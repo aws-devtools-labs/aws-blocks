@@ -12,13 +12,14 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { AppSetting } from './index.cdk.js';
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly id: string;
+	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
@@ -35,12 +36,22 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production, stackId = 'TestStack'): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'TestStack');
+	const stack = new StubBlocksStack(app, stackId);
+	stack.defaults = defaults;
 	const parent = new Scope('app');
 	return { stack, parent };
 }
+
+test('CDK: the secret-init Lambda log group adopts defaults.logRetention', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox, 'SecretRetentionStack');
+	new AppSetting(parent, 'my-secret', { secret: true, name: '/myapp/secret-key' });
+	const template = Template.fromStack(stack);
+	// The secret-init Lambda now owns an explicit log group whose retention
+	// follows the stack-wide default (sandbox → one week) instead of infinite.
+	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+});
 
 test('CDK: secret AppSetting SSM policy is scoped to specific parameter ARN (not wildcard)', () => {
 	const { stack, parent } = setup();
@@ -229,4 +240,121 @@ test('CDK: fromExisting still registers the runtime config key (BLOCKS_SSM_PARAM
 		'external setting must register BLOCKS_SSM_PARAM_DB_URL so the runtime can resolve the parameter',
 	);
 	assert.equal(registry.entries.get('BLOCKS_SSM_PARAM_DB_URL'), '/blocks/sandbox/db-abc-connection-string');
+});
+
+const TEST_CMK = 'arn:aws:kms:us-east-1:111122223333:key/abcd1234-5678-90ab-cdef-1234567890ab';
+
+test('CDK: secret with kmsKeyArn grants handler KMS on the specific CMK ARN (not a ViaService wildcard)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'cmk-secret', { secret: true, name: '/app/cmk-secret', kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+	const policies = template.findResources('AWS::IAM::Policy');
+
+	let found = false;
+	for (const logicalId of Object.keys(policies)) {
+		const statements = policies[logicalId]?.Properties?.PolicyDocument?.Statement;
+		if (!Array.isArray(statements)) continue;
+		for (const stmt of statements) {
+			const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+			if (!actions.includes('kms:Decrypt')) continue;
+			// The CMK grant scopes to the exact key ARN and carries no ViaService condition.
+			const resStr = JSON.stringify(stmt.Resource);
+			if (resStr.includes(TEST_CMK)) {
+				found = true;
+				assert.ok(actions.includes('kms:Encrypt'), 'stack-managed CMK secret should grant kms:Encrypt');
+				// Standard-tier SecureStrings only use Encrypt/Decrypt — no GenerateDataKey.
+				assert.ok(
+					!actions.some((a: string) => a.startsWith('kms:GenerateDataKey')),
+					'CMK grant should not include kms:GenerateDataKey* (advanced-tier only)',
+				);
+				assert.strictEqual(stmt.Condition, undefined, 'CMK grant should not use a ViaService wildcard condition');
+			}
+		}
+	}
+	assert.ok(found, `Expected a handler KMS grant scoped to the CMK ARN ${TEST_CMK}`);
+});
+
+test('CDK: secret with kmsKeyArn passes the KeyId to the bulk secret custom resource', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'cmk-secret', { secret: true, name: '/app/cmk-secret', kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulk = Object.values(crs).find((r) => Array.isArray(r?.Properties?.Parameters));
+	assert.ok(bulk, 'Expected a bulk-secrets custom resource with a Parameters list');
+	const params = bulk.Properties.Parameters as Array<{ name: string; keyId?: string }>;
+	const entry = params.find((p) => p.name === '/app/cmk-secret');
+	assert.ok(entry, 'the secret should appear in the bulk Parameters');
+	assert.strictEqual(entry?.keyId, TEST_CMK, 'the CMK ARN must be passed through as keyId');
+});
+
+test('CDK: a default-key secret carries no keyId in the bulk Parameters', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'plain-secret', { secret: true, name: '/app/plain-secret' });
+	const template = Template.fromStack(stack);
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulk = Object.values(crs).find((r) => Array.isArray(r?.Properties?.Parameters));
+	const params = bulk?.Properties?.Parameters as Array<{ name: string; keyId?: string }>;
+	const entry = params.find((p) => p.name === '/app/plain-secret');
+	assert.ok(entry, 'the secret should appear in the bulk Parameters');
+	assert.strictEqual(entry?.keyId, undefined, 'a default-key secret must not set keyId');
+});
+
+test('CDK: kmsKeyArn without secret throws ValidationFailed', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AppSetting(parent, 'bad', { value: 'x', name: '/app/bad', kmsKeyArn: TEST_CMK }),
+		/only valid with 'secret: true'/,
+	);
+});
+
+test('CDK: fromExisting with kmsKeyArn grants read-only KMS scoped to the CMK ARN (Decrypt, no Encrypt)', () => {
+	const { stack, parent } = setup();
+	AppSetting.fromExisting(parent, 'ext-cmk', { name: '/ext/cmk-secret', secret: true, kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+	const policies = template.findResources('AWS::IAM::Policy');
+
+	let found = false;
+	for (const logicalId of Object.keys(policies)) {
+		const statements = policies[logicalId]?.Properties?.PolicyDocument?.Statement;
+		if (!Array.isArray(statements)) continue;
+		for (const stmt of statements) {
+			const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+			if (JSON.stringify(stmt.Resource).includes(TEST_CMK) && actions.includes('kms:Decrypt')) {
+				found = true;
+				assert.ok(!actions.includes('kms:Encrypt'), 'external (read-only) CMK secret must not grant kms:Encrypt');
+			}
+		}
+	}
+	assert.ok(found, 'external CMK secret should grant kms:Decrypt scoped to the CMK ARN');
+});
+
+test('CDK: bulk-init role can read + re-key secrets (ssm:GetParameter + kms:Encrypt/Decrypt), no GenerateDataKey', () => {
+	// The re-encrypt-on-key-change path reads the current value (GetParameter +
+	// Decrypt) and rewrites it under the new key (Encrypt). The bulk-init statement
+	// is uniquely identified by ssm:AddTagsToResource.
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'cmk-secret', { secret: true, name: '/app/cmk-secret', kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+	const policies = template.findResources('AWS::IAM::Policy');
+
+	let bulkSsm: string[] | undefined;
+	let bulkKms: string[] | undefined;
+	for (const logicalId of Object.keys(policies)) {
+		const statements = policies[logicalId]?.Properties?.PolicyDocument?.Statement;
+		if (!Array.isArray(statements)) continue;
+		for (const stmt of statements) {
+			const actions: string[] = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+			if (actions.includes('ssm:AddTagsToResource')) bulkSsm = actions;
+			if (actions.includes('kms:Encrypt') && stmt.Condition?.StringEquals?.['kms:ViaService']) bulkKms = actions;
+		}
+	}
+	assert.ok(bulkSsm, 'expected the bulk-init ssm statement (identified by AddTagsToResource)');
+	assert.ok(bulkSsm?.includes('ssm:GetParameter'), 'bulk-init needs ssm:GetParameter to read a value when re-keying');
+	assert.ok(bulkKms, 'expected the bulk-init KMS statement (ViaService-scoped)');
+	assert.ok(bulkKms?.includes('kms:Decrypt'), 'bulk-init needs kms:Decrypt to read the current value when re-keying');
+	assert.ok(
+		!bulkKms?.some((a) => a.startsWith('kms:GenerateDataKey')),
+		'no GenerateDataKey* — standard-tier SecureStrings do not use it',
+	);
 });

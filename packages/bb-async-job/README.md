@@ -21,7 +21,7 @@ Background job processing backed by SQS and Lambda.
 
 **Available Methods:**
 - **`submit(payload, options?)`** - Enqueue a single job (returns `{ jobId }`)
-- **`submitBatch(payloads, options?)`** - Enqueue up to 10 jobs in one call (returns `{ jobIds, failed: [] }` on full success). On partial failure, **throws** `AsyncJobErrors.BatchSubmitFailed` — the error has `.jobIds` (with `null` at failed indexes) and `.failed[]` (each entry's `index`, `code`, `message`). The mock runtime never partially fails; this is AWS-only.
+- **`submitBatch(payloads, options?)`** - Enqueue up to 10,000 jobs in one call — batches larger than SQS's 10-entry / 256 KB per-request limits are split across multiple `SendMessageBatch` requests automatically and sent with bounded concurrency (over 10,000 throws `AsyncJobErrors.BatchTooLarge`; returns `{ jobIds, failed: [] }` on full success). Because a multi-chunk submit is not atomic, on partial failure it **throws** `AsyncJobErrors.BatchSubmitFailed` — the error has `.jobIds` (real MessageIds for the entries that made it onto the queue, `null` at failed indexes) and `.failed[]` (each entry's `index`, `code`, `message`; a transport-level `send()` rejection fails its whole chunk and short-circuits the rest). The mock runtime never partially fails; this is AWS-only.
 - **`getStatus(jobId)`** - Read a job's recorded state and full transition history (returns `AsyncJobStatus | null`). Requires `trackStatus: true`.
 - **`waitUntilComplete(jobId, options?)`** - Wait until the job reaches `complete` or `failed` (returns the final `AsyncJobStatus`). Requires `trackStatus: true`.
 
@@ -58,9 +58,30 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 | `handler` | (required) | Async function that processes each job |
 | `schema` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
 | `maxRetries` | 3 | Maximum attempts before sending to the dead-letter queue |
-| `batchSize` | 1 | Messages per Lambda invocation |
+| `batchSize` | 10 | Messages per Lambda invocation |
+| `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
 | `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
+
+### Batching and handler requirements
+
+The queue is a standard SQS queue, so delivery is at-least-once and a handler must
+already be idempotent to be correct — a message can be delivered more than once
+regardless of `batchSize`. Batching widens the window in which that happens: with
+`batchSize: 10`, a Lambda that times out or runs out of memory partway through a
+batch redelivers all ten messages, including the ones whose handler had already
+finished. Per-record failures on their own are isolated (only the failed message is
+redelivered), so this is specifically the whole-invocation failure case.
+
+Set `batchSize: 1` for handlers that cannot tolerate being re-run, or for
+latency-sensitive work — a batching window makes SQS wait up to
+`maxBatchingWindowSeconds` before invoking the Lambda at all, so a job submitted on
+a user-facing path starts up to that many seconds late. `maxBatchingWindowSeconds: 0`
+opts out of the wait while keeping batching.
+
+The queue's visibility timeout is set to the shared Lambda's timeout plus
+`maxBatchingWindowSeconds`, because a message's visibility clock starts when the
+poller receives it — before the batching window elapses and before the handler runs.
 
 ## Handler Context
 
@@ -81,7 +102,7 @@ import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 
 AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
 AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items
-AsyncJobErrors.BatchTooLarge      // batch > 10 items
+AsyncJobErrors.BatchTooLarge      // submitBatch() over the 10,000-payload soft cap
 AsyncJobErrors.ValidationFailed   // schema validation failed
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled

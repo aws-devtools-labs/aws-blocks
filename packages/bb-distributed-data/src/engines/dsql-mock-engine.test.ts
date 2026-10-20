@@ -8,6 +8,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { DsqlMockEngine } from './dsql-mock-engine.js';
 import { DistributedDatabaseErrors } from '../errors.js';
+import { ApiError } from '@aws-blocks/core';
 
 const TEST_DIR = '.bb-data-dsql-mock-test-' + process.pid;
 let engine: DsqlMockEngine;
@@ -131,4 +132,64 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   const rows = await engine.query<{ id: string }>('SELECT id FROM t');
   assert.deepStrictEqual(rows, [{ id: 'ok' }]);
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
+});
+
+// --- OCC conflict surfaces as HTTP 409 (Conflict) ---
+// A simulated serialization-failure (SQLSTATE 40001) on commit must reach the
+// caller as an ApiError with status 409 — not a plain 500 — while preserving
+// the SerializationFailure name and flagging the conflict retriable, so mock
+// and real DSQL engines behave identically over the JSON-RPC wire.
+test('commit OCC conflict surfaces as an ApiError with status 409', async () => {
+  const dir = join(TEST_DIR, 'occ-conflict-409');
+  engine = new DsqlMockEngine(dir);
+  const handle = await engine.beginTransaction();
+  engine.simulateConflict();
+  await assert.rejects(
+    () => engine.commitTransaction(handle),
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(e.status, 409);
+      assert.strictEqual(e.name, DistributedDatabaseErrors.SerializationFailure);
+      assert.strictEqual(e.retriable, true);
+      return true;
+    },
+  );
+});
+
+// --- Regression: destroy() before the first query ---
+// PGlite 0.5.10's close() never resolves while the instance is still
+// initializing (electric-sql/pglite#1148). The other tests always query before
+// destroy(), which forces init, so these pin the never-queried path.
+
+/** Rejects if `promise` has not settled within `ms`, so a hang fails the test instead of stalling it. */
+async function settlesWithin<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test('destroy resolves for an engine that never ran a query', async () => {
+  engine = new DsqlMockEngine(join(TEST_DIR, 'destroy-before-query'));
+  await settlesWithin(engine.destroy(), 15_000, 'destroy()');
+});
+
+test('destroy waits for PGlite init to settle before closing', async () => {
+  let ready = false;
+  let closed = false;
+  // Mimics PGlite 0.5.10: close() hangs if it is called before init has settled.
+  const factory = (): PGlite =>
+    ({
+      waitReady: new Promise<void>((resolve) => setTimeout(() => { ready = true; resolve(); }, 50)),
+      query: async () => ({ rows: [] }),
+      close: () => (ready ? Promise.resolve().then(() => { closed = true; }) : new Promise<void>(() => {})),
+    }) as unknown as PGlite;
+  engine = new DsqlMockEngine(join(TEST_DIR, 'destroy-waits-for-init'), factory);
+  await settlesWithin(engine.destroy(), 5_000, 'destroy()');
+  assert.strictEqual(closed, true, 'destroy() should close the instance once init settles');
 });

@@ -36,7 +36,8 @@ import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
-import { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
+import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
+import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -186,12 +187,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
       throw buildOutputMissingError(distDir, 'static');
     }
   } else {
-    if (!fs.existsSync(serverEntry)) {
-      throw buildOutputMissingError(serverDir, output);
-    }
-    if (!directoryHasFiles(clientDir)) {
-      throw buildOutputMissingError(clientDir, output);
-    }
+    ensureSsrBuildOutput(clientDir, serverDir, serverEntry, output);
   }
 
   const manifest: DeployManifest =
@@ -697,6 +693,43 @@ const directoryHasFiles = (dir: string): boolean => {
   return fs.readdirSync(dir).length > 0;
 };
 
+/**
+ * Validate a server/hybrid build output.
+ *
+ * `dist/server/entry.mjs` is the required artifact — its absence means the
+ * @astrojs/node standalone build didn't run (throws). An EMPTY `dist/client`,
+ * however, is valid: a pure-SSR app with no static assets (no `public/` files,
+ * no prerendered pages) produces one, and CloudFront simply routes every
+ * request to the SSR Lambda. So do NOT treat an empty client dir as missing —
+ * just ensure it exists (Astro normally creates it) so downstream asset
+ * handling (`staticAssets.directory`, prerender globbing) has a valid path.
+ *
+ * Exported for unit testing.
+ */
+export const ensureSsrBuildOutput = (
+  clientDir: string,
+  serverDir: string,
+  serverEntry: string,
+  output: AstroOutput,
+): void => {
+  if (!fs.existsSync(serverEntry)) {
+    throw buildOutputMissingError(serverDir, output);
+  }
+  // `dist/client` only holds static assets (public/, prerendered pages, hashed
+  // client JS/CSS); a pure-SSR build legitimately emits none. `mkdirSync` with
+  // `recursive` is idempotent, so create unconditionally — but emit a breadcrumb
+  // only when we actually materialize an ABSENT dir, so a silently-empty client
+  // (a broken build that dropped its assets) still surfaces in build logs rather
+  // than being masked by the create.
+  const clientAbsent = !fs.existsSync(clientDir);
+  fs.mkdirSync(clientDir, { recursive: true });
+  if (clientAbsent) {
+    process.stderr.write(
+      'ℹ️  No dist/client emitted; treating as a pure-SSR build (CloudFront routes all requests to the SSR Lambda).\n',
+    );
+  }
+};
+
 const buildOutputMissingError = (
   missingPath: string,
   mode: AstroOutput,
@@ -775,15 +808,22 @@ export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
  * then prunes the `@img/sharp-wasm32` fallback (~8.7 MB, never used on
  * linux-x64) and other dead weight. Net add ≈ 19.5 MB unzipped — ~8% of
  * Lambda's 250 MB unzipped limit. Mirrors the Nitro adapter's IPX bundle.
+ *
+ * `arch` defaults to the adapter run's target ({@link targetComputeArch}):
+ * `x64` for Lambda, `arm64` for Lambda Web Functions (`compute.type:
+ * 'web-function'`), which installs `@img/sharp-linux-arm64` instead.
  * @internal
  */
-export const installSharpForAstroSsr = (serverDir: string): void => {
-  // Idempotent: skip if a linux-x64 sharp is already present.
+export const installSharpForAstroSsr = (
+  serverDir: string,
+  arch: ComputeArch = targetComputeArch(),
+): void => {
+  // Idempotent: skip if a linux-<arch> sharp is already present.
   const existing = path.join(
     serverDir,
     'node_modules',
     '@img',
-    'sharp-linux-x64',
+    `sharp-linux-${arch}`,
   );
   if (fs.existsSync(existing)) return;
 
@@ -805,7 +845,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
   }
 
   process.stderr.write(
-    '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
+    `\u{1F4F8} Installing sharp (linux-${arch}) into the Astro SSR bundle for /_image optimization\n`,
   );
   try {
     // `spawn.sync` here is the local ./spawn.js wrapper, which THROWS on a
@@ -824,7 +864,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
         '--include=optional',
         '--omit=dev',
         '--os=linux',
-        '--cpu=x64',
+        `--cpu=${arch}`,
         '--libc=glibc',
       ],
       { cwd: serverDir, stdio: 'inherit' },
@@ -844,7 +884,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
       'AstroSharpInstallError',
       {
         message:
-          'Failed to install a linux-x64 `sharp` into the Astro SSR bundle for `/_image` optimization.',
+          `Failed to install a linux-${arch} \`sharp\` into the Astro SSR bundle for \`/_image\` optimization.`,
         resolution:
           'Ensure `npm` is on PATH and the build host can reach the npm registry. ' +
           'To ship without native image optimization, set `image.service` to ' +
@@ -991,6 +1031,7 @@ const buildSsrManifest = (input: {
         type: 'http-server',
         bundle: distDir,
         entrypoint: path.posix.join(path.basename(serverDir), RUN_SH_FILENAME),
+        serverEntry: path.posix.join(path.basename(serverDir), 'entry.mjs'),
         port: ASTRO_SERVER_PORT,
         placement: 'regional',
         runtime: FRAMEWORK_COMPUTE_RUNTIME,

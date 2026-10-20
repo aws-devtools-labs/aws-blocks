@@ -32,7 +32,10 @@ Examples:
   npx blocks-telemetry --disable --global # Disable globally
 
 Environment:
-  AWS_BLOCKS_DISABLE_TELEMETRY=1              Disables telemetry (overrides config files)
+  AWS_BLOCKS_DISABLE_TELEMETRY=1|true|yes     Disables telemetry (overrides config files)
+                                              Case-insensitive; surrounding whitespace ignored
+  BLOCKS_TELEMETRY_ENDPOINT=<url>             Sends events to <url> instead of the collector
+                                              Send failures are ignored; the command is unaffected
 `);
 }
 

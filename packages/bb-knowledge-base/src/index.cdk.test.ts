@@ -10,7 +10,7 @@
  * CloudFormation `DeletionPolicy` and leaked. Those tests pin the fix: the
  * vector resources now mirror the data bucket's removal policy.
  *
- * Ingestion sync: the handler role must be able to read ingestion-job
+ * Ingestion sync: the execution role must be able to read ingestion-job
  * status (`bedrock:GetIngestionJob` / `bedrock:ListIngestionJobs`) — scoped to
  * the KB ARN like the existing `bedrock:Retrieve` grant — and the
  * `DATA_SOURCE_ID` config the runtime sync checks rely on must be
@@ -39,11 +39,13 @@ const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'test-fi
 const VECTOR_BUCKET_TYPE = s3vectors.CfnVectorBucket.CFN_RESOURCE_TYPE_NAME;
 const VECTOR_INDEX_TYPE = s3vectors.CfnIndex.CFN_RESOURCE_TYPE_NAME;
 
-// Minimal BlocksStack-shaped parent — KnowledgeBase calls
-// `this.handler.addToRolePolicy(...)` and `cdk.Stack.of(this)`, both of which
-// resolve through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack).
+// Minimal BlocksStack-shaped parent — KnowledgeBase grants to
+// `this.executionRole` and reads `cdk.Stack.of(this)`, both of which resolve
+// through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack). `computeFn`
+// stands in for a compute that assumes the shared role, so the config-registry
+// test has a function to stamp the config coordinates on.
 class StubBlocksStack extends cdk.Stack {
-  public readonly handler: cdk.aws_lambda.Function;
+  public readonly computeFn: cdk.aws_lambda.Function;
   public readonly executionRole: cdk.aws_iam.IRole;
   public readonly id: string;
   public defaults: BlocksDefaults = BlocksPresets.production;
@@ -54,7 +56,7 @@ class StubBlocksStack extends cdk.Stack {
     this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
       assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
     });
-    this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
+    this.computeFn = new cdk.aws_lambda.Function(this, 'StubHandler', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
       code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
@@ -118,10 +120,10 @@ test('CDK: sandbox defaults make the data bucket + vector store destroy', () => 
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Delete' });
 });
 
-test('CDK: handler role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
+test('CDK: execution role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
   const template = synth();
 
-  // isSynced()/waitUntilSynced() poll ingestion-job status — the handler role
+  // isSynced()/waitUntilSynced() poll ingestion-job status — the execution role
   // needs both actions, granted as Allow.
   template.hasResourceProperties('AWS::IAM::Policy', {
     PolicyDocument: Match.objectLike({
@@ -181,8 +183,12 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // finalizeConfigRegistry serializes the registry into blocks-config.json via a
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
-  // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
-  finalizeConfigRegistry(stack, stack.handler);
+  // the compute is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
+  // Grant config read to the shared execution role and stamp the coordinates on
+  // the stand-in compute's function.
+  finalizeConfigRegistry(stack, stack.executionRole, [
+    { setEnv: (k: string, v: string) => stack.computeFn.addEnvironment(k, v) } as any,
+  ]);
   const template = Template.fromStack(stack);
 
   const configBlob = JSON.stringify(
@@ -212,7 +218,7 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
 // DESIGN.md, "Source coverage (folder and imported s3://)").
 const S3_SOURCE = 's3://my-docs-bucket';
 
-test('CDK (s3:// source): handler still gets bedrock:Retrieve + ingestion-status grants scoped to the KB ARN', () => {
+test('CDK (s3:// source): execution role still gets bedrock:Retrieve + ingestion-status grants scoped to the KB ARN', () => {
   const { stack } = buildStack({ source: S3_SOURCE });
   const template = Template.fromStack(stack);
 

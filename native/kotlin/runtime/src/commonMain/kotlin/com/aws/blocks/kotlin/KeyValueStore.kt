@@ -1,10 +1,35 @@
 package com.aws.blocks.kotlin
 
+/**
+ * Thrown when storage cannot be read or written, as opposed to a key simply being absent. The
+ * difference matters to callers that would otherwise treat a temporary failure as empty storage
+ * and overwrite what is still held there.
+ */
+internal class KeyValueStoreException(
+    message: String,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+/**
+ * Persistent storage for small string values.
+ *
+ * Operations suspend because every implementation moves its I/O off the calling thread. Keychain
+ * calls count: they are inter-process requests that block until they return, not local calls.
+ */
 internal interface KeyValueStore {
-    fun put(key: String, value: String)
-    fun get(key: String): String?
-    fun remove(key: String)
-    fun getAll(): Map<String, String>
+    suspend fun put(key: String, value: String)
+
+    /**
+     * Returns the stored value, or null when the key is absent. Throws when the key may well be
+     * present but storage could not be read.
+     */
+    suspend fun get(key: String): String?
+
+    /**
+     * Drops every entry in this store, including any left by an earlier version of the library.
+     * Keys are never enumerated, so an entry that cannot be read is still removed.
+     */
+    suspend fun clear()
 }
 
 internal expect fun encryptedKeyValueStore(name: String): KeyValueStore

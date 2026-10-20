@@ -27,9 +27,135 @@ export const HARNESS_FAIL_REASONS = {
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
-// An ungraceful 2-agent death that tore down the harness itself (isUngracefulStepTwoDeath) is infra,
-// not a gradeable failure → reclassified harness_error, EXCLUDED under this (distinct) reason.
-export const AGENT_HARNESS_TEARDOWN_REASON = 'agent_harness_teardown';
+// A 2-agent failure whose terminal `builder_error` is a PROVIDER-SIDE 5xx SERVER FAULT (Bedrock
+// `ServiceUnavailableException`/`InternalServerException`, a `$fault=server`, or an `httpStatusCode:5xx`)
+// is NOT the agent under test failing — it is the model backend being unavailable. The invoke layer
+// already RETRIES these (isRetryableModelError treats 5xx/ServiceUnavailable as transient, up to
+// INVOKE_MAX_ATTEMPTS with backoff); this signature only lands as a terminal `builder_error` AFTER
+// those retries were exhausted, i.e. the provider was down for the whole retry window. Scoring that a
+// counted composite-0 `agent_fail` would penalize the framework for AWS Bedrock being briefly down, so
+// this ONE signature is reclassified harness_error (EXCLUDED from the mean) — infra, not the thing
+// under test. Deliberately NARROW: it matches only a 5xx SERVER fault, never a client 4xx, a throttle,
+// a `MaxTokensError`/`ContextWindowOverflowError` (the agent's own budget — genuinely agent_fail), or a
+// wall-clock/cancellation partial. So a real agent failure can't hide behind this gate. Mirrors the
+// PGlite OOM carve-out below (an infra signature on a 2-agent/dead_server failure → harness_error).
+//
+// COUPLING: the `$fault=server` and `httpStatusCode:5xx` tokens are matched against the FLATTENED
+// string that describeModelError() (bedrock-retry.mjs) writes onto result.json's `builder_error` —
+// `${name}: ${msg} $fault=${fault} $metadata={httpStatusCode:${status},…}`. Only that string survives
+// to the finalize boundary; the structured `$metadata.httpStatusCode` / `$fault` the retry layer reads
+// via errorChain() is gone by scoring time. So this regex depends on describeModelError's exact output
+// format: if that describer ever stops emitting `$fault=` / `httpStatusCode:` (a format tidy-up), this
+// gate would silently stop firing and these cells would quietly fall back to counted agent_fail. The
+// cross-module test in scoring.test.mjs ("drift guard") pins that contract — it runs describeModelError
+// on a synthetic 503 cause-chain and asserts isProviderServerFault() fires, so a describer format change
+// breaks a test rather than silently disabling the carve-out.
+export const PROVIDER_SERVER_FAULT_RE =
+	/\$fault=server\b|httpStatusCode:\s*5\d\d\b|\bservice[_ ]?unavailable|\binternalserver|\binternalfailure|\bmodelnotready/i;
+export const PROVIDER_UNAVAILABLE_REASON = 'provider_unavailable';
+
+/**
+ * True when a terminal `builder_error` string shows a provider-side 5xx SERVER fault — i.e. the 2-agent
+ * step failed because the model backend (Bedrock) was unavailable through the whole invoke-retry
+ * window, not because the agent under test failed. Non-string input → false. Pure.
+ *
+ * NARROW BY DESIGN — matches a 5xx server fault only, so it must NOT fire on:
+ *   - a client-side 4xx (ValidationException / AccessDenied / a bad request) — the agent's config fault;
+ *   - a `MaxTokensError` / `ContextWindowOverflowError` — the agent exhausting its own budget (agent_fail);
+ *   - a throttle alone (429) that was retried away or is a quota concern, not an outage;
+ *   - a `wall_clock_timeout` / `cancelled` partial envelope (handled elsewhere in classifyCell).
+ * @param {unknown} builderError the terminal `builder_error` on result.json (from describeModelError)
+ * @returns {boolean}
+ */
+export function isProviderServerFault(builderError) {
+	return typeof builderError === 'string' && PROVIDER_SERVER_FAULT_RE.test(builderError);
+}
+
+// A checkpoint-survived ungraceful 2-agent death UNDER ACTIVE ISOLATION cannot be an agent pkill-storm
+// (cross-uid EPERM stops the agent from signalling the harness) — it is an infra WALL-CLOCK TIMEOUT
+// that killed the process group before a terminal stop_reason could flush. Reclassified harness_error
+// and EXCLUDED under this (distinct) timeout reason. (The old `agent_harness_teardown` label wrongly
+// implied an agent-inflicted teardown, which active isolation makes impossible.)
+export const AGENT_HARNESS_TIMEOUT_REASON = 'wall_clock_timeout';
+
+// A dev-server that never came up (empty APP_BASE_URL) or crashed AFTER the agent's build: step 3
+// detects this, SKIPS Playwright (no bogus invalid-URL failures) and stamps dev_server_status='dead'
+// on result.json. The built app failing to RUN is a GENUINE product failure, so it's scored exactly
+// like agent_fail — verdict 'fail', composite 0, INCLUDED in the mean — so a backend crash can't hide
+// as an excluded 'unknown'. A DISTINCT klass (not agent_fail) so the failure root-cause can still
+// attribute owner=framework (e.g. the PGlite backend crash) rather than blaming the agent. This is
+// NOT harness_error: the harness did its job; it was the produced app that did not run.
+export const DEAD_SERVER_STATUS = 'dead';
+export const DEAD_SERVER_KLASS = 'dead_server';
+export const DEAD_SERVER_REASON = 'dev_server_dead';
+
+// PGLITE_INIT_TRAP_RE mirrors the regex in packages/data-common/src/pglite-init.ts (the signature the
+// mock engine's init-retry matches on a PGlite `_pg_initdb` WASM abort — `Aborted(Cannot enlarge memory
+// arrays…)` / `unreachable` — under the CI runner's ~290 MB-per-instance linear-memory ceiling). It is
+// kept as a local copy because scoring.mjs is a dependency-free `.mjs` that runs under bare `node` in CI
+// and must not import a TS package; a drift test in scoring.test.mjs pins the two together.
+//
+// Historically a dead_server whose dev-log tail matched this signature was reclassified harness_error.
+// That substring gate was REMOVED (osama-rizk, round 2): once bb-data keeps the dev server ALIVE through
+// a migration init trap, the trap no longer kills the process, so the engine's per-attempt `onRetry`
+// warning leaves `Aborted(` in the tail even after a SUCCESSFUL retry — meaning "exited + signature
+// somewhere in 100 lines" mostly selected a survived-trap-then-a-DIFFERENT-crash misclassification
+// (an agent crash wrongly excluded). The sole causal signal is now DATA_LAYER_UNAVAILABLE_SENTINEL
+// below, stamped by step 3 only when the data layer was still wedged at test end. The regex and
+// isPgliteInitOom helper remain exported for the drift guard and as a tested pure predicate; neither is
+// wired into classifyCell any more. Case-SENSITIVE on purpose (no /i).
+export const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(/;
+export const PGLITE_OOM_REASON = 'pglite_init_oom';
+
+// The sole, CAUSAL data-layer signal. bb-data's mock Database logs PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL
+// when an eager migration run exhausts its retries on a PGlite WASM init trap, and
+// PGLITE_DATA_LAYER_RECOVERED_SENTINEL when a later re-run heals it (see
+// packages/data-common/src/pglite-init.ts). Step 3 (3-build-and-test.sh) scans the dev log AFTER
+// Playwright and stamps `data_layer_unavailable: true` ONLY when the LAST unavailable sentinel is not
+// followed by a recovery marker — i.e. the data layer was still down when the tests finished. That
+// makes the flag a CAUSAL claim (down at test time), not mere presence of a trap that may have recovered.
+// A cell carrying it is reclassified harness_error (EXCLUDED) for ANY class — including a `scored` cell
+// whose DB tests failed because the server stayed up but every query rejected. Both literals are kept
+// VALUE-IN-SYNC with the TS source (drift tests in scoring.test.mjs assert equality) since this .mjs
+// cannot import them.
+export const PGLITE_DATA_LAYER_UNAVAILABLE_SENTINEL = '[bb-data] PGlite init trap: data layer unavailable';
+export const PGLITE_DATA_LAYER_RECOVERED_SENTINEL = '[bb-data] PGlite init trap: data layer recovered';
+
+/**
+ * True when a dev-log tail shows the PGlite WASM init-trap signature. Non-string input → false. Pure.
+ * NOTE: no longer wired into classifyCell (the dead_server substring fallback was removed — see the
+ * comment above PGLITE_INIT_TRAP_RE); retained as a tested pure predicate and the drift-guard anchor.
+ * The primary causal signal is {@link isDataLayerUnavailable}.
+ * @param {unknown} devLogTail the captured dev.log tail (result.dev_log_tail)
+ * @returns {boolean}
+ */
+export function isPgliteInitOom(devLogTail) {
+	return typeof devLogTail === 'string' && PGLITE_INIT_TRAP_RE.test(devLogTail);
+}
+
+/**
+ * True when step 3 stamped the causal data-layer sentinel on the cell — the mock Database survived a
+ * PGlite init trap but its data layer is wedged (every DB query rejects). This is the primary,
+ * causation-proving signal; it fires for ANY class, including a `scored` cell with failing DB tests.
+ * @param {{data_layer_unavailable?: unknown}} result
+ * @returns {boolean}
+ */
+export function isDataLayerUnavailable(result) {
+	return result?.data_layer_unavailable === true;
+}
+
+/**
+ * The klasses that are GENUINE failures counted in the mean as composite 0 (verdict 'fail', included
+ * by isScoredCell) — as opposed to `harness_error` (excluded) or `scored` (graded on its tests).
+ * `agent_fail` = the agent produced no app within budget; `dead_server` = it produced an app whose
+ * dev-server never served / crashed. Both are real product failures, so both count. Single-sourced
+ * here so verdictOf, isScoredCell and summary.mjs share ONE definition of "a counted failure".
+ * @param {string|null|undefined} klass
+ * @returns {boolean}
+ */
+export function isCountedFailKlass(klass) {
+	return klass === 'agent_fail' || klass === DEAD_SERVER_KLASS;
+}
 
 // The NON-terminal stop_reason 2-agent-run.ts stamps on its running checkpoint (lib/partial-envelope.mjs).
 // A checkpoint surviving to finalize means no terminal exit path overwrote it (the process died
@@ -75,9 +201,18 @@ export function isUngracefulStepTwoDeath(result) {
  *   - `harness_error` — a pre-grade step failed or the run was CANCELLED (EXCLUDED from the mean).
  *   - `agent_fail` — the agent step failed on its own merits AND exited gracefully (verdict 'fail',
  *     composite 0, INCLUDED). An ungraceful 2-agent teardown is reclassified `harness_error`.
+ *     EXCEPTION: a 2-agent failure whose terminal `builder_error` is a provider-side 5xx SERVER fault
+ *     (the model backend was unavailable through the whole invoke-retry window) is reclassified
+ *     `harness_error` (EXCLUDED) — infra, not the agent (see isProviderServerFault). A client 4xx,
+ *     throttle, or MaxTokensError budget exhaustion stays `agent_fail` (counted).
+ *   - `dead_server` — the agent finished but the built app's dev-server never served / crashed
+ *     (dev_server_status='dead'): a genuine product failure (verdict 'fail', composite 0, INCLUDED).
+ *     A PGlite init trap no longer lands here — bb-data keeps the server alive through it, and the
+ *     causal `data_layer_unavailable` carve-out above (not any dev_log_tail substring) excludes a
+ *     cell whose data layer was still wedged at test end. Every dead_server now stays counted.
  *   - `scored` — reached build/test/judge; its outcome is a real signal.
- * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
- * @returns {{klass: 'scored'|'harness_error'|'agent_fail', reason: string|null}}
+ * @param {{failed_at?: string|null, status?: string, dev_server_status?: string, dev_pid_status?: string, dev_log_tail?: string, data_layer_unavailable?: boolean, builder_error?: unknown, stop_reason?: unknown, checkpoint?: unknown}} result
+ * @returns {{klass: 'scored'|'harness_error'|'agent_fail'|'dead_server', reason: string|null}}
  */
 export function classifyCell(result) {
 	const failedAt = result?.failed_at ?? null;
@@ -87,6 +222,18 @@ export function classifyCell(result) {
 	}
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
+	}
+	// PRIMARY, causal PGlite-init-trap carve-out. Once bb-data keeps the dev server ALIVE through a
+	// migration init trap, the trap no longer kills the server: the front door serves, Playwright runs,
+	// and every DB-backed test fails because the data layer is wedged — so the cell reaches `scored`
+	// with failing tests and the dead_server+signature gate below NEVER sees it. bb-data logs a fixed
+	// sentinel on that trap and step 3 stamps `data_layer_unavailable: true` (any serve state). Its
+	// presence PROVES a WASM-memory trap caused the DB outage (the sentinel is emitted only on that
+	// path), so the cell is infra → harness_error (EXCLUDED) for ANY class — scored, agent_fail, or
+	// dead_server. Ordered AFTER cancellation / pre-grade harness returns (those keep their own reason)
+	// and BEFORE agent_fail / dead_server / scored, so it rescues exactly the cells they would miscount.
+	if (isDataLayerUnavailable(result)) {
+		return { klass: 'harness_error', reason: PGLITE_OOM_REASON };
 	}
 	// Agent failure is a real fail — except an ungraceful harness teardown (no terminal envelope) that
 	// happened WHILE agent-shell isolation was active, which is reclassified harness_error so a
@@ -98,9 +245,26 @@ export function classifyCell(result) {
 	// quietly excluded and inflating the headline mean.
 	if (failedAt === AGENT_FAIL_AT) {
 		if (isUngracefulStepTwoDeath(result) && result?.isolation_active === true) {
-			return { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON };
+			return { klass: 'harness_error', reason: AGENT_HARNESS_TIMEOUT_REASON };
+		}
+		// Signature-gated carve-out: a 2-agent failure whose terminal `builder_error` is a provider-side
+		// 5xx SERVER fault (Bedrock unavailable through the whole invoke-retry window) is infra, not the
+		// agent under test → harness_error (EXCLUDED). Narrow by design (see isProviderServerFault): only
+		// a 5xx server fault, never a client 4xx, a throttle, a MaxTokensError budget exhaustion, or a
+		// wall-clock/cancel partial — so a genuine agent failure stays agent_fail (counted).
+		if (isProviderServerFault(result?.builder_error)) {
+			return { klass: 'harness_error', reason: PROVIDER_UNAVAILABLE_REASON };
 		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
+	}
+	// The agent finished and any build succeeded, but the dev-server never served / crashed (step 3
+	// detected it, skipped Playwright, and stamped dev_server_status='dead'). The produced app failing
+	// to RUN is a genuine product failure → dead_server (verdict 'fail', composite 0, INCLUDED), NOT a
+	// 'scored' cell with no tests (which would read 'unknown' and be EXCLUDED, masking the crash).
+	// Ordered AFTER the harness_error / agent_fail returns so a cancellation or a pre-grade failure —
+	// which never produced a runnable app to begin with — still wins and stays excluded.
+	if (result?.dev_server_status === DEAD_SERVER_STATUS) {
+		return { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON };
 	}
 	return { klass: 'scored', reason: null };
 }
@@ -154,8 +318,9 @@ export function verdict(tr, harnessHint) {
 export function verdictOf(result) {
 	const klass = result?.klass ?? classifyCell(result).klass;
 	if (klass === 'harness_error') return verdict(0, 'harness_error');
-	// An agent failure is a real 'fail' even with no tests — must not read as 'unknown' (excluded).
-	if (klass === 'agent_fail') return 'fail';
+	// A counted failure (agent_fail / dead_server) is a real 'fail' even with no tests — it must not
+	// read as 'unknown', which would exclude it from the mean and hide the failure.
+	if (isCountedFailKlass(klass)) return 'fail';
 	const stats = testStats(result);
 	if (stats.denom === 0) return verdict(0, 'unknown');
 	return verdict(testRate(stats), null);
@@ -189,15 +354,16 @@ export function compositeBand(c) {
 }
 
 /**
- * The single inclusion rule for the headline mean. A cell counts iff it is an `agent_fail` (a genuine
- * failure counted as composite 0), OR it is gradeable (not harness_error) and produced tests (denom>0).
+ * The single inclusion rule for the headline mean. A cell counts iff it is a COUNTED failure
+ * (`agent_fail` or `dead_server` — a genuine failure scored as composite 0), OR it is gradeable
+ * (not harness_error) and produced tests (denom>0).
  * @param {object} result
  * @returns {boolean}
  */
 export function isScoredCell(result) {
 	const klass = result?.klass ?? classifyCell(result).klass;
 	if (klass === 'harness_error') return false;
-	if (klass === 'agent_fail') return true;
+	if (isCountedFailKlass(klass)) return true;
 	return testStats(result).denom > 0;
 }
 

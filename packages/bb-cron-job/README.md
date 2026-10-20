@@ -213,7 +213,7 @@ Automatically provisions:
 
 - **EventBridge Schedule:** One `AWS::Scheduler::Schedule` per CronJob instance
 - **Shared Lambda:** Targets the shared Lambda (same as API handlers and AsyncJob). No dedicated Lambda per job.
-- **IAM role:** Per-stack EventBridge Scheduler role with `lambda:InvokeFunction` permission
+- **IAM role:** Per-stack EventBridge Scheduler role with `lambda:InvokeFunction` permission. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
 - **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
 
 ## Key Distinction from AsyncJob

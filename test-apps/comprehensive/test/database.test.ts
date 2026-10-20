@@ -3,6 +3,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
+import { DatabaseErrors } from '@aws-blocks/bb-data';
 import type { api as apiType } from 'aws-blocks';
 
 // Compile-time type assertion helpers. `Equal` is the standard invariant
@@ -81,8 +83,10 @@ export function databaseTests(getApi: () => typeof apiType) {
       await api.dbInsert(a, 'sender', 50);
       await api.dbInsert(b, 'receiver', 0);
 
-      // Transfer more than balance — should fail
-      await assert.rejects(() => api.dbTransfer(a, b, 999), /Insufficient balance/);
+      // Transfer more than balance — should fail. The handler throws a raw
+      // Error, which the RPC gate collapses to a generic 500 (message
+      // sanitized); the rollback itself is asserted by the unchanged values below.
+      await assert.rejects(() => api.dbTransfer(a, b, 999), ApiError);
 
       // Values unchanged
       const sender = await api.dbGet(a);
@@ -103,6 +107,31 @@ export function databaseTests(getApi: () => typeof apiType) {
       assert.strictEqual(result.error, 'UniqueConstraintViolationException');
 
       await api.dbDelete(id);
+    });
+
+    // Duplicate-key (SQLSTATE 23505) UniqueConstraintViolation must serialize to
+    // JSON-RPC 409 (Conflict) over the wire — reconstructed client-side as an
+    // ApiError with status 409 — not a generic 500. The error name is preserved
+    // so isBlocksError still matches. The PGlite mock enforces the PK constraint,
+    // so this exercises the real translate path locally. (issue #508)
+    test('Database - duplicate insert returns status 409 over the wire', async () => {
+      const api = getApi();
+      const id = `t-409-${Date.now().toString(36)}`;
+      await api.dbInsert(id, 'first', 1);
+      try {
+        await assert.rejects(
+          () => api.dbInsert(id, 'dup', 2),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, 409, 'duplicate key must be 409, not 500');
+            assert.ok(isBlocksError(e, DatabaseErrors.UniqueConstraintViolation));
+            assert.strictEqual(e.retriable, false, 'duplicate key is not retriable');
+            return true;
+          },
+        );
+      } finally {
+        await api.dbDelete(id);
+      }
     });
 
     // Kysely transactions must be atomic on the real engine.

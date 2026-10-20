@@ -1,5 +1,323 @@
 # @aws-blocks/hosting
 
+## 0.4.1
+
+### Patch Changes
+
+- 8b5ef4a: fix(hosting): stop the SSR REST API from leaking an IAM role on every teardown
+  
+  The SSR origin's `RestApi` relied on CDK's default `cloudWatchRole: true`, which
+  provisions an account-level `AWS::ApiGateway::Account` plus a CloudWatch Logs IAM
+  role with `RemovalPolicy.RETAIN`. The SSR stage enables neither execution nor
+  access logging, so the role was unused, and because it is retained, every
+  `cdk destroy` of a hosting SSR stack left one orphaned IAM role behind — enough,
+  over repeated deploys, to exhaust the account's 3000 `RolesPerAccount` quota and
+  make all subsequent deploys fail with `ServiceLimitExceeded`. The SSR `RestApi`
+  now sets `cloudWatchRole: false` (matching `bb-lambda-compute`), so no role or
+  `ApiGateway::Account` is created. Existing stacks drop both resources on their
+  next deploy; the previously retained role is not removed by CloudFormation and
+  can be deleted manually — but first check `aws apigateway get-account`: if the
+  region's `cloudwatchRoleArn` still points at that role, deleting it breaks
+  logging for every other API Gateway stage in the region.
+- 382dac6: fix(hosting): the image-optimization Lambda no longer follows redirects on remote image fetches
+  
+  The IPX image Lambda validated a remote image URL against the allowlist
+  (`IMAGE_ALLOWED_HOSTNAMES` / `remotePatterns`) once, before fetching — and the
+  fetch then followed HTTP redirects without re-validating the target. An allowlisted
+  host with an open redirect (a user-content CDN, say) could therefore steer the fetch
+  to any host, including `127.0.0.1` inside the Lambda sandbox.
+  
+  Remote fetches now use `fetchOptions: { redirect: 'error' }`, so a 3xx fails the
+  image request instead of being followed, and the allowlist holds for every request
+  the Lambda makes. **If an allowlisted image host serves its images through a redirect,
+  allowlist the final location instead.** The generated Lambda also pins `ipx` to an
+  exact version (`3.1.1`) rather than `^3.0.0`, so the fetch behavior this guard relies
+  on can't change at deploy time.
+- c6d9e49: fix(hosting): the image-optimization Lambda's SVG gate now decides by content, not file extension
+  
+  With `dangerouslyAllowSVG` / `IMAGE_ALLOW_SVG` off, the image Lambda rejected SVG
+  sources only when the URL ended in `.svg`. An origin's content type isn't tied to its
+  path, so an SVG served from `/logo` or `/logo.png` passed the gate and was returned as
+  `image/svg+xml` from the application's own origin. SVGO, which IPX runs on SVG input,
+  is an optimiser rather than a sanitiser and keeps some script-capable constructs.
+  
+  The Lambda now sniffs the image bytes from both the S3 originals bucket and allowlisted
+  remote hosts, and rejects SVG content with a `415` before IPX processes it. That also
+  covers rasterizing requests such as `?f=png`. As a backstop it refuses any SVG output
+  unless SVG is enabled. The `.svg` extension check remains as a cheap pre-filter.
+  Nothing changes when SVG is enabled, or for raster images.
+- 7c19c4f: feat: `npm run deploy -- --wait-live` holds `BLOCKS_DEPLOYED` until the new build is actually served
+  
+  `cdk deploy` returning is not the same as the new frontend build being served.
+  Two edge windows stay open after CloudFormation reports complete, and emitting
+  `BLOCKS_DEPLOYED` while either is open lets a caller's immediate self-test hit a
+  stale bundle and silently miss a regression.
+  
+  - **New opt-in `--wait-live` flag.** When set, `npm run deploy` only prints
+    `BLOCKS_DEPLOYED` once the new build is confirmed live, so a request issued
+    immediately after the signal returns the new asset.
+  - **Per-build config match (the KVS cutover).** Each deploy stamps its build id
+    into the runtime config (`/.blocks-sandbox/config.json`) and surfaces it as a
+    `HostingBuildId` stack output; the poll declares the config live only when the
+    body CloudFront serves carries that exact id, distinguishing the new build from
+    a byte-identical config still served by an edge POP routing to the previous
+    build during cutover — the common re-deploy case.
+  - **Invalidation wait (the compute/SSR window).** For a compute deploy the `/*`
+    CloudFront invalidation that flushes the previous build's edge-cached SSR HTML
+    is fire-and-forget, so CloudFormation returns before it propagates. The deploy
+    now surfaces the invalidation id as a `HostingInvalidationId` stack output and,
+    under `--wait-live`, polls `GetInvalidation` until `Completed` before signalling
+    — closing the window where the edge still serves old SSR HTML (referencing old
+    hashed assets → 403). Pure-static deploys issue no invalidation and skip this.
+  - **Bounded probing.** Each config probe carries a per-request timeout
+    (`AbortSignal`), so one stalled response cannot hold the deploy past its budget.
+    `--wait-live-timeout=<seconds>` tunes the overall budget (default 180); if
+    liveness can't be confirmed in time, the deploy — which itself succeeded — prints
+    a clear warning and exits non-zero rather than emitting a false "live" signal.
+  - **No-op for backend-only apps** (no frontend to verify) and off by default, so the
+    existing deploy flow is unchanged unless you opt in.
+
+## 0.4.0
+
+### Minor Changes
+
+- 5501cb6: Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
+  
+  **Breaking change** (a minor bump pre-1.0):
+  
+  - The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
+    with the new `monitoring.subscriptions` list instead: `EmailSubscription`
+    and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
+    subscriptions only, for now). Each subscription is applied to **both**
+    hosting alarm topics, so you subscribe in one place and every alarm is
+    covered regardless of region.
+  - The `hosting.monitoringTopic` attribute is **removed**, replaced by
+    `hosting.monitoring` = `{ alarms, alarmTopics }` (all alarms and all
+    alarm topics across both regions).
+  
+  `AWS/CloudFront` metrics publish only in us-east-1 and a CloudWatch alarm
+  cannot watch a metric cross-region, so off-region the CloudFront 5xx alarm
+  never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
+  Off-region deployments now **always** place the CloudFront alarm in a
+  synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
+  encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
+  too. Off-region placement is always on; the only escape is when it is
+  genuinely impossible. When the region resolves but the account is
+  unresolved (a single-synth multi-account pipeline), the us-east-1 support
+  stack cannot be built, so the CloudFront alarm is skipped with a loud synth
+  warning and all other alarms are kept, rather than throwing. Set
+  `env: { account, region }` to enable CloudFront coverage.
+  
+  Migration: replace `monitoring: { snsTopicArn }` with
+  `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
+  (or a `UrlSubscription`). Two escape paths cover what `subscriptions` no
+  longer does directly:
+  
+  - **Route alarms to an existing/central SNS topic:**
+    `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
+  - **Resource-target (Lambda/SQS) subscriptions:** still valid on the
+    regional topic via `hosting.monitoring.alarmTopics[].addSubscription(...)`.
+    Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
+    drops them (that would need an unresolvable cross-region reference).
+  
+  See `docs/DECISIONS.md` D-016 for the always-on and warn-and-skip rationale.
+  
+  `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
+  `monitoring` attribute in place of `monitoringTopic`.
+- 5515483: fix(hosting): fail-closed SSR cache key + per-credential cache-key options
+  
+  Ensures cacheable SSR responses on compute deployments are keyed per credential, and adds the controls to include credentials in the SSR cache key.
+  
+  **BREAKING:** existing configs that set `cdn.ssrDefaultTtl > 0` now fail synth (`SsrCacheKeyCredentialsRequiredError`) until they include a credential in the SSR cache key. Enabling `ssrDefaultTtl > 0` makes SSR responses without an explicit `Cache-Control` header cacheable and shared at the CloudFront edge, keyed only on the Next.js router headers — not on `Authorization` or session cookies (CloudFront ignores `Vary`).
+  
+  Migration — pick one:
+  - Add `cacheKeyCookies: ['<your session cookie>']` and/or `cacheKeyHeaders: ['authorization']` so cached responses are keyed per credential; or
+  - Remove `ssrDefaultTtl` (and ensure personalized routes emit `Cache-Control: private`).
+  
+  - **Fail-closed guard on `cdn.ssrDefaultTtl`.** Synth throws unless `cacheKeyCookies` and/or `cacheKeyHeaders` is set, so credentials are in the cache key before per-credential responses can be cached. An unresolved-token TTL is treated as `> 0` (fail closed).
+  - **New `cdn.cacheKeyCookies` and `cdn.cacheKeyHeaders` options.** Add your session cookie name(s) and/or credential-bearing header(s) (e.g. `'authorization'`) to the SSR cache key so authenticated responses are cached per credential. `'accept-encoding'` is rejected (handled by the brotli/gzip flags), and at most 8 caller cookies are allowed (CloudFront's 10-cookie cap, 2 reserved for Next.js preview mode). The cookie/header caps are resolved via `QuotaBudget` (`quotas.cacheKeyCookies` / `quotas.cacheKeyHeaders`) so a granted quota increase raises them.
+  - **Shared-route cache key on compute deploys.** Compute deploys route every request through a single default cache behavior, so `cacheKeyCookies`/`cacheKeyHeaders` would key all routes per credential. The edge router now strips the configured cookies and `authorization` on static and image routes so shared assets keep a shared cache key, while SSR/compute routes stay keyed per credential.
+  - **Cache-key JSDoc** on `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` documenting how credentials enter the cache key and safe usage.
+  - **`@aws-blocks/core`:** `Hosting` exposes `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` as top-level props and forwards them to the CDN cache-key config.
+  
+  Note: any route that sets cookies via `Set-Cookie`, or otherwise varies per user without opting into the cache key, must emit `Cache-Control: private` so its response is not cached as a single shared entry at the edge.
+
+### Patch Changes
+
+- 773cef2: fix(astro): allow an empty `dist/client` for pure-SSR builds
+  
+  A server/hybrid Astro app with no static assets — no `public/` files and no
+  prerendered pages — produces an empty `dist/client`. The adapter treated that as
+  a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
+  and deploy. `dist/server/entry.mjs` is the real required artifact; an empty (or
+  absent) `dist/client` is valid, since CloudFront routes every request to the SSR
+  Lambda. The adapter now requires only the server entry and ensures `dist/client`
+  exists (creating it when absent, with a build-log breadcrumb) instead of failing.
+- 6b7fe4c: fix(hosting): retain the ISR tag-table seed custom resource on stack delete
+  
+  The `IsrTagTableSeed` custom resource is backed by a Lambda through a CDK
+  `Provider`. On stack delete CloudFormation tore the provider's framework Lambda
+  down before it sent the custom resource its `Delete`, so the delete invoke hit
+  an already-gone function, received no response, and hung to the 30-minute
+  custom-resource timeout -- failing the whole stack delete with `DELETE_FAILED`
+  and re-failing identically on every retry. The seed custom resource now carries
+  `RemovalPolicy.RETAIN`, so CloudFormation drops it on delete without a delete
+  invoke and the stack tears down cleanly. This is behavior-preserving: the
+  OpenNext `dynamodb-provider` `remove()` path is a no-op, and the seeded rows
+  live only in the ISR tag table, which is destroyed with the stack -- so
+  retaining the custom resource orphans nothing.
+- dae7a86: fix(hosting): warn when a compute resource pins an end-of-life Node.js runtime
+  
+  `resolveRuntime` still accepts an explicitly pinned `nodejs18.x` or `nodejs20.x`
+  (so an existing/deployed function isn't hard-broken at synth), but both are past
+  their AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). It now
+  emits a CDK synth-time **deprecation warning** for those runtimes, pointing at
+  `nodejs22.x` / `nodejs24.x` (or omitting the runtime to use the default). A
+  supported runtime, or omitting it, warns nothing; the accepted set and the
+  hard error for unrecognized runtimes are unchanged.
+- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
+  
+  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
+    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
+    schedule-group pattern).
+  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
+    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
+    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+
+## 0.3.1
+
+### Patch Changes
+
+- 2806ae2: Ensure the hosting route cutover waits for the resolved client configuration deployment.
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+
+## 0.3.0
+
+### Minor Changes
+
+- f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
+  
+  The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
+  after `buildRetentionDays` (default 30), including the build that CloudFront KVS
+  `meta.b` currently points to. An app that did not deploy within the retention
+  window had its live build's objects expired out from under an otherwise-healthy
+  stack — the router kept rewriting to the now-empty prefix, so every static path
+  returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
+  Recovery required a redeploy.
+  
+  **Fix.** The lifecycle rule now matches only objects tagged
+  `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
+  to the new build, the cutover handler tags the *outgoing* build's objects
+  superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
+  delete-object permission). The live build is never tagged, so it is never expired,
+  regardless of deploy cadence. Superseded builds are still cleaned up after
+  `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
+  "NOT tagged" predicate), which is why the superseded build is tagged rather than
+  the live build excluded.
+  
+  **Rollback-safety hardening.** The same cutover also *clears* the build-state tag
+  on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+  this, a rollback that re-points `meta.b` back to a retained build that was tagged
+  superseded by an earlier cutover would hand the now-live build to
+  `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
+  `s3:DeleteObjectTagging` (tags only, never objects).
+  
+  **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
+  `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
+  to change retention was an L1 bucket override. It now flows through to the
+  hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
+  (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
+  before.
+  
+  **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
+  synth-time **warning** (never an error) when the deploy cadence is at or beyond
+  `buildRetentionDays`, i.e. when superseded builds could age out before the next
+  deploy and shrink the rollback window. The live build is unaffected, so this is
+  a rollback-window note, not a correctness gate.
+  
+  Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
+  lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
+  + Lambda-role update on the next deploy; no bucket replacement), and adds a new
+  IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+  scoped to `builds/*`) to the
+  cutover handler. Build artifacts uploaded before the upgrade carry no
+  `build-state` tag and are therefore never expired by the new rule — including
+  the live build — so the upgrade cannot delete a running build; from the next
+  deploy onward each superseded build is tagged and reclaimed normally.
+
+### Patch Changes
+
+- 1da58fd: `HostingConstruct`: retain the CDKBucketDeployment custom resources so they're skipped on stack teardown. A BucketDeployment custom resource runs a delete-time handler (object cleanup / CloudFront invalidation — aws-cdk#15891, aws-cdk#23708); when it fails it wedges the whole stack in `DELETE_FAILED`, orphaning the CloudFront distribution. Retaining the CRs removes them from the teardown path so the stack — and its distribution — delete cleanly (object cleanup is handled by the bucket's `autoDeleteObjects` / sandbox teardown). Observed leaking distributions on the high-volume Amplify SSR-adapter e2e (`deployment-type=standalone`), which consumes this construct.
+- 4b74c7f: feat(hosting,pipeline): managed-value JSON codec + a public per-stage post-deploy hook
+  
+  **`@aws-blocks/hosting` — managed-value JSON codec.** `secret()`/`config()` markers
+  are branded with a `Symbol` (and may carry a non-serializable `schema`), so they do
+  not survive `JSON.stringify`/`JSON.parse` — the brand is dropped and
+  `isManagedValue()` then returns false. Any consumer that carries a config object
+  containing markers across a JSON boundary (e.g. serializing per-stage config into a
+  build environment variable and reading it back in a later phase) now has a lossless
+  round-trip: `encodeManagedValue`/`decodeManagedValue`, the `managedValueReplacer` /
+  `managedValueReviver` for use with `JSON.stringify`/`JSON.parse`, plus
+  `isManagedValueJSON`, `ManagedValueJSON`, `MANAGED_VALUE_JSON_TAG`,
+  `MANAGED_VALUE_JSON_VERSION`, and the typed `ManagedValueCodecError`. The wire form
+  is a versioned, cross-build compatibility boundary: `decodeManagedValue` accepts
+  `unknown` and validates exhaustively — throwing `ManagedValueCodecError` on an
+  unsupported version, unknown kind, or malformed value — while the reviver leaves
+  anything that is not an exact wire value untouched (a tagged object carrying extra
+  fields is not mistaken for a marker, so no data is silently dropped). A marker's
+  `schema` object is not serializable and is not transported, but its operational bit
+  is, so a schema-bearing marker round-trips **without silently changing runtime
+  behavior** (the far side still JSON-parses the stored value); deep re-validation
+  still requires re-declaring the schema on the far side.
+  
+  **`@aws-blocks/pipeline` — `postStage` hook.** New optional `postStage` prop on
+  `PipelineProps`. It is invoked once per stage with the stage, its config, and the
+  resolved pipeline source (`PostStageContext`), and its returned steps are attached
+  as that stage's post-deploy steps. When the stage also has a `bakeTime`, the bake
+  step is made to depend on the hook's steps, so baking begins only after they
+  complete rather than racing them in parallel. This lets a higher-level construct run
+  a second per-stage deploy phase (one that needs the first phase's outputs) without
+  matching internal construct names to rediscover the stage's source.
+  
+  Both additions are backward compatible — new exports and one new optional prop.
+
+## 0.2.0
+
+### Minor Changes
+
+- 9d4ccea: Add `secret()` / `config()` support to hosting and pipeline for self-hosted deployments — externalized values that are never hardcoded in source, committed to git, or written into the CloudFormation template.
+  
+  **Two intent functions; the store is implied by which you call.**
+  
+  - **`secret('KEY')` → AWS Secrets Manager** — for sensitive values (API keys, tokens, credentials).
+  - **`config('KEY')` → SSM Parameter Store** (free tier) — for non-sensitive externalized values (feature flags, a custom domain, a connection ARN).
+  
+  The developer never selects a store; it is derived from the function (`storeForKind`), so the CLI write, the IAM grant, the synth-time fetch, and the runtime read can never disagree.
+  
+  **Runtime read — two getters, one per store.** `getSecret('KEY')` reads Secrets Manager; `getConfig('KEY')` reads SSM. Each reads its own injected locator env var (`HOSTING_SECRET_PARAM_<KEY>` vs `HOSTING_CONFIG_PARAM_<KEY>`), so the store is unambiguous. Both read `process.env.KEY` first, so **local dev needs no AWS** (put the value in a `.env` file). Values are fetched + decrypted on first use, cached (per-kind `cacheTtlSeconds` for rotation without a cold start; otherwise cached for the process lifetime), and never enter the template. The getters live on the **CDK-free `@aws-blocks/hosting` entry** — the value API (`secret`/`config`/`getSecret`/`getConfig`) is the package's `.`, and its module graph pulls in no CDK, no `fast-glob`, and no `node:fs`, so importing it into an SSR/runtime bundle (including the edge runtime) is safe. Build-time tooling lives off `.` so it never enters a runtime bundle: the CDK construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI + typegen engines on `@aws-blocks/hosting/scripts`. (`@aws-blocks/core` already exports a backend `getConfig`, so import the hosting getters from `@aws-blocks/hosting`.)
+  
+  **CDK wiring.** In `Hosting` `environment` (and `domain`) a `secret()`/`config()` marker injects only the store *locator* and grants the compute role least-privilege read (`secretsmanager:GetSecretValue` / `ssm:GetParameter`, scoped to the exact ARN) + `kms:Decrypt` (conditioned on `kms:ViaService`). When a `stage` is set the grant covers BOTH the stage locator `<prefix>/<stage>/<key>` and the shared fallback `<prefix>/<key>` (the fallback read is what lets a stage fall back to a shared value), so treat the shared entry as readable by every stage sharing that prefix. A **synth-time** position — `domain.domainName` — accepts only `config()` (or a plain string), never `secret()`: the value is resolved via an SDK read and **inlined as a literal into the template** (a domain must be a literal before CloudFront/ACM), so a secret there would defeat its own purpose; a domain is public anyway. Synth resolution is async, so use `await Hosting.create(...)`. (Runtime `environment` markers still accept both `secret()` and `config()` — those inject only the locator and never inline.) Per-kind namespace/cache config is set via the separate `secretStore` / `configStore` props (`{ prefix, stage, cacheTtlSeconds }`), defaulting to the neutral `/hosting/secrets` and `/hosting/config` prefixes.
+  
+  **Namespacing (avoid cross-app collisions).** A **Blocks** app is scoped automatically: the `Hosting` / `Pipeline` blocks and the `npm run secret` / `config` CLIs default to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`, where `stackId` is the app's stable id from the committed `.blocks/config.json`. Both the CLI and the CDK synth read that same file, so two Blocks apps in one account/region never collide, and the write and the read can never diverge (when the file is absent — e.g. a bare test — both sides fall back to the unscoped `/blocks/*` identically). `stackId` is stage-independent (prod and sandbox share it; use the opt-in `stage` segment for per-stage values). A **standalone** hosting/pipeline app (the framework-neutral leaf) has no `.blocks/config.json`, so its defaults (`/hosting/secrets`, `/hosting/config`) stay account-global — give each app its own `secretStore.prefix` / `configStore.prefix` (and matching CLI `--prefix`) when more than one deploys to an account. Use `--region` (or `AWS_REGION`) to write the value in the same region the app deploys to.
+  
+  **Bring-your-own (BYO).** `environment` (hosting) and `buildSecrets` (pipeline) also accept an existing CDK `ISecret` / `IParameter` handle alongside the managed markers: the construct grants read via the handle and injects its locator, so `getSecret`/`getConfig` resolve it identically — managed *provisions*, BYO *references*.
+  
+  **Pipeline.** `source.connectionArn` accepts a `config()` marker (resolved to a literal at synth; a connection ARN is a reference inlined into the template, so `secret()` is a type error there — same rule as `domain`). `buildSecrets` accepts `secret()` markers or BYO `ISecret` handles and wires them as CodeBuild `SECRETS_MANAGER` env vars fetched at build time (masked in logs, never inlined) — build-time credentials are secrets, so this surface is Secrets-Manager-only. Namespace config via `secretStore` / `configStore`.
+  
+  **CLI.** `secret set|list|remove` (Secrets Manager) and `config set|list|remove` (SSM), sharing one engine (`setValue`/`listValues`/`removeValue`/`runValueCli`). Blocks apps get `npm run secret` / `npm run config` (scoped per app to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`); standalone/pipeline apps get the `hosting-secret` and `hosting-config` bins. A **secret** value is never read from argv/shell history — `secret set` takes it from a hidden prompt or `--value-stdin` (a positional value is a hard error); a non-sensitive **config** value may be passed positionally. `list` prints names only, never values. All commands accept `--prefix`, `--stage`, and `--region` (write to the same region the app deploys to).
+  
+  **Type-safe reads (zero code) — `getSecret` / `getConfig` autocomplete + typo errors.** The runtime getters are typed against two augmentable registries (`HostingSecretRegistry` / `HostingConfigRegistry`): empty by default they accept any `string` (unchanged, non-breaking), and once populated they narrow to your declared keys — editor autocomplete, and a typo (or reading a `config` key via `getSecret`, i.e. the wrong store) becomes a compile error. You populate them with **no code change** via the new `hosting-typegen` CLI (`npm run typegen`, `--watch` to regenerate on save, `--check` for CI): it statically scans your `secret('...')` / `config('...')` calls (TypeScript compiler API — no app execution, no AWS credentials) and generates a `.d.ts` (`.blocks/hosting-values.d.ts`) that augments the `@aws-blocks/hosting` entry (where the getters live), narrowing them to your declared keys. The generated file is derived from your `secret()`/`config()` calls, and `--check` fails CI when it's stale. Add `.blocks/**/*.d.ts` to your tsconfig `include`. In a Blocks app this is automatic: the dev server (`npm run dev`) auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself (a no-op when the app declares no secrets, and non-fatal), so keys update as you type with no second command; standalone hosting apps use `hosting-typegen --watch`.
+  
+  **Typed, parsed values via a schema.** `secret('KEY', { schema })` / `config('KEY', { schema })` accept any Standard Schema (Zod, Valibot, ArkType — typed as `StandardSchemaV1`, library-neutral). `typegen` builds a TypeScript `Program`, infers the schema's output type, and inlines it into the generated `.d.ts`, so **`getSecret`/`getConfig` return the inferred type** (e.g. `const { beta } = await getConfig('FEATURE_FLAGS')`) instead of `string` — no `JSON.parse(...)` and no `any`. At runtime the value is JSON-parsed (a per-key flag is injected at synth); the schema itself isn't shipped to the runtime, so this is parse-to-type, not a deep re-validation across the bundle boundary.
+  
+  **Templates.** `@aws-blocks/create-blocks-app` templates scaffold a `secret` script (`npm run secret`) wired to the Blocks CLI, and a `typegen` script (`npm run typegen` → `runTypegenCli` from `@aws-blocks/blocks/scripts`) with `.blocks/**/*.d.ts` added to the tsconfig `include`, so a newly-created app can manage secrets and get type-safe `getSecret`/`getConfig` out of the box.
+
 ## 0.1.10
 
 ### Patch Changes

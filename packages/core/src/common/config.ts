@@ -56,13 +56,18 @@ async function loadConfigFromS3(): Promise<Record<string, string>> {
 		const body = await fetcher(bucket, key);
 		configCache = JSON.parse(body);
 	} catch (error: any) {
-		const isNotFound = error?.name === 'NoSuchKey'
-			|| error?.Code === 'NoSuchKey'
-			|| error?.$metadata?.httpStatusCode === 404;
+		const isNotFound =
+			error?.name === 'NoSuchKey' || error?.Code === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404;
 		if (isNotFound) {
-			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config`);
-			configCache = {};
-			return configCache;
+			// Do NOT cache the empty result: a 404 right after deploy is usually the config file
+			// not being readable yet (the transient window before the BucketDeployment settles), not
+			// a genuinely config-less app. Caching {} here would poison the container for its whole
+			// lifetime. Returning without caching lets the next invocation re-fetch and pick up the
+			// real config once it's present. (Apps that truly have no config just re-check cheaply.)
+			console.warn(
+				`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`,
+			);
+			return {};
 		}
 		const msg = error instanceof Error ? error.message : String(error);
 		throw new Error(`[Blocks] Failed to load config from S3 (${bucket}/${key}): ${msg}`);
@@ -142,14 +147,68 @@ export async function preloadConfig(): Promise<void> {
  * read their config via `process.env[key]` as before — no BB code changes needed.
  *
  * Only sets env vars that aren't already set (won't override explicit env vars).
+ * When an existing env var shadows a config entry with a **different** value,
+ * logs one warning listing the shadowed key names (never their values), so a
+ * `registerConfig` entry that can't take effect isn't silently ignored. A key
+ * whose env value already equals the config value (e.g. set by an earlier load
+ * in the same container) is not reported.
  */
 export async function loadConfigToProcessEnv(): Promise<void> {
 	const config = await ensureConfigLoaded();
+	const shadowed: string[] = [];
 	for (const [key, value] of Object.entries(config)) {
-		if (process.env[key] === undefined) {
+		const existing = process.env[key];
+		if (existing === undefined) {
 			process.env[key] = value;
+		} else if (existing !== String(value)) {
+			shadowed.push(key);
 		}
 	}
+	if (shadowed.length > 0) {
+		console.warn(
+			`[Blocks config] Ignored ${shadowed.length} config entr${shadowed.length === 1 ? 'y' : 'ies'} because an environment variable of the same name is already set (environment variables take precedence over registerConfig): ${shadowed.join(', ')}`,
+		);
+	}
+}
+
+/**
+ * Whether a config load has resolved and cached a result.
+ *
+ * Returns `true` once `loadConfigFromS3()` has cached a config object — either a
+ * successful S3 load, a genuinely-empty `{}` config, or the no-bucket local-dev
+ * path (both of which cache `{}`). Returns `false` in the initial state AND
+ * after a transient not-found miss: the 404 path deliberately does NOT cache its
+ * empty result (see `loadConfigFromS3`), so a `false` return immediately after
+ * awaiting a load uniquely identifies the post-deploy S3 window where
+ * blocks-config.json isn't readable yet.
+ *
+ * Callers use this to tell a transient-empty load (retry on the next request)
+ * apart from a legitimately-config-less app (do nothing) without reaching into
+ * the module's private cache.
+ */
+export function isConfigResolved(): boolean {
+	return configCache !== null;
+}
+
+/**
+ * Sanitize a Blocks identifier into a valid config/env-var key segment:
+ * uppercase, with every non-alphanumeric character replaced by `_`.
+ *
+ * Config entries are loaded into `process.env` at runtime (see
+ * {@link loadConfigToProcessEnv}), so a key must be a valid env-var name. This
+ * is the single rule both sides of a key share: whoever *writes* a config key
+ * (`registerConfig(\`PREFIX_${sanitizeConfigKey(id)}\`, …)`) and whoever *reads*
+ * it (`getConfigSync(\`PREFIX_${sanitizeConfigKey(id)}\`)`) MUST go through this
+ * function so they reconstruct a byte-identical key — a hand-inlined variant
+ * that drifts silently misses the lookup at runtime.
+ *
+ * @example
+ * ```typescript
+ * registerConfig(this, `BLOCKS_QUEUE_URL_${sanitizeConfigKey(this.fullId)}`, url);
+ * ```
+ */
+export function sanitizeConfigKey(id: string): string {
+	return id.toUpperCase().replace(/[^A-Z0-9]/g, '_');
 }
 
 /**

@@ -25,6 +25,7 @@
  * `cognitoFederated()` providers are configured.
  */
 
+import { brandBlocksError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type {
@@ -689,5 +690,5 @@ async function s256(input: string): Promise<string> {
 function engineError(message: string): Error {
 	const err = new Error(`CognitoFederationEngine: ${message}`);
 	err.name = 'AuthOIDCEngineError';
-	return err;
+	return brandBlocksError(err);
 }

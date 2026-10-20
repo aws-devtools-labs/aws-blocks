@@ -2,9 +2,9 @@
 
 A single application configuration value backed by SSM Parameter Store.
 
-**When to use:** You need a configuration value (feature flag, API URL, threshold) or a secret (API key, token) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
+**When to use:** You need a non-sensitive configuration value (feature flag, API URL, threshold) stored as a single SSM parameter. Each `AppSetting` instance maps to exactly one parameter.
 
-**When NOT to use:** If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
+**When NOT to use:** For a production secret (API key, OAuth client secret, database connection string, token), use [`Secret`](../bb-secret/README.md) — it is the recommended home for credentials that protect a production app, [in line with AWS guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html). `AppSetting` with `secret: true` does encrypt the value at rest and is free, so it is a fine fallback for a *low-value* secret in a prototype — but it is not the recommended place for production secrets. If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -26,8 +26,19 @@ const setting = new AppSetting(scope, id, options)
 | `name` | `string` | No | SSM parameter path. When omitted, derived from the scope tree as `/${fullId}`, guaranteeing uniqueness within the stack. |
 | `value` | `T` | No | Initial value. Required for non-secret parameters. Must not be provided when `secret` is set. |
 | `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T` from the schema. Cannot be used with `secret`. |
-| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the `aws/ssm` KMS key. Cannot be used with `schema` or `value`. |
+| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). Cannot be used with `schema` or `value`. For a production secret, prefer [`Secret`](../bb-secret/README.md) (AWS Secrets Manager) — see **When NOT to use** above. |
+| `kmsKeyArn` | `string` | No | ARN of a customer-managed KMS key to encrypt the SecureString, instead of the default `aws/ssm` key. Only valid with `secret: true`. See the note below. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
+
+> **Customer-managed KMS key (`kmsKeyArn`):** Provide a CMK ARN to control the
+> decrypt/grant scope of a secret (e.g. cross-account access or a dedicated key
+> policy). The construct grants the shared handler `kms:Decrypt` (plus
+> `kms:Encrypt` for secrets it writes) on that specific key ARN. Because AWS
+> Blocks does not own a bring-your-own key, **the key's own key policy must also
+> allow the app's Lambda execution role** to use it (or delegate to IAM via the
+> account-root statement CDK adds to same-account keys). Adding or changing
+> `kmsKeyArn` on an already-deployed secret re-encrypts its current value under
+> the new key on the next deploy, so decryption keeps working.
 
 > **Naming:** When you omit `name`, the framework derives a unique SSM path from
 > the construct scope tree (`/${fullId}`). This is the recommended approach — it
@@ -133,7 +144,7 @@ const apiUrl = new AppSetting(scope, 'apiUrl', {
 
 ## Validation Rules
 
-These are enforced at CDK synth time:
+These are enforced at CDK synth time and in local development (the mock rejects the same combinations at construction):
 
 - `secret` + `schema` → error (secrets are plain strings)
 - `schema` without `value` → error (parameter needs a valid initial value)

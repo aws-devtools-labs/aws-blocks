@@ -58,8 +58,13 @@ export interface Segment {
 export interface TracerOptions {
 	/**
 	 * Enable or disable tracing. Default: `true`.
-	 * When `false`, all operations are silent no-ops but `startSegment`
+	 * When `false`, all runtime operations are silent no-ops but `startSegment`
 	 * still executes the wrapped function normally.
+	 *
+	 * **At deploy time this is not a global off switch.** Tracing is presence-gated
+	 * and fleet-wide: `enabled: false` only means *this* `Tracer` doesn't opt in.
+	 * If any other `Tracer` exists in the app, X-Ray is still enabled on every
+	 * compute. To keep X-Ray off, don't construct a `Tracer` at all.
 	 */
 	enabled?: boolean;
 

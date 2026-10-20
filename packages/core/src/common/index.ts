@@ -8,6 +8,9 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 
+/** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
+const PG_APPLICATION_NAME_MAX_BYTES = 63;
+
 export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
@@ -158,6 +161,12 @@ export class Scope {
    */
   private static _unnamedCustomCount = 0;
 
+  /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
+  private static _defaultBlock: { name: string; version: string } | undefined;
+
+  /** Framework read from the synth sink for the process's telemetry event. */
+  private static _framework: string | undefined;
+
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
@@ -210,13 +219,45 @@ export class Scope {
     // running count into both totals here.
     totalCount += Scope._unnamedCustomCount;
     customBlocksCount += Scope._unnamedCustomCount;
+    const fallback = Scope._defaultBlock;
+    if (fallback && !Scope._bbRegistry.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
+      blocks.push(fallback);
+      totalCount += 1;
+    }
     return { blocks, totalCount, customBlocksCount };
+  }
+
+  /**
+   * Folded in only when {@link getRegisteredBlocks} is called, so importing the
+   * declaring package never mutates the registry, and the entry lands after
+   * every block the app actually constructed.
+   *
+   * @internal
+   */
+  static _setDefaultBlockForTelemetry(name: string, version: string): void {
+    Scope._defaultBlock = { name, version };
+  }
+
+  /**
+   * @internal Set by the deploy/sandbox orchestrator from the synth sink. Holds the
+   * resolved framework name unvalidated, including a customAdapter name; buildEvent
+   * gates it against REPORTED_FRAMEWORKS.
+   */
+  static _setFrameworkForTelemetry(framework: string): void {
+    Scope._framework = framework;
+  }
+
+  /** @internal */
+  static _getRegisteredFramework(): string | undefined {
+    return Scope._framework;
   }
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
     Scope._bbRegistry.clear();
     Scope._unnamedCustomCount = 0;
+    Scope._defaultBlock = undefined;
+    Scope._framework = undefined;
   }
 
   get fullId(): string {
@@ -291,13 +332,50 @@ export class Scope {
 
     const parents = collectBBParents(this.parent);
     for (const parent of parents) {
-      chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      if (parent.bbName && parent.bbVersion) {
+        chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      }
     }
 
     if (this.bbName && this.bbVersion && OFFICIAL_BB_NAMES.has(this.bbName)) {
       chain.push(['bb', `${this.bbName}/${this.bbVersion}`]);
     }
     return chain;
+  }
+
+  /**
+   * Render {@link buildUserAgentChain} as a single space-delimited string,
+   * suitable for a string-typed field such as the Postgres `application_name`
+   * connection parameter (`aws-blocks/<core> bb/AuthBasic/<version> bb/Database/<version>`).
+   *
+   * Shortened here rather than left to the server: Postgres truncates an
+   * over-long `application_name` by raw bytes, cutting mid-token, and preserves
+   * only printable ASCII — any other byte reaches `pg_stat_activity` as a `\xNN`
+   * escape, which is why the gap marker is ASCII `...` and not `…`.
+   *
+   * Returns `''` for an empty chain (e.g. the CDK context), so callers can use a
+   * simple truthiness guard before setting the field.
+   *
+   * @param maxBytes - Byte budget for the rendered string. Defaults to the
+   *   Postgres `application_name` limit. Override for other string sinks.
+   */
+  protected formatUserAgentString(maxBytes = PG_APPLICATION_NAME_MAX_BYTES): string {
+    const entries = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`);
+    if (entries.length === 0) return '';
+
+    const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+    const full = entries.join(' ');
+    if (byteLen(full) <= maxBytes) return full;
+
+    const origin = entries[0];
+    const leaf = entries[entries.length - 1];
+    const parents = entries.slice(1, -1);
+    while (parents.length > 0) {
+      parents.pop();
+      const elided = [origin, ...parents, '...', leaf].join(' ');
+      if (byteLen(elided) <= maxBytes) return elided;
+    }
+    return byteLen(origin) <= maxBytes ? origin : '';
   }
 }
 
@@ -341,7 +419,22 @@ function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
 }
 
-export function computeScopeFullId(scope: { id: string; parent?: any }) {
+/**
+ * The fully-qualified ID of a scope: its parent's `fullId` (or `id`) joined to its own.
+ *
+ * This is what `Scope.fullId` returns. Call it directly only when a block must know its
+ * own `fullId` before `super()` has run — a block that builds a child in its constructor
+ * cannot reach `this.fullId` yet, and must not restate the rule.
+ *
+ * @param scope - The scope's own `id` and its optional parent
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ *
+ * @example
+ * ```typescript
+ * const fullId = computeScopeFullId({ id, parent: scope });
+ * ```
+ */
+export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
     if ('fullId' in scope.parent && scope.parent.fullId) {
       return `${scope.parent.fullId}-${scope.id}`;
@@ -352,6 +445,37 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
   }
   return scope.id;
 }
+
+/**
+ * A Building Block standing in as its own child's parent, for a block that must
+ * construct a child before `super()` has run and so cannot pass `this`.
+ *
+ * `bbName`/`bbVersion` are required because the chain walk skips a parent without
+ * them. It also skips a name outside `OFFICIAL_BB_NAMES`, so a custom block is not
+ * attributed by supplying them alone. `fullId` is derived here so the child's own
+ * `fullId`, and any resource name taken from it, is the same as under a real parent.
+ *
+ * @param meta - The block's own `id`, its parent scope, and its name and version
+ * @returns A parent carrying the identity and the user-agent metadata
+ *
+ * @example
+ * ```typescript
+ * const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+ * const child = new KVStore(self, 'sessions');
+ * ```
+ */
+export function buildingBlockParent(
+  meta: BuildingBlockMeta & { id: string; parent: ScopeParent },
+): BuildingBlockMeta & { id: string; parent: ScopeParent; fullId: string } {
+  return { ...meta, fullId: computeScopeFullId(meta) };
+}
+
+/**
+ * How a Blocks backend's API is exposed to clients: `'apigateway'` (the API
+ * Gateway endpoint itself, the default) or `'cloudfront'` (a Blocks-managed
+ * CloudFront distribution in front of it). See {@link BlocksStackProps.apiFrontDoor}.
+ */
+export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
 
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
@@ -364,10 +488,45 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * How the app's API is exposed to clients. Default: `'apigateway'`.
+   *
+   * - `'apigateway'` — clients call the stack's API Gateway endpoint directly, on
+   *   its own `execute-api` domain. Nothing extra to deploy.
+   * - `'cloudfront'` — Blocks puts a CloudFront distribution in front of the
+   *   gateway (built as a regional endpoint, so traffic passes through one
+   *   CloudFront layer), and clients call the distribution's domain instead.
+   *
+   * Whichever tier you pick, `publicApiUrl` (and the `ApiUrl` stack output) is the
+   * URL clients should call. When a `Hosting` construct fronts the API, the API is
+   * served from Hosting's distribution; under `'cloudfront'` Blocks then creates no
+   * second distribution.
+   *
+   * The default is a constant `'apigateway'` — it is NEVER derived from the app's
+   * shape, so adding or removing Building Blocks never silently changes how the
+   * API is exposed.
+   *
+   * ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
+   * changes the API's endpoint domain.** Browser auth cookies and sessions are
+   * bound to the origin they were set on, so the change invalidates every existing
+   * cookie/session — users are signed out and must sign in again. (A stable custom
+   * domain — a future feature — would avoid this.) Pick a tier, and decide on
+   * Hosting, before you have real users, and treat a later change as a breaking
+   * migration.
+   */
+  apiFrontDoor?: ApiFrontDoorTier;
 }
 
 export class BlocksStack {
 	public readonly id: string;
+	/**
+	 * Path to the app's backend module (`props.backendCDKPath`). A typed contract for Building
+	 * Blocks that co-bundle the backend at synth time and read it off
+	 * `globalThis.CURRENT_BLOCKS_STACK` (the CDK `BlocksStack` / `BlocksBackend` set it). Declared
+	 * here so those consumers can type against this shared `BlocksStack` contract — which the CDK
+	 * `BlocksStack` / `BlocksBackend` implements — instead of `any`.
+	 */
+	declare readonly backendModulePath: string;
 	constructor(scope: Construct, id: string, props: BlocksStackProps) {
 		this.id = id;
 	}

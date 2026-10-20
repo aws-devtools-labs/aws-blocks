@@ -2,18 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
+import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME, getVpcContext } from '@aws-blocks/core/cdk';
+import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { Architecture, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { applyXRayTracing, buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './observability.js';
 import type { LambdaComputeProps } from './types.js';
+import { BB_NAME } from './version.js';
 
 export type { LambdaComputeProps } from './types.js';
 
 /**
- * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
- * Gateway REST API. The compute *owns* these resources.
+ * Process-global brand marking a {@link LambdaCompute} instance. Registered via
+ * `Symbol.for` (like core's `API_NAMESPACE_MARKER`) so identification works even
+ * when two copies of `bb-lambda-compute` resolve in one dependency tree — the
+ * case where `instanceof` fails because each copy has a distinct class object.
+ */
+const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
+
+/**
+ * A Lambda-backed {@link Compute}: a `NodejsFunction` the stack's single shared
+ * API Gateway REST API fronts. The compute *owns* the function (and its log
+ * group); the HTTP ingress is provisioned once at the stack level and integrates
+ * this compute's {@link apiHandler}. A BlocksStack / BlocksBackend's `handler`
+ * delegates to this compute's `fn`; its `gateway` / `apiUrl` resolve to the
+ * shared gateway.
  *
  * The function assumes the shared execution role (`this.executionRole`), so
  * Building Block grants reach it via that role. The handler entry and
@@ -25,13 +41,41 @@ export type { LambdaComputeProps } from './types.js';
  * cannot instantiate a compute until the customer-facing surface exists.
  */
 export class LambdaCompute extends Compute {
+	/**
+	 * Brand enabling cross-copy identification via {@link LambdaCompute.isLambdaCompute}.
+	 * @internal
+	 */
+	readonly [LAMBDA_COMPUTE_BRAND] = true;
 	/** The Lambda function backing this compute. */
 	readonly fn: lambda.NodejsFunction;
-	/** The API Gateway REST API fronting {@link fn}. */
-	readonly apiGateway: apigateway.RestApi;
+	/**
+	 * The handler's CloudWatch log group. Logs are always captured here; the
+	 * retention comes from this compute's `logRetention` prop, falling back to the
+	 * stack-wide `defaults.logRetention`. Named `logGroup` (not `handlerLogGroup`)
+	 * to avoid clashing with the inherited {@link Scope.handlerLogGroup} accessor.
+	 */
+	readonly logGroup: LogGroup;
 
-	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
-		super(id, { parent: scope });
+	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
+		super(id, { parent: scope, bbName: BB_NAME });
+
+		// The single CloudWatch log group for the handler. Owning it (a real
+		// LogGroup passed as the function's `logGroup`) makes its retention follow
+		// this compute's setting instead of AWS's infinite default. Retention is a
+		// compute-level prop (per-compute override) falling back to the stack-wide
+		// default. Torn down with the stack (logs are not durable state).
+		this.logGroup = new LogGroup(this, 'HandlerLogGroup', {
+			retention: options?.logRetention ?? this.defaults.logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		});
+
+		// Discover the shared VPC context from the owning stack/backend (set by
+		// initializeVpc when the customer passes `vpc`). When present, place the
+		// function in the VPC using the framework-resolved subnets and security
+		// group; when absent, leave these unset so the function runs in the
+		// AWS-managed network. The shared execution role already carries the ENI
+		// permissions (AWSLambdaVPCAccessExecutionRole) in that case.
+		const vpcContext = getVpcContext(this);
 
 		// Entry + BLOCKS_STACK_NAME are derived from the owning stack/backend
 		// (resolved by Compute) — never caller-supplied — so every compute in an
@@ -40,40 +84,98 @@ export class LambdaCompute extends Compute {
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: DEFAULT_NODE_RUNTIME,
+			// Default to arm64 (Graviton) — ~20% cheaper at equal performance, and
+			// transparent for the framework's own pure-JS bundles. `architecture` is
+			// internal for now (see types.ts); a customer override arrives with the
+			// public compute-configuration surface.
+			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
+			logGroup: this.logGroup,
 			memorySize: 2048,
 			timeout: cdk.Duration.seconds(60 * 15),
 			environment: {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,
 			},
-			bundling: {
+			// blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+			// CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing
+			// at Lambda load. See core's ./cdk/bundling.ts.
+			bundling: blocksNodejsBundling({
 				minify: true,
 				esbuildArgs: { '--conditions': 'aws-runtime' },
-			},
+			}),
+			// VPC placement, when a VPC is configured. Spread conditionally so the
+			// non-VPC path leaves these unset (CDK treats undefined as "no VPC").
+			...(vpcContext
+				? {
+						vpc: vpcContext.vpc,
+						vpcSubnets: vpcContext.computeSubnets,
+						securityGroups: [vpcContext.computeSecurityGroup],
+					}
+				: {}),
 		});
 
-		this.apiGateway = new apigateway.RestApi(this, 'API', {
-			restApiName: 'Blocks API',
-			deployOptions: { cachingEnabled: false },
-		});
-
-		const integration = new apigateway.LambdaIntegration(this.fn);
-
-		// Nested resource tree for /aws-blocks/api. The intermediate resource
-		// gets a proxy so sub-paths (RawRoutes) still reach the function.
-		const awsBlocksResource = this.apiGateway.root.addResource(BLOCKS_NAMESPACE.slice(1));
-		awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
-
-		const apiResource = awsBlocksResource.addResource('api');
-		apiResource.addMethod('POST', integration);
-		apiResource.addMethod('OPTIONS', integration);
-
-		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
+		// preset allows localhost so a local dev frontend can reach the deployed
+		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
+		// CORS_ALLOWED_ORIGINS.
+		const allowedOrigins = this.defaults.allowedOrigins;
+		if (allowedOrigins.length > 0) {
+			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
+		}
 	}
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	/**
+	 * The function the stack's shared REST API gateway integrates — this
+	 * compute's Lambda. Request throttling and access logging live on that shared
+	 * gateway's stage, not here; the gateway forwards every path to the function
+	 * and the Lambda handler does the routing.
+	 */
+	apiHandler(): IFunction {
+		return this.fn;
+	}
+
+	/**
+	 * Type guard for a {@link LambdaCompute} that survives duplicate
+	 * `bb-lambda-compute` copies in one dependency tree — it checks the
+	 * process-global {@link LAMBDA_COMPUTE_BRAND} symbol rather than class
+	 * identity, so it does not misfire like `instanceof` when a block and the
+	 * app resolve different copies of this package.
+	 */
+	static isLambdaCompute(x: unknown): x is LambdaCompute {
+		return (
+			typeof x === 'object' &&
+			x !== null &&
+			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
+		);
+	}
+
+	protected applyTracing(): void {
+		// Flip this function to X-Ray Active mode; the IAM grant to publish
+		// segments is applied once on the shared role by core's finalizeTracing.
+		applyXRayTracing(this.fn);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Logs are always captured to this compute's own log group (the one wired
+		// into the function), so this is always available. Query that group's name
+		// (CDK-generated) rather than the AWS default `/aws/lambda/<fn>` name.
+		return buildLoggingWidgets(this.logGroup.logGroupName, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }

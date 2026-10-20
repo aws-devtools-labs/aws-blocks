@@ -70,10 +70,19 @@ export function attach(httpServer: Server) {
 
 		// CORS for browser uploads/downloads
 		const origin = req.headers.origin || '*';
+		// Reflecting the request Origin (falling back to '*') is intentional: it
+		// lets a localhost cross-port dev server (e.g. Vite/webpack on a different
+		// port) call this local file-server. This dev file-server is local tooling
+		// only and NEVER deploys to AWS / production.
+		// It is safe because Access-Control-Allow-Credentials is deliberately NOT
+		// set, so the reflected origin carries no ambient credentials: presigned-URL
+		// auth is a query-string token, not a cookie / ambient session. That is what
+		// makes reflecting an arbitrary origin here safe.
+		// WARNING: do not re-add Access-Control-Allow-Credentials and do not
+		// 'tighten' this reflection without understanding the above.
 		res.setHeader('Access-Control-Allow-Origin', origin);
 		res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
 		res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-		res.setHeader('Access-Control-Allow-Credentials', 'true');
 
 		if (req.method === 'OPTIONS') {
 			res.writeHead(200);
@@ -149,8 +158,11 @@ export function attach(httpServer: Server) {
 			// `nosniff` stops the browser from MIME-sniffing octet-streams into
 			// HTML, and `Content-Disposition: attachment` forces a download rather
 			// than inline rendering — so an uploaded document can never run as a
-			// page. Real S3 objects served through CloudFront are hardened the same
-			// way; this keeps local dev from being weaker than production.
+			// page. This is dev-server hardening only. Deployed FileBucket content
+			// is served via S3 presigned URLs, where the stored Content-Type is
+			// chosen by the uploader and no equivalent Content-Disposition/nosniff
+			// is applied — do not assume this dev-server behavior reflects the
+			// deployed path.
 			res.writeHead(200, {
 				'Content-Type': contentType,
 				'Content-Length': body.length.toString(),

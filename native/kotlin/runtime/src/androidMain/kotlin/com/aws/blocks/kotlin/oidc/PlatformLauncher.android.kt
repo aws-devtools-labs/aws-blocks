@@ -28,7 +28,12 @@ internal object PendingOidcResult {
 }
 
 private class AndroidOidcLauncher : OidcPlatformLauncher {
-    override suspend fun launch(authorizeUrl: String): String {
+    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
+        AndroidRedirectSession(configuredRelayTo)
+}
+
+private class AndroidRedirectSession(override val relayTo: String) : OidcRedirectSession {
+    override suspend fun awaitRedirect(authorizeUrl: String): String {
         val activity = ContextProvider.activity
             ?: error("No active Activity. Ensure signIn() is called while an Activity is resumed.")
         val deferred = PendingOidcResult.create()
@@ -37,5 +42,9 @@ private class AndroidOidcLauncher : OidcPlatformLauncher {
         }
         activity.startActivity(intent)
         return deferred.await()
+    }
+
+    override fun close() {
+        if (PendingOidcResult.isActive) PendingOidcResult.cancel()
     }
 }

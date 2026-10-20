@@ -911,7 +911,13 @@ export type SignInNextStep =
 export interface CognitoUser<O extends AuthCognitoOptions = AuthCognitoOptions> extends AuthUser {
 	/** Cognito-assigned UUID (`sub` claim). Unique per user across the pool lifetime. */
 	userSub: string;
-	/** Group memberships resolved from the `cognito:groups` claim. */
+	/**
+	 * Group memberships. From `requireAuth` / `getCurrentUser` / `signIn` these
+	 * are the `cognito:groups` token claim (a snapshot from sign-in, may lag an
+	 * out-of-band membership change until the token refreshes). From `requireRole`
+	 * they are read live from Cognito (`AdminListGroupsForUser`) at call time and
+	 * narrowed to the declared groups, so they reflect current membership.
+	 */
 	groups: GroupOf<O>[];
 	/** Standard OIDC attrs (`email`, `phone_number`, …) + `custom:*` attrs. */
 	attributes: Partial<Record<ReadAttrOf<O>, string>>;

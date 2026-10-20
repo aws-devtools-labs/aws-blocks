@@ -97,4 +97,7 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
 awsBlocks {
     apiSpec = file("blocks.spec.json")
     packageName = "blocks.e2e"
+    oidc {
+        relayTo = "nativebindings://auth"
+    }
 }

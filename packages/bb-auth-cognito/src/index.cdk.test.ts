@@ -40,7 +40,12 @@ function synth(build: (stack: cdk.Stack) => void) {
 	(globalThis as any).CURRENT_BLOCKS_STACK = stack;
 	try {
 		build(stack);
-		finalizeConfigRegistry(stack, handler);
+		// Grant config read to the handler's role and stamp the `BLOCKS_CONFIG_*`
+		// coordinates on the handler function — the same target as before the
+		// shared-role refactor, so the template assertions are unchanged.
+		finalizeConfigRegistry(stack, handler.role!, [
+			{ setEnv: (key: string, value: string) => handler.addEnvironment(key, value) } as any,
+		]);
 		return Template.fromStack(stack);
 	} finally {
 		delete (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -63,15 +68,21 @@ function scope(stack: cdk.Stack): ScopeParent {
  *
  * Runs against the built `dist/`, which the package's own test script requires
  * anyway (`node --test dist/**\/*.test.js`).
+ *
+ * Passing `sessionStore` exercises the standalone SessionStore constructor instead.
  */
-function synthUnderCdkConditions(): { id: string; timeToLive: unknown }[] {
+function synthUnderCdkConditions(sessionStore?: { ttlSeconds?: number }): { id: string; timeToLive: unknown }[] {
+	const construct =
+		sessionStore === undefined
+			? "new AuthCognito(stack, 'auth');"
+			: `new SessionStore(stack, 'standalone-sessions', ${sessionStore.ttlSeconds});`;
 	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
 	writeFileSync(probe, `
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
 import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { AuthCognito, SessionStore } from '@aws-blocks/bb-auth-cognito';
 
 const app = new cdk.App();
 const stack = new cdk.Stack(app, 'TestStack');
@@ -87,8 +98,8 @@ const handler = new lambda.Function(stack, 'Handler', {
 stack.handler = handler;
 stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
-new AuthCognito(stack, 'auth');
-finalizeConfigRegistry(stack, handler);
+${construct}
+finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
 const tables = Object.entries(resources)
@@ -110,6 +121,24 @@ console.log('__TABLES__' + JSON.stringify(tables));
 		rmSync(probe, { force: true });
 	}
 }
+
+// ─── Standalone session retention ───────────────────────────────────────────
+
+describe('SessionStore (CDK) — retention', () => {
+	test('a positive session lifetime enables DynamoDB TTL on the standalone table', () => {
+		const tables = synthUnderCdkConditions({ ttlSeconds: 3600 });
+		assert.strictEqual(tables.length, 1);
+		assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: 'ttl', Enabled: true });
+	});
+
+	for (const ttlSeconds of [undefined, 0, -1]) {
+		test(`session lifetime ${ttlSeconds} leaves DynamoDB TTL disabled`, () => {
+			const tables = synthUnderCdkConditions({ ttlSeconds });
+			assert.strictEqual(tables.length, 1);
+			assert.strictEqual(tables[0].timeToLive, undefined);
+		});
+	}
+});
 
 // ─── User Pool ──────────────────────────────────────────────────────────────
 
@@ -666,19 +695,31 @@ const LIFECYCLE_ADMIN_ACTIONS = [
 	'cognito-idp:AdminUserGlobalSignOut',
 ];
 // Actions granted by BOTH slices — excluded from the "does not grant the other
-// slice's actions" cross-checks below.
+// slice's actions" cross-checks below. AdminListGroupsForUser is additionally a
+// client-facing baseline grant (see BASELINE_ADMIN_ACTIONS) because `requireRole`
+// reads live membership.
 const SHARED_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 const groupOnlyActions = GROUP_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
 const lifecycleOnlyActions = LIFECYCLE_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+// Admin actions granted unconditionally to the execution role, independent of
+// the opt-in `admin` surface. `requireRole` is a client-facing guard that reads
+// live group membership via AdminListGroupsForUser, so that one action is always
+// present — every other Admin* action still requires opt-in.
+const BASELINE_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
 
 describe('AuthCognito (CDK) — admin IAM grant', () => {
-	test('no admin option → NO Admin* actions granted (least privilege)', () => {
+	test('no admin option → only the client-facing baseline Admin action granted (least privilege)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth', { groups: ['admins'] });
 		});
 		const actions = grantedActions(template);
 		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			if (BASELINE_ADMIN_ACTIONS.includes(a)) continue;
 			assert.ok(!actions.has(a), `unexpected admin action granted without opt-in: ${a}`);
+		}
+		// requireRole reads live membership, so its one Admin action is the baseline.
+		for (const a of BASELINE_ADMIN_ACTIONS) {
+			assert.ok(actions.has(a), `missing client-facing baseline action ${a}`);
 		}
 	});
 
@@ -720,5 +761,15 @@ describe('AuthCognito (CDK) — admin IAM grant', () => {
 		const actions = grantedActions(template);
 		assert.ok(actions.has('cognito-idp:AdminGetUser'), 'lifecycle must grant AdminGetUser');
 		assert.ok(actions.has('cognito-idp:AdminListGroupsForUser'), 'lifecycle must grant AdminListGroupsForUser for getUser groups');
+	});
+});
+
+// `admin` is an accessor, which the cross-package method-parity test skips, so pin
+// its guard here: `auth.admin.addUserToGroup(...)` at module scope must fail with
+// the actionable synth error, not "Cannot read properties of undefined".
+test('CDK: admin getter throws the synth-time guard error', () => {
+	synth((stack) => {
+		const auth = new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: {} });
+		assert.throws(() => auth.admin, { message: /^AuthCognito\.admin\(\) cannot be called during CDK synth\./ });
 	});
 });

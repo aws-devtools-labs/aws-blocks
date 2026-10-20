@@ -7,7 +7,7 @@ import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
-import { clearRouteRegistry } from '@aws-blocks/core';
+import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import { handleDiscovery, handleJwks, handleAuthorize, handleAuthorizeSubmit, stubIssuerUrl } from './engines/stub-idp.js';
@@ -467,6 +467,39 @@ describe('stub IdP /authorize', () => {
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
 
+	test('inline users appear on the login screen (and replace the default)', async () => {
+		const provider = stubIdp({
+			name: 'corporate',
+			users: [
+				{ sub: 'u-1', email: 'alice@example.com', name: 'Alice' },
+				{ sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+			],
+		});
+		const cap = authorizeContext('corporate', baseParams);
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 200);
+		const html = String(cap.sent);
+		assert.match(html, /alice@example\.com/);
+		assert.match(html, /bob@example\.com/);
+		// The built-in default user is no longer offered when inline users are set.
+		assert.doesNotMatch(html, /corporate-user@stub\.invalid/);
+	});
+
+	test('onAuthorize receives the inline users directory', async () => {
+		const provider = stubIdp({
+			name: 'corporate',
+			users: [
+				{ sub: 'u-1', email: 'alice@example.com', name: 'Alice' },
+				{ sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+			],
+			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
+		});
+		const cap = authorizeContext('corporate', { ...baseParams, login_hint: 'bob@example.com' });
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 302, 'inline user matched by loginHint signs in');
+		assert.match(cap.headers.get('Location')!, /code=/);
+	});
+
 	test('rejects custom-scheme redirect_uri', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', { ...baseParams, redirect_uri: 'myapp://callback' });
@@ -658,6 +691,24 @@ describe('requireAuth / checkAuth / getCurrentUser without session', () => {
 		await assert.rejects(
 			() => auth.requireAuth(ctx),
 			(e: Error) => e.name === AuthOIDCErrors.NotAuthenticated,
+		);
+	});
+
+	test('requireAuth throws an ApiError with status 401 (regression: handle401 / e.status===401 must match)', async () => {
+		// A bare Error serializes as 500 over JSON-RPC, so handle401 (status === 401)
+		// never fired. Must be ApiError(401); name preserved for isBlocksError().
+		const auth = new AuthOIDC(ROOT, unique('noauth401'), {
+			providers: [stubIdp({ name: unique('p') })],
+		});
+		const ctx = freshContext();
+		await assert.rejects(
+			() => auth.requireAuth(ctx),
+			(e: unknown) => {
+				assert.ok(e instanceof ApiError, `expected ApiError, got ${(e as { constructor?: { name?: string } })?.constructor?.name}`);
+				assert.strictEqual(e.status, 401);
+				assert.strictEqual(e.name, AuthOIDCErrors.NotAuthenticated);
+				return true;
+			},
 		);
 	});
 

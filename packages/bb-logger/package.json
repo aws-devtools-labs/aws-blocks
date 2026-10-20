@@ -1,6 +1,12 @@
 {
   "name": "@aws-blocks/bb-logger",
-  "version": "0.1.4",
+  "version": "0.2.2",
+  "keywords": [
+    "aws-blocks",
+    "logging",
+    "structured-logging",
+    "observability"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -38,11 +44,11 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.2.0"
+    "@aws-blocks/core": "^0.7.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",

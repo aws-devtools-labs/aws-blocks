@@ -9,6 +9,7 @@
  * WORKSPACE (containment enforced by the Sandbox); the bash timeout is floored to BASH_MIN_TIMEOUT_SEC.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { Agent, type AgentResult, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
@@ -21,6 +22,7 @@ import {
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
+import { beginWorkspaceDiff, finishWorkspaceDiff } from './lib/workspace-diff.mjs';
 import {
 	BENCH_AGENT_USER,
 	WorkspaceSandbox,
@@ -35,6 +37,23 @@ const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
 const OUTPUT = required('OUTPUT', '[bench]');
 const TRACE_PATH = process.env.TRACE;
 const METRICS_PATH = process.env.METRICS;
+// Point the sandbox's per-command log at commands.jsonl beside the trace (so the
+// bench-trace upload picks it up; absent on a local run with no TRACE). Set before any invoke() so
+// every cycle is captured. Honour a caller-provided BENCH_CMD_LOG, else derive it beside the trace.
+const CMD_LOG_PATH =
+	process.env.BENCH_CMD_LOG ?? (TRACE_PATH ? join(dirname(TRACE_PATH), 'commands.jsonl') : undefined);
+if (CMD_LOG_PATH) {
+	process.env.BENCH_CMD_LOG = CMD_LOG_PATH;
+	// Truncate once here UNCONDITIONALLY (run-shell only appends) so a reused self-hosted runner —
+	// or a caller that pre-sets BENCH_CMD_LOG — can't carry a prior cell's lines into this artifact.
+	// Best-effort like the append side (run-shell.ts): a bad caller-provided path degrades to
+	// "no command log" rather than crashing the whole agent run at module load.
+	try {
+		writeFileSync(CMD_LOG_PATH, '');
+	} catch (err) {
+		console.warn(`[bench] could not truncate BENCH_CMD_LOG (${CMD_LOG_PATH}): ${err}`);
+	}
+}
 const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-opus-4-8';
 // Opus rejects the `temperature` parameter (like the judge), so only pin temperature=0 for models
 // that accept it (e.g. Sonnet); keyed off the model id so BENCH_MODEL stays self-configuring.
@@ -76,6 +95,8 @@ process.stderr.write(
 // envelope from the signal handler. Counters at module scope so they survive invoke retries and the handler.
 let partialTokensIn = 0;
 let partialTokensOut = 0;
+let partialCacheRead = 0;
+let partialCacheWrite = 0;
 let partialCycles = 0;
 
 // Fresh agent per invoke attempt (mirrors the judge): a mid-stream failure can leave a half-built
@@ -99,6 +120,10 @@ function makeBuilderAgent(): Agent {
 		if (inner.type === 'modelMetadataEvent' && inner.usage) {
 			partialTokensIn += inner.usage.inputTokens ?? 0;
 			partialTokensOut += inner.usage.outputTokens ?? 0;
+			// Cache-read/write tokens are DISPLAYED only (never fed into cost/SCORE); accumulated with
+			// the same per-cycle += as tokens_in/out so a mid-run kill still leaves the spend on disk.
+			partialCacheRead += inner.usage.cacheReadInputTokens ?? 0;
+			partialCacheWrite += inner.usage.cacheWriteInputTokens ?? 0;
 			partialCycles += 1;
 			// Checkpoint the moment usage advances, so an UNGRACEFUL kill (a pkill storm tearing down
 			// this harness before the SIGTERM flush) still leaves nonzero tokens + partial cycles on OUTPUT.
@@ -124,6 +149,8 @@ function writeCheckpoint(): void {
 				startedMs: started,
 				tokensIn: partialTokensIn,
 				tokensOut: partialTokensOut,
+				cacheRead: partialCacheRead,
+				cacheWrite: partialCacheWrite,
 				cycles: partialCycles,
 				isolationActive: ISOLATE,
 			}),
@@ -153,6 +180,8 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					duration_sec: Math.round((Date.now() - started) / 1000),
 					tokens_in: partialTokensIn,
 					tokens_out: partialTokensOut,
+					cache_read_tokens: partialCacheRead,
+					cache_write_tokens: partialCacheWrite,
 					stop_reason: stopReason,
 					cycle_count: partialCycles,
 					final_message: '',
@@ -188,6 +217,12 @@ process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 // it such an early death would leave the step-0 baseline with no isolation flag, and scoring.mjs would
 // have to assume isolation was off. A later model cycle (or a terminal exit) overwrites this.
 writeCheckpoint();
+
+// Snapshot the scaffolded workspace NOW (before the agent touches it) so a post-run diff can report
+// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders 🆕 "(new)").
+// Uses a throwaway external git dir, so it never disturbs the workspace/app or the agent's own git.
+const snapshot = beginWorkspaceDiff(WORKSPACE);
+process.stderr.write(`[bench] workspace churn snapshot: ${snapshot ? 'captured' : 'unavailable (loc/files → null)'}\n`);
 
 // Startup stagger: spread each wave's FIRST Bedrock call so N cells don't all hit invoke at once and
 // trip the account TPM ceiling (the burst that failed 6/10 cells in run 28967475174). Keyed to the
@@ -242,6 +277,8 @@ if (!result) {
 				duration_sec: Math.round((Date.now() - started) / 1000),
 				tokens_in: partialTokensIn,
 				tokens_out: partialTokensOut,
+				cache_read_tokens: partialCacheRead,
+				cache_write_tokens: partialCacheWrite,
 				stop_reason: 'error',
 				cycle_count: partialCycles,
 				final_message: '',
@@ -266,6 +303,15 @@ const duration_sec = Math.round((Date.now() - started) / 1000);
 const winnerUsage = result.metrics?.accumulatedUsage;
 const tokensIn = Math.max(partialTokensIn, winnerUsage?.inputTokens ?? 0);
 const tokensOut = Math.max(partialTokensOut, winnerUsage?.outputTokens ?? 0);
+// Cache tokens follow the SAME max(hook, winner) rule as tokens_in/out. Displayed only — NOT part of
+// cost/SCORE (see scoring.mjs cellCost); a future net-of-cache cost model could subtract these.
+const cacheRead = Math.max(partialCacheRead, winnerUsage?.cacheReadInputTokens ?? 0);
+const cacheWrite = Math.max(partialCacheWrite, winnerUsage?.cacheWriteInputTokens ?? 0);
+
+// LOC/files churn from the pre-run scaffold snapshot (best-effort; null on any failure — see
+// workspace-diff.mjs). Computed only on the success path: a timed-out/errored cell left the workspace
+// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ 🆕 "(new)").
+const churn = finishWorkspaceDiff(snapshot, WORKSPACE);
 
 writeFileSync(
 	OUTPUT,
@@ -275,8 +321,14 @@ writeFileSync(
 			duration_sec,
 			tokens_in: tokensIn,
 			tokens_out: tokensOut,
+			cache_read_tokens: cacheRead,
+			cache_write_tokens: cacheWrite,
 			stop_reason: result.stopReason,
 			cycle_count: result.metrics?.cycleCount ?? 0,
+			loc_created: churn.loc_created,
+			loc_edited: churn.loc_edited,
+			files_created: churn.files_created,
+			files_edited: churn.files_edited,
 			final_message: messageText(result.lastMessage),
 			isolation_active: ISOLATE,
 		},

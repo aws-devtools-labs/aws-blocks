@@ -9,17 +9,17 @@
  * route returns a 503 with a helpful message directing the user to deploy.
  */
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers } from '@aws-blocks/core';
-import type { DashboardOptions } from './types.js';
+import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { mountDashboardRoute } from './routes.js';
+import type { DashboardOptions } from './types.js';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
 } from './types.js';
 
 /**
@@ -36,19 +36,29 @@ export type {
  * // dashboard.url === null
  * ```
  */
-export class Dashboard {
+export class Dashboard extends Scope {
 	/** Always null in local mode. */
 	readonly url: null = null;
 
 	/** The configured dashboard name. */
 	readonly dashboardName: string;
 
-	/** Scope-qualified identifier for SDK registry. */
-	readonly fullId: string;
+	readonly #fullId: string;
+
+	/** Scope-qualified identifier for SDK registry (snapshot at construction, as before extending Scope). */
+	override get fullId(): string {
+		return this.#fullId;
+	}
 
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
+		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		this.#fullId =
+			'fullId' in scope && scope.fullId
+				? `${scope.fullId}-${id}`
+				: 'id' in scope && scope.id
+					? `${scope.id}-${id}`
+					: id;
 		const title = options?.title ?? id;
-		this.fullId = 'fullId' in scope && scope.fullId ? `${scope.fullId}-${id}` : ('id' in scope && scope.id ? `${scope.id}-${id}` : id);
 		this.dashboardName = (options?.dashboardName ?? this.fullId).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255);
 		registerSdkIdentifiers(this.fullId, { dashboardName: this.dashboardName });
 
@@ -60,11 +70,11 @@ export class Dashboard {
 
 		console.log(
 			`[Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).\n` +
-			`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
-			`📍 Local observability data:\n` +
-			`   • Logs: Check your terminal output - Logger BB writes structured JSON to stdout\n` +
-			`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
-			`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`
+				`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
+				`📍 Local observability data:\n` +
+				`   • Logs: Check your terminal output - every compute writes structured JSON to stdout\n` +
+				`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
+				`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`,
 		);
 	}
 }

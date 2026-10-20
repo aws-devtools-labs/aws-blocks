@@ -3,10 +3,14 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
+import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
-import { registerRoute, clearRouteRegistry } from './raw-route.js';
+import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
+import { ApiError, blocksError } from './errors.js';
 import { decodeRpcResponse } from './rpc.js';
+import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
+import { HttpRequest } from '@smithy/protocol-http';
+import { installClientUserAgent } from './server/client-user-agent.js';
 import type { BlocksContext } from './api.js';
 
 beforeEach(() => {
@@ -28,6 +32,145 @@ async function invoke(backend: any, event: any): Promise<any> {
   const handler = createLambdaHandler(async () => backend);
   return handler(event) as any;
 }
+
+// ── init self-heal (retry on failed initialization) ─────────────────────────
+
+describe('createLambdaHandler — init self-heal', () => {
+  it('retries initialize() on a later request instead of caching a failed init', async () => {
+    let initCalls = 0;
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) {
+          return { msg };
+        },
+      }),
+    };
+    // Fail the first initialization (e.g. config not readable yet in the brief post-deploy
+    // window), then succeed. The SAME handler instance must recover — a cached rejected
+    // initPromise would poison the container and fail every subsequent request.
+    const backendFactory = async () => {
+      initCalls++;
+      if (initCalls === 1) throw new Error('transient init failure');
+      return backend;
+    };
+    const handler = createLambdaHandler(backendFactory);
+
+    // 1st request: init fails, so the handler rejects.
+    await assert.rejects(() => handler(makeEvent()) as any, /transient init failure/);
+
+    // 2nd request: init is retried and succeeds → 200 (not a re-thrown cached rejection).
+    const res = (await handler(makeEvent())) as any;
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(initCalls, 2, 'initialize() must be retried on the next request, not cached');
+  });
+
+  it('recovers from a transient-empty (post-deploy 404) config load on the next request', async () => {
+    // Reproduces the poisoned-container bug: the first S3 load hits the transient
+    // post-deploy window (NoSuchKey), so config resolves empty; the handler must
+    // NOT lock in that empty config, and the NEXT request must re-fetch and pick
+    // up the now-present config.
+    _resetConfigCache();
+    process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+    process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+    delete process.env.SELFHEAL_KEY;
+
+    let fetchCall = 0;
+    const notFound = new Error('The specified key does not exist.');
+    (notFound as any).name = 'NoSuchKey';
+    _setS3Fetcher(async () => {
+      fetchCall++;
+      if (fetchCall === 1) throw notFound; // config not readable yet
+      return JSON.stringify({ SELFHEAL_KEY: 'ready' });
+    });
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return {
+        api: (_ctx: BlocksContext) => ({
+          async echo(msg: string) { return { msg, cfg: process.env.SELFHEAL_KEY }; },
+        }),
+      };
+    });
+
+    try {
+      // 1st request: transient-empty load → initialize() throws TransientConfigError
+      // BEFORE importing the backend (so we never lock in empty config), and the
+      // request rejects.
+      await assert.rejects(() => handler(makeEvent()) as any, TransientConfigError);
+      assert.strictEqual(backendImports, 0, 'backend must NOT be imported while config is unresolved');
+
+      // 2nd request: config now present → initialize() re-runs, re-fetches, and
+      // injects the config into process.env before importing the backend.
+      const res = (await handler(makeEvent())) as any;
+      assert.strictEqual(res.statusCode, 200);
+      const body = JSON.parse(res.body);
+      assert.strictEqual(body.result.cfg, 'ready', 'now-present config was injected on the retry');
+      assert.strictEqual(backendImports, 1, 'backend imported exactly once, on the successful retry');
+      assert.strictEqual(fetchCall, 2, 'S3 was re-fetched on the retry (transient miss is not cached)');
+    } finally {
+      _resetConfigCache();
+      delete process.env.BLOCKS_CONFIG_BUCKET;
+      delete process.env.BLOCKS_CONFIG_KEY;
+      delete process.env.SELFHEAL_KEY;
+    }
+  });
+
+  it('does NOT re-init for a config-less app (no bucket, local dev) — initialize runs once', async () => {
+    _resetConfigCache();
+    delete process.env.BLOCKS_CONFIG_BUCKET;
+    delete process.env.BLOCKS_CONFIG_KEY;
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return { api: (_ctx: BlocksContext) => ({ async echo(msg: string) { return { msg }; } }) };
+    });
+
+    try {
+      const r1 = (await handler(makeEvent())) as any;
+      const r2 = (await handler(makeEvent())) as any;
+      assert.strictEqual(r1.statusCode, 200);
+      assert.strictEqual(r2.statusCode, 200);
+      assert.strictEqual(backendImports, 1, 'no re-init for a genuinely config-less (local dev) app');
+    } finally {
+      _resetConfigCache();
+    }
+  });
+
+  it('does NOT re-init or spin for a genuinely-empty ({}) S3 config', async () => {
+    // A real, readable empty config must be treated as resolved — distinct from
+    // the transient 404 miss — so the container does not throw/retry forever nor
+    // re-fetch S3 on every request.
+    _resetConfigCache();
+    process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+    process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+
+    let fetchCall = 0;
+    _setS3Fetcher(async () => { fetchCall++; return JSON.stringify({}); });
+
+    let backendImports = 0;
+    const handler = createLambdaHandler(async () => {
+      backendImports++;
+      return { api: (_ctx: BlocksContext) => ({ async echo(msg: string) { return { msg }; } }) };
+    });
+
+    try {
+      const r1 = (await handler(makeEvent())) as any;
+      const r2 = (await handler(makeEvent())) as any;
+      const r3 = (await handler(makeEvent())) as any;
+      assert.strictEqual(r1.statusCode, 200);
+      assert.strictEqual(r2.statusCode, 200);
+      assert.strictEqual(r3.statusCode, 200);
+      assert.strictEqual(backendImports, 1, 'genuinely-empty config resolves; no re-init');
+      assert.strictEqual(fetchCall, 1, 'S3 fetched once and cached — no per-request re-fetch spin');
+    } finally {
+      _resetConfigCache();
+      delete process.env.BLOCKS_CONFIG_BUCKET;
+      delete process.env.BLOCKS_CONFIG_KEY;
+    }
+  });
+});
 
 // ── RPC body tests ──────────────────────────────────────────────────────────
 
@@ -272,7 +415,212 @@ describe('createLambdaHandler — RawRoute body handling', () => {
   });
 });
 
+// ── RPC errors never carry ARNs / AWS SDK detail ────────────────────────────
+
+describe('createLambdaHandler — AWS SDK AccessDenied detail never reaches the RPC client', () => {
+  it('collapses an AccessDenied (role + resource ARNs in the message, $metadata attached) to a generic error', async () => {
+    const roleArn = 'arn:aws:sts::123456789012:assumed-role/app-backend-HandlerRole-ABC123/app-backend-handler';
+    const resourceArn = 'arn:aws:dynamodb:us-west-2:123456789012:table/app-backend-orders-prod';
+    const sdkError = Object.assign(
+      new Error(`User: ${roleArn} is not authorized to perform: dynamodb:PutItem on resource: ${resourceArn}`),
+      { name: 'AccessDeniedException', $fault: 'client', $metadata: { httpStatusCode: 400, requestId: 'REQ-123' } },
+    );
+    const backend = { api: (_ctx: BlocksContext) => ({ async write() { throw sdkError; } }) };
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke(backend, makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.write', params: [], id: 1 }) }));
+    } finally {
+      console.error = originalError;
+    }
+
+    const body: string = result.body;
+    for (const leak of ['arn:aws', '123456789012', 'HandlerRole', 'app-backend-orders-prod', 'AccessDeniedException', 'REQ-123', 'dynamodb:PutItem']) {
+      assert.ok(!body.includes(leak), `client-visible error body leaked "${leak}": ${body}`);
+    }
+    assert.ok(JSON.parse(body).error, 'the call must still fail');
+  });
+});
+
+// ── RawRoute uncaught-exception sanitization ────────────────────────────────
+
+describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 without leaking its name or message', async () => {
+    class ResourceNotFoundException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'ResourceNotFoundException';
+      }
+    }
+    registerRoute({
+      method: 'GET',
+      path: '/raw/fails',
+      handler: async () => {
+        throw new ResourceNotFoundException('Requested resource not found: Table: internal-orders-prod');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/fails', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Internal error' });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes('ResourceNotFoundException'));
+    assert.ok(!serialized.includes('internal-orders-prod'));
+  });
+
+  it('keeps the name and message of a branded Building Block error thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/bb-error',
+      handler: async () => {
+        throw blocksError('ValidationFailedException', 'email must be a valid address');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/bb-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), {
+      error: 'ValidationFailedException: email must be a valid address',
+      name: 'ValidationFailedException',
+    });
+  });
+
+  it('keeps the status of an ApiError thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/api-error',
+      handler: async () => {
+        throw new ApiError('Forbidden', 403, { name: 'AccessDenied' });
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/api-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Forbidden', name: 'AccessDenied' });
+  });
+
+  it('leaves a deliberate ctx.response error write untouched', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/own-error',
+      handler: async (ctx) => {
+        ctx.response.status = 502;
+        ctx.response.send({ error: 'upstream said: ResourceNotFoundException' });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/own-error', body: null }));
+
+    assert.strictEqual(result.statusCode, 502);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'upstream said: ResourceNotFoundException' });
+  });
+});
+
 // ── Cookie extraction tests ─────────────────────────────────────────────────
+
+// ── Unmatched RawRoute diagnostics ──────────────────────────────────────────
+//
+// A request that matches no RawRoute used to return 404 without a trace in
+// CloudWatch, which is what made the duplicate-core-copy bug invisible.
+
+describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
+  /** Run `fn` with console.error captured; returns the collected lines. */
+  async function captureErrors(fn: () => Promise<void>): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(' '));
+    };
+    try {
+      await fn();
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  it('logs method, path and route count when no RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    let result: any;
+    const logged = await captureErrors(async () => {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+    });
+
+    assert.strictEqual(result.statusCode, 404);
+    // The count must match the registry the dispatcher actually consulted —
+    // a "0 routes registered" line is the fingerprint of a split registry.
+    const expectedCount = getRegisteredRoutes().length;
+    assert.ok(expectedCount > 0, 'precondition: routes are registered');
+    assert.ok(
+      logged.some(
+        (line) =>
+          line.includes('No RawRoute matched GET /unknown') &&
+          line.includes(`${expectedCount} routes registered`),
+      ),
+      `expected a diagnostic for the unmatched route, got: ${JSON.stringify(logged)}`,
+    );
+  });
+
+  it('does not log when a RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    const logged = await captureErrors(async () => {
+      const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/known', body: null }));
+      assert.strictEqual(result.statusCode, 200);
+    });
+
+    assert.deepStrictEqual(logged, []);
+  });
+
+  it('names duplicate core copies as the likely cause when more than one is loaded', async () => {
+    const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+    const state = (globalThis as typeof globalThis & { [REGISTRY_KEY]?: { copies: number } })[REGISTRY_KEY];
+    assert.ok(state, `route registry state must live on globalThis['${REGISTRY_KEY}']`);
+
+    const originalCopies = state.copies;
+    state.copies = 2;
+    try {
+      const logged = await captureErrors(async () => {
+        const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+        assert.strictEqual(result.statusCode, 404);
+      });
+
+      assert.ok(
+        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
+      );
+    } finally {
+      state.copies = originalCopies;
+    }
+  });
+});
 
 describe('createLambdaHandler — cookie extraction', () => {
   it('extracts cookies from lowercase "cookie" header (API Gateway v2)', async () => {
@@ -1070,5 +1418,195 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── SQS partial batch failure tests ─────────────────────────────────────────
+
+/**
+ * These pin the runtime half of the bb-async-job BatchSize fix: with a batch
+ * larger than 1, failing records must be reported individually via
+ * `batchItemFailures` so SQS retries only those messages. If this response
+ * shape regresses, every successful sibling message in a partially-failing
+ * batch would be redelivered (or, worse, the failures silently dropped).
+ */
+function makeSqsBatchEvent(count: number) {
+  return {
+    Records: Array.from({ length: count }, (_, i) => ({
+      eventSource: 'aws:sqs',
+      eventSourceARN: 'arn:aws:sqs:us-east-1:123456789012:my-queue',
+      messageId: `msg-${i}`,
+      body: JSON.stringify({ n: i }),
+    })),
+  };
+}
+
+describe('handleEventSourceRecords — SQS partial batch responses', () => {
+  it('reports only the failed records of a mixed-success 10-record batch', async () => {
+    const processed: number[] = [];
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async (record: any) => {
+      const { n } = JSON.parse(record.body);
+      if (n % 3 === 0) throw new Error(`boom on ${n}`);
+      processed.push(n);
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+
+      assert.deepStrictEqual(
+        result.batchItemFailures.map((f: any) => f.itemIdentifier).sort(),
+        ['msg-0', 'msg-3', 'msg-6', 'msg-9']
+      );
+      assert.deepStrictEqual(processed.sort((a, b) => a - b), [1, 2, 4, 5, 7, 8]);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('returns no batchItemFailures when every record in the batch succeeds', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => {});
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.deepStrictEqual(result, {});
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('reports all records when the whole batch fails (no silent drop)', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => { throw new Error('always'); });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.strictEqual(result.batchItemFailures.length, 10);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+});
+
+// ── Native client user-agent forwarding (end-to-end, through the real handler) ──
+
+describe('createLambdaHandler — native client user-agent forwarding', () => {
+  // API method: drives a Building-Block-style SDK client and returns the
+  // outgoing user-agent.
+  function uaProbeBackend() {
+    return {
+      api: (_ctx: BlocksContext) => ({
+        async probe() {
+          let mw: any;
+          const client = {
+            middlewareStack: {
+              identify: () => ['getUserAgentMiddleware - build'],
+              add: (m: any) => { mw = m; },
+              addRelativeTo: (m: any) => { mw = m; },
+            },
+          };
+          installClientUserAgent(client);
+          const request = new HttpRequest({
+            hostname: 'example.com',
+            headers: { 'user-agent': 'aws-sdk-js/3.700.0 aws-blocks/0.5.0' },
+          });
+          await mw(async (a: any) => ({ output: a }))({ request });
+          return request.headers['user-agent'];
+        },
+      }),
+    };
+  }
+
+  function probeEvent(clientUserAgent?: string) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (clientUserAgent !== undefined) headers['x-blocks-user-agent'] = clientUserAgent;
+    return makeEvent({ headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'api.probe', params: [], id: 1 }) });
+  }
+
+  it('appends a valid inbound token to the outgoing SDK user agent', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('drops a malformed inbound token without changing the outgoing user agent', async () => {
+    // Uppercase language: the validator rejects it, so nothing is appended.
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-Swift/0.1.1'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+  it('appends the token when the client also sends appended metadata', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent('aws-blocks-swift/9.9.9 os/android#14'));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0 client/swift/9.9.9');
+  });
+
+  it('leaves the outgoing user agent unchanged when no token header is present', async () => {
+    const result = await invoke(uaProbeBackend(), probeEvent(undefined));
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
+  });
+
+});
+
+// ── RPC dispatch: only API surfaces are callable ────────────────────────────
+//
+// The dispatcher resolves `backend[apiNamespace][method]`. It must not expose a
+// Building Block instance that happens to be exported from the backend module
+// (its whole data plane would bypass every `requireAuth` in the ApiNamespace
+// layer), `_`-private exports, or members inherited from `Object.prototype`.
+
+function rpcEvent(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+function rpcError(result: any): { code: number; message: string } | undefined {
+  return JSON.parse(result.body).error;
+}
+
+describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
+  it('rejects a method on an exported Building Block (Scope) instance', async () => {
+    let wrote = false;
+    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
+    const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
+    assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');
+    assert.strictEqual(wrote, false, 'the block method must never run');
+  });
+
+  it('rejects an underscore-private export', async () => {
+    let ran = false;
+    const backend = { _internal: () => ({ async run() { ran = true; return 1; } }) };
+    const result = await invoke(backend, rpcEvent('_internal.run'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+    assert.strictEqual(ran, false);
+  });
+
+  for (const inherited of ['toString', 'hasOwnProperty', 'constructor', 'valueOf', '__proto__']) {
+    it(`rejects the inherited Object.prototype member "${inherited}"`, async () => {
+      const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return m; } }) };
+      const result = await invoke(backend, rpcEvent(`api.${inherited}`));
+      assert.strictEqual(rpcError(result)?.code, -32601, `${inherited} must be method-not-found`);
+    });
+  }
+
+  it('rejects a non-function own property on the method map', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ secretConfig: { key: 'x' }, async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcEvent('api.secretConfig'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+  });
+
+  it('still dispatches a real method (regression guard)', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
+    const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
+    assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
   });
 });

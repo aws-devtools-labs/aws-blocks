@@ -3,19 +3,21 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { matchRoute, lockRouteRegistry } from './raw-route.js';
+import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
+import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
-import { loadConfigToProcessEnv } from './common/config.js';
+import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
 import {
   parseRpcRequest,
   successResponse,
   errorResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import { validateClientUserAgentToken } from './server/client-user-agent.js';
+import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -30,6 +32,14 @@ export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
  */
 export const requestCookies = new AsyncLocalStorage<string>();
 (globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = requestCookies;
+
+/**
+ * Per-request store for the validated native-client token. Also registered on
+ * `globalThis.__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__` so the middleware can
+ * read it without importing `node:async_hooks`.
+ */
+export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>();
+(globalThis as any).__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__ = requestClientUserAgent;
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -297,18 +307,31 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
   async function initialize() {
     await loadConfigToProcessEnv();
 
-    // Merge hosting-provided CORS origins into the main env var so the lazy
-    // getCorsPatterns() sees a combined value on first access.
-    // loadConfigToProcessEnv() won't override CORS_ALLOWED_ORIGINS if it's
-    // already set (sandbox env var), but CORS_HOSTING_ORIGINS always loads
-    // from S3 since it's never set as a direct env var.
-    const hostingOrigins = process.env.CORS_HOSTING_ORIGINS;
-    if (hostingOrigins) {
-      const existing = process.env.CORS_ALLOWED_ORIGINS;
-      process.env.CORS_ALLOWED_ORIGINS = existing
-        ? `${existing},${hostingOrigins}`
-        : hostingOrigins;
+    // If the app has config coordinates (BLOCKS_CONFIG_BUCKET/KEY set) but the
+    // load didn't actually resolve the config, we're in the transient post-deploy
+    // S3 window where blocks-config.json isn't readable yet. loadConfigFromS3()
+    // deliberately does NOT cache that empty result, so throw a typed transient
+    // error here — BEFORE importing the backend — so the createLambdaHandler()
+    // catch resets initPromise and the next request re-runs initialize(), which
+    // re-fetches from S3 and picks up the now-present config. Without this throw,
+    // initialize() would succeed with empty config, `handler` would be assigned,
+    // and the `if (!handler)` guard below would never fire again, poisoning the
+    // container for its whole life (it would import the backend against empty
+    // process.env and serve "not configured" 500s forever).
+    //
+    // A genuinely config-less app does NOT throw: the no-bucket local-dev path
+    // and a real empty `{}` config both cache their result, so isConfigResolved()
+    // is true and the retry never spins. Once the blob is readable the successful
+    // load caches, so there is no unbounded per-request S3 re-fetch either.
+    if (process.env.BLOCKS_CONFIG_BUCKET && process.env.BLOCKS_CONFIG_KEY && !isConfigResolved()) {
+      throw new TransientConfigError();
     }
+
+    // CORS origins are read directly by getCorsPatterns(), which now compiles
+    // CORS_ALLOWED_ORIGINS (user-supplied regex channel) and CORS_HOSTING_ORIGINS
+    // (framework-injected literal origins, escaped at runtime) via separate paths.
+    // No pre-merge here: folding the resolved CloudFront domain into the regex
+    // channel would regex-compile its dots into wildcards, so the two stay split.
 
     const mod = await backendFactory();
     handler = createHandler(mod);
@@ -318,7 +341,18 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
 
   return async (event: any, context?: LambdaContext) => {
     if (!handler) {
-      if (!initPromise) initPromise = initialize();
+      // Retry init on failure instead of caching the rejection. If initialize() throws (most often
+      // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
+      // post-deploy window before it's readable), a memoized rejected promise would poison this
+      // container for its whole lifetime — every later request re-awaits the same rejection and 500s.
+      // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
+      // since it doesn't cache failures), so the handler self-heals once config is available.
+      if (!initPromise) {
+        initPromise = initialize().catch((err) => {
+          initPromise = null;
+          throw err;
+        });
+      }
       await initPromise;
     }
 
@@ -391,6 +425,27 @@ class HandlerTimeoutError extends Error {
 }
 
 /**
+ * Thrown by `initialize()` when the app has config coordinates
+ * (BLOCKS_CONFIG_BUCKET/KEY) but the S3 config load resolved empty because
+ * blocks-config.json wasn't readable yet — the transient window right after a
+ * deploy, before the BucketDeployment settles.
+ *
+ * It flows through the `createLambdaHandler()` init catch, which resets
+ * `initPromise` so the NEXT request re-runs `initialize()` and picks up the
+ * now-present config (config.ts does not cache a not-found result, so the retry
+ * re-fetches). A distinct type keeps the recovery path greppable and testable
+ * and separates it from real init failures, which surface with their own error.
+ *
+ * @internal Exported for testing only.
+ */
+export class TransientConfigError extends Error {
+  constructor() {
+    super('[Blocks] Config not readable yet (transient post-deploy S3 window); will retry on next request');
+    this.name = 'TransientConfigError';
+  }
+}
+
+/**
  * Extract the request path from a Lambda event, normalizing between
  * API Gateway v1 (REST) and v2 (HTTP API) event shapes.
  *
@@ -455,7 +510,7 @@ function createHandler(backend: any) {
         headers: {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
           'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',
@@ -469,7 +524,14 @@ function createHandler(backend: any) {
     // APIs server-side gets forwarded cookies.
     const inboundCookies = event.headers?.cookie || event.headers?.Cookie || '';
 
-    return requestCookies.run(inboundCookies, async () => {
+    // Validate the attacker-controlled header before storing, so malformed
+    // input never reaches the AWS user agent.
+    const clientUserAgent = validateClientUserAgentToken(
+      event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    );
+
+    return requestCookies.run(inboundCookies, () =>
+      requestClientUserAgent.run(clientUserAgent, async () => {
     // RawRoute dispatch — check path-based routes before falling through to RPC
     const requestPath = getRequestPath(event);
     if (requestPath !== BLOCKS_RPC_PREFIX) {
@@ -477,8 +539,17 @@ function createHandler(backend: any) {
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404
+      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // Log it: an unmatched route used to be entirely silent, which is what
+      // made a split route registry (duplicate @aws-blocks/core copies)
+      // undiagnosable from CloudWatch alone. The path is already in the API
+      // Gateway access logs, so this adds no new category of data.
       if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
+        const copies = getLoadedCoreCopies();
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        console.error(
+          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+        );
         return {
           statusCode: 404,
           headers: {
@@ -532,8 +603,9 @@ function createHandler(backend: any) {
         },
       };
 
-      // Get the API by export name
-      const apiHandler = backend[apiNamespace];
+      // Get the API by export name. resolveApiNamespace refuses exported Building
+      // Block instances and `_`-private exports, so only an API surface is callable.
+      const apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -543,11 +615,13 @@ function createHandler(backend: any) {
         ? apiHandler(context)
         : apiHandler;
 
-      if (!apiMethods[method]) {
+      // Own/declared callable methods only — never an inherited Object.prototype member.
+      const apiMethod = resolveApiMethod(apiMethods, method);
+      if (!apiMethod) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const result = await apiMethod(...args);
 
       return {
         statusCode: responseStatus,
@@ -562,7 +636,7 @@ function createHandler(backend: any) {
         body: errorResponseFromCatch(error, rpcId),
       };
     }
-    });
+    }));
   };
 }
 
@@ -617,11 +691,9 @@ async function handleRawRoute(
       },
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('RawRoute Error:', error);
-    const status = error instanceof ApiError ? error.status : 500;
-    const body: Record<string, any> = { error: error.message };
-    if (error.name && error.name !== 'Error') body.name = error.name;
+    const { status, body } = rawRouteErrorFromCatch(error);
     return {
       statusCode: status,
       headers: Object.fromEntries(
@@ -630,7 +702,7 @@ async function handleRawRoute(
       multiValueHeaders: {
         'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
       },
-      body: JSON.stringify(body),
+      body,
     };
   }
 }
