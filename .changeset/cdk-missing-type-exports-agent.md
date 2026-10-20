@@ -10,5 +10,5 @@ code importing them failed to type-check under that condition — for example,
 
 The `cdk` entry now exports `AgentTurnPayload`, `AgentConfig`, `AgentResult`, `AgentStreamChunk`, `AgentStreamResult`,
 `ToolDefinition`, `AgentTool`, `ToolFactory`, `ToolsConfig`, `ToolHandlerArgs`, `DefaultToolContext`,
-`InterruptResponse`, `ToolCallRecord`, `ModelConfig`, `StreamOptions`, `Message`, `Conversation`, `JSONValue`,
-`TokenUsage`.
+`InterruptResponse`, `ToolCallRecord`, `ModelConfig`, `BedrockGuardrail`, `StreamOptions`, `Message`, `Conversation`,
+`JSONValue`, `TokenUsage`.
