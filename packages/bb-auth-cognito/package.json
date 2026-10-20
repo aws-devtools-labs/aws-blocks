@@ -59,7 +59,7 @@
     "aws-jwt-verify": "^5.2.1"
   },
   "devDependencies": {
-    "@aws-crypto/client-node": "^4.2.4",
+    "@aws-crypto/client-node": "^5.0.2",
     "@aws-sdk/client-cloudwatch-logs": "^3.1153.0",
     "@aws-sdk/client-dynamodb": "^3.1153.0",
     "@aws-sdk/client-iam": "^3.1153.0",
