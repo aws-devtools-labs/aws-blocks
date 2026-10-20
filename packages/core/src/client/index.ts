@@ -265,7 +265,11 @@ export interface ApiNamespaceClientOptions {
  * through `new URL()`.
  */
 function namespaceRequestUrl(baseUrl: string, namespace: string): string {
-  return `${baseUrl.replace(/\/+$/, '')}/${namespace}`;
+  // Trim trailing slashes with a loop, not `/\/+$/` — that regex backtracks
+  // quadratically on a long run of '/' that doesn't end the string.
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return `${baseUrl.slice(0, end)}/${namespace}`;
 }
 
 /**
