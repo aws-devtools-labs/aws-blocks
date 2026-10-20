@@ -16,9 +16,31 @@ conditional-export shape:
 | `index.cdk.ts` | `cdk` | Provisions the `secretsmanager.Secret`, grants IAM, registers config. |
 | `index.browser.ts` | `browser` | Stub; instantiation throws `NotSupported`. |
 
-The public API (`get`, `put`, `fromExisting`, `SecretOptions`, `ExternalSecretRef`,
-`SecretErrors`) is identical across layers. `types.ts` is the single, types-only
-source; `errors.ts` holds the wire-stable error names.
+The public read API (`get`, `listVersions`, `fromExisting`, `SecretOptions`,
+`ExternalSecretRef`, `SecretErrors`) is identical across layers. `put` is
+**conditional** (see below). `types.ts` is the single, types-only source;
+`errors.ts` holds the wire-stable error names.
+
+## Read-only by default (`allowRuntimeWrite`)
+
+A `Secret` is read-only at runtime unless `allowRuntimeWrite: true`. This is
+enforced at three levels so the type, the object, and the IAM all agree:
+
+- **Type** — `Secret<T>` is `Omit<SecretImpl<T>, 'put'>` (no `put`). The public
+  `Secret` is a `SecretConstructor` with overloaded `new`: the overload whose
+  options include `allowRuntimeWrite: true` returns `WritableSecret<T>` (adds
+  `put`), the other returns the read-only `Secret<T>`. `SecretImpl` is not
+  exported; `Secret` is a `const` bound to it via a single internal cast (a class
+  can't narrow its own constructor return type per-overload).
+- **Object** — `put` is `declare`d (no field emit), then assigned in the
+  constructor **only** when `allowRuntimeWrite === true`. So on a read-only
+  secret `'put' in secret` is `false` — the method is genuinely absent, not a
+  thrower.
+- **IAM** — the CDK layer grants `grantWrite` only when `allowRuntimeWrite ===
+  true` (see Infrastructure below).
+
+The runtime write logic lives in a private `#put`; the public `put` (when
+present) delegates to it. The mock and aws layers mirror this exactly.
 
 ## When to use `Secret` vs `AppSetting(secret: true)`
 
@@ -69,9 +91,11 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
 - **Removal policy:** `options.removalPolicy` (`'destroy'`/`'retain'`) when set,
   otherwise the stack-wide `this.defaults.removalPolicy` (production RETAIN,
   sandbox DESTROY).
-- **IAM:** grants the shared `this.executionRole` `grantRead` +
-  `grantWrite` on the single secret (scoped, not a wildcard). Secrets Manager
-  attaches the KMS grants for the encryption key.
+- **IAM:** grants the shared `this.executionRole` `grantRead` + `ListSecretVersionIds` on
+  the single secret (scoped, not a wildcard). `grantWrite` (`PutSecretValue`) is
+  added **only** when `options.allowRuntimeWrite === true` — the default is
+  read-only, matching the runtime object, which exposes no `put()` unless writes
+  are opted in. Secrets Manager attaches the KMS grants for the encryption key.
 - **Resource group:** the created secret is tagged
   `aws-blocks-stack=<rootStackName>` (walking to the non-nested parent stack,
   mirroring `AppSetting`), so it joins the stack's `-settings` resource group —

@@ -22,9 +22,10 @@
     "test:e2e:sandbox": "npm run test:sandbox",
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
+  "//nuxt-pin": "nuxt is pinned <4.5.0 below: nuxt 4.5 bumps its bundled Vite to 8, which pulls lightningcss (MPL-2.0). nuxt is also in .ncurc.json `reject` so the weekly bump can't rewrite this cap, and the four nuxt advisories this pin exposes (all patched in 4.5.1) are listed in .github/dependency-review-config.yml allow_ghsas. BEFORE UNPINNING: confirm MPL-2.0 deps are allowed internally — then move to nuxt >= 4.5.1 (which also fixes those advisories) and drop the reject + the nuxt allow_ghsas entries.",
   "dependencies": {
     "@aws-blocks/blocks": "*",
-    "nuxt": "^4.0.0",
+    "nuxt": ">=4.0.0 <4.5.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {
