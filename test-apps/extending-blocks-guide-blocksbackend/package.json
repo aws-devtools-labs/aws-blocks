@@ -17,7 +17,7 @@
   "dependencies": {
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
-    "@aws-sdk/client-sqs": "^3.1153.0"
+    "@aws-sdk/client-sqs": "^3.1152.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
