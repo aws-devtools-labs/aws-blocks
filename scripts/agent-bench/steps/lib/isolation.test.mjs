@@ -287,6 +287,30 @@ describe('the agent-user boundary on a real host', () => {
 		}
 	});
 
+	it('exec lockdown follows a symlinked tree entry to its writable target (tool cache → /usr/lib/jvm-style)', needsBoundary, () => {
+		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
+		try {
+			chmodSync(base, 0o755);
+			const target = join(base, 'jvm', 'jdk'); // outside the trusted tree, world-writable, root-owned
+			mkdirSync(join(target, 'bin'), { recursive: true });
+			writeFileSync(join(target, 'bin', 'java'), '#!/bin/sh\n', { mode: 0o755 });
+			sudo('/usr/bin/chown', '-R', 'root:root', join(base, 'jvm'));
+			sudo('/usr/bin/chmod', '-R', '0777', join(base, 'jvm'));
+			const tree = join(base, 'toolcache', 'Java', '21');
+			mkdirSync(tree, { recursive: true });
+			spawnSync('/bin/ln', ['-s', target, join(tree, 'x64')]);
+			const targets = { flat: [], deep: [join(base, 'toolcache')], exclude: [] };
+			assert.ok(findAgentWritable(targets).writable.includes(join(tree, 'x64')), 'the link to a writable target is reported');
+			assert.deepEqual(lockDownExecPaths(targets, { fix: true }), []);
+			const r = asAgent(`echo x > ${target}/planted; echo x > ${target}/bin/java; echo done`);
+			assert.match(r.stdout, /done/);
+			assert.equal(existsSync(join(target, 'planted')), false, 'no planting in the linked target');
+			assert.equal(readFileSync(join(target, 'bin', 'java'), 'utf-8'), '#!/bin/sh\n', 'no replacing a binary in the linked tree');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', base]);
+		}
+	});
+
 	it('exec lockdown fails closed when the agent already owns a file in a trusted dir', needsBoundary, () => {
 		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
 		try {

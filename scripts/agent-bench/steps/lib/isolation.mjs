@@ -259,30 +259,46 @@ export function findAgentWritable({ flat, deep, exclude }) {
 
 /**
  * Remove group/other write from every trusted executable path the agent user can write (under CI;
- * locally only verify), then verify again as the agent user. Anything still writable (e.g. owned by
- * the agent user, or granted by an ACL) is a problem: the caller must fail closed.
+ * locally only verify), then verify again as the agent user, until nothing is left (bounded
+ * rounds). A writable hit that is a symlink (e.g. a tool-cache entry linking into /usr/lib/jvm) is
+ * fixed through the link and its real target tree joins the deep set. Anything still writable
+ * (e.g. owned by the agent user, or granted by an ACL) is a problem: the caller must fail closed.
  * @param {{flat: string[], deep: string[], exclude: string[]}} targets
  * @param {{fix?: boolean}} [options] default: fix only under CI
  * @returns {string[]} problems (empty = locked)
  */
 export function lockDownExecPaths(targets, options = {}) {
 	const fix = options.fix ?? isCI();
-	const first = findAgentWritable(targets);
-	if (first.problems.length === 0 || !fix) return first.problems;
-	// Deep trees: every non-link entry with group/other write, skipping the agent's own dirs.
+	const deep = new Set(targets.deep);
 	const prune = targets.exclude.flatMap((p) => ['-path', p, '-prune', '-o']);
-	for (const root of first.deepRoots) {
-		spawnSync(BIN.sudo, ['-n', BIN.find, root, ...prune, '!', '-type', 'l', '-perm', '/022', '-exec', BIN.chmod, 'go-w', '{}', '+'], {
-			stdio: 'ignore',
-			timeout: 600_000,
-		});
+	const fixedTrees = new Set();
+	for (let round = 0; round < 10; round++) {
+		const found = findAgentWritable({ ...targets, deep: [...deep] });
+		if (found.problems.length === 0 || !fix) return found.problems;
+		// Deep trees (once each): every non-link entry with group/other write, skipping agent dirs.
+		for (const root of found.deepRoots) {
+			if (fixedTrees.has(root)) continue;
+			fixedTrees.add(root);
+			spawnSync(BIN.sudo, ['-n', BIN.find, root, ...prune, '!', '-type', 'l', '-perm', '/022', '-exec', BIN.chmod, 'go-w', '{}', '+'], {
+				stdio: 'ignore',
+				timeout: 600_000,
+			});
+		}
+		// Every reported path explicitly (chmod follows a symlink to its target); a symlinked hit's
+		// real target tree is checked (and fixed) as a whole from the next round on.
+		for (let i = 0; i < found.writable.length; i += 500) {
+			spawnSync(BIN.sudo, ['-n', BIN.chmod, 'go-w', '--', ...found.writable.slice(i, i + 500)], { stdio: 'ignore', timeout: 60_000 });
+		}
+		for (const p of found.writable) {
+			try {
+				const real = realpathSync(p);
+				if (real !== p && statSync(real).isDirectory() && !targets.exclude.some((x) => real === x || real.startsWith(`${x}/`))) deep.add(real);
+			} catch {
+				/* vanished */
+			}
+		}
 	}
-	// Flat entries and ancestors: exactly the reported paths.
-	const loose = first.writable.filter((p) => !first.deepRoots.some((root) => p === root || p.startsWith(`${root}/`)));
-	for (let i = 0; i < loose.length; i += 500) {
-		spawnSync(BIN.sudo, ['-n', BIN.chmod, 'go-w', '--', ...loose.slice(i, i + 500)], { stdio: 'ignore', timeout: 60_000 });
-	}
-	return findAgentWritable(targets).problems;
+	return findAgentWritable({ ...targets, deep: [...deep] }).problems;
 }
 
 // ── Runner temp ──────────────────────────────────────────────────────────────────────────────
