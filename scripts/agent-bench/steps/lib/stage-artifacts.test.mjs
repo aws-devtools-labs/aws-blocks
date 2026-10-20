@@ -10,6 +10,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const STEP = join(dirname(fileURLToPath(import.meta.url)), '..', 'stage-artifacts.mjs');
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 const SECRET = `fakeSecret/${'s'.repeat(29)}`;
 const SESSION = `IQoJb3JpZ2luX2Vj${'t'.repeat(60)}`;
 const OIDC_REQ = `fake-oidc-request-${'r'.repeat(30)}`;
@@ -47,7 +48,8 @@ function fixture() {
 	writeFileSync(files.cmdLog, `${JSON.stringify({ command: 'env', stdout: `AWS_SECRET_ACCESS_KEY=${SECRET}\n` })}\n`);
 	writeFileSync(join(ws, 'src', 'leak.ts'), `// ${SECRET}\nexport const t = '${GH}';\n`);
 	writeFileSync(join(ws, 'src', 'app.ts'), 'const API_KEY = process.env.X;\n');
-	writeFileSync(join(ws, 'export.json'), JSON.stringify({ Credentials: { SecretAccessKey: UNKNOWN, Expiration: 'x' } }));
+	// Source JSON is redacted by value: the exact credential goes, wherever it sits.
+	writeFileSync(join(ws, 'export.json'), JSON.stringify({ Credentials: { SecretAccessKey: SECRET, Expiration: 'x' } }));
 	writeFileSync(join(ws, 'package.json'), '{\n  "name": "app",\n  "author": "someone"\n}\n');
 	writeFileSync(join(ws, 'node_modules', 'pkg', 'index.js'), `// ${SECRET}\n`);
 	writeFileSync(join(ws, 'src', 'blob.bin'), Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(SECRET)]));
@@ -98,7 +100,7 @@ describe('stage-artifacts.mjs (the published copy)', () => {
 			assert.equal(result.Credentials.SecretAccessKey, '***REDACTED***');
 			JSON.parse(readFileSync(join(stage, 'trace', 'trace.json'), 'utf-8'));
 			for (const l of readFileSync(join(stage, 'trace', 'commands.jsonl'), 'utf-8').split('\n').filter(Boolean)) JSON.parse(l);
-			// Source: code is not mangled, JSON is key-aware, untouched JSON keeps its bytes.
+			// Source: code is not mangled, an exact credential in JSON is gone, untouched JSON keeps its bytes.
 			const src = join(stage, 'source');
 			assert.equal(readFileSync(join(src, 'src', 'app.ts'), 'utf-8'), 'const API_KEY = process.env.X;\n');
 			assert.equal(JSON.parse(readFileSync(join(src, 'export.json'), 'utf-8')).Credentials.SecretAccessKey, '***REDACTED***');
@@ -112,6 +114,37 @@ describe('stage-artifacts.mjs (the published copy)', () => {
 			assert.match(readFileSync(join(ws, 'src', 'leak.ts'), 'utf-8'), /fakeSecret/);
 		} finally {
 			cleanup(root);
+		}
+	});
+
+	it('source JSON keeps its bytes: the real app-template package.json and lockfile, credential-named packages included', () => {
+		const root = mkdtempSync(join(tmpdir(), 'stage-source-json-'));
+		try {
+			const ws = join(root, 'app');
+			mkdirSync(ws);
+			// The default template ships `scripts.secret`; the lockfile lists credential-provider-*,
+			// token-providers, backend-secret, js-cookie… — package metadata, not credentials.
+			const pkg = readFileSync(join(REPO, 'packages', 'create-blocks-app', 'templates', 'default', 'package.json'), 'utf-8');
+			const lock = readFileSync(join(REPO, 'package-lock.json'), 'utf-8');
+			assert.match(pkg, /"secret":/);
+			assert.match(lock, /credential-provider/);
+			assert.match(lock, /token-providers/);
+			writeFileSync(join(ws, 'package.json'), pkg);
+			writeFileSync(join(ws, 'package-lock.json'), lock);
+			// …while an exact credential embedded in a JSON value is still removed.
+			const leaky = JSON.parse(pkg);
+			leaky.description = `deploy with ${SECRET}`;
+			writeFileSync(join(ws, 'leaky.json'), `${JSON.stringify(leaky, null, 2)}\n`);
+			const stage = join(root, 'stage');
+			const r = run({ STAGE_DIR: stage, WORKSPACE: ws });
+			assert.equal(r.status, 0, r.stderr);
+			assert.equal(readFileSync(join(stage, 'source', 'package.json'), 'utf-8'), pkg, 'template package.json must be byte-identical');
+			assert.equal(readFileSync(join(stage, 'source', 'package-lock.json'), 'utf-8'), lock, 'lockfile must be byte-identical');
+			const staged = readFileSync(join(stage, 'source', 'leaky.json'), 'utf-8');
+			assert.equal(staged.includes(SECRET), false);
+			assert.deepEqual(JSON.parse(staged), { ...leaky, description: 'deploy with ***REDACTED***' });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 

@@ -102,7 +102,7 @@ delete process.env.WORKSPACE;
 // uid stops it reading this harness's /proc/<pid>/environ, which holds the job credentials for the
 // Bedrock calls. The ACL grant covers the disposable copy only. Fail closed, like the builder: under
 // CI a judge without isolation records `isolation_failure` (harness_error) and never runs.
-const phase = enterAgentPhase(JUDGE_SRC);
+const phase = enterAgentPhase(JUDGE_SRC, { agentDirs: [WORKSPACE] });
 const ISOLATE = phase.isolated;
 if (phase.error) {
 	process.stderr.write(`[judge] REFUSING to run the judge: ${phase.error}\n`);

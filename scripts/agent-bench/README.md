@@ -110,11 +110,26 @@ The boundary, outermost first:
    read any of them, nor read any runner-uid `/proc/<pid>/environ`; a failure
    is an `isolation_failure`. Writing those files would otherwise inject env or
    `PATH` into later steps, including the one that re-assumes the full role.
-5. **Reap.** Every `benchagent` process (setsid/nohup escapees included) is
+5. **Trusted executables locked and verified.** Later runner-uid steps — and
+   `sudo`, as root, through its `secure_path` — execute from the runner `PATH`,
+   `/usr/local/{s,}bin` and the other system dirs, the node install, the hosted
+   tool cache, global npm modules, the checkout (its `scripts/agent-bench` and
+   `node_modules`), the downloaded actions and the runner itself. The hosted image
+   ships some of these world-writable (e.g. `/usr/local/bin`,
+   `/opt/hostedtoolcache`), which would let the agent plant or replace a binary
+   that a later step runs with the credentials. Before any agent code runs, each
+   phase removes group/other write from every such path `benchagent` can write
+   (via `sudo`, under CI), then checks **as `benchagent`** that it can't write or
+   replace any of them, any entry in them, or any (non-sticky) ancestor; anything
+   left (e.g. a file it already owns) is an `isolation_failure`. The agent's own
+   dirs (the workspace, the Playwright browser cache, which no runner-uid process
+   executes from afterwards) are excluded. The harness's own tool calls (`sudo`,
+   `runuser`, `pkill`, …) use absolute system paths.
+6. **Reap.** Every `benchagent` process (setsid/nohup escapees included) is
    killed and its crontab removed at the start and end of each agent phase, and
    step 4c reaps and verifies none remain before anything is published or the
    role is re-assumed.
-6. **Credential-free env.** Each agent process gets an explicit env from
+7. **Credential-free env.** Each agent process gets an explicit env from
    `buildShellEnv` (`steps/lib/secrets.mjs`); per-command overrides pass the same
    filter, so they can add app settings (`BLOCKS_URL`, `RUN_ID`, …) but never
    reintroduce anything denied:
@@ -126,7 +141,7 @@ The boundary, outermost first:
      `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
      `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
      `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
-     system dirs, the hosted tool cache and the harness's own node dir;
+     system dirs and the harness's own node dir (both covered by the lockdown);
      `NODE_OPTIONS` keeps only flags that load no code.
    - **always stripped:** every other `AWS_*` (keys, session token, profile,
      web-identity, container-credential and config-file vars), every `ACTIONS_*`,
@@ -135,7 +150,7 @@ The boundary, outermost first:
      other `GITHUB_*` / `RUNNER_*` (file commands, `RUNNER_TEMP`), and startup
      hooks (`BASH_ENV`, `ENV`, exported bash functions, `PROMPT_COMMAND`,
      `LD_*`, npm's `node-options`/`script-shell`/config-file redirects).
-7. **Redaction, then a fail-closed published copy.** Writers redact before
+8. **Redaction, then a fail-closed published copy.** Writers redact before
    writing: `commands.jsonl` (command, cwd, stdout, stderr — redacted before the
    4000-char cut), `trace.json`, `metrics.json`, `result.json`, the summary
    job's step summary, PR comment, S3 aggregate, Athena NDJSON and
@@ -145,12 +160,16 @@ The boundary, outermost first:
    runner, opened without following links; the source root and its ancestors
    must contain no symlink; and symlinks, special files, binaries (NUL / invalid
    UTF-8), files over 20 MiB, unreadable files and entries whose name carries a
-   credential or control character are dropped, never published. JSON is
-   redacted value by value and key-aware (a string under a credential-named
-   property such as `SecretAccessKey` or `authorization` is replaced whatever its
-   format; numeric usage fields survive). The redactor also replaces the exact
-   values of the credential vars in the harness env, AWS key ids
-   (`AKIA`/`ASIA`), STS session tokens, JWTs (e.g. OIDC tokens), GitHub
+   credential or control character are dropped, never published. Harness JSON
+   (result, trace, metrics, command log) is redacted value by value and
+   key-aware: a string under a credential field name (`SecretAccessKey`,
+   `SessionToken`, `password`, `apiKey`, `authorization`, env-style `*_TOKEN`, …;
+   exact names, not substrings) is replaced whatever its format, and numeric
+   usage fields survive. Source files the agent wrote, JSON included, are
+   redacted by value only, so `package.json` scripts and lockfile package names
+   (`credential-provider-*`, `js-cookie`, …) stay byte-identical. The redactor
+   replaces the exact values of the credential vars in the harness env, AWS key
+   ids (`AKIA`/`ASIA`), STS session tokens, JWTs (e.g. OIDC tokens), GitHub
    (`ghp_`/`ghs_`/…, `github_pat_`) and npm tokens, PEM private keys and — in
    logs, not source — credential-named `NAME=value` pairs. If 4c fails, nothing
    from that cell is uploaded or persisted (it is then missing from the summary
@@ -165,7 +184,8 @@ agent and are not redaction sources. The agent's code produces the Playwright
 report the supervisor scores (validated as bounded integers), so score
 integrity rests on the same trust as before. Redaction is best-effort: it cannot
 catch a secret that was encoded, split or otherwise transformed, or a credential
-in an unknown format without a credential-like name next to it; dropped binary
+in an unknown format without a credential-like name next to it (in source files,
+only exact values and known token formats are caught); dropped binary
 and oversized files are simply missing from the source artifact. Job logs are
 not passed through this redactor (GitHub masks the secrets it knows about), and
 the agent never holds credentials to print.
@@ -402,7 +422,7 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/3-build-and-test.sh` | Trusted supervisor: `npm run build` + Playwright spec, every app/dependency process run as `benchagent` via `lib/agent-exec.mjs`; validates and writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
 | `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed shared rubric (`COMMON_DIMENSIONS`) and applies hard caps |
 | `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner that spawns every command as `benchagent` with the `buildShellEnv` env and writes the redacted `commands.jsonl`. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
-| `steps/lib/isolation.mjs` | **Single source of truth** for the agent-user boundary: the `runuser` spawn (refuses a same-uid fallback under CI), workspace ACL, runner-temp lockdown + verification as the agent user, the reap, and `enterAgentPhase` |
+| `steps/lib/isolation.mjs` | **Single source of truth** for the agent-user boundary: the `runuser` spawn (refuses a same-uid fallback under CI), workspace ACL, trusted-executable lockdown + runner-temp lockdown (each verified as the agent user), the reap, and `enterAgentPhase` |
 | `steps/lib/agent-exec.mjs` | Step 3's bridge to that boundary: `preflight`, `run` (a command as `benchagent`), `reap`, and `read-file` (copy an agent-written file without following links) |
 | `steps/lib/secrets.mjs` | **Single source of truth** for credential hygiene: `buildShellEnv` (the env policy for agent processes), `redactSecrets` / `redactDeep` (key-aware) / `stringifyRedacted` / `createRedactor` (artifact, sink and prompt redaction). Pure apart from `redactSecrets` reading `process.env` |
 | `steps/stage-artifacts.mjs` | Step 4c: reap, then build the only published copy (redacted harness files + source, no links/binaries/oversized/unreadable files or credential-bearing names); fails closed |
@@ -422,8 +442,9 @@ pessimistic baseline. Each successful step augments it. `finalize-result.mjs`
 runs with `if: always()` and stamps `status: scored` (all steps green),
 `status: error, failed_at: <step>` (a tracked step failed), or
 `failed_at: pre-oidc` (something before OIDC — e.g. `npm ci` — failed). The
-upload step also runs with `if: always()`, so the cell always shows up in the
-summary table — never silently missing.
+upload step runs whenever step 4c staged the cell (`if: always()` plus the
+staging gate), so the cell shows up in the summary table unless its files could
+not be safely staged.
 
 The report is written to the **GitHub Actions run summary**
 (`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the headline,

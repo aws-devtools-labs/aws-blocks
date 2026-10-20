@@ -6,9 +6,9 @@
 // them on a real hosted runner (including against its real RUNNER_TEMP). Fakes are assembled at runtime.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -16,11 +16,14 @@ import {
 	bareShellAllowed,
 	buildAgentSpawn,
 	enterAgentPhase,
+	findAgentWritable,
 	harnessUidPids,
 	isCI,
 	isolationAvailable,
+	lockDownExecPaths,
 	lockDownRunnerTemp,
 	reapAgentProcesses,
+	trustedExecPaths,
 	verifyAgentIsolation,
 } from './isolation.mjs';
 
@@ -50,6 +53,14 @@ function withEnv(vars, fn) {
 			else process.env[k] = v;
 		}
 	}
+}
+
+function sudo(...args) {
+	const r = spawnSync('/usr/bin/sudo', ['-n', ...args], { encoding: 'utf-8' });
+	assert.equal(r.status, 0, `sudo ${args.join(' ')}: ${r.stderr}`);
+}
+function asAgent(script) {
+	return spawnSync('/usr/bin/sudo', ['-n', '/usr/sbin/runuser', '-u', BENCH_AGENT_USER, '--', '/bin/bash', '-c', script], { encoding: 'utf-8' });
 }
 
 // A child process env for a CI job whose agent user is missing (isolation can't be entered).
@@ -86,7 +97,9 @@ describe('CI detection + the local-only bare opt-in', () => {
 			assert.throws(() => buildAgentSpawn('true', '/tmp', false, {}), /refusing/);
 		});
 		withEnv({ CI: undefined, GITHUB_ACTIONS: undefined, BENCH_ALLOW_BARE_SHELL: '1' }, () => {
-			assert.deepEqual(buildAgentSpawn('true', '/tmp', false, {}), { file: 'bash', args: ['-c', "cd '/tmp' && true"], isolated: false });
+			const spec = buildAgentSpawn('true', '/tmp', false, {});
+			assert.match(spec.file, /^\/(usr\/)?bin\/bash$/, 'the shell is resolved by absolute system path, never via PATH');
+			assert.deepEqual({ ...spec, file: 'bash' }, { file: 'bash', args: ['-c', "cd '/tmp' && true"], isolated: false });
 		});
 	});
 });
@@ -215,7 +228,10 @@ describe('the agent-user boundary on a real host', () => {
 		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
 		try {
 			writeFileSync(join(ws, 'app.ts'), 'export {};\n');
-			assert.deepEqual(enterAgentPhase(ws), { isolated: true });
+			// Off a runner, use system dirs only: a developer PATH may hold dirs this check (rightly)
+			// refuses. On a runner the real PATH is used; the hosted-runner test below covers it too.
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
 			const { file, args } = buildAgentSpawn('id -un; cat app.ts', ws, true, { PATH: '/usr/bin:/bin' });
 			const r = spawnSync(file, args, { encoding: 'utf-8' });
 			assert.equal(r.status, 0, r.stderr);
@@ -224,4 +240,125 @@ describe('the agent-user boundary on a real host', () => {
 			rmSync(ws, { recursive: true, force: true });
 		}
 	});
+
+	// Writable trusted executable paths: the hosted image ships e.g. /usr/local/bin and
+	// /opt/hostedtoolcache world-writable, so the agent could plant a binary a later runner-uid step
+	// (or sudo, as root) executes. This reproduces that layout in scratch dirs.
+
+	it('exec lockdown: finds what the agent can write or replace, removes it, and leaves agent dirs alone', needsBoundary, () => {
+		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
+		try {
+			chmodSync(base, 0o755);
+			const bin = join(base, 'bin'); // a root-owned, world-writable PATH dir (like /usr/local/bin)
+			mkdirSync(bin);
+			writeFileSync(join(bin, 'aws'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+			sudo('/usr/bin/chown', '-R', 'root:root', bin);
+			sudo('/usr/bin/chmod', '0777', bin);
+			const tree = join(base, 'toolcache'); // a world-writable install tree (like /opt/hostedtoolcache)
+			mkdirSync(join(tree, 'node', 'bin'), { recursive: true });
+			writeFileSync(join(tree, 'node', 'bin', 'node'), '#!/bin/sh\n', { mode: 0o755 });
+			chmodSync(join(tree, 'node', 'bin', 'node'), 0o777);
+			chmodSync(join(tree, 'node'), 0o777);
+			const agentDir = join(tree, 'agent-cache'); // an agent dir inside a tree: excluded, untouched
+			mkdirSync(agentDir);
+			chmodSync(agentDir, 0o777);
+			const anc = join(base, 'open'); // a writable, non-sticky ancestor of a locked dir
+			mkdirSync(join(anc, 'locked'), { recursive: true });
+			chmodSync(anc, 0o777);
+			const targets = { flat: [bin, join(anc, 'locked')], deep: [tree], exclude: [agentDir] };
+
+			const before = findAgentWritable(targets);
+			assert.deepEqual(before.deepRoots, [tree]);
+			for (const p of [bin, anc]) assert.ok(before.writable.includes(p), `${p} must be reported: ${before.writable}`);
+			assert.ok(!before.writable.some((p) => p.startsWith(agentDir)), 'excluded agent dir must not be reported');
+			assert.ok(!before.writable.includes('/tmp'), 'a sticky ancestor (/tmp) is not replaceable and must not be reported');
+			assert.match(asAgent(`echo planted > ${bin}/proof && echo ok`).stdout, /ok/, 'baseline: the agent can plant');
+			sudo('/usr/bin/rm', '-f', join(bin, 'proof'));
+
+			assert.deepEqual(lockDownExecPaths(targets, { fix: true }), []);
+			const plant = asAgent(`echo x > ${bin}/aws2; echo x > ${tree}/node/bin/node; mv ${anc}/locked ${anc}/moved; echo done`);
+			assert.match(plant.stdout, /done/);
+			assert.equal(existsSync(join(bin, 'aws2')), false, 'no planting in the locked PATH dir');
+			assert.equal(readFileSync(join(tree, 'node', 'bin', 'node'), 'utf-8'), '#!/bin/sh\n', 'no replacing a locked binary');
+			assert.equal(existsSync(join(anc, 'locked')), true, 'no renaming a locked dir away through its parent');
+			assert.match(asAgent(`touch ${agentDir}/still-writable && echo ok`).stdout, /ok/, 'the agent dir keeps its access');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', base]);
+		}
+	});
+
+	it('exec lockdown fails closed when the agent already owns a file in a trusted dir', needsBoundary, () => {
+		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
+		try {
+			chmodSync(base, 0o755);
+			const bin = join(base, 'bin');
+			mkdirSync(bin);
+			sudo('/usr/bin/chown', 'root:root', bin);
+			sudo('/usr/bin/chmod', '0777', bin);
+			assert.equal(asAgent(`printf '#!/bin/sh\\n' > ${bin}/aws && chmod 755 ${bin}/aws`).status, 0);
+			const problems = lockDownExecPaths({ flat: [bin], deep: [], exclude: [] }, { fix: true });
+			assert.ok(problems.some((p) => p.includes(join(bin, 'aws'))), `a planted, agent-owned binary must keep the check failing: ${problems}`);
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', base]);
+		}
+	});
+});
+
+describe('trusted executable paths (what later runner-uid steps run from)', () => {
+	it('covers PATH + sudo secure_path, symlink targets, the node install, checkout, actions and tool cache; excludes agent dirs', () => {
+		const base = mkdtempSync(join(tmpdir(), 'bench-trusted-'));
+		try {
+			const custom = join(base, 'custom-bin');
+			const targetDir = join(base, 'real-bin');
+			mkdirSync(custom);
+			mkdirSync(targetDir);
+			writeFileSync(join(targetDir, 'tool'), '');
+			spawnSync('/bin/ln', ['-s', join(targetDir, 'tool'), join(custom, 'tool')]);
+			const checkout = join(base, 'work', 'repo', 'repo');
+			const actions = join(base, 'work', '_actions');
+			mkdirSync(join(checkout, 'bench-app'), { recursive: true });
+			mkdirSync(join(checkout, '.pw-browsers'));
+			mkdirSync(actions);
+			const t = trustedExecPaths(
+				{
+					PATH: `${custom}:/usr/bin:relative`,
+					GITHUB_WORKSPACE: checkout,
+					RUNNER_WORKSPACE: join(base, 'work', 'repo'),
+					WORKSPACE: join(checkout, 'bench-app'),
+					PLAYWRIGHT_BROWSERS_PATH: join(checkout, '.pw-browsers'),
+					RUNNER_TEMP: join(base, 'temp'),
+				},
+				['/tmp/judge-src'],
+			);
+			for (const d of [custom, realpathSync(targetDir), '/usr/bin']) assert.ok(t.flat.includes(d), `flat must include ${d}`);
+			for (const d of ['/usr/local/bin', '/usr/sbin', '/bin']) if (existsSync(d)) assert.ok(t.flat.includes(d), `sudo secure_path ${d}`);
+			assert.ok(!t.flat.includes('relative'));
+			const nodeRoot = dirname(dirname(realpathSync(process.execPath)));
+			for (const d of [nodeRoot, checkout, actions]) assert.ok(t.deep.includes(resolve(d)), `deep must include ${d}`);
+			for (const d of [join(checkout, 'bench-app'), join(checkout, '.pw-browsers'), join(base, 'temp'), '/tmp/judge-src']) {
+				assert.ok(t.exclude.includes(d), `exclude must include ${d}`);
+			}
+		} finally {
+			rmSync(base, { recursive: true, force: true });
+		}
+	});
+
+	it(
+		'on a GitHub-hosted runner: no runner PATH dir, secure_path dir, node binary or install tree is writable by the agent user',
+		{ skip: process.env.GITHUB_ACTIONS === 'true' ? false : 'not on a GitHub Actions runner' },
+		() => {
+			const targets = trustedExecPaths(process.env);
+			assert.deepEqual(lockDownExecPaths(targets), [], 'the lockdown must leave nothing writable');
+			// Independent of findAgentWritable: test -w as the agent user, then try to plant/replace.
+			const node = realpathSync(process.execPath);
+			const dirs = [...new Set([...(process.env.PATH ?? '').split(':').filter((d) => d.startsWith('/')), '/usr/local/bin', '/usr/local/sbin', dirname(node)])];
+			const quoted = dirs.filter((d) => existsSync(d)).map((d) => `'${d}'`).join(' ');
+			const r = asAgent(
+				`for d in ${quoted}; do [ -w "$d" ] && echo "WRITABLE $d"; touch "$d/.bench-plant" 2>/dev/null && echo "PLANTED $d"; done; ` +
+					`[ -w '${node}' ] && echo "WRITABLE ${node}"; mv '${node}' '${node}.x' 2>/dev/null && echo "REPLACED ${node}"; echo __done__`,
+			);
+			assert.match(r.stdout, /__done__/);
+			assert.doesNotMatch(r.stdout, /WRITABLE|PLANTED|REPLACED/, r.stdout);
+		},
+	);
 });

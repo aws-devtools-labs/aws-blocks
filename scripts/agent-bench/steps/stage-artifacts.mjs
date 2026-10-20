@@ -5,14 +5,16 @@
 //   1. Reap every agent-user process and verify none is left (fail closed): nothing can change a file
 //      while it is staged, and no agent process outlives this step into the role re-assume.
 //   2. Harness JSON (RESULT_PATH, TRACE, METRICS) and the JSONL command log: opened without following
-//      links, must be regular files owned by this (runner) uid, parsed and deep-redacted (key-aware).
+//      links, must be regular files owned by this (runner) uid, parsed and deep-redacted (key-aware:
+//      a string under a credential field name such as SecretAccessKey is replaced whatever its format).
 //   3. The generated source (WORKSPACE): the root and its ancestors must contain no symlink. Walked
 //      with no-follow opens + inode checks, into STAGE_DIR/source. Dropped, never published: symlinks,
 //      special files, binaries (NUL / invalid UTF-8), files over 20 MiB, unreadable files, and any
-//      entry whose name carries a credential or a control character. Text is redacted with the
-//      source-mode redactor (exact credential values + token formats) and JSON files key-aware too.
-//      The dirs the upload always excluded (node_modules, .git, dist, .blocks-sandbox, .aws, .env*,
-//      *.pem) are not staged.
+//      entry whose name carries a credential or a control character. Source is redacted by VALUE
+//      only (exact credential values + token formats; no name heuristics, so package.json scripts
+//      and lockfile package names stay intact); JSON files are also checked value by value, which
+//      catches an exact secret that only matches unescaped. The dirs the upload always excluded
+//      (node_modules, .git, dist, .blocks-sandbox, .aws, .env*, *.pem) are not staged.
 // Paths in messages are redacted and JSON-escaped. STAGE_DIR should live under RUNNER_TEMP (0700).
 // Exit 1 (and STAGE_DIR removed) on any hard failure.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -186,9 +188,11 @@ function stageSourceFile(src, dest, relPath, st) {
 	if (text === null) return drop(say(relPath), 'binary');
 	let out = redactSource(text);
 	if (relPath.endsWith('.json')) {
+		// Text redaction keeps the file's own formatting; a value-level pass then catches a secret that
+		// only matches once JSON-unescaped (rewriting the file only in that case).
 		try {
-			const parsed = JSON.parse(text);
-			const red = redactDeep(parsed, redactSource);
+			const parsed = JSON.parse(out);
+			const red = redactDeep(parsed, redactSource, { keyAware: false });
 			if (JSON.stringify(red) !== JSON.stringify(parsed)) out = `${JSON.stringify(red, null, 2)}\n`;
 		} catch {
 			/* not JSON: the text redaction above applies */

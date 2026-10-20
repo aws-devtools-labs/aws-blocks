@@ -73,8 +73,9 @@ const ALLOW_PREFIXES = ['LC_', 'NPM_CONFIG_', 'npm_config_', 'PLAYWRIGHT_', 'BLO
 //   - startup hooks that run code from outside the app: BASH_ENV, ENV, exported bash functions,
 //     PROMPT_COMMAND, SHELLOPTS/BASHOPTS, LD_*/DYLD_* loader vars, npm's node-options/script-shell/
 //     onload-script/config-file redirects.
-// PATH keeps only system dirs, the hosted tool cache and the dir of the node running the harness;
-// NODE_OPTIONS keeps only flags that load no code.
+// PATH keeps only system dirs and the dir of the node running the harness (the exec-path lockdown in
+// isolation.mjs verifies the agent user cannot write either); NODE_OPTIONS keeps only flags that
+// load no code.
 const AWS_NON_CREDENTIAL = new Set(['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_BLOCKS_DISABLE_TELEMETRY']);
 const HARD_CREDENTIAL_EXACT = new Set([
 	'GITHUB_TOKEN',
@@ -89,7 +90,6 @@ const RUNNER_PLUMBING_RE = /^(GITHUB_(?!ACTIONS$)|RUNNER_(?!(OS|ARCH)$))/i;
 const STARTUP_HOOK_RE =
 	/^(BASH_ENV|ENV|BASH_FUNC_.*|PROMPT_COMMAND|SHELLOPTS|BASHOPTS|LD_.*|DYLD_.*|npm_config_(node_options|script_shell|onload_script|userconfig|globalconfig|init_module))$/i;
 const SAFE_PATH_DIRS = new Set(['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin', '/snap/bin']);
-const SAFE_PATH_PREFIXES = ['/opt/hostedtoolcache/'];
 // NODE_OPTIONS flags that only tune the runtime (no --require/--import/--loader/--env-file…).
 const SAFE_NODE_OPTION_RE =
 	/^--(max-old-space-size|max-semi-space-size|stack-size|max-http-header-size)=\d+$|^--(no-warnings|enable-source-maps|no-deprecation|trace-warnings)$/;
@@ -116,7 +116,7 @@ function isAllowedName(name) {
 }
 
 /**
- * PATH reduced to the safe dirs (order kept; /usr/local/bin:/usr/bin:/bin when none survive), with
+ * PATH reduced to the system dirs (order kept; /usr/local/bin:/usr/bin:/bin when none survive), with
  * the dir of the node running the harness appended if missing, so the agent's `node`/`npm` are the
  * harness's own.
  */
@@ -125,7 +125,7 @@ export function sanitizePath(value) {
 	const kept = String(value)
 		.split(':')
 		.filter((d) => isAbsolute(d) && normalize(d) === d && !d.includes('..'))
-		.filter((d) => SAFE_PATH_DIRS.has(d) || d === nodeDir || SAFE_PATH_PREFIXES.some((p) => d.startsWith(p)));
+		.filter((d) => SAFE_PATH_DIRS.has(d) || d === nodeDir);
 	const dirs = kept.length ? [...new Set(kept)] : ['/usr/local/bin', '/usr/bin', '/bin'];
 	if (!dirs.includes(nodeDir)) dirs.push(nodeDir);
 	return dirs.join(':');
@@ -250,31 +250,64 @@ export function redactSecrets(text) {
 }
 
 // JSON property names whose STRING values are credentials whatever their format (an AWS secret
-// access key or a non-prefixed session token has none). Numbers are kept, so usage/scoring fields
-// like `tokens_in` or `inputTokens` survive.
-const CREDENTIAL_KEY_RE = /secret|passw|credential|private_?key|api_?key|access_?key|token|authorization|cookie/i;
+// access key or a non-prefixed session token has none): exact credential field names (compared
+// case- and separator-insensitively) and env-style UPPER_SNAKE names with a credential suffix. Not a
+// substring match, so package names like `credential-provider-ini` or a `scripts.secret` command
+// are untouched. Numbers are kept, so usage/scoring fields like `tokens_in` survive.
+const CREDENTIAL_FIELD_NAMES = new Set([
+	'secretaccesskey',
+	'awssecretaccesskey',
+	'sessiontoken',
+	'awssessiontoken',
+	'securitytoken',
+	'awssecuritytoken',
+	'accesskeyid',
+	'awsaccesskeyid',
+	'password',
+	'passwd',
+	'apikey',
+	'xapikey',
+	'clientsecret',
+	'privatekey',
+	'authorization',
+	'proxyauthorization',
+	'accesstoken',
+	'refreshtoken',
+	'idtoken',
+	'authtoken',
+	'bearertoken',
+	'cookie',
+	'setcookie',
+]);
+const ENV_CREDENTIAL_NAME_RE = /^[A-Z][A-Z0-9_]*_(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|ACCESS_KEY_ID)$/;
+
+/** True for a JSON property name that holds a credential (see CREDENTIAL_FIELD_NAMES). */
+export function isCredentialField(key) {
+	return CREDENTIAL_FIELD_NAMES.has(String(key).toLowerCase().replace(/[-_.\s]/g, '')) || ENV_CREDENTIAL_NAME_RE.test(String(key));
+}
 
 /**
  * Deep-redact a JSON-like value, so serialized JSON stays valid: every string value and key goes
- * through `redact`, and a string under a credential-named property is replaced outright. Own
- * `__proto__` properties are preserved as data.
+ * through `redact`, and (with `keyAware`, the default) a string under a credential field name is
+ * replaced outright. Use `keyAware: false` for JSON the agent wrote (source files): value-based
+ * redaction only. Own `__proto__` properties are preserved as data.
  * @template T
  * @param {T} value
  * @param {(text: string) => string} [redact]
- * @param {string} [key] the property name `value` sits under (internal)
+ * @param {{keyAware?: boolean}} [options]
  * @returns {T}
  */
-export function redactDeep(value, redact = redactSecrets, key = undefined) {
-	if (typeof value === 'string') {
-		if (key !== undefined && value !== '' && CREDENTIAL_KEY_RE.test(key)) return /** @type {T} */ (REDACTED);
-		return /** @type {T} */ (redact(value));
-	}
-	if (Array.isArray(value)) return /** @type {T} */ (value.map((v) => redactDeep(v, redact, key)));
-	if (value && typeof value === 'object') {
-		const entries = Object.entries(value).map(([k, v]) => [redact(k), redactDeep(v, redact, k)]);
-		return /** @type {T} */ (Object.fromEntries(entries));
-	}
-	return value;
+export function redactDeep(value, redact = redactSecrets, options = {}) {
+	const keyAware = options.keyAware !== false;
+	const walk = (v, key) => {
+		if (typeof v === 'string') {
+			return keyAware && key !== undefined && v !== '' && isCredentialField(key) ? REDACTED : redact(v);
+		}
+		if (Array.isArray(v)) return v.map((item) => walk(item, key));
+		if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, item]) => [redact(k), walk(item, k)]));
+		return v;
+	};
+	return /** @type {T} */ (walk(value, undefined));
 }
 
 /**

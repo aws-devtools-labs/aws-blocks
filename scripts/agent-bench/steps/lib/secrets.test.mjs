@@ -9,6 +9,7 @@ import {
 	buildShellEnv,
 	createRedactor,
 	credentialValues,
+	isCredentialField,
 	isCredentialName,
 	redactDeep,
 	redactSecrets,
@@ -123,11 +124,11 @@ describe('buildShellEnv (agent/judge shell env policy)', () => {
 		assert.deepEqual(leaked, []);
 	});
 
-	it('PATH keeps only system dirs, the hosted tool cache and the harness node dir — from base or override', () => {
+	it('PATH keeps only system dirs and the harness node dir — from base or override', () => {
 		const nodeDir = dirname(process.execPath);
-		const evil = ['/tmp/evil-bin', '/home/runner/work/x/node_modules/.bin', 'relative/bin', '/usr/bin/../../tmp'];
-		const path = ['/usr/local/bin', ...evil, '/opt/hostedtoolcache/node/22.0.0/x64/bin', nodeDir, '/usr/bin', '/bin'].join(':');
-		const expected = ['/usr/local/bin', '/opt/hostedtoolcache/node/22.0.0/x64/bin', nodeDir, '/usr/bin', '/bin'];
+		const evil = ['/tmp/evil-bin', '/home/runner/work/x/node_modules/.bin', 'relative/bin', '/usr/bin/../../tmp', '/opt/hostedtoolcache/Python/3/bin'];
+		const path = ['/usr/local/bin', ...evil, nodeDir, '/usr/bin', '/bin'].join(':');
+		const expected = ['/usr/local/bin', nodeDir, '/usr/bin', '/bin'];
 		assert.deepEqual(buildShellEnv({ PATH: path }).PATH.split(':'), [...new Set(expected)]);
 		// Nothing safe left → system dirs + the harness node dir (never the evil entry).
 		const fallback = buildShellEnv({}, { overrides: { PATH: '/tmp/evil-bin' } }).PATH.split(':');
@@ -284,6 +285,36 @@ describe('redaction', () => {
 		assert.deepEqual(out.usage, { inputTokens: 10, cacheReadInputTokens: 3 });
 		assert.equal(out.stop_reason, 'max_tokens');
 		assert.equal(out.emptyToken, '');
+	});
+
+	it('credential field names are exact names, not substrings found in package names or scripts', () => {
+		for (const k of ['SecretAccessKey', 'secret_access_key', 'aws_secret_access_key', 'SessionToken', 'AccessKeyId', 'password', 'apiKey', 'api_key', 'x-api-key', 'authorization', 'client_secret', 'access_token', 'refreshToken', 'privateKey', 'Cookie', 'API_TOKEN', 'GITHUB_TOKEN', 'DEPLOY_SECRET']) {
+			assert.equal(isCredentialField(k), true, k);
+		}
+		for (const k of [
+			'secret',
+			'token',
+			'tokens_in',
+			'judge_tokens_out',
+			'inputTokens',
+			'node_modules/@aws-sdk/credential-provider-ini',
+			'@aws-sdk/credential-providers',
+			'@aws-sdk/token-providers',
+			'@aws-amplify/backend-secret',
+			'js-cookie',
+			'keytar',
+			'stop_reason',
+		]) {
+			assert.equal(isCredentialField(k), false, k);
+		}
+	});
+
+	it('redactDeep with keyAware:false redacts by value only (agent-written JSON)', () => {
+		const value = { scripts: { secret: 'tsx aws-blocks/scripts/secret.ts' }, password: 'not-a-known-value', note: `x ${FAKE_CREDENTIAL_ENV.GITHUB_TOKEN}` };
+		const out = redactDeep(value, redactPatterns, { keyAware: false });
+		assert.equal(out.scripts.secret, 'tsx aws-blocks/scripts/secret.ts');
+		assert.equal(out.password, 'not-a-known-value');
+		assert.equal(out.note, 'x ***REDACTED-GH-TOKEN***');
 	});
 
 	it('redactDeep keeps an own `__proto__` property as data (no prototype setter, no data loss)', () => {

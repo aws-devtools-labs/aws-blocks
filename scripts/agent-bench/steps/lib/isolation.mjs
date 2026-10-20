@@ -2,11 +2,18 @@
 // (run-shell.ts) and every process step 3 starts from the agent's app (agent-exec.mjs).
 //
 // Agent code runs as a dedicated unprivileged user (`benchagent`, no sudo rights) via
-// `sudo -n runuser -u benchagent -- env <shell-env> …`. The harness keeps the job credentials in its
-// own env (it makes the Bedrock calls), so the boundary is what keeps them out of reach: a
+// `sudo -n runuser -u benchagent -- env -i <shell-env> …`. The harness keeps the job credentials in
+// its own env (it makes the Bedrock calls), so the boundary is what keeps them out of reach: a
 // different uid cannot read the harness's /proc/<pid>/environ or signal it. Around it:
 //   - FAIL CLOSED: under CI there is no same-uid fallback. A bare shell is only for local dev,
 //     behind BENCH_ALLOW_BARE_SHELL=1, and refused when CI/GITHUB_ACTIONS is set.
+//   - TRUSTED EXECUTABLES: every later runner-uid step (and sudo, as root) executes from the runner
+//     PATH, sudo's secure_path, the node install, the hosted tool cache, the checkout's scripts and
+//     node_modules, the downloaded actions and the runner itself. The hosted image ships some of
+//     these world-writable (e.g. /usr/local/bin, /opt/hostedtoolcache), which would let the agent
+//     plant or replace a binary that later runs with the credentials. Before agent code runs, write
+//     access for others is removed (CI only) and the agent user is VERIFIED unable to write or
+//     replace any of them or any ancestor. The harness's own tool calls use absolute system paths.
 //   - RUNNER TEMP: the runner's file-command files (GITHUB_ENV/OUTPUT/PATH/STATE, and the set_env
 //     file configure-aws-credentials writes the AWS keys to) live under RUNNER_TEMP. Before agent
 //     code runs, those dirs are made 0700 and the agent user is VERIFIED unable to list/read them
@@ -15,10 +22,23 @@
 //     each agent phase and before anything is published or the role is re-assumed.
 // Plain .mjs (no TS) so bare-node step scripts can use it; unit-tested in isolation.test.mjs.
 import { spawnSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const BENCH_AGENT_USER = process.env.BENCH_AGENT_USER || 'benchagent';
+
+// System tools by absolute path, never via PATH (and sudo targets too: sudo would otherwise look
+// them up in its secure_path, whose /usr/local/* dirs come first).
+function sysBin(name) {
+	for (const d of ['/usr/bin', '/usr/sbin', '/bin', '/sbin']) {
+		const p = join(d, name);
+		if (existsSync(p)) return p;
+	}
+	return `/usr/bin/${name}`;
+}
+const BIN = Object.fromEntries(
+	['sudo', 'runuser', 'env', 'bash', 'pkill', 'pgrep', 'crontab', 'setfacl', 'chmod', 'find', 'getent', 'id'].map((n) => [n, sysBin(n)]),
+);
 
 /** True on a CI runner, where a same-uid fallback is never allowed. */
 export function isCI(env = process.env) {
@@ -37,7 +57,7 @@ let agentHome;
 // The agent user's home (passwd entry) so HOME is writable; falls back to /home/<user>.
 function resolveAgentHome() {
 	try {
-		const r = spawnSync('getent', ['passwd', BENCH_AGENT_USER], { encoding: 'utf8', timeout: 5000 });
+		const r = spawnSync(BIN.getent, ['passwd', BENCH_AGENT_USER], { encoding: 'utf8', timeout: 5000 });
 		const home = r.status === 0 && typeof r.stdout === 'string' ? r.stdout.trim().split(':')[5] : '';
 		if (home) return home;
 	} catch {
@@ -46,17 +66,22 @@ function resolveAgentHome() {
 	return `/home/${BENCH_AGENT_USER}`;
 }
 
+// `sudo -n runuser -u <agent> -- env -i [pairs…] <argv…>`, all by absolute path.
+function asAgent(envPairs, argv) {
+	return { file: BIN.sudo, args: ['-n', BIN.runuser, '-u', BENCH_AGENT_USER, '--', BIN.env, '-i', ...envPairs, ...argv] };
+}
+
 /**
  * Whether commands can run as the agent user via passwordless sudo+runuser (probed once, with the
  * exact transition used for every command). The harness user holds `NOPASSWD:ALL` on the hosted
- * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab` work too; the agent user
- * holds no sudo rights (agent-bench.yml fails the job otherwise).
+ * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab/chmod` work too; the agent
+ * user holds no sudo rights (agent-bench.yml fails the job otherwise).
  * @returns {boolean}
  */
 export function isolationAvailable() {
 	if (isolationProbe !== undefined) return isolationProbe;
 	try {
-		const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'true'], {
+		const r = spawnSync(BIN.sudo, ['-n', BIN.runuser, '-u', BENCH_AGENT_USER, '--', '/bin/true'], {
 			stdio: 'ignore',
 			timeout: 5000,
 		});
@@ -78,14 +103,14 @@ export function isolationAvailable() {
 export function prepareWorkspaceIsolation(root) {
 	if (!isolationAvailable()) return false;
 	let me = process.env.USER ?? '';
-	if (!me) me = spawnSync('id', ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
+	if (!me) me = spawnSync(BIN.id, ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
 	const abs = resolve(root);
 	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync('setfacl', ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const access = spawnSync(BIN.setfacl, ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const dflt = spawnSync(BIN.setfacl, ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
 	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
 	for (let dir = dirname(abs), prev = ''; dir && dir !== prev && dir !== '/'; prev = dir, dir = dirname(dir)) {
-		spawnSync('setfacl', ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
+		spawnSync(BIN.setfacl, ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
 	}
 	return true;
 }
@@ -115,11 +140,7 @@ export function buildAgentSpawn(command, cwd, isolated, env) {
 		const envPairs = Object.entries(forwarded)
 			.filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
 			.map(([k, v]) => `${k}=${v}`);
-		return {
-			file: 'sudo',
-			args: ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', '-i', ...envPairs, 'bash', '-c', inner],
-			isolated: true,
-		};
+		return { ...asAgent(envPairs, [BIN.bash, '-c', inner]), isolated: true };
 	}
 	if (!bareShellAllowed()) {
 		throw new Error(
@@ -128,9 +149,143 @@ export function buildAgentSpawn(command, cwd, isolated, env) {
 			} (a bare shell needs BENCH_ALLOW_BARE_SHELL=1 and is never allowed under CI)`,
 		);
 	}
-	return { file: 'bash', args: ['-c', inner], isolated: false };
+	return { file: BIN.bash, args: ['-c', inner], isolated: false };
 }
 
+// ── Trusted executables ──────────────────────────────────────────────────────────────────────
+// sudo's secure_path on the hosted image (root resolves sudo targets here).
+const SECURE_PATH_DIRS = ['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin', '/snap/bin'];
+// Install trees later runner-uid steps execute from (node/npm/npx, global npm packages, setup-* tools).
+const SYSTEM_EXEC_TREES = ['/opt/hostedtoolcache', '/usr/local/lib/node_modules'];
+
+// The runner's own install dir (it runs the later actions' node from <root>/externals).
+function runnerInstallRoots() {
+	const roots = new Set();
+	for (const pid of harnessUidPids()) {
+		try {
+			const comm = readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
+			if (comm === 'Runner.Worker' || comm === 'Runner.Listener') roots.add(dirname(dirname(realpathSync(`/proc/${pid}/exe`))));
+		} catch {
+			/* gone or not ours */
+		}
+	}
+	return [...roots];
+}
+
+/**
+ * Everything a later runner-uid (or sudo/root) step executes from, split into `flat` dirs (the dir
+ * and its direct entries: every PATH dir, sudo's secure_path, and the target dir of each symlinked
+ * entry) and `deep` trees (checked recursively: the node install, the hosted tool cache, global npm
+ * modules, the checkout with its scripts + node_modules, the downloaded actions, the runner). The
+ * agent's own dirs (`agentDirs`: workspace, Playwright cache) and RUNNER_TEMP are excluded. Pure
+ * apart from reading the filesystem.
+ * @param {Record<string, string | undefined>} [env]
+ * @param {string[]} [agentDirs]
+ * @returns {{flat: string[], deep: string[], exclude: string[]}}
+ */
+export function trustedExecPaths(env = process.env, agentDirs = []) {
+	const flat = new Set([...SECURE_PATH_DIRS, ...(env.PATH ?? '').split(':').filter((d) => isAbsolute(d))]);
+	for (const d of [...flat]) {
+		let entries = [];
+		try {
+			entries = readdirSync(d, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const e of entries) {
+			if (!e.isSymbolicLink()) continue;
+			try {
+				flat.add(dirname(realpathSync(join(d, e.name))));
+			} catch {
+				/* dangling */
+			}
+		}
+	}
+	const deep = new Set(SYSTEM_EXEC_TREES);
+	deep.add(dirname(dirname(realpathSync(process.execPath))));
+	if (env.RUNNER_TOOL_CACHE) deep.add(env.RUNNER_TOOL_CACHE);
+	if (env.GITHUB_WORKSPACE) deep.add(env.GITHUB_WORKSPACE);
+	if (env.RUNNER_WORKSPACE) deep.add(join(dirname(env.RUNNER_WORKSPACE), '_actions'));
+	for (const r of runnerInstallRoots()) deep.add(r);
+	const exclude = [...agentDirs, env.WORKSPACE, env.PLAYWRIGHT_BROWSERS_PATH, env.RUNNER_TEMP]
+		.filter((p) => typeof p === 'string' && p !== '')
+		.map((p) => resolve(p));
+	const real = (list) => [...new Set(list.filter((p) => existsSync(p)).map((p) => resolve(p)))];
+	return { flat: real([...flat]), deep: real([...deep]), exclude: [...new Set(exclude)] };
+}
+
+/**
+ * As the agent user, list what it could write or replace: writable flat dirs/entries, any writable
+ * path in a deep tree (first hit per tree), and any writable non-sticky ancestor (a writable parent
+ * lets it rename the child away). Empty = nothing trusted is writable. A probe that could not run
+ * is reported as a problem.
+ * @param {{flat: string[], deep: string[], exclude: string[]}} targets
+ * @returns {{writable: string[], deepRoots: string[], problems: string[]}}
+ */
+export function findAgentWritable({ flat, deep, exclude }) {
+	const script = [
+		'prune=(); for a in "$@"; do case "$a" in X:*) prune+=(-path "${a#X:}" -prune -o);; esac; done',
+		'for a in "$@"; do case "$a" in',
+		'  F:*) find "${a#F:}" -maxdepth 1 -writable -printf "F\\t%p\\n" 2>/dev/null;;',
+		'  D:*) d="${a#D:}"; hit=$(find "$d" "${prune[@]}" -writable -print -quit 2>/dev/null); [ -n "$hit" ] && printf "D\\t%s\\t%s\\n" "$d" "$hit";;',
+		'esac; done',
+		'for a in "$@"; do case "$a" in F:*|D:*) p="${a#?:}"; while [ "$p" != / ]; do p=$(dirname "$p");',
+		'  if [ -w "$p" ] && [ ! -k "$p" ]; then printf "A\\t%s\\n" "$p"; fi; done;; esac; done',
+		'echo __probe_done__',
+	].join('\n');
+	const args = [...exclude.map((p) => `X:${p}`), ...flat.map((p) => `F:${p}`), ...deep.map((p) => `D:${p}`)];
+	const { file, args: argv } = asAgent(['PATH=/usr/bin:/bin'], [BIN.bash, '-c', script, 'probe', ...args]);
+	const r = spawnSync(file, argv, { encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
+	const lines = (r.stdout ?? '').split('\n').filter(Boolean);
+	if (r.status !== 0 || lines.at(-1) !== '__probe_done__') {
+		return { writable: [], deepRoots: [], problems: [`writability probe could not run as ${BENCH_AGENT_USER} (exit ${r.status ?? r.error?.message})`] };
+	}
+	const writable = new Set();
+	const deepRoots = new Set();
+	for (const line of lines.slice(0, -1)) {
+		const [kind, a, b] = line.split('\t');
+		if (kind === 'D') {
+			deepRoots.add(a);
+			writable.add(b);
+		} else writable.add(a);
+	}
+	const writableList = [...writable];
+	return {
+		writable: writableList,
+		deepRoots: [...deepRoots],
+		problems: writableList.map((p) => `${BENCH_AGENT_USER} can write or replace ${p}`),
+	};
+}
+
+/**
+ * Remove group/other write from every trusted executable path the agent user can write (under CI;
+ * locally only verify), then verify again as the agent user. Anything still writable (e.g. owned by
+ * the agent user, or granted by an ACL) is a problem: the caller must fail closed.
+ * @param {{flat: string[], deep: string[], exclude: string[]}} targets
+ * @param {{fix?: boolean}} [options] default: fix only under CI
+ * @returns {string[]} problems (empty = locked)
+ */
+export function lockDownExecPaths(targets, options = {}) {
+	const fix = options.fix ?? isCI();
+	const first = findAgentWritable(targets);
+	if (first.problems.length === 0 || !fix) return first.problems;
+	// Deep trees: every non-link entry with group/other write, skipping the agent's own dirs.
+	const prune = targets.exclude.flatMap((p) => ['-path', p, '-prune', '-o']);
+	for (const root of first.deepRoots) {
+		spawnSync(BIN.sudo, ['-n', BIN.find, root, ...prune, '!', '-type', 'l', '-perm', '/022', '-exec', BIN.chmod, 'go-w', '{}', '+'], {
+			stdio: 'ignore',
+			timeout: 600_000,
+		});
+	}
+	// Flat entries and ancestors: exactly the reported paths.
+	const loose = first.writable.filter((p) => !first.deepRoots.some((root) => p === root || p.startsWith(`${root}/`)));
+	for (let i = 0; i < loose.length; i += 500) {
+		spawnSync(BIN.sudo, ['-n', BIN.chmod, 'go-w', '--', ...loose.slice(i, i + 500)], { stdio: 'ignore', timeout: 60_000 });
+	}
+	return findAgentWritable(targets).problems;
+}
+
+// ── Runner temp ──────────────────────────────────────────────────────────────────────────────
 function owned(path) {
 	try {
 		return statSync(path).uid === process.getuid?.();
@@ -164,8 +319,8 @@ export function lockDownRunnerTemp(env = process.env) {
 			continue; // absent
 		}
 		if (owned(dir)) {
-			spawnSync('setfacl', ['-b', dir], { stdio: 'ignore', timeout: 10_000 });
-			spawnSync('chmod', ['0700', dir], { stdio: 'ignore', timeout: 10_000 });
+			spawnSync(BIN.setfacl, ['-b', dir], { stdio: 'ignore', timeout: 10_000 });
+			spawnSync(BIN.chmod, ['0700', dir], { stdio: 'ignore', timeout: 10_000 });
 		}
 		paths.push(dir, ...entries.map((e) => join(dir, e)));
 	}
@@ -174,7 +329,7 @@ export function lockDownRunnerTemp(env = process.env) {
 
 /** PIDs of every process owned by this (harness) uid, the processes whose environ holds the creds. */
 export function harnessUidPids() {
-	const r = spawnSync('pgrep', ['-u', String(process.getuid?.() ?? '')], { encoding: 'utf8', timeout: 5000 });
+	const r = spawnSync(BIN.pgrep, ['-u', String(process.getuid?.() ?? '')], { encoding: 'utf8', timeout: 5000 });
 	const pids = (r.stdout ?? '').split('\n').map(Number).filter((n) => Number.isInteger(n) && n > 0);
 	return [...new Set([process.pid, process.ppid, ...pids])].slice(0, 500);
 }
@@ -193,11 +348,8 @@ export function verifyAgentIsolation({ paths = [], pids = [] }) {
 		'*) if [ -d "$p" ]; then ls -A -- "$p" >/dev/null 2>&1 && echo "can list $p"; ' +
 		'else cat -- "$p" >/dev/null 2>&1 && echo "can read $p"; fi;; esac; done; echo __probe_done__';
 	const args = [...paths, ...pids.map((p) => `pid:${p}`)];
-	const r = spawnSync(
-		'sudo',
-		['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', '-i', 'PATH=/usr/bin:/bin', 'bash', '-c', script, 'probe', ...args],
-		{ encoding: 'utf8', timeout: 60_000 },
-	);
+	const { file, args: argv } = asAgent(['PATH=/usr/bin:/bin'], [BIN.bash, '-c', script, 'probe', ...args]);
+	const r = spawnSync(file, argv, { encoding: 'utf8', timeout: 60_000 });
 	const lines = (r.stdout ?? '').split('\n').filter(Boolean);
 	if (r.status !== 0 || lines.at(-1) !== '__probe_done__') {
 		return [`isolation probe could not run as ${BENCH_AGENT_USER} (exit ${r.status ?? r.error?.message})`];
@@ -217,10 +369,10 @@ function sleepMs(ms) {
 export function reapAgentProcesses() {
 	if (!isolationAvailable()) return true;
 	for (let i = 0; i < 20; i++) {
-		spawnSync('sudo', ['-n', 'pkill', '-KILL', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
+		spawnSync(BIN.sudo, ['-n', BIN.pkill, '-KILL', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
 		// After the kill, so no surviving process can re-add a crontab that cron would run later.
-		spawnSync('sudo', ['-n', 'crontab', '-r', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
-		if (spawnSync('pgrep', ['-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1) return true;
+		spawnSync(BIN.sudo, ['-n', BIN.crontab, '-r', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
+		if (spawnSync(BIN.pgrep, ['-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1) return true;
 		sleepMs(250);
 	}
 	return false;
@@ -228,12 +380,13 @@ export function reapAgentProcesses() {
 
 /**
  * Enter an agent phase: decide isolated vs (local-only) bare, and for isolated, reap leftovers,
- * grant the workspace ACL, lock down the runner temp dirs and verify the boundary. Never falls back
- * to the harness uid under CI.
+ * grant the workspace ACL, lock down + verify the trusted executable paths and the runner temp
+ * dirs. Never falls back to the harness uid under CI.
  * @param {string} root the dir the agent works in
+ * @param {{agentDirs?: string[]}} [options] other agent-writable dirs (excluded from the exec lockdown)
  * @returns {{isolated: boolean, error?: undefined} | {isolated: false, error: string}}
  */
-export function enterAgentPhase(root) {
+export function enterAgentPhase(root, options = {}) {
 	if (!isolationAvailable() || !prepareWorkspaceIsolation(root)) {
 		if (bareShellAllowed()) return { isolated: false };
 		return {
@@ -242,6 +395,10 @@ export function enterAgentPhase(root) {
 		};
 	}
 	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
+	const execProblems = lockDownExecPaths(trustedExecPaths(process.env, [root, ...(options.agentDirs ?? [])]));
+	if (execProblems.length) {
+		return { isolated: false, error: `trusted executable paths are writable by ${BENCH_AGENT_USER}: ${execProblems.slice(0, 5).join('; ')}` };
+	}
 	const problems = verifyAgentIsolation({ paths: lockDownRunnerTemp(), pids: harnessUidPids() });
 	if (problems.length) return { isolated: false, error: `isolation check failed: ${problems.slice(0, 5).join('; ')}` };
 	return { isolated: true };
