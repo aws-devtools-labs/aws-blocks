@@ -262,6 +262,9 @@ export class PGliteEngine implements DatabaseEngine {
   async destroy(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // PGlite 0.5.10+ close() never resolves while the instance is still
+    // initializing, so let init settle (or fail) before closing.
+    await this.db.waitReady.catch(() => {});
     await this.db.close();
   }
 }
