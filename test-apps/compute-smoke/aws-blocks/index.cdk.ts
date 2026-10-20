@@ -36,7 +36,7 @@ const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 if (!vpcId) {
   throw new Error(
     'Missing VPC ID. Set the VPC_TEST_VPC_ID env var or pass -c vpcId=vpc-xxx.\n' +
-    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy',
+    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy BlocksComputeTestVpc',
   );
 }
 
@@ -58,8 +58,10 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
       // deriving its own — so the app adds zero new VPCs per run.
       network: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
       // Provision endpoints into THIS per-PR stack. Concurrency is serialized at
-      // the CI job level (group: blocks-test-vpc) because AWS permits only one
-      // private-DNS interface endpoint per service per VPC.
+      // the CI job level (group: blocks-test-compute) because AWS permits only
+      // one private-DNS interface endpoint per service per VPC — and this suite
+      // uses its own persistent VPC (BlocksComputeTestVpc), separate from the
+      // VPC smoke suite's, so the two don't contend.
       provisionEndpoints: true,
     },
   },

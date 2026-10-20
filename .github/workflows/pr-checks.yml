@@ -390,7 +390,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Ensure persistent test VPC
-        run: cd test-infra && npx cdk deploy --require-approval never --outputs-file outputs.json
+        run: cd test-infra && npx cdk deploy BlocksTestVpc --require-approval never --outputs-file outputs.json
 
       - name: Export VPC ID
         run: |
@@ -411,16 +411,14 @@ jobs:
     timeout-minutes: 60
     environment: publish
     # Serialize this suite across PRs: it provisions private-DNS interface
-    # endpoints into the shared persistent test VPC, and AWS permits only one per
+    # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
+    # from the VPC smoke job's BlocksTestVpc), and AWS permits only one per
     # service per VPC — two concurrent runs of THIS job would collide. Queue
     # rather than cancel so an in-flight deploy/destroy isn't interrupted.
     #
-    # NOTE: this uses a group distinct from the VPC smoke job (blocks-test-vpc).
-    # GitHub job-level concurrency *cancels* (doesn't queue) a second job that
-    # shares a group within the same run, so the two suites can't share a group.
-    # vpc-smoke is a no-op stub today, so they don't actually collide on the
-    # shared VPC's endpoints yet; unifying their serialization once vpc-smoke is
-    # real is tracked as part of the deferred VPC hardening.
+    # This uses a group distinct from the VPC smoke job (blocks-test-vpc). The
+    # two suites don't collide across groups because they target *different*
+    # persistent VPCs, so they can run in parallel.
     concurrency:
       group: blocks-test-compute
       cancel-in-progress: false
@@ -451,12 +449,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Ensure persistent test VPC
-        run: cd test-infra && npx cdk deploy --require-approval never --outputs-file outputs.json
+      - name: Ensure persistent compute test VPC
+        run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
         run: |
-          VPC_ID=$(cat test-infra/outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksTestVpc']['VpcId'])")
+          VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
 
       - name: E2E Compute Smoke
