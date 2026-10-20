@@ -2,8 +2,15 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
+import { Construct } from 'constructs';
+import type { ScopeParent } from '../common/index.js';
 import { CORE_VERSION } from '../version.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { Scope } from './index.js';
+import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+
+function blocksValue(stack: cdk.Stack): string {
+	return Template.fromStack(stack).toJSON().Metadata.AWSToolsMetrics.AWSBlocks;
+}
 
 describe('addBlocksStackMetadata', () => {
 	test('writes Metadata.AWSToolsMetrics.AWSBlocks with format version, core version and production mode', () => {
@@ -14,7 +21,7 @@ describe('addBlocksStackMetadata', () => {
 
 		const metadata = Template.fromStack(stack).toJSON().Metadata;
 		assert.deepStrictEqual(metadata.AWSToolsMetrics, {
-			AWSBlocks: `1;core=${CORE_VERSION};mode=production`,
+			AWSBlocks: `1;core=${CORE_VERSION};mode=production;bb=;custom=0`,
 		});
 	});
 
@@ -35,7 +42,7 @@ describe('addBlocksStackMetadata', () => {
 		addBlocksStackMetadata(stack);
 
 		const metadata = Template.fromStack(stack).toJSON().Metadata;
-		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=sandbox`);
+		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=sandbox;bb=;custom=0`);
 	});
 
 	test('writes mode=sandbox when sandboxMode context is string "true"', () => {
@@ -45,7 +52,7 @@ describe('addBlocksStackMetadata', () => {
 		addBlocksStackMetadata(stack);
 
 		const metadata = Template.fromStack(stack).toJSON().Metadata;
-		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=sandbox`);
+		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=sandbox;bb=;custom=0`);
 	});
 
 	test('writes mode=production when sandboxMode context is string "false"', () => {
@@ -55,7 +62,7 @@ describe('addBlocksStackMetadata', () => {
 		addBlocksStackMetadata(stack);
 
 		const metadata = Template.fromStack(stack).toJSON().Metadata;
-		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=production`);
+		assert.strictEqual(metadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=production;bb=;custom=0`);
 	});
 
 	test('preserves existing template metadata and other AWSToolsMetrics entries', () => {
@@ -72,7 +79,7 @@ describe('addBlocksStackMetadata', () => {
 		assert.deepStrictEqual(metadata['Custom::Existing'], { key: 'value' });
 		assert.deepStrictEqual(metadata.AWSToolsMetrics, {
 			OtherTool: 'x',
-			AWSBlocks: `1;core=${CORE_VERSION};mode=production`,
+			AWSBlocks: `1;core=${CORE_VERSION};mode=production;bb=;custom=0`,
 		});
 	});
 
@@ -90,7 +97,7 @@ describe('addBlocksStackMetadata', () => {
 
 			const metadata = Template.fromStack(stack).toJSON().Metadata;
 			assert.deepStrictEqual(metadata.AWSToolsMetrics, {
-				AWSBlocks: `1;core=${CORE_VERSION};mode=production`,
+				AWSBlocks: `1;core=${CORE_VERSION};mode=production;bb=;custom=0`,
 			});
 		});
 	}
@@ -104,7 +111,7 @@ describe('addBlocksStackMetadata', () => {
 
 		const metadata = Template.fromStack(stack).toJSON().Metadata;
 		assert.deepStrictEqual(metadata.AWSToolsMetrics, {
-			AWSBlocks: `1;core=${CORE_VERSION};mode=production`,
+			AWSBlocks: `1;core=${CORE_VERSION};mode=production;bb=;custom=0`,
 		});
 	});
 
@@ -117,9 +124,112 @@ describe('addBlocksStackMetadata', () => {
 		addBlocksStackMetadata(nested);
 
 		const rootMetadata = Template.fromStack(root).toJSON().Metadata;
-		assert.strictEqual(rootMetadata.AWSToolsMetrics.AWSBlocks, `1;core=${CORE_VERSION};mode=production`);
+		assert.strictEqual(
+			rootMetadata.AWSToolsMetrics.AWSBlocks,
+			`1;core=${CORE_VERSION};mode=production;bb=;custom=0`,
+		);
 		const nestedMetadata = Template.fromStack(nested).toJSON().Metadata;
 		assert.strictEqual(nestedMetadata?.AWSToolsMetrics, undefined);
+	});
+
+	test('lists official blocks sorted and deduplicated', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'BlocksStack');
+		recordBuildingBlock(new Construct(stack, 'a'), 'KVStore');
+
+		addBlocksStackMetadata(stack);
+
+		recordBuildingBlock(new Construct(stack, 'b'), 'AuthCognito');
+		recordBuildingBlock(new Construct(stack, 'c'), 'KVStore');
+		recordBuildingBlock(new Construct(stack, 'd'), 'FileBucket');
+
+		assert.strictEqual(
+			blocksValue(stack),
+			`1;core=${CORE_VERSION};mode=production;bb=AuthCognito,FileBucket,KVStore;custom=0`,
+		);
+	});
+
+	test('counts custom blocks without naming them', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'CustomStack');
+		addBlocksStackMetadata(stack);
+
+		recordBuildingBlock(new Construct(stack, 'a'), 'MyWidget');
+		recordBuildingBlock(new Construct(stack, 'b'), 'MyWidget');
+		recordBuildingBlock(new Construct(stack, 'c'), 'OtherThing');
+		recordBuildingBlock(new Construct(stack, 'd'), 'Secret');
+
+		const value = blocksValue(stack);
+		assert.strictEqual(value, `1;core=${CORE_VERSION};mode=production;bb=Secret;custom=3`);
+		assert.ok(!value.includes('MyWidget'));
+	});
+
+	test('counts nested-stack blocks on the root stack', () => {
+		const app = new cdk.App();
+		const root = new cdk.Stack(app, 'RootBlocksStack');
+		const nested = new cdk.NestedStack(root, 'Nested');
+		const deeper = new cdk.NestedStack(nested, 'Deeper');
+		new cdk.CfnWaitConditionHandle(deeper, 'Placeholder');
+		addBlocksStackMetadata(nested);
+
+		recordBuildingBlock(new Construct(root, 'a'), 'Logger');
+		recordBuildingBlock(new Construct(nested, 'b'), 'KVStore');
+		recordBuildingBlock(new Construct(deeper, 'c'), 'AsyncJob');
+		recordBuildingBlock(new Construct(deeper, 'd'), 'MyWidget');
+
+		assert.strictEqual(
+			blocksValue(root),
+			`1;core=${CORE_VERSION};mode=production;bb=AsyncJob,KVStore,Logger;custom=1`,
+		);
+		assert.strictEqual(Template.fromStack(nested).toJSON().Metadata?.AWSToolsMetrics, undefined);
+		assert.strictEqual(Template.fromStack(deeper).toJSON().Metadata?.AWSToolsMetrics, undefined);
+	});
+
+	test('keeps separate root stacks apart', () => {
+		const app = new cdk.App();
+		const first = new cdk.Stack(app, 'FirstStack');
+		const second = new cdk.Stack(app, 'SecondStack');
+		addBlocksStackMetadata(first);
+		addBlocksStackMetadata(second);
+
+		recordBuildingBlock(new Construct(first, 'a'), 'KVStore');
+		recordBuildingBlock(new Construct(second, 'b'), 'Tracer');
+
+		assert.strictEqual(blocksValue(first), `1;core=${CORE_VERSION};mode=production;bb=KVStore;custom=0`);
+		assert.strictEqual(blocksValue(second), `1;core=${CORE_VERSION};mode=production;bb=Tracer;custom=0`);
+	});
+
+	test('preserves sibling AWSToolsMetrics keys', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'SiblingStack');
+		stack.templateOptions.metadata = { AWSToolsMetrics: { OtherTool: 'x' } };
+		addBlocksStackMetadata(stack);
+		recordBuildingBlock(new Construct(stack, 'a'), 'Metrics');
+
+		assert.deepStrictEqual(Template.fromStack(stack).toJSON().Metadata.AWSToolsMetrics, {
+			OtherTool: 'x',
+			AWSBlocks: `1;core=${CORE_VERSION};mode=production;bb=Metrics;custom=0`,
+		});
+	});
+
+	test('ignores blocks outside a stack', () => {
+		assert.doesNotThrow(() => recordBuildingBlock(new Construct(new cdk.App(), 'Loose'), 'KVStore'));
+	});
+
+	test('Scope records only when bbName is set', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'ScopeStack');
+		addBlocksStackMetadata(stack);
+		const parent = stack as unknown as ScopeParent;
+
+		const app1 = new Scope('app', { parent });
+		const kv = new Scope('notes', { parent: app1, bbName: 'KVStore', bbVersion: '1.2.3' });
+		new Scope('custom', { parent: app1, bbName: 'MyWidget' });
+
+		assert.strictEqual(kv.bbName, 'KVStore');
+		assert.strictEqual(kv.bbVersion, '1.2.3');
+		assert.strictEqual(app1.bbName, undefined);
+		assert.strictEqual(blocksValue(stack), `1;core=${CORE_VERSION};mode=production;bb=KVStore;custom=1`);
 	});
 
 	test('tags deployment-type as production when sandboxMode context is absent', () => {

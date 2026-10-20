@@ -136,6 +136,8 @@ data class NativeCatalogs(
     val bindings: List<NativeTransferableBinding> = emptyList(),
     /** Declared identities that no binding of any kind names. */
     val unreferencedPackages: Set<String> = emptySet(),
+    /** Every identity the packages catalog declares, whether or not a binding names it. */
+    val declaredPackages: Set<String> = emptySet(),
 ) {
     companion object {
         val EMPTY = NativeCatalogs()
