@@ -13,10 +13,10 @@ final class SwiftCodeGeneratorTests: XCTestCase {
     let builder = CodegenModelBuilder()
     let generator = SwiftCodeGenerator()
 
-    private func generate(from json: String) throws -> GeneratedSources {
-        let rpcModel = try parser.parse(data: Data(json.utf8))
+    private func generate(from json: String, optOut: Set<String> = []) throws -> GeneratedSources {
+        let rpcModel = try OpenRPCParser(optOutNativePackages: optOut).parse(data: Data(json.utf8))
         let codegenModel = builder.build(from: rpcModel)
-        return generator.generate(from: codegenModel)
+        return try generator.generate(from: codegenModel)
     }
 
     // MARK: - Basic Generation
@@ -476,7 +476,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }
             """
             let model = try build(from: json)
-            let output = generator.generate(from: model)
+            let output = try generator.generate(from: model)
             XCTAssertTrue(output.api.contains(testCase.type), "\(testCase.tag) should map to \(testCase.type), got:\n\(output.api)")
             XCTAssertFalse(output.api.contains("UnknownTransferable"), "\(testCase.tag) is bound and must not use the fallback")
             XCTAssertTrue(output.warnings.isEmpty, "\(testCase.tag) is bound and must not emit a diagnostic, got: \(output.warnings)")
@@ -496,7 +496,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: json)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable nested in a list is out of scope, got:\n\(output.api)")
         XCTAssertTrue(output.api.contains("[JSONValue]"), "a nested unbound transferable keeps its prior JSONValue type, got:\n\(output.api)")
         XCTAssertTrue(output.warnings.isEmpty, "a nested transferable must not emit a diagnostic, got: \(output.warnings)")
@@ -515,7 +515,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: json)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         XCTAssertTrue(output.api.contains("link: JSONValue"), "an unbound transferable parameter keeps its prior JSONValue type, got:\n\(output.api)")
         XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable parameter is out of scope, got:\n\(output.api)")
         XCTAssertTrue(output.warnings.isEmpty, "a transferable parameter must not emit a diagnostic, got: \(output.warnings)")
@@ -538,7 +538,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: json)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         let all = output.api + "\n" + output.models
         XCTAssertTrue(all.contains("let link: JSONValue"), "an unbound transferable record field keeps its prior JSONValue type, got:\n\(all)")
         XCTAssertFalse(all.contains("UnknownTransferable"), "a transferable nested in a record is out of scope, got:\n\(all)")
@@ -561,7 +561,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: json)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         XCTAssertTrue(output.api.contains("-> JSONValue?"), "a nullable unbound transferable keeps its prior optional JSONValue type, got:\n\(output.api)")
         XCTAssertFalse(output.api.contains("UnknownTransferable"), "a transferable in a nullable container is out of scope, got:\n\(output.api)")
         XCTAssertTrue(output.warnings.isEmpty, "a nullable transferable must not emit a diagnostic, got: \(output.warnings)")
@@ -690,7 +690,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             }]
         }
         """)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertTrue(diagnostic?.contains("with type argument Api.ListArg.ResultMessage") ?? false, "model not named: \(diagnostic ?? "nil")")
     }
@@ -798,7 +798,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """
         let model = try build(from: spec)
-        let output = generator.generate(from: model)
+        let output = try generator.generate(from: model)
         XCTAssertTrue(output.api.contains("public final nonisolated class _Default: Sendable {"), "expected _Default class, got:\n\(output.api)")
         let diagnostic = output.warnings.first { $0.contains("AWSBLOCKS-NATIVE-001") }
         XCTAssertEqual(
