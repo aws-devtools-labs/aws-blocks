@@ -455,6 +455,81 @@ describe('extractMethodTypes — transferable detection', () => {
 		}
 	});
 
+	it('keeps an inferred channel message type out of the spec', () => {
+		// Native generators can't decode every inferred message type (an `any`, a primitive), so a channel needs written args.
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'index.ts': `
+				${TRANSFERABLE_PRELUDE}
+				interface CursorPosition { userId: string; x: number; y: number; }
+				declare function channelOf<T = unknown>(name: string): RealtimeChannel<T>;
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async inferred() { return channelOf<CursorPosition>('cursors'); },
+					async inferredAny() { return channelOf<any>('cursors'); },
+					async inferredNames() { return channelOf<'online' | 'away'>('status'); },
+				}));
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('api.inferred')?.transferable?.blocksTag, 'realtime/channel');
+			assert.deepStrictEqual(types.get('api.inferred')?.transferable?.typeArgs, []);
+			assert.deepStrictEqual(types.get('api.inferredAny')?.transferable?.typeArgs, []);
+			// String literals reach the spec only for an oidc/client's provider names.
+			assert.deepStrictEqual(types.get('api.inferredNames')?.transferable?.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves a helper-built client generic to a string-literal enum, as AuthOIDC.createApi() does', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'oidc.ts': `
+				${API_NS_MOCK}
+				interface ProviderConfig { readonly name: string; }
+				type ProviderName<P extends readonly ProviderConfig[]> = P[number]['name'];
+				interface OIDCClientDescriptor { __blocks: 'oidc/client'; providers: string[]; }
+				export interface OIDCClient<Provider extends string = string> {
+					signIn(provider: Provider): Promise<void>;
+					toJSON(): OIDCClientDescriptor;
+				}
+				export function provider<N extends string>(name: N): { readonly name: N } { return { name }; }
+				export class AuthOIDC<P extends readonly ProviderConfig[]> {
+					constructor(readonly options: { providers: P }) {}
+					createApi() {
+						return new ApiNamespace(null, 'auth', () => ({
+							getClient: async (): Promise<OIDCClient<ProviderName<P>>> => null as any,
+						}));
+					}
+				}
+			`,
+			'index.ts': `
+				import { AuthOIDC, provider } from './oidc.js';
+				const typed = new AuthOIDC({ providers: [provider('google'), provider('github')] });
+				const loose = new AuthOIDC({ providers: [] as { readonly name: string }[] });
+				const parsed = new AuthOIDC({ providers: JSON.parse('[]') });
+				export const oidcAuthApi = typed.createApi();
+				export const looseAuthApi = loose.createApi();
+				export const parsedAuthApi = parsed.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const typed = types.get('oidcAuthApi.getClient')?.transferable;
+			assert.strictEqual(typed?.blocksTag, 'oidc/client');
+			assert.deepStrictEqual(typed.typeArgs, [{ type: 'string', enum: ['google', 'github'] }]);
+			// Provider names that resolve to plain `string` or `any` name no providers, so the client stays untyped.
+			for (const name of ['looseAuthApi.getClient', 'parsedAuthApi.getClient']) {
+				const untyped = types.get(name)?.transferable;
+				assert.strictEqual(untyped?.blocksTag, 'oidc/client', name);
+				assert.deepStrictEqual(untyped.typeArgs, [], name);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('returns no transferable info when toJSON is missing or __blocks is not a literal', () => {
 		const dir = createTempProject({
 			'tsconfig.json': TRANSFERABLE_TSCONFIG,

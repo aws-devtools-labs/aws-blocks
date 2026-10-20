@@ -543,6 +543,10 @@ function extractMethodsFromResolvedType(
  * (`RealtimeChannel`, where `T = unknown` is filled in by the checker) and
  * an explicit `RealtimeChannel<unknown>`. The two look identical in the
  * resolved `ts.Type`, but only the explicit form should emit a `[{}]` slot.
+ *
+ * An `oidc/client` also emits the arguments the checker infers, when they
+ * resolve to string literals: `AuthOIDC.createApi()` types `getClient()` as
+ * `OIDCClient<ProviderName<P>>`, which resolves to `OIDCClient<'google' | 'github'>`.
  */
 function detectTransferable(
 	type: ts.Type,
@@ -581,7 +585,8 @@ function detectTransferable(
 	// Step 10-11: For generic type arguments — only emit them when the
 	// customer actually wrote `<...>` in the source. If `syntacticNode` has
 	// no `typeArguments`, treat the type as non-generic (defaults filled in
-	// by the checker shouldn't appear in the spec).
+	// by the checker shouldn't appear in the spec), except for the inferred
+	// provider names of an `oidc/client`.
 	const typeArgs: JsonSchema[] = [];
 	const wroteTypeArgs = syntacticNode?.typeArguments && syntacticNode.typeArguments.length > 0;
 	if (wroteTypeArgs) {
@@ -596,9 +601,32 @@ function detectTransferable(
 				typeArgs.push(tsTypeToJsonSchema(arg, checker));
 			}
 		}
+	} else if (blocksTag === 'oidc/client') {
+		typeArgs.push(...inferredProviderNames(type, checker));
 	}
 
 	return { blocksTag, typeArgs };
+}
+
+/**
+ * An `oidc/client`'s inferred type argument as a string enum of provider
+ * names, which native generators turn into a provider type. Empty unless it
+ * resolves to string literals: the `string` default, `any`, or an unresolved
+ * type parameter names no providers. Other tags emit only written arguments,
+ * since an inferred realtime message type can be `any` or a shape a native
+ * generator can't decode.
+ */
+function inferredProviderNames(type: ts.Type, checker: ts.TypeChecker): JsonSchema[] {
+	if (!(type.getFlags() & ts.TypeFlags.Object)) return [];
+	if (!((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference)) return [];
+	const typeRef = type as ts.TypeReference;
+	// Arguments for the enclosing scope's type parameters come first, and a `this` argument may follow.
+	const outer = typeRef.target.outerTypeParameters?.length ?? 0;
+	const local = typeRef.target.localTypeParameters?.length ?? 0;
+	const args = checker.getTypeArguments(typeRef).slice(outer, outer + local);
+	const schemas = args.map((arg) => tsTypeToJsonSchema(arg, checker));
+	const namesProviders = (schema: JsonSchema) => schema.type === 'string' && Array.isArray(schema.enum);
+	return schemas.every(namesProviders) ? schemas : [];
 }
 
 // ── ts.Type → JSON Schema conversion ────────────────────────────────────────
