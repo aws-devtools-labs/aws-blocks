@@ -1,20 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
-
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
+  buildSandboxCdkEnv,
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
   sandboxFailureRecoveryHint,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
+import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 
 /**
@@ -169,5 +170,40 @@ describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => 
 
   it('keeps Express Mode when no stack has an unsafe resource', async () => {
     assert.deepStrictEqual(await findExpressUnsafeStacks([], fakeCfn({})), []);
+  });
+});
+
+describe('buildSandboxCdkEnv — framework sink reaches the synth child, and honours opt-out', () => {
+  const originalEnv = { ...process.env };
+  const originalCwd = process.cwd();
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    process.chdir(originalCwd);
+  });
+
+  function inCleanProject(): void {
+    // No .blocks/config.json, so consent falls back to the enabled default.
+    const tmp = join(tmpdir(), `sandbox-env-test-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+    process.chdir(tmp);
+  }
+
+  it('carries the framework sink path and the cdk resolution condition', () => {
+    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    inCleanProject();
+
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+
+    assert.strictEqual(env[FRAMEWORK_SINK_ENV], '/tmp/blocks-framework-sink');
+    assert.strictEqual(env.NODE_OPTIONS, '--conditions=cdk');
+  });
+
+  it('omits the sink when the user opted out, so nothing is written to disk', () => {
+    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+
+    assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
   });
 });

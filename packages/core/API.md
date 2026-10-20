@@ -360,6 +360,8 @@ export class Scope {
         totalCount: number;
         customBlocksCount: number;
     };
+    // @internal (undocumented)
+    static _getRegisteredFramework(): string | undefined;
     // (undocumented)
     readonly id: string;
     // (undocumented)
@@ -370,6 +372,8 @@ export class Scope {
     static _resetRegistry(): void;
     // @internal
     static _setDefaultBlockForTelemetry(name: string, version: string): void;
+    // @internal
+    static _setFrameworkForTelemetry(framework: string): void;
 }
 
 // @public (undocumented)

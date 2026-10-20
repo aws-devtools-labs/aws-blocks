@@ -36,6 +36,10 @@ permissions:
 
 env:
   NODE_OPTIONS: '--test-reporter=spec'
+  # Disable Blocks CLI telemetry for canary runs. Telemetry is on by default and
+  # CI detection alone does not suppress it, so set the official opt-out env var
+  # (packages/core/src/telemetry/consent.ts) to stop any events being sent.
+  AWS_BLOCKS_DISABLE_TELEMETRY: '1'
 
 jobs:
   # Discover the matrix from the source of truth rather than hard-coding it.
@@ -93,11 +97,6 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
-
-      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
-      # traffic is consistent and identifiable (and can be excluded from product
-      # usage metrics).
-      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
 

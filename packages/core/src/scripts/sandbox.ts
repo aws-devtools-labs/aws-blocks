@@ -11,7 +11,8 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
+import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -79,6 +80,21 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: Sand
     "--context", "sandboxMode=true",
     "--app", `npm exec tsx -- -C cdk ${backendPath}`,
   ];
+}
+
+/**
+ * cdk child env for the sandbox synth + deploy. Includes the telemetry framework
+ * sink so the synth child reports its framework before this parent emits SUCCESS.
+ * The watch spawn omits it: watch sends no event, and the sink is already consumed
+ * and deleted by then, so wiring this same path in would silently write nowhere.
+ */
+export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    NODE_OPTIONS: "--conditions=cdk",
+    ...getCdkTelemetryEnv('sandbox'),
+    ...getFrameworkSinkEnv(frameworkSink),
+  };
 }
 
 /**
@@ -208,10 +224,13 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
+  // Framework resolves in the cdk synth child; it writes the value here so the
+  // parent can attach it to the sandbox telemetry event.
+  const frameworkSink = createFrameworkSink();
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
 
-  const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
+  const cdkEnv = buildSandboxCdkEnv(frameworkSink);
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
   const assemblyDir = `${outDir}/cdk.out`;
 
@@ -241,6 +260,7 @@ export async function startSandbox(options: SandboxOptions) {
       { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -251,6 +271,8 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(sandboxFailureRecoveryHint());
     throw error;
   }
+
+  registerFrameworkFromSink(frameworkSink);
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
   const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
