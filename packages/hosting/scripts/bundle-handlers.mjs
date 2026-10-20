@@ -32,6 +32,12 @@ const handlers = [
     // read as file `x`, export `bundle.handler` → "Cannot find module".
     outfile: join(pkgRoot, 'dist', 'constructs', 'kv_keys_handler_bundle.mjs'),
   },
+  {
+    // `@aws-sdk/client-lambda-web` (Lambda Web Functions) is not in the Lambda
+    // runtime baseline either.
+    entry: join(pkgRoot, 'src', 'constructs', 'web_function_policy_handler.ts'),
+    outfile: join(pkgRoot, 'dist', 'constructs', 'web_function_policy_handler_bundle.mjs'),
+  },
 ];
 
 await Promise.all(

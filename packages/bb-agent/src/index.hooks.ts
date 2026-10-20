@@ -14,16 +14,85 @@
  * 4. User sends message — chunks arrive via the already-open subscription
  */
 
-import type { AgentStreamChunk } from './types.js';
+import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
+import type { AgentStreamChunk, JSONValue } from './types.js';
+import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
 
 export type { AgentStreamChunk } from './types.js';
+/** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
+export type { JSONValue } from './types.js';
 
-/** A message in the conversation (for UI rendering). */
-export interface ChatMessage {
-	id: string;
-	role: 'user' | 'assistant' | 'approval';
-	content: string;
-	metadata?: Record<string, any>;
+// The compute-agnostic client API. Prefer these over useChat() — see createChat().
+export {
+	createChat,
+	realtimeTransport,
+} from './index.chat.js';
+export type {
+	CreateChatOptions,
+	ChatController,
+	ChatConversationApi,
+	SendInput,
+	ChatTransport,
+	ChunkStream,
+	TurnRequest,
+} from './index.chat.js';
+
+/**
+ * A message in the conversation (for UI rendering).
+ *
+ * Re-exported from the canonical definition so `/client` consumers get the SAME
+ * discriminated union createChat uses: narrowing on `role === 'approval'` types
+ * `metadata` as {@link ApprovalMetadata}, so `m.metadata?.approved` is typed with
+ * no cast. (Previously `/client` shipped a flat duplicate whose `metadata` was
+ * `Record<string, any>`, silently shadowing the union — this re-export removes that.)
+ */
+export type { ChatMessage, ApprovalMetadata } from './index.chat.js';
+
+/** Handler invoked for each streaming chunk delivered over the Realtime channel. */
+export type ChatChunkHandler = (chunk: AgentStreamChunk) => void;
+
+/**
+ * The wire format an app's `subscribe` adapter hands to `channel.subscribe(...)` to
+ * hydrate a live channel. Kept as a bb-agent-facing alias of bb-realtime's
+ * `RealtimeChannelDescriptor` so existing consumers can keep naming `ChatChannelDescriptor`,
+ * and so a `refresh` typed against it is the exact type bb-realtime's `SubscribeOptions.refresh`
+ * expects.
+ */
+export type ChatChannelDescriptor = RealtimeChannelDescriptor;
+
+/**
+ * Options form accepted by {@link UseChatOptions.subscribe}.
+ *
+ * Mirrors bb-realtime's `SubscribeOptions` shape so an app's `subscribe` adapter can
+ * forward this object straight to `channel.subscribe(...)`. useChat passes this object
+ * (rather than a bare handler) so it can react to a mid-turn transport disconnect and,
+ * on reconnect, re-sync authoritative state from the DB — the correctness backstop for
+ * chunks lost while the socket was down.
+ */
+export interface ChatSubscribeOptions {
+	/** Called for each incoming chunk (the streaming handler). */
+	onMessage: ChatChunkHandler;
+	/**
+	 * Called when the connection is lost for any reason (including a client-initiated
+	 * `unsubscribe()`). Optional — useChat does not require it, but forwards it so an
+	 * adapter can surface drops.
+	 */
+	onDisconnect?: (reason: DisconnectReason) => void;
+	/**
+	 * Called after the transport transparently reconnects and this channel has been
+	 * resubscribed. useChat uses this to re-sync from the DB (see {@link UseChatOptions.subscribe}).
+	 */
+	onReconnect?: () => void;
+	/**
+	 * Called before each reconnect to obtain a freshly-minted channel descriptor (new
+	 * connect + channel token) so the subscription can outlive the token TTLs (channel
+	 * ~1h / connect ~2h). Mirrors bb-realtime's `SubscribeOptions.refresh` and stays
+	 * zero-arg because the channel is fixed per subscription here. useChat binds
+	 * {@link UseChatOptions.refresh} to the resolved channelId and forwards the bound
+	 * zero-arg form here; the transport calls it on reconnect only (never on the initial
+	 * subscribe) and simply does not use it when undefined.
+	 */
+	refresh?: () => Promise<ChatChannelDescriptor>;
 }
 
 /** Options for creating a chat instance. */
@@ -31,16 +100,48 @@ export interface UseChatOptions {
 	api: {
 		sendMessage(conversationId: string, message: string, channelId: string): Promise<unknown>;
 		createConversation(): Promise<{ conversationId: string }>;
-		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
+		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: unknown }[] }>;
 		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<unknown>;
 		getPendingInterrupts?(conversationId: string): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
 	};
 	/**
-	 * Subscribe to a Realtime channel. Must return an object with:
+	 * Subscribe to a Realtime channel. Called with the channel id and either a bare
+	 * chunk handler or a {@link ChatSubscribeOptions} object — useChat always passes the
+	 * options object so it can react to disconnect/reconnect, but the bare-handler form
+	 * is still accepted for backward compatibility. Adapters typically forward the second
+	 * argument straight to `channel.subscribe(...)`, which accepts both shapes.
+	 *
+	 * Must return an object with:
 	 * - unsubscribe(): stop receiving messages
 	 * - established: Promise that resolves when the WS subscription is confirmed
 	 */
-	subscribe: (channelId: string, handler: (chunk: AgentStreamChunk) => void) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
+	subscribe: (channelId: string, handlerOrOptions: ChatChunkHandler | ChatSubscribeOptions) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
+	/**
+	 * Optional consumer-supplied callback to re-mint a fresh channel descriptor when the
+	 * Realtime transport reconnects. useChat only holds the channelId (== conversationId)
+	 * plus your `subscribe` adapter; the channel descriptor is minted INSIDE that adapter
+	 * (via your raw-descriptor server method — see the Contract below), which useChat cannot
+	 * reach — so it cannot self-mint.
+	 * Provide this and useChat binds it to the CURRENT channel at the subscribe call site
+	 * and forwards the bound zero-arg form to the subscription (as `refresh`) so long turns
+	 * survive the channel (~1h) / connect (~2h) token TTLs: a reconnect mints fresh tokens
+	 * instead of replaying expired ones. Receives the resolved `channelId` so it re-mints for
+	 * the channel actually in use (which changes across loadConversation), not one captured
+	 * once at construction.
+	 *
+	 * Contract: this MUST resolve to the RAW channel descriptor (the wire object with
+	 * `__blocks`/token fields), NOT a hydrated channel client. To produce one: the app
+	 * exposes a server method that returns the channel's `toJSON()` descriptor with the
+	 * `__blocks` discriminant stripped (so the response middleware does not hydrate it on
+	 * the way back); this callback re-adds `__blocks: 'realtime/channel'`. That server
+	 * method re-issues a connect + channel token, so it MUST apply the SAME authorization
+	 * as the method that issued the original channel — it is a credential-issuing endpoint
+	 * and must be gated like the original. For example, with the test app's example server
+	 * method `agentGetRawDescriptor`:
+	 * `async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' })`.
+	 * When omitted, a reconnect replays the original tokens (fine for short turns).
+	 */
+	refresh?: (channelId: string) => Promise<ChatChannelDescriptor>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -49,7 +150,7 @@ export interface UseChatOptions {
 	onChunk?: (chunk: AgentStreamChunk) => void;
 	/** Called when the agent encounters an error. */
 	onError?: (error: string) => void;
-	/** Called when the agent needs human approval before continuing. */
+	/** Called when the agent needs human approval before continuing. The same interrupt may be surfaced more than once — on the initial `loadConversation` and again on a reconnect re-sync — so handlers should key/dedupe by interrupt `id`. */
 	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: any }>) => void;
 }
 
@@ -76,8 +177,63 @@ function nextId(): string {
 	return `msg-${++messageCounter}-${Date.now()}`;
 }
 
+// Reconnect-recovery state machine. useChat is deprecated (superseded by createChat per
+// #338) and FROZEN; this state machine is duplicated in index.chat.ts (createChat, the
+// canonical surface). Keep the two in sync — a fix here likely applies there. Not extracted
+// to a shared module deliberately: useChat is on a deprecation path.
+/**
+ * Last-resort window (ms) of COMPLETE SILENCE after a reconnect. The failsafe is a
+ * backstop, NOT the primary recovery (which is the done chunk / DB re-sync). It is
+ * re-armed by every received chunk (see handleChunk), so it only fires after a window
+ * in which NO chunk at all arrived — not during a long tool-call/thinking gap or a slow
+ * post-reconnect stream. On the multi-hour turns this feature targets, such gaps are
+ * normal.
+ *
+ * This MUST comfortably exceed the Realtime transport's idle-timeout + reconnect budget
+ * (API Gateway WebSocket: 10-min idle timeout, 2h max connection duration), otherwise a
+ * perfectly normal idle → disconnect → reconnect cycle would trip a spurious 'Timed out'.
+ * 11 minutes sits just above the 10-min idle timeout with margin for the reconnect.
+ */
+const RECONNECT_FAILSAFE_MS = 660_000;
+
+/**
+ * Coerce an arbitrary value into a {@link JSONValue} for audit metadata. A value that
+ * is already JSON-round-trippable is kept as-is; anything else (a function, a symbol,
+ * a cyclic object) becomes its string form, so metadata stays a clean JSONValue.
+ * Mirrors the helper in index.chat.ts so an approval message's `input` (typed
+ * `unknown` on InterruptResponse) satisfies ApprovalMetadata's `input?: JSONValue`.
+ */
+function toJSONValue(value: unknown): JSONValue {
+	try {
+		const parsed: JSONValue = JSON.parse(JSON.stringify(value));
+		return parsed;
+	} catch {
+		return String(value);
+	}
+}
+
+/**
+ * Narrow an `unknown` message metadata value (customers pass their backend shape
+ * straight through) into a JSON record for rendering. A plain object is round-tripped
+ * to a clean {@link JSONValue} record; a non-object (null, string, array, undefined)
+ * yields `undefined`. Mirrors the narrow createChat does so the customer never writes
+ * a per-call adapter.
+ */
+function asJSONRecord(value: unknown): Record<string, JSONValue> | undefined {
+	if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+	const json = toJSONValue(value);
+	return typeof json === 'object' && json !== null && !Array.isArray(json) ? json : undefined;
+}
+
 /**
  * Create a chat instance for managing agent conversations.
+ *
+ * @deprecated Prefer {@link createChat}, which is compute-agnostic and takes a
+ * single `transport` instead of a hand-written `subscribe` callback. `useChat`
+ * couples call sites to the Realtime channel mechanism and requires the app to
+ * assemble the `api` adapter + `subscribe` bridge by hand. `createChat` fuses
+ * subscribe + run so the subscribe-before-send race can't surface. This remains
+ * for backward compatibility and is unchanged.
  *
  * @example
  * ```typescript
@@ -87,10 +243,22 @@ function nextId(): string {
  *     createConversation: () => api.agentCreateConversationId(),
  *     getConversation: (id) => api.agentGetConversation(id),
  *   },
- *   subscribe: async (channelId, handler) => {
+ *   subscribe: async (channelId, sub) => {
  *     const result = await api.agentGetChannel(channelId);
- *     return result.channel.subscribe(handler);
+ *     // `sub` is a ChatSubscribeOptions object (onMessage/onReconnect/onDisconnect/refresh);
+ *     // channel.subscribe accepts it directly and wires reconnect handling — including
+ *     // calling sub.refresh to re-mint fresh tokens before each reconnect — for us.
+ *     return result.channel.subscribe(sub);
  *   },
+ *   // Re-mint a fresh channel descriptor on reconnect so long turns outlive the channel
+ *   // (~1h) / connect (~2h) token TTLs. useChat binds this to the current channelId and
+ *   // forwards the bound zero-arg form to the subscription as sub.refresh.
+ *   // Must resolve to the RAW descriptor (wire object with token fields), not a hydrated
+ *   // channel: the app's server method returns channel.toJSON() with __blocks stripped and
+ *   // this callback re-adds it. That method re-issues tokens, so gate it with the SAME
+ *   // authorization as the method that issued the original channel. `agentGetRawDescriptor`
+ *   // here is the test app's example server method.
+ *   refresh: async (channelId) => ({ ...(await api.agentGetRawDescriptor(channelId)), __blocks: 'realtime/channel' }),
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
@@ -106,9 +274,228 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	let activeSub: { unsubscribe(): void } | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
+	/** Timer id for the post-reconnect failsafe (see RECONNECT_FAILSAFE_MS). null when disarmed. */
+	let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * True once destroy() has run. Guards async callbacks (the reconnect re-sync and the
+	 * failsafe timer) so no onLoadingChange/onError/onMessagesChange fires after teardown.
+	 */
+	let destroyed = false;
+	/**
+	 * Whether onError has already been reported for the CURRENT turn. A send-path
+	 * rejection (e.g. a 504) may mean the turn actually STARTED server-side, so a later
+	 * `error` chunk can arrive for the same turn; this guard reports onError at most once
+	 * per turn. Reset when a new turn begins (sendMessage / respondToInterrupt).
+	 */
+	let errorReported = false;
+
+	/** Cancel the post-reconnect failsafe timer if one is armed. */
+	function clearFailsafe() {
+		if (failsafeTimer !== null) {
+			clearTimeout(failsafeTimer);
+			failsafeTimer = null;
+		}
+	}
+
+	/**
+	 * Arm the bounded post-reconnect failsafe. If the turn is still running after a
+	 * reconnect and the terminal chunk never arrives (lost a second time), this stops
+	 * the spinner and surfaces an error rather than hanging loading=true forever.
+	 */
+	function armFailsafe() {
+		clearFailsafe();
+		failsafeTimer = setTimeout(() => {
+			failsafeTimer = null;
+			// Teardown guard: destroy() may have run while the timer was pending.
+			if (destroyed) return;
+			if (loading) {
+				loading = false;
+				options.onLoadingChange?.(loading);
+				// Route through reportError so the once-per-turn errorReported latch covers the
+				// failsafe path too — a later `error` chunk for the same server-started turn
+				// won't then double-report after a failsafe timeout.
+				reportError('Timed out waiting for the agent to respond after reconnect.');
+			}
+		}, RECONNECT_FAILSAFE_MS);
+	}
+
+	/**
+	 * Drop the optimistic empty assistant placeholder (if present and still empty).
+	 * Used on a send-path failure so no orphaned empty bubble is left in the UI.
+	 */
+	function removeEmptyAssistantPlaceholder() {
+		if (!assistantId) return;
+		const placeholder = messages.find(m => m.id === assistantId);
+		if (placeholder && !placeholder.content) {
+			messages = messages.filter(m => m.id !== assistantId);
+			options.onMessagesChange?.(messages);
+		}
+		assistantId = null;
+	}
+
+	/**
+	 * Surface an error to the consumer at most ONCE per turn (see errorReported). A 504
+	 * send-rejection and a later `error` chunk can both describe the same failed turn; we
+	 * must not fire onError twice for it.
+	 */
+	function reportError(message: string) {
+		if (errorReported) return;
+		errorReported = true;
+		options.onError?.(message);
+	}
+
+	/**
+	 * Shared handler for a rejected send path (api.sendMessage / api.resume): reset
+	 * loading, drop the dangling empty placeholder, and surface the error via onError
+	 * (swallowed, matching how the `error` chunk is handled — no re-throw).
+	 *
+	 * NOTE: a 504 (or similar) rejection often means the turn DID start server-side, so a
+	 * later done/delta/error chunk may still arrive for it. Recovery of such a started
+	 * turn happens via the normal reconnect → getConversation re-sync path; here we only
+	 * guard against a DOUBLE onError (reportError) if that later chunk is an `error`.
+	 */
+	function handleSendFailure(err: unknown) {
+		loading = false;
+		options.onLoadingChange?.(loading);
+		removeEmptyAssistantPlaceholder();
+		reportError(err instanceof Error ? err.message : String(err));
+	}
+
+	/**
+	 * Re-sync authoritative state from the DB after the transport transparently
+	 * reconnects. Any chunks published while the socket was down were missed, so the
+	 * persisted conversation is the source of truth:
+	 * - If the turn completed server-side (history ends with a non-empty assistant
+	 *   message), adopt that final text into the in-flight bubble and clear loading —
+	 *   the `done` chunk was lost in the gap.
+	 * - If the turn is still running (no final assistant message yet), keep loading
+	 *   true and wait for the terminal chunk on the resubscribed channel, arming a
+	 *   bounded failsafe so the spinner can't hang if that chunk is also lost.
+	 * Also re-checks pending interrupts, which may have been raised during the gap.
+	 */
+	async function handleReconnect() {
+		if (destroyed) return;
+		if (!conversationId) return;
+		// Capture the in-flight turn identity BEFORE the await. getConversation reads
+		// DynamoDB, which is eventually consistent, so this read can (a) resolve LATE —
+		// after a terminal chunk already resolved the turn on the resubscribed channel —
+		// and (b) reflect a STALE view whose last row is a previous turn's assistant
+		// message. Both are guarded against once the read resolves, using this snapshot.
+		const turnAtStart = assistantId;
+		try {
+			const { messages: history } = await options.api.getConversation(conversationId);
+			if (destroyed) return;
+			const last = history[history.length - 1];
+			const turnComplete = !!last && last.role === 'assistant' && !!last.content;
+
+			// Turn-identity + liveness guard: only act on the persisted read if the turn we
+			// captured is STILL the in-flight one and we're still loading. If a terminal
+			// chunk (done/error) resolved the turn while getConversation was in flight, it
+			// already nulled assistantId (and set the authoritative final text), so we must
+			// ignore this — possibly stale — DB result rather than clobber a live outcome.
+			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
+
+			if (turnComplete && stillSameInFlightTurn) {
+				// Adopt the persisted final text ONLY if it extends what we've already
+				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
+				// persisted text). If it does NOT extend our stream, `last` is a stale /
+				// previous-turn assistant row that does not continue the current bubble;
+				// adopting it would overwrite live text with prior-turn content and halt
+				// streaming, so we treat the turn as still running and wait for the terminal
+				// chunk instead.
+				//
+				// INVARIANT (resume path): a resume-start conversation must not end in a
+				// content-bearing assistant row. On resume, respondToInterrupt resets
+				// assistantText='', which makes extendsStream=true and BYPASSES the prefix guard —
+				// so any content-bearing assistant row that getConversation returns as `last` would
+				// be adopted and the resumed turn closed early. Not reachable today: the backend
+				// does not persist an assistant message on interrupt, so `last` is the raw
+				// empty-content interrupt row and turnComplete is false at resume-start. A custom
+				// getConversation adapter that role-filters to user/assistant (as loadConversation
+				// does client-side) could re-expose this by dropping the interrupt row and
+				// surfacing a prior assistant row as `last`.
+				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
+				if (extendsStream) {
+					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
+					// Replace the in-flight assistant bubble with the persisted final text.
+					assistantText = last.content;
+					messages = messages.map(m => (m.id === assistantId ? { ...m, content: last.content } : m));
+					options.onMessagesChange?.(messages);
+					assistantId = null;
+					clearFailsafe();
+					loading = false;
+					options.onLoadingChange?.(loading);
+				} else {
+					// Snapshot doesn't extend our stream — keep waiting for the terminal chunk,
+					// guarded by the bounded failsafe.
+					armFailsafe();
+				}
+			} else if (stillSameInFlightTurn) {
+				// Turn still running server-side (no final assistant message yet) — do NOT clear
+				// loading. Wait for the terminal chunk on the resubscribed channel, guarded by
+				// the bounded failsafe.
+				armFailsafe();
+			}
+			// else: the turn was already resolved by a terminal chunk during the await
+			// (assistantId nulled / loading cleared) — nothing to adopt.
+
+			// A pending interrupt may have been raised while the socket was down.
+			if (options.api.getPendingInterrupts) {
+				const { interrupts } = await options.api.getPendingInterrupts(conversationId);
+				if (destroyed) return;
+				// Recompute liveness FRESH here — the getPendingInterrupts await above is another
+				// window in which a live terminal `done` chunk can resolve the turn (nulling
+				// assistantId / clearing loading), so the earlier stillSameInFlightTurn snapshot
+				// may be stale. getPendingInterrupts reads eventually-consistent DynamoDB, so a
+				// turn a live `done` already closed can still list a since-resolved interrupt;
+				// surfacing it would re-null assistantId / re-clear loading and re-open a turn
+				// that already completed. DESIGN.md tells handlers to dedupe by interrupt id, but
+				// that does not license us to clobber a resolved turn's state. A GENUINE pause
+				// keeps the turn in-flight (turn-state block above armed the failsafe, still
+				// loading, assistantId still === turnAtStart), so this gate still fires for it.
+				const stillInFlight = assistantId !== null && assistantId === turnAtStart && loading;
+				if (interrupts.length && stillInFlight) {
+					// The turn is PAUSED at an approval prompt — treat it exactly like a live
+					// `interrupt` chunk: clear the failsafe armed just above and drop loading,
+					// so the ~11-min 'Timed out' failsafe cannot fire while the user is legitimately
+					// deciding (no chunks arrive while paused, so nothing would re-arm it).
+					assistantId = null;
+					clearFailsafe();
+					loading = false;
+					options.onLoadingChange?.(loading);
+					options.onInterrupt?.(interrupts);
+				}
+			}
+		} catch (err) {
+			if (destroyed) return;
+			// Re-sync itself failed. Surface it via reportError so the once-per-turn onError
+			// contract holds uniformly: if a send-rejection already reported onError for this
+			// turn, a re-sync throw here won't emit a second one.
+			reportError(err instanceof Error ? err.message : String(err));
+			// Arm the failsafe so the non-hang guarantee is LOCAL — independent of whether the
+			// transport happened to fire onDisconnect before this onReconnect. We used to skip
+			// arming here to avoid a second 'Timed out' onError ~11min later, relying on the
+			// PRECEDING onDisconnect having armed it; that reasoning is now stale. The
+			// errorReported latch (set by the reportError above) already suppresses that second
+			// onError, and armFailsafe is idempotent + re-armed by any later chunk, so a
+			// still-live turn on the resubscribed channel is unaffected.
+			armFailsafe();
+		}
+	}
 
 	/** Handle a chunk from the Realtime subscription. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		// Teardown guard: the ChunkQueue drains items buffered before destroy()'s unsubscribe()
+		// closed the stream, so a chunk can still arrive after destroy(). Drop it so no onChunk/
+		// onMessagesChange/onError/onInterrupt fires post-teardown (mirrors handleReconnect and
+		// the failsafe's destroyed guards).
+		if (destroyed) return;
+		// Liveness: ANY received chunk proves the stream is alive. If the post-reconnect
+		// failsafe is armed, re-arm it (reset its countdown) so it only ever fires after a
+		// window of COMPLETE silence — not during a long tool-call/thinking gap or a slow
+		// post-reconnect stream. Terminal chunks below still clearFailsafe outright.
+		if (failsafeTimer !== null) armFailsafe();
+
 		options.onChunk?.(chunk);
 
 		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
@@ -122,14 +509,35 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				messages = messages.map(m => m.id === assistantId ? { ...m, content: chunk.text! } : m);
 				options.onMessagesChange?.(messages);
 			}
+			// Null assistantId so it is a reliable in-flight signal: a later-resolving
+			// reconnect re-sync must not adopt a (possibly stale) DB snapshot over this
+			// already-resolved turn (see handleReconnect's turn-identity guard).
+			assistantId = null;
+			clearFailsafe();
 			loading = false;
 			options.onLoadingChange?.(loading);
 		}
 
 		if (chunk.type === 'error') {
+			// Drop the empty assistant placeholder if the error arrived before any text
+			// (mirror the interrupt branch / createChat), so a failed-before-first-token
+			// turn leaves no blank assistant bubble.
+			if (assistantId) {
+				const assistant = messages.find(m => m.id === assistantId);
+				if (assistant && !assistant.content) {
+					messages = messages.filter(m => m.id !== assistantId);
+					options.onMessagesChange?.(messages);
+				}
+			}
+			// Null assistantId (mirroring done/interrupt) so a later reconnect re-sync treats
+			// the turn as resolved and won't clobber the bubble with a stale getConversation read.
+			assistantId = null;
+			clearFailsafe();
 			loading = false;
 			options.onLoadingChange?.(loading);
-			options.onError?.(chunk.error ?? 'Unknown error');
+			// Report at most once per turn: a prior send-rejection may have already surfaced
+			// onError for this same (server-started) turn.
+			reportError(chunk.error ?? 'Unknown error');
 		}
 
 		if (chunk.type === 'interrupt' && chunk.interrupts) {
@@ -142,6 +550,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				}
 			}
 			assistantId = null;
+			clearFailsafe();
 			loading = false;
 			options.onLoadingChange?.(loading);
 			options.onInterrupt?.(chunk.interrupts);
@@ -152,13 +561,49 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	async function ensureSubscribed(channelId: string) {
 		if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
 
-		const sub = await options.subscribe(channelId, handleChunk);
+		// Pass a plain options object (NOT a callable-with-props). Both bb-realtime
+		// middlewares resolve subscribe with `typeof handlerOrOptions === 'function'`
+		// FIRST — a function is treated as a bare handler and its onMessage/onReconnect/
+		// onDisconnect/refresh properties are never read. A hybrid callable would therefore
+		// silently drop them, making the reconnect re-sync + failsafe + token refresh dead
+		// on the real transport. The options object hits the transport's object branch.
+		const subscribeArg: ChatSubscribeOptions = {
+			onMessage: handleChunk,
+			onReconnect: () => { void handleReconnect(); },
+			// The transport's terminal failure paths — every channel's resubscribe rejected
+			// (all-stale tokens), or reconnect retries exhausted past the ~2h connect-token
+			// ceiling — surface onDisconnect('error') but deliberately do NOT fire onReconnect
+			// (nothing is live). Without wiring this, an in-flight turn's spinner would hang
+			// with no signal. On a terminal 'error' drop while loading, arm the bounded
+			// failsafe: it re-arms on any subsequent chunk (so a still-live turn is unaffected)
+			// and otherwise clears loading + surfaces onError, so the spinner can never hang.
+			// 'client' (our own unsubscribe) is ignored.
+			onDisconnect: (reason) => {
+				// Arm on ANY non-'client' reason while loading, not just 'error': 'client' is our
+				// own unsubscribe (newConversation/destroy) so we never arm on it, but any other
+				// terminal reason ('error'/'timeout'/'unknown') can leave an in-flight turn with no
+				// live channel and no onReconnect. This is self-correcting — a turn that actually
+				// reconnects re-arms on its next chunk and clears on the terminal chunk / onReconnect
+				// re-sync, so a spurious arm on a reason later followed by onReconnect does no harm,
+				// while a genuinely terminal 'timeout'/'unknown' drop (which fires no onReconnect) can
+				// no longer leave the spinner stuck.
+				if (reason !== 'client' && loading) { armFailsafe(); }
+			},
+			// Bind the consumer-supplied re-mint callback to THIS channelId (where the channel
+			// is known) and forward the zero-arg bound form. The channel changes across
+			// loadConversation / first-send createConversation, so binding here — not at
+			// construction — re-mints for the channel actually in use. When undefined the
+			// transport simply replays the original tokens on reconnect (back-compat).
+			refresh: options.refresh ? () => options.refresh!(channelId) : undefined,
+		};
+
+		const sub = await options.subscribe(channelId, subscribeArg);
 		try {
 			await sub.established;
 		} catch (err) {
 			console.warn('Subscription failed, retrying with fresh token:', err);
 			sub.unsubscribe();
-			const retrySub = await options.subscribe(channelId, handleChunk);
+			const retrySub = await options.subscribe(channelId, subscribeArg);
 			await retrySub.established;
 			activeSub = retrySub;
 			return;
@@ -188,19 +633,51 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			assistantText = '';
 			messages = [...messages, userMsg, aMsg];
 			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: bind the failsafe timer's lifecycle to the turn, exactly like
+			// errorReported/assistantText. handleSendFailure() and a mid-turn newConversation-style
+			// teardown can end a loading turn WITHOUT a terminal chunk, leaving a failsafe armed by
+			// an onDisconnect. Clearing it here stops a STALE timer from an abandoned turn firing
+			// during this healthy turn — which would clear loading and latch a bogus 'Timed out'
+			// onError, suppressing this turn's real error.
+			clearFailsafe();
+			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
 
 			// Submit — chunks arrive via the already-open subscription
-			await options.api.sendMessage(conversationId, text, conversationId);
+			try {
+				await options.api.sendMessage(conversationId, text, conversationId);
+			} catch (err) {
+				// Send rejected (e.g. 504). Reset loading, drop the empty assistant
+				// placeholder, and surface onError. NOTE: a 504 may still have started the
+				// turn server-side. Because handleSendFailure nulls assistantId and clears
+				// loading, the reconnect re-sync guard (stillSameInFlightTurn) will NOT
+				// auto-adopt that started turn's persisted text into the live bubble — the
+				// send is treated as failed. The started turn's result is still persisted and
+				// is recovered the next time the app opens the conversation (loadConversation),
+				// not automatically on the in-flight reconnect.
+				handleSendFailure(err);
+			}
 		},
 
 		async respondToInterrupt(responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>) {
 			if (loading) return;
 			if (!conversationId) throw new Error('No active conversation');
-			// Add approval messages to chat immediately
+			// Guard BEFORE mutating any state: if resume is unconfigured, throw before we set
+			// loading or create a placeholder, so an unconfigured call can't leave the spinner
+			// stuck or orphan an empty assistant bubble (the failure mode this method's rejection
+			// path already handles).
+			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
+			// Add approval messages to chat immediately. Build metadata as a typed
+			// ApprovalMetadata (no cast) — `input` is `unknown` on InterruptResponse, so
+			// coerce it to JSONValue the same way createChat does.
 			for (const r of responses) {
-				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
+				const metadata: ApprovalMetadata = {};
+				if (r.approved !== undefined) metadata.approved = r.approved;
+				if (r.trust !== undefined) metadata.trust = r.trust;
+				if (r.toolName !== undefined) metadata.toolName = r.toolName;
+				if (r.input !== undefined) metadata.input = toJSONValue(r.input);
+				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata }];
 			}
 			// Reuse existing empty assistant placeholder or create one
 			const existingEmpty = messages.find(m => m.role === 'assistant' && !m.content);
@@ -213,10 +690,19 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			}
 			assistantText = '';
 			options.onMessagesChange?.(messages);
+			// Turn-start cleanup: clear a failsafe left armed by a prior abandoned turn (see
+			// sendMessage) so a stale timer can't fire during this resumed turn.
+			clearFailsafe();
+			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
-			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
-			await options.api.resume(conversationId, responses, conversationId);
+			try {
+				await options.api.resume(conversationId, responses, conversationId);
+			} catch (err) {
+				// Resume failed — reset loading, drop the empty assistant placeholder, and
+				// surface the error via onError (consistent with the sendMessage failsafe).
+				handleSendFailure(err);
+			}
 		},
 
 		getMessages() { return messages; },
@@ -232,14 +718,28 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// 2. THEN load history from DB
 			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
 			const { messages: history } = await options.api.getConversation(id);
-			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
-					id: nextId(),
-					role: m.role as 'user' | 'assistant' | 'approval',
-					content: m.content,
-					metadata: m.metadata,
-				}));
+			messages = history.flatMap<ChatMessage>(m => {
+				// metadata arrives as `unknown` (customers pass their backend shape
+				// straight through — no adapter). Narrow it HERE, once, so the customer
+				// never writes this: a plain object becomes the JSON record, anything
+				// else is dropped.
+				const record = asJSONRecord(m.metadata);
+				if (m.role === 'user' || m.role === 'assistant') {
+					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+				}
+				if (m.role === 'approval') {
+					// Project the narrowed record into the typed ApprovalMetadata shape:
+					// read the known keys, keep the JSON-safe types.
+					const meta: ApprovalMetadata = {};
+					const src = record ?? {};
+					if (typeof src.approved === 'boolean') meta.approved = src.approved;
+					if (typeof src.trust === 'boolean') meta.trust = src.trust;
+					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+					if (src.input !== undefined) meta.input = src.input;
+					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+				}
+				return [];
+			});
 			options.onMessagesChange?.(messages);
 
 			// Check for pending interrupts (e.g., user left mid-approval)
@@ -250,6 +750,8 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		},
 
 		destroy() {
+			destroyed = true;
+			clearFailsafe();
 			if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
 		},
 	};

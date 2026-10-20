@@ -1,16 +1,16 @@
  // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { Agent, createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { createConnection, type Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { ApiError } from '../errors.js';
-import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
@@ -20,8 +20,11 @@ import {
   successResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from '../rpc.js';
 import { redactToJson } from '../redact.js';
+import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
+import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
@@ -37,6 +40,19 @@ function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
 }
 
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
+/**
+ * Resolve the interface the dev server binds: an explicit `host` option, then
+ * `BLOCKS_DEV_HOST`, else IPv4 loopback. Loopback by default — never every
+ * interface — because the dev server exposes the full API with no auth.
+ */
+export function resolveDevHost(option: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  const chosen = option?.trim() || env.BLOCKS_DEV_HOST?.trim();
+  return chosen || '127.0.0.1';
+}
+
+/** Re-exported for callers/tests; the single definition lives in `common/loopback.ts`. */
+export { isLoopbackHost } from '../common/loopback.js';
 
 /**
  * Resolve the CORS origin for the dev server.
@@ -58,7 +74,7 @@ export function buildDevCorsHeaders(requestOrigin: string): Record<string, strin
     'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin),
     'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': CORS_MAX_AGE,
   };
@@ -101,10 +117,20 @@ export interface DevServerOptions {
   /**
    * Command to start the frontend dev server (e.g., 'npx vite --port 3100 --strictPort').
    * Omit to run backend-only (no frontend proxy).
+   * The proxy reuses HTTP connections to the frontend and releases its pool on shutdown.
    */
   frontendCommand?: string;
   /** Port the frontend dev server listens on. Default: 3100. */
   frontendPort?: number;
+  /**
+   * Interface the dev server binds. Default: `127.0.0.1` (loopback only). The dev
+   * server proxies your whole Blocks API — with local mock auth, which
+   * authenticates nothing — against the local mock datastore, so it must not be
+   * reachable from other machines by default. Set a wider host (e.g. `0.0.0.0`)
+   * only for container / remote-devbox setups where you control who can reach the
+   * port. Overridable with the `BLOCKS_DEV_HOST` environment variable.
+   */
+  host?: string;
   /**
    * Watch `secret()` / `config()` calls and regenerate the type-safe key
    * augmentation (so `getSecret`/`getConfig` autocomplete and reject typos) as you
@@ -161,12 +187,11 @@ async function deployLocal(backend: Record<string, any>): Promise<void> {
  *
  * When `host` is omitted the port is probed on BOTH loopback families —
  * `127.0.0.1` (IPv4) and `::1` (IPv6) — and reported open if EITHER answers.
- * This matters because `server.listen(port, …)` (below) passes no host, so Node
- * binds dual-stack on `::` (all interfaces, both families). A single `localhost`
- * probe resolves to only one of `::1`/`127.0.0.1` on a given host, so an orphan
- * holding the port on the *other* family would be invisible — leaving the
- * startup/EADDRINUSE reclaim path blind to a port that `listen` will still
- * reject. Probing both families keeps every "is the port bound" check in
+ * This matters because an orphan dev server (or an older version of it, which
+ * bound dual-stack on `::`) can hold the port on either loopback family. A single
+ * `localhost` probe resolves to only one of `::1`/`127.0.0.1` on a given host, so
+ * an orphan on the *other* family would be invisible — leaving the
+ * startup/EADDRINUSE reclaim path blind to a port that is still contended. Probing both families keeps every "is the port bound" check in
  * agreement with what `listen` actually contends for. Pass an explicit `host`
  * to probe only that address.
  *
@@ -352,9 +377,9 @@ export interface ReclaimPortDeps {
  * logging/assertions. Best-effort: never throws.
  *
  * Probe contract: the default `probe` is {@link isPortOpen} with no host, which
- * checks BOTH `127.0.0.1` and `::1`. `server.listen` binds dual-stack on `::`,
- * so an orphan holding the port on either loopback family is detected (and thus
- * reclaimed) — a single-family `localhost` probe could miss it and no-op.
+ * checks BOTH `127.0.0.1` and `::1`, so an orphan holding the port on either
+ * loopback family is detected (and thus reclaimed) — a single-family `localhost`
+ * probe could miss it and no-op.
  */
 export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> = {}): Promise<ReclaimResult> {
   const probe = deps.probe ?? ((p) => isPortOpen(p));
@@ -438,7 +463,7 @@ export function evaluatePortBindRetry(
 export interface BindRetryDeps {
   /** Reclaim the contended port; its result drives the operator message. */
   reclaim: (port: number) => Promise<ReclaimResult>;
-  /** Re-attempt the bind (`server.listen(port, onListening)` in prod). */
+  /** Re-attempt the bind (`server.listen(port, host, onListening)` in prod). */
   relisten: () => void;
   /** Schedule the next attempt after a backoff (`setTimeout` in prod). */
   scheduleRetry: (fn: () => void, delayMs: number) => void;
@@ -446,6 +471,15 @@ export interface BindRetryDeps {
   onExhausted: () => void;
   /** Warning/error sink (`console.error` in prod). */
   warn: (msg: string) => void;
+}
+
+/** Schedule a front-door rebind retry; keep it refed so the retry deterministically fires. */
+export function scheduleBindRetry(
+  fn: () => void,
+  delayMs: number,
+  setTimer: (fn: () => void, delayMs: number) => NodeJS.Timeout = setTimeout,
+): NodeJS.Timeout {
+  return setTimer(fn, delayMs);
 }
 
 /**
@@ -542,10 +576,11 @@ export type SingletonDecision = { action: 'proceed' } | { action: 'exit'; reason
  *
  * - **No / corrupt pidfile** → proceed (first start; startup reclaim covers any orphan socket).
  * - **Same pid** → proceed (defensive; the record is our own).
- * - **Same parent (`ppid`)** → proceed. `tsx watch` is the stable parent across
- *   reloads, so a matching parent means the watcher is relaunching OUR OWN script
- *   — not a competitor. A second `npm run dev` runs under a *different* watcher,
- *   so it never matches here. This carve-out is what preserves hot reload.
+ * - **Same parent (`ppid`) and dead recorded child** → proceed. `tsx watch` is
+ *   the stable parent across reloads, and it relaunches after the old child exits.
+ *   A live recorded child with the same parent can also happen when two
+ *   `npm run dev` jobs share a shell, so that still goes through the live-owner
+ *   check below.
  * - **Different, still-live owner actually holding the port** → exit cleanly with
  *   a clear message (do not spawn a competing supervisor).
  * - **Otherwise** (recorded owner is dead → stale pidfile, or the port is free)
@@ -559,8 +594,9 @@ export function evaluateSingleton(
 ): SingletonDecision {
   if (!existing) return { action: 'proceed' };
   if (existing.pid === self.pid) return { action: 'proceed' };
-  if (existing.ppid === self.ppid) return { action: 'proceed' }; // tsx-watch relaunch of our own supervisor
-  const ownerAlive = isAlive(existing.pid) || (existing.ppid > 1 && isAlive(existing.ppid));
+  const existingPidAlive = isAlive(existing.pid);
+  if (existing.ppid === self.ppid && !existingPidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
+  const ownerAlive = existingPidAlive || (existing.ppid > 1 && isAlive(existing.ppid));
   if (ownerAlive && portInUse) {
     return { action: 'exit', reason: `dev server already running on :${existing.port} (pid ${existing.pid})` };
   }
@@ -568,6 +604,20 @@ export function evaluateSingleton(
 }
 
 export async function startDevServer(options: DevServerOptions) {
+  // Bind loopback unless the developer explicitly opts into a wider interface.
+  const host = resolveDevHost(options.host);
+  if (!isLoopbackHost(host)) {
+    console.warn(
+      `\n⚠️  AWS Blocks dev server is binding ${host}, not loopback. Anyone who can reach this ` +
+        'machine on that interface can call every API method against your local mock data ' +
+        '(local auth authenticates nothing). Use this only in a container or devbox whose ' +
+        'port you control.' +
+        (isWildcardHost(host)
+          ? ' Browsers must reach it by IP address for the realtime WebSocket to accept their Origin; ' +
+            'to use a hostname instead, set BLOCKS_DEV_HOST to that hostname.\n'
+          : '\n'),
+    );
+  }
   const {
     port = 3000,
     backendPath,
@@ -627,8 +677,8 @@ export async function startDevServer(options: DevServerOptions) {
     if (decision.action === 'exit') {
       console.error(
         `\n⚠️  ${decision.reason}.\n` +
-        `   Not starting a second dev server. Stop the other process (or run the ` +
-        `cleanup script) and retry \`npm run dev\`.\n`,
+        `   Not starting a second dev server. Stop the running one with ` +
+        `\`npm run dev:stop\` and retry \`npm run dev\`.\n`,
       );
       process.exit(0);
     }
@@ -688,18 +738,21 @@ export async function startDevServer(options: DevServerOptions) {
   // 5. Collect APIs for runtime
   const apis = new Map<string, any>();
   for (const [exportName, exportValue] of Object.entries(backend)) {
-    if (typeof exportValue === 'function' || typeof exportValue === 'object') {
+    // Same rule as the Lambda handler: no Building Block instances or `_`-private exports.
+    if (isDispatchableExport(exportName, exportValue)) {
       apis.set(exportName, exportValue);
     }
   }
 
-  registerBuiltinRoutes();
+  registerBuiltinRoutes({ localDev: true });
   lockRouteRegistry();
 
   // ── Frontend proxy ─────────────────────────────────────────────────────
   let frontendProcess: ChildProcess | null = null;
+  // Reuse frontend sockets so repeated page loads do not exhaust ephemeral ports.
+  const frontendAgent = frontendCommand ? new Agent({ keepAlive: true }) : undefined;
   const frontendProxy = frontendCommand
-    ? httpProxy.createProxyServer({ target: `http://localhost:${frontendPort}`, ws: true })
+    ? httpProxy.createProxyServer({ target: `http://localhost:${frontendPort}`, ws: true, agent: frontendAgent })
     : null;
 
   frontendProxy?.on('error', (_err, _req, res) => {
@@ -952,6 +1005,10 @@ export async function startDevServer(options: DevServerOptions) {
 
   // WebSocket upgrade — route to frontend (HMR) or dev attachments
   server.on('upgrade', (req, socket, head) => {
+    // A stale client can reset the connection mid-upgrade (ECONNRESET). The raw
+    // socket has no 'error' listener at this point, so Node's default handler
+    // would kill the dev server. Attach one before any parsing/routing.
+    socket.on('error', () => socket.destroy());
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/realtime') return; // handled by dev attachment (noServer mode)
     if (frontendProxy) {
@@ -1038,11 +1095,17 @@ export async function startDevServer(options: DevServerOptions) {
   // testable {@link createBindRetryController}; telemetry stays here.
   const onEaddrinuse = createBindRetryController(port, {
     reclaim: (p) => reclaimPort(p),
-    relisten: () => server.listen(port, onListening),
-    scheduleRetry: (fn, delayMs) => { setTimeout(fn, delayMs).unref?.(); },
+    relisten: () => server.listen(port, host, onListening),
+    scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });
+  // Malformed/aborted requests must not become unhandled socket errors.
+  server.on('clientError', (_err: Error, socket: Duplex) => {
+    if ((socket as Socket).writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    else socket.destroy();
+  });
+
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       // Keep the telemetry signal (unchanged) …
@@ -1066,7 +1129,7 @@ export async function startDevServer(options: DevServerOptions) {
     process.exit(1);
   });
 
-  server.listen(port, onListening);
+  server.listen(port, host, onListening);
 
   // ── Cleanup ────────────────────────────────────────────────────────────
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -1096,6 +1159,7 @@ export async function startDevServer(options: DevServerOptions) {
     // successor may already own it).
     removeOwnPidfile();
     frontendProxy?.close();
+    frontendAgent?.destroy();
     apiProxy?.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
@@ -1114,6 +1178,7 @@ export async function startDevServer(options: DevServerOptions) {
   // (a surviving grandchild keeps the group alive) — see POST-EXIT GROUP-KILL
   // POLICY above.
   process.once('exit', () => {
+    frontendAgent?.destroy();
     // Release our singleton pidfile on any exit path (crash, uncaught exception)
     // that bypassed cleanup(), so it never lingers and blocks the next start.
     removeOwnPidfile();
@@ -1121,6 +1186,254 @@ export async function startDevServer(options: DevServerOptions) {
     if (!child) return;
     killFrontendTree(child, 'SIGKILL');
   });
+}
+
+// ── Stop / status (`npm run dev:stop`) ──────────────────────────────────────
+// A sanctioned way to stop a dev server started with `npm run dev` — so an
+// operator (or an agent) never reaches for `pkill -f tsx`/`killall node`, which
+// matches by process NAME and also kills the caller's own shell/agent process.
+//
+// Ownership is proven, never guessed. We act ONLY on the supervisor identity the
+// dev server itself recorded in its per-port pidfile ({pid, ppid, port}) — we
+// never scan a port and signal whatever happens to be listening, so a stale
+// pidfile or a same-port process from an unrelated project is never touched. The
+// `ppid` is the stable `tsx watch` watcher; SIGTERM-ing it is what actually stops
+// `npm run dev` (tsx relays the signal to its child, whose own `cleanup()` drains
+// the frontend and removes the pidfile). Killing only the listener child would
+// leave the watcher alive to relaunch on the next file edit — so the watcher is
+// the primary target, and the recorded child's listener tree is only a fallback
+// when the watcher is already gone.
+
+/** The per-port pidfile path a dev server records its supervisor identity in. */
+export function devPidfilePath(port: number): string {
+  return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
+}
+
+/** Outcome of {@link stopDevServer}. */
+export interface StopResult {
+  /** The front-door port acted on. */
+  port: number;
+  /** True when a recorded supervisor was found and signalled. */
+  stopped: boolean;
+  /** True when no pidfile / no live recorded supervisor was found (idempotent no-op). */
+  alreadyStopped: boolean;
+  /** Supervisor identity read from the pidfile, when one was present. */
+  record: DevServerPidRecord | null;
+  /**
+   * How the server was stopped:
+   *  - `watcher`  — SIGTERM to the recorded `tsx watch` ppid (the clean path).
+   *  - `listener` — fallback: killed the recorded child pid's listener tree
+   *                 (watcher was already gone / not a tsx watcher).
+   *  - `none`     — nothing live was recorded.
+   */
+  via: 'watcher' | 'listener' | 'none';
+  /** PIDs signalled. */
+  pids: number[];
+  /** True when, after signalling, the front-door port is confirmed free. */
+  portFree: boolean;
+}
+
+/** Injectable seams for {@link stopDevServer} (real implementations by default). */
+export interface StopDevServerDeps {
+  /** Read a pidfile body, or null when absent/unreadable. */
+  readPidfile: (path: string) => string | null;
+  /** Delete the pidfile. */
+  removePidfile: (path: string) => void;
+  /** True iff a signal can be delivered to `pid` (it exists). */
+  isAlive: (pid: number) => boolean;
+  /** The command line of `pid`, for confirming a ppid is really a `tsx` watcher. */
+  commandOf: (pid: number) => string;
+  /** Send a signal to a single pid (the watcher path). */
+  signal: (pid: number, sig: NodeJS.Signals) => void;
+  /** True iff the front-door port is currently bound. */
+  probe: (port: number) => Promise<boolean>;
+  /** PIDs of the listener(s) holding a port (fallback path only). */
+  listPids: (port: number) => number[];
+  /** Terminate a listener PID's tree (fallback path only). */
+  killTree: (pid: number, sig: NodeJS.Signals) => void;
+  /** Wait (bounded) for a port to be released. */
+  waitFree: (port: number, timeoutMs?: number) => Promise<void>;
+}
+
+/** Read `pid`'s command line (`ps -o command=`), '' on any failure or Windows. */
+function pidCommand(pid: number): string {
+  if (process.platform === 'win32') return '';
+  try {
+    const { stdout } = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      windowsHide: true,
+      timeout: 3000,
+    });
+    return (stdout ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function defaultStopDeps(): StopDevServerDeps {
+  return {
+    readPidfile: (p) => {
+      try {
+        return readFileSync(p, 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+    removePidfile: (p) => {
+      try {
+        unlinkSync(p);
+      } catch {
+        /* already gone */
+      }
+    },
+    isAlive: (pid) => isPidAlive(pid),
+    commandOf: (pid) => pidCommand(pid),
+    signal: (pid, sig) => process.kill(pid, sig),
+    probe: (p) => isPortOpen(p),
+    listPids: (p) => findListenerPids(p),
+    killTree: (pid, sig) => killListenerTree(pid, sig),
+    waitFree: (p, t) => waitForPortFree(p, t),
+  };
+}
+
+/** True iff `command` looks like a `tsx watch` supervisor (not a bare shell). */
+function isTsxWatcher(command: string): boolean {
+  return /\btsx\b/.test(command) && /\bwatch\b/.test(command);
+}
+
+/**
+ * Stop the dev server recorded for `port` by SIGTERM-ing its `tsx watch`
+ * supervisor — the only thing that actually ends `npm run dev` (killing just the
+ * listener child leaves the watcher to relaunch on the next edit).
+ *
+ * Ownership is PROVEN, not guessed: this acts only on the pids the dev server
+ * wrote to its own pidfile ({pid, ppid, port}). It never scans the port and
+ * signals an arbitrary listener, so a stale pidfile or an unrelated same-port
+ * process is never killed — the exact failure a `pkill -f`/port-scan stop has.
+ *
+ *  1. No pidfile, or neither recorded pid alive → nothing of ours is running
+ *     (`alreadyStopped`, idempotent).
+ *  2. Recorded `ppid` is alive AND its command is a `tsx watch` → SIGTERM it.
+ *     tsx relays the signal to its child, whose own `cleanup()` drains the
+ *     frontend and removes the pidfile. (A bare `node server.ts` start has the
+ *     caller's SHELL as ppid, which is NOT a tsx watcher, so we never signal it —
+ *     that would be the self-kill this command exists to prevent.)
+ *  3. Watcher gone / not a tsx watcher but the recorded child `pid` still holds
+ *     the port → fall back to SIGTERM→SIGKILL of that child's listener tree.
+ *
+ * The pidfile is removed only once the port is confirmed free (or no owner is
+ * left alive), so a server that survived the signal keeps its singleton guard.
+ * Dependencies are injected for tests; defaults wire the real seams. Never throws.
+ */
+export async function stopDevServer(
+  port = 3000,
+  deps: Partial<StopDevServerDeps> = {},
+): Promise<StopResult> {
+  const d = { ...defaultStopDeps(), ...deps };
+  const pidfilePath = devPidfilePath(port);
+
+  const body = d.readPidfile(pidfilePath);
+  const record = body != null ? parsePidRecord(body) : null;
+
+  const result = (via: StopResult['via'], pids: number[], portFree: boolean): StopResult => ({
+    port,
+    stopped: via !== 'none',
+    alreadyStopped: via === 'none',
+    record,
+    via,
+    pids,
+    portFree,
+  });
+
+  if (!record) return result('none', [], !(await d.probe(port)));
+
+  const watcherAlive = record.ppid > 1 && d.isAlive(record.ppid);
+  const childAlive = d.isAlive(record.pid);
+
+  // Nothing we recorded is alive — stale pidfile. Clear it, report no-op.
+  if (!watcherAlive && !childAlive) {
+    d.removePidfile(pidfilePath);
+    return result('none', [], !(await d.probe(port)));
+  }
+
+  // Primary path: SIGTERM the recorded tsx watch supervisor.
+  if (watcherAlive && isTsxWatcher(d.commandOf(record.ppid))) {
+    try {
+      d.signal(record.ppid, 'SIGTERM');
+    } catch {
+      /* raced away */
+    }
+    await d.waitFree(port, 3000);
+    const portFree = !(await d.probe(port));
+    if (portFree) d.removePidfile(pidfilePath);
+    return result('watcher', [record.ppid], portFree);
+  }
+
+  // Fallback: the watcher is gone (or ppid is not a tsx watcher), but the
+  // recorded child still holds the port. Reap exactly that child's listener
+  // tree — still ownership-scoped to the recorded pid, never an arbitrary scan.
+  if (childAlive && (await d.probe(port)) && d.listPids(port).includes(record.pid)) {
+    d.killTree(record.pid, 'SIGTERM');
+    await d.waitFree(port, 2000);
+    if (await d.probe(port)) {
+      d.killTree(record.pid, 'SIGKILL');
+      await d.waitFree(port, 2000);
+    }
+    const portFree = !(await d.probe(port));
+    if (portFree) d.removePidfile(pidfilePath);
+    return result('listener', [record.pid], portFree);
+  }
+
+  // The recorded owner is alive but no longer holds the port (e.g. already
+  // shutting down). Clear the pidfile if the port is free.
+  const portFree = !(await d.probe(port));
+  if (portFree) d.removePidfile(pidfilePath);
+  return result('none', [], portFree);
+}
+
+/** Human-readable one-liner describing a {@link StopResult}, for the CLI. */
+export function stopMessage(result: StopResult): string {
+  if (result.alreadyStopped) {
+    return `No dev server was running on :${result.port} (nothing to stop).`;
+  }
+  const who = result.pids.length ? ` (pid${result.pids.length > 1 ? 's' : ''} ${result.pids.join(', ')})` : '';
+  if (result.portFree) {
+    return `🛑 Stopped the dev server on :${result.port}${who}.`;
+  }
+  return (
+    `⚠️  Signalled the dev server on :${result.port}${who}, but the port is still ` +
+    `bound — it may still be shutting down, or another process now holds it.`
+  );
+}
+
+/**
+ * CLI entry for the `dev:stop` template script. Stops the dev server on the
+ * front-door port (`--port N`, default 3000), prints one {@link stopMessage},
+ * and sets a non-zero exit code when the stop did not free the port (agents read
+ * the exit status, not the emoji). Never throws.
+ */
+export async function runStopCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const port = parsePortArg(argv) ?? 3000;
+  const r = await stopDevServer(port);
+  console.log(stopMessage(r));
+  if (!r.alreadyStopped && !r.portFree) process.exitCode = 1;
+}
+
+/** Parse `--port <n>` / `--port=<n>` from argv; `null` when absent/invalid. Pure. */
+export function parsePortArg(argv: readonly string[]): number | null {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port' && i + 1 < argv.length) {
+      const n = Number(argv[i + 1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+    const m = /^--port=(\d+)$/.exec(a);
+    if (m) {
+      const n = Number(m[1]);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    }
+  }
+  return null;
 }
 
 // ── Local API handler ────────────────────────────────────────────────────────
@@ -1204,13 +1517,14 @@ function handleApiRequest(
 
         const apiMethods = typeof apiHandler === 'function' ? apiHandler(context) : apiHandler;
 
-        if (!apiMethods[rpcMethod]) {
+        const apiMethod = resolveApiMethod(apiMethods, rpcMethod);
+        if (!apiMethod) {
           res.writeHead(200, rpcHeaders);
           res.end(methodNotFoundResponse(`'${rpcMethod}' on API '${apiNamespace}'`, rpcId));
           return;
         }
 
-        const result = await apiMethods[rpcMethod](...args);
+        const result = await apiMethod(...args);
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {
@@ -1235,6 +1549,10 @@ function handleApiRequest(
         const errPayload = errorResponseFromCatch(error, rpcId);
         if (!process.env.BLOCKS_DEV_QUIET) {
           console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
+          // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
+          // text lives on `cause` (server-side only). Surface it here so a SQL typo or
+          // connection error shows useful text in the local terminal.
+          if (error?.cause) console.log('  cause:', error.cause);
           if (error?.stack) console.log(error.stack);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1250,14 +1568,21 @@ function handleApiRequest(
     let body = '';
     req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
+      // Hoisted above the try so the error catch below can reuse any headers
+      // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
+      // custom) — matching the production lambda-handler error path, which also
+      // re-emits `responseHeaders`. Declared inside the try, they would be out
+      // of catch scope and the error response would drop those headers in local
+      // dev while production kept them, hiding a CORS/cookie bug locally.
+      let responseStatus = 200;
+      const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
+
       try {
         const headers = new Headers();
         Object.entries(req.headers).forEach(([k, v]) => {
           headers.set(k, Array.isArray(v) ? v[0] : v || '');
         });
 
-        let responseStatus = 200;
-        const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
         let responseBody: any;
 
         const context = {
@@ -1290,11 +1615,29 @@ function handleApiRequest(
         res.writeHead(responseStatus, headerObj);
         res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
       } catch (error: any) {
-        const status = error instanceof ApiError ? error.status : 500;
-        const errBody: Record<string, any> = { error: error.message };
-        if (error.name && error.name !== 'Error') errBody.name = error.name;
-        res.writeHead(status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(errBody));
+        if (!process.env.BLOCKS_DEV_QUIET) {
+          console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
+          // A branded error carries a stable BB message; the raw driver/SDK text
+          // lives on `cause` (server-side only). Surface it here, matching the RPC
+          // catch above, so a developer debugging a raw-route failure sees it.
+          if (error?.cause) console.error('  cause:', error.cause);
+          if (error?.stack) console.error(error.stack);
+        }
+        const { status, body: errBody } = rawRouteErrorFromCatch(error);
+        // Reuse any headers the handler set on `ctx.response` before throwing
+        // (CORS, Set-Cookie, custom), the same way the success path and the
+        // production lambda-handler error path do. The sanitized error body is
+        // JSON, so Content-Type is forced to application/json on top.
+        const headerObj: Record<string, string | string[]> = {};
+        for (const [key, value] of responseHeaders.entries()) {
+          if (key === 'set-cookie') continue;
+          headerObj[key] = value;
+        }
+        const setCookies = responseHeaders.getSetCookie?.() ?? [];
+        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
+        headerObj['content-type'] = 'application/json';
+        res.writeHead(status, headerObj);
+        res.end(errBody);
       }
     });
     return;

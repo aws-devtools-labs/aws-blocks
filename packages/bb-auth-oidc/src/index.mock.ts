@@ -6,11 +6,12 @@
  * Wires to an in-process stub IdP via `OidcClientEngine`.
  */
 
-import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { buildingBlockParent, getSdkIdentifiers, registerSdkIdentifiers, type ScopeParent } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
+import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -64,9 +65,11 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		const sessions = new KVStore<SessionRow>(self, 'sessions');
 
-		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
+		// The same expression as the AWS runtime; `user-agent.test.ts` pins the pair.
+		const cookieNamePrefix = `oidc_${self.fullId}`;
 		const cookieAttributes = {
 			...resolveCookieSecurity({
 				crossDomain: options.crossDomain ?? false,
@@ -82,7 +85,7 @@ export class AuthOIDC<
 		// and ran OIDC discovery against an empty issuer, crashing `npm run dev`.
 		const hasCognitoFederated = options.providers.some((p) => p.kind === 'cognito-federated');
 
-		let engine;
+		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			// Cognito federation needs a deployed Cognito User Pool + app-client
 			// credentials, which only exist after `npm run sandbox`/`deploy`. In the
@@ -154,16 +157,4 @@ export class AuthOIDC<
 			}
 		}
 	}
-}
-
-/** Mock-runtime scope prefix for cookie naming (avoids collisions between instances). */
-function mockPrefix(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('_');
 }

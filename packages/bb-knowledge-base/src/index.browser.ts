@@ -3,7 +3,7 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSyncedOptions } from './types.js';
-import { KnowledgeBaseErrors } from './errors.js';
+import { KnowledgeBaseErrors, blocksError } from './errors.js';
 
 export type {
 	KnowledgeBaseOptions, SourceConfig,
@@ -16,9 +16,7 @@ export { KnowledgeBaseErrors } from './errors.js';
 const BROWSER_ERROR = 'KnowledgeBase is server-side only. Use it in server actions, API routes, or Lambda handlers — not in browser code.';
 
 function browserError(): Error {
-	const err = new Error(`${KnowledgeBaseErrors.BrowserNotSupported}: ${BROWSER_ERROR}`);
-	err.name = KnowledgeBaseErrors.BrowserNotSupported;
-	return err;
+	return blocksError(KnowledgeBaseErrors.BrowserNotSupported, BROWSER_ERROR);
 }
 
 /**

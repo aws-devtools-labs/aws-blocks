@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, brandBlocksError } from '@aws-blocks/core';
 
 /**
  * DSQL-specific error constants.
@@ -14,6 +14,22 @@ export const DistributedDatabaseErrors = {
   SerializationFailure: 'SerializationFailureException',
   TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
 } as const;
+
+/**
+ * Error name raised by the mock's DDL guard when a DDL statement is attempted on
+ * the app-runtime connection, which is DML-only (parity with the production
+ * `dsql:DbConnect` IAM grant).
+ *
+ * INTERNAL, mock-path only — deliberately NOT a member of the public
+ * {@link DistributedDatabaseErrors} and not re-exported from any entry point.
+ * On the deployed path DSQL rejects unsupported statements (DDL, foreign keys)
+ * with SQLSTATE 42501, which is indistinguishable from a genuine grant denial by
+ * code alone, so {@link translateDsqlError} lets it fall through to
+ * `QueryFailed`. A public matchable constant would match locally but never in a
+ * deployed app, so it stays off the public surface until a deployed producer
+ * exists.
+ */
+export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
 
 /**
  * PostgreSQL error codes used for DSQL error translation.
@@ -33,29 +49,124 @@ export const PG_CONNECTION_EXCEPTION_CLASS = '08';
  */
 export const TRANSACTION_ROW_LIMIT = 3000;
 
+/**
+ * Build the 409 ApiError for a serialization-failure (SQLSTATE 40001) OCC
+ * conflict. Maps to HTTP 409 (Conflict) so the JSON-RPC serializer emits code
+ * 409 instead of a generic 500, preserves the `SerializationFailure` name so
+ * `isBlocksError(e, DistributedDatabaseErrors.SerializationFailure)` keeps
+ * matching on both server and client, keeps the original engine error as
+ * `cause` (server-side), and flags the conflict retriable — the caller can
+ * retry the transaction (see `retryOnConflict`).
+ *
+ * The client-visible message is a fixed, stable string (the raw driver text is
+ * verbose); the original error is retained as `cause` for server-side
+ * diagnostics.
+ */
+export function serializationConflict(cause: Error): ApiError {
+  return new ApiError('The transaction failed due to a serialization conflict', 409, {
+    name: DistributedDatabaseErrors.SerializationFailure,
+    cause,
+    retriable: true,
+  });
+}
+
+/**
+ * Build the 409 ApiError for a unique-constraint / duplicate-key violation
+ * (SQLSTATE 23505). Maps to HTTP 409 (Conflict) so the JSON-RPC serializer emits
+ * code 409 instead of a generic 500, preserves the `UniqueConstraintViolation`
+ * name so `isBlocksError(e, DistributedDatabaseErrors.UniqueConstraintViolation)`
+ * keeps matching on both server and client, and keeps the original engine error
+ * as `cause` (server-side).
+ *
+ * Unlike {@link serializationConflict}, this is NOT flagged retriable: a
+ * duplicate key is a deterministic constraint failure, so a blind retry of the
+ * same insert fails identically (ApiError defaults `retriable` to `false`).
+ *
+ * The client-visible message is a fixed, stable string; the raw driver text
+ * (which can name columns / constraints and varies by engine) is retained only
+ * as `cause` for server-side diagnostics, never interpolated into the message.
+ */
+export function uniqueConstraintConflict(cause: Error): ApiError {
+  return new ApiError('The item violates a unique constraint', 409, {
+    name: DistributedDatabaseErrors.UniqueConstraintViolation,
+    cause,
+  });
+}
+
+/**
+ * Stable, BB-authored message for the DDL-denial path. The mock's DDL guard
+ * ({@link DSQL_PERMISSION_ERROR_NAME}) is the ONLY producer
+ * of this error — the deployed path falls through to `QueryFailed` (see
+ * {@link translateDsqlError}) — so this lives here as the single source and the
+ * mock engine imports it, rather than keeping a drift-prone second copy.
+ */
+export const DDL_NOT_ALLOWED_MESSAGE =
+  'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime. ' +
+  'Use migration files instead — the migration Lambda has dsql:DbConnectAdmin for DDL.';
+
+/**
+ * Stable, BB-authored client-facing messages per DistributedDatabaseErrors name.
+ * The raw DSQL/pg driver text is never sent — kept only as `cause` for
+ * server-side diagnostics. A branded error's `name` AND `message` cross the wire
+ * (D-003), so a re-tag path gives the error a stable message here rather than
+ * forwarding the driver's.
+ *
+ * Only the two names {@link translateDsqlError} actually re-tags are listed:
+ * {@link DSQL_PERMISSION_ERROR_NAME} is deliberately absent, because after the
+ * 42501 reversal nothing re-tags to it (the deployed path falls through to `QueryFailed`); its message
+ * lives in {@link DDL_NOT_ALLOWED_MESSAGE} for the mock's DDL guard.
+ */
+const RE_TAG_MESSAGES: Record<string, string> = {
+  [DistributedDatabaseErrors.QueryFailed]: 'The database query failed',
+  [DistributedDatabaseErrors.ConnectionFailed]: 'The database connection failed',
+};
+
+/**
+ * Build a BRANDED re-tag error: a fresh `Error` with the BB `name` and a stable
+ * BB message, keeping the original driver error as `cause` (server-side only).
+ * The name crosses the wire so `isBlocksError(e, DistributedDatabaseErrors.QueryFailed
+ * | .ConnectionFailed)` keeps matching on the client, while the raw driver text
+ * never leaks (D-003).
+ */
+function reTagged(name: string, cause: Error): Error {
+  const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DistributedDatabaseErrors.QueryFailed];
+  const wrapped = new Error(`${name}: ${message}`, { cause });
+  wrapped.name = name;
+  return brandBlocksError(wrapped);
+}
+
+/** Read a pg driver error's SQLSTATE `code` without an `as` cast. */
+function pgErrorCode(e: Error): string | undefined {
+  return 'code' in e && typeof e.code === 'string' ? e.code : undefined;
+}
+
 /** Translate a pg error code to a DistributedDatabaseErrors name. */
 export function translateDsqlError(e: Error): never {
-  const code = (e as any).code as string | undefined;
+  const code = pgErrorCode(e);
   if (code === PG_SERIALIZATION_FAILURE) {
     // An OCC / serialization-failure conflict (SQLSTATE 40001) is a Conflict,
-    // not an InternalServerError: throw an ApiError with status 409 so the
-    // JSON-RPC serializer emits code 409 instead of a generic 500. Preserve the
-    // SerializationFailure name so isBlocksError() keeps matching on both server
-    // and client, keep the original error as `cause` (server-side), and flag it
-    // retriable — the caller can retry the transaction (see `retryOnConflict`).
-    // The client-visible message is a fixed, stable string (the raw driver text
-    // is verbose); the original error is retained as `cause` for diagnostics.
-    throw new ApiError('The transaction failed due to a serialization conflict', 409, {
-      name: DistributedDatabaseErrors.SerializationFailure,
-      cause: e,
-      retriable: true,
-    });
+    // not an InternalServerError: see serializationConflict() for the full
+    // rationale (409 mapping, preserved name, retained cause, retriable flag).
+    throw serializationConflict(e);
   } else if (code === PG_UNIQUE_VIOLATION) {
-    e.name = DistributedDatabaseErrors.UniqueConstraintViolation;
-  } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
-    e.name = DistributedDatabaseErrors.ConnectionFailed;
-  } else {
-    e.name = DistributedDatabaseErrors.QueryFailed;
+    // A duplicate-key / unique-constraint violation (SQLSTATE 23505) is a
+    // Conflict, not an InternalServerError: see uniqueConstraintConflict() for
+    // the full rationale (409 mapping, preserved name, retained cause, and why
+    // it is NOT retriable).
+    throw uniqueConstraintConflict(e);
   }
-  throw e;
+  // SQLSTATE 42501 (insufficient_privilege) is intentionally NOT special-cased:
+  // on DSQL it covers both a genuine grant denial AND the rejection of an
+  // unsupported statement (DDL, foreign keys), which cannot be told apart by
+  // code alone. Re-tagging every 42501 to `Permission` mislabels an unsupported
+  // FOREIGN KEY as a permission error, so it falls through to `QueryFailed` —
+  // the app-runtime DDL denial is surfaced by the mock's DDL guard, not here.
+  //
+  // Brand the re-tagged connection/query error (stable BB message, raw driver
+  // error kept as `cause`) so its name crosses the wire without leaking driver
+  // text (D-003).
+  const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
+    ? DistributedDatabaseErrors.ConnectionFailed
+    : DistributedDatabaseErrors.QueryFailed;
+  throw reTagged(name, e);
 }

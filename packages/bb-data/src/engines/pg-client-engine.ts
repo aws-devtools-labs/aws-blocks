@@ -5,6 +5,7 @@ import pg from 'pg';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { translatePgError } from './pg-error-translator.js';
 import { DatabaseErrors } from '../errors.js';
+import { brandBlocksError } from '@aws-blocks/core';
 import type { ExternalSslOptions } from '../types.js';
 
 /**
@@ -29,6 +30,18 @@ export interface PgClientEngineConfig {
   poolSize?: number;
   /** Milliseconds to wait for a connection before erroring. Unset = wait indefinitely. */
   connectionTimeoutMillis?: number;
+  /**
+   * Postgres `application_name` to report when the caller supplies none.
+   *
+   * Applied as pg's `fallback_application_name`, which pg uses only when no
+   * `application_name` came from the connection string or `PGAPPNAME`
+   * (`application_name || fallback_application_name`).
+   *
+   * Used by the AWS runtime layer to propagate the BB user-agent chain
+   * (`"aws-blocks/<core> bb/Database/<version>"`), visible in `pg_stat_activity`
+   * on servers that expose it, and in provider dashboards (Supabase, Neon, etc.).
+   */
+  applicationName?: string;
 }
 
 /**
@@ -48,7 +61,11 @@ function assertPostgresUrl(connectionString: string): void {
       '(deploy), then re-run `npm run sandbox` / `npm run deploy`. See MIGRATION_GUIDE.md.',
     );
     err.name = DatabaseErrors.ConnectionFailed;
-    throw err;
+    // Branded so the name crosses the wire and isBlocksError(e,
+    // DatabaseErrors.ConnectionFailed) matches on the client. The message is
+    // BB-authored (a provisioning-guidance string, no raw driver text), so
+    // forwarding it is safe (D-003).
+    throw brandBlocksError(err);
   }
 }
 
@@ -129,6 +146,7 @@ export class PgClientEngine implements DatabaseEngine {
       connectionString,
       max: config.poolSize ?? 5,
       ssl: { minVersion: 'TLSv1.2', ...baseSsl },
+      ...(config.applicationName ? { fallback_application_name: config.applicationName } : {}),
       ...(config.connectionTimeoutMillis !== undefined && {
         connectionTimeoutMillis: config.connectionTimeoutMillis,
       }),

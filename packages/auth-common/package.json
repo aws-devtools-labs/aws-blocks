@@ -1,6 +1,12 @@
 {
   "name": "@aws-blocks/auth-common",
-  "version": "0.1.7",
+  "version": "0.2.0",
+  "sideEffects": false,
+  "keywords": [
+    "aws-blocks",
+    "authentication",
+    "auth-ui"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -30,6 +36,10 @@
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
     },
+    "./theme": {
+      "types": "./dist/theme.d.ts",
+      "default": "./dist/theme.js"
+    },
     "./cookies": {
       "types": "./dist/cookies.d.ts",
       "default": "./dist/cookies.js"
@@ -40,12 +50,12 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.4.0"
+    "@aws-blocks/core": "^0.7.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "happy-dom": "^20.8.9",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.19.43",
+    "happy-dom": "^20.14.6",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",

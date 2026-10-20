@@ -26,7 +26,7 @@ jobs:
     outputs:
       source-changed: ${{ steps.check.outputs.source-changed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -46,12 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: publish
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -65,7 +65,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -128,7 +128,7 @@ jobs:
       - name: Deploy sandbox
         run: |
           cd /tmp/amplify-interop-test
-          npm run sandbox -- --once --identifier int-${GITHUB_RUN_ID:(-8)}
+          npm run sandbox -- --once --identifier int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
       - name: Smoke test
         run: |
@@ -139,7 +139,7 @@ jobs:
         if: always()
         run: |
           cd /tmp/amplify-interop-test
-          npm run sandbox:delete -- --identifier int-${GITHUB_RUN_ID:(-8)} || true
+          npm run sandbox:delete -- --identifier int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
 
   e2e-amplify-interop:
     name: E2E Amplify Interop (Browser)
@@ -151,12 +151,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: amp-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -170,7 +170,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -181,7 +181,7 @@ jobs:
       - name: Deploy sandbox
         run: |
           cd test-apps/amplify-gen2
-          npm run sandbox:once -- --identifier amp-${GITHUB_RUN_ID:(-8)}
+          npm run sandbox:once -- --identifier amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
       - name: Run Playwright tests
         run: |
@@ -192,7 +192,7 @@ jobs:
         if: always()
         run: |
           cd test-apps/amplify-gen2
-          npm run sandbox:delete -- --identifier amp-${GITHUB_RUN_ID:(-8)} || true
+          npm run sandbox:delete -- --identifier amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for

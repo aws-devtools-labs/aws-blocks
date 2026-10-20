@@ -18,6 +18,7 @@ export {
 	type ValueKind,
 } from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
@@ -25,6 +26,7 @@ export {
 	BlocksPresets,
 	BlocksStack,
 	type BlocksThrottling,
+	BuildingBlockScope,
 	blocksNodejsBundling,
 	type CoreBlocksBackendProps,
 	type CoreBlocksStackProps,
@@ -33,7 +35,11 @@ export {
 	finalizeConfigRegistry,
 	finalizeDashboards,
 	finalizeTracing,
+	getBlocksRoot,
+	getBlocksRootId,
 	getConfigLocation,
+	getOrCreateOnRoot,
+	getVpcContext,
 	registerConfig,
 	registerDashboardFinalizer,
 	registerTracer,
@@ -43,7 +49,13 @@ export {
 	synthGuard,
 } from './cdk/index.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
-export { BlocksStackProps } from './common/index.js';
+export {
+	type BlocksStackProps,
+	type BuildingBlockMeta,
+	buildingBlockParent,
+	computeScopeFullId,
+	type ScopeParent,
+} from './common/index.js';
 export {
 	_resetSdkRegistry,
 	getAllSdkIdentifiers,
@@ -51,7 +63,7 @@ export {
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
 export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
-export { ApiError, blocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
 export {
 	type BlocksStackApi,
 	type ComputeConfig,
@@ -94,3 +106,4 @@ export {
 	blocksConfigParameterName,
 	blocksSecretParameterName,
 } from './secret-naming.js';
+export { installClientUserAgent } from './server/client-user-agent.js';

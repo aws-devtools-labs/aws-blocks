@@ -39,6 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
+import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
   /** Project root directory (the directory containing the framework config) */
@@ -53,6 +54,10 @@ export type NitroAdapterOptions = {
    * in the user's `nuxt.config.ts` (the adapter reads this from
    * `.output/nitro.json`). `'node-server'` produces a plain Node HTTP
    * server (run via the Lambda Web Adapter).
+   *
+   * When the run targets Lambda Web Functions (`compute.type:
+   * 'web-function'`, see `withComputeTarget`) the default is
+   * `'node-server'` instead — Web Functions run the HTTP server directly.
    */
   preset?: string;
   /**
@@ -249,7 +254,9 @@ type NitroRouteRule = {
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   const { projectDir, skipBuild, preset, buildCommand } = options;
-  const effectivePreset = preset ?? 'aws-lambda';
+  // Web Functions run a plain Node.js HTTP server → `node-server`; Lambda
+  // compute (API Gateway) → `aws-lambda`.
+  const effectivePreset = preset ?? (targetCompute() === 'web-function' ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');

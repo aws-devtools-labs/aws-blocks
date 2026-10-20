@@ -58,6 +58,7 @@ export const AgentErrors: {
     readonly BrowserNotSupported: "BrowserNotSupportedException";
     readonly StreamFailed: "StreamFailedException";
     readonly InterruptRequired: "InterruptRequiredException";
+    readonly InvalidUsage: "InvalidUsageException";
 };
 
 // @public (undocumented)
@@ -121,6 +122,13 @@ export interface AgentTurnPayload<TContext = DefaultToolContext> {
     }>;
     message: string;
     userId: string;
+}
+
+// @public
+export interface BedrockGuardrail {
+    identifier: string;
+    trace?: 'enabled' | 'disabled' | 'enabled_full';
+    version: string;
 }
 
 // @public
@@ -217,11 +225,13 @@ export interface Message {
 // @public (undocumented)
 export interface ModelConfig {
     apiKey?: string | (() => Promise<string>);
+    cannedResponses?: Record<string, string> | string;
     // (undocumented)
     endpoint?: string;
+    guardrail?: BedrockGuardrail;
     // Warning: (ae-forgotten-export) The symbol "GuardrailsConfig" needs to be exported by the entry point index.aws.d.ts
     //
-    // (undocumented)
+    // @deprecated (undocumented)
     guardrails?: GuardrailsConfig;
     // Warning: (ae-forgotten-export) The symbol "InferenceConfig" needs to be exported by the entry point index.aws.d.ts
     //
@@ -312,6 +322,7 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
     // (undocumented)
     parameters: TParams;
     trustable?: boolean;
+    untrustedOutput?: boolean;
 }
 
 // @public

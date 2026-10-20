@@ -19,11 +19,6 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,
 });
 
-if (sandboxMode) {
-  // Tell the runtime that cookies need cross-domain attributes (frontend on
-  // localhost, API on API Gateway — different registrable domains).
-  blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');}
-
 // Add static site hosting only when deploying (not in sandbox mode)
 if (!sandboxMode) {
   new Hosting(blocksStack, 'Hosting', {

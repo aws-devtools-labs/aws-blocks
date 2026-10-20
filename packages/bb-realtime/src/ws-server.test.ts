@@ -13,9 +13,10 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect as netConnect, type AddressInfo } from 'node:net';
+import { PassThrough } from 'node:stream';
 import { WebSocket } from 'ws';
-import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
+import { attach, closeWebSocketServer, localRealtimeBus, isAllowedUpgradeOrigin } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { mintChannelToken } from './utils.js';
 import { hydrate, __resetConnectionsForTest } from './mock-middleware.js';
@@ -115,7 +116,7 @@ describe('WebSocket server: subscribe authorization', () => {
 		intruder.close();
 	});
 
-	it('uses the data key when forwarding a client publish', async () => {
+	it('uses the data key when broadcasting a server-side publish', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
 		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
 
@@ -126,19 +127,128 @@ describe('WebSocket server: subscribe authorization', () => {
 			});
 		});
 
-		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
-		await new Promise<void>((resolve, reject) => {
-			publisher.on('open', resolve);
-			publisher.on('error', reject);
-		});
-		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'from client' } }));
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'from server' } });
 
 		const message = await received;
-		assert.deepStrictEqual(message.data, { text: 'from client' });
+		assert.deepStrictEqual(message.data, { text: 'from server' });
 		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 
+		subscriber.close();
+	});
+});
+
+// Parity with the deployed WebSocket handler (index.aws.ts), which accepts only
+// subscribe / unsubscribe / ping. A client-originated `publish` used to be
+// broadcast locally with NO authorization of any kind, so any connected client
+// could inject payloads into any channel.
+describe('WebSocket server: client publish is not supported (parity with AWS)', () => {
+	it('never broadcasts a client-originated publish, and tells the sender', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
+		let leaked = false;
+		subscriber.on('message', (data) => { if (JSON.parse(data.toString()).type === 'message') leaked = true; });
+
+		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
+		await new Promise<void>((resolve, reject) => { publisher.on('open', resolve); publisher.on('error', reject); });
+		const reply = new Promise<{ type: string; message: string }>((resolve) => publisher.on('message', (d) => resolve(JSON.parse(d.toString()))));
+		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'injected' } }));
+
+		const r = await reply;
+		assert.strictEqual(r.type, 'error');
+		assert.match(r.message, /publish/i);
+		await new Promise((res) => setTimeout(res, 150));
+		assert.strictEqual(leaked, false, 'a client publish must never reach subscribers');
 		publisher.close();
 		subscriber.close();
+	});
+});
+
+// WebSocket handshakes are exempt from CORS, so without an Origin check any page
+// the developer visits could open ws://localhost:3000/realtime (cross-site
+// WebSocket hijacking).
+describe('WebSocket server: Origin validation on upgrade', () => {
+	const open = (origin?: string) =>
+		new Promise<'open' | number>((resolve) => {
+			const ws = new WebSocket(`ws://localhost:${port}/realtime`, origin ? { origin } : {});
+			ws.on('open', () => { ws.close(); resolve('open'); });
+			ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+			ws.on('error', () => resolve(0));
+		});
+
+	it('rejects a cross-site Origin with 403', async () => {
+		assert.strictEqual(await open('https://evil.example'), 403);
+	});
+
+	it('rejects a lookalike Origin (localhost as a subdomain)', async () => {
+		assert.strictEqual(await open('http://localhost.evil.example:3000'), 403);
+	});
+
+	it('accepts loopback Origins (the dev server and its frontend)', async () => {
+		assert.strictEqual(await open('http://localhost:3000'), 'open');
+		assert.strictEqual(await open('http://127.0.0.1:3100'), 'open');
+		assert.strictEqual(await open('http://[::1]:3000'), 'open');
+	});
+
+	it('accepts a client that sends no Origin (non-browser tools, server-side tests)', async () => {
+		assert.strictEqual(await open(), 'open');
+	});
+});
+
+describe('WebSocket server: raw-socket errors during upgrade (issue #1108 regression)', () => {
+	it('survives a connection reset in the middle of a /realtime upgrade', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (err: unknown) => unhandled.push(err);
+		process.on('uncaughtException', onUnhandled);
+
+		try {
+			for (let i = 0; i < 20; i++) {
+				const socket = netConnect({ host: '127.0.0.1', port });
+				await new Promise<void>((resolve, reject) => {
+					socket.once('connect', resolve);
+					socket.once('error', reject);
+				});
+				socket.on('error', () => {}); // client side of the reset — not under test
+
+				// Partial upgrade request: headers arrive, the handshake never completes.
+				socket.write(
+					'GET /realtime HTTP/1.1\r\n' +
+						`Host: localhost:${port}\r\n` +
+						'Upgrade: websocket\r\n' +
+						'Connection: Upgrade\r\n' +
+						'Sec-WebSocket-Version: 13\r\n' +
+						'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+				);
+
+				// Abort with RST (setNoDelay + destroy after linger 0) during the upgrade window.
+				socket.resetAndDestroy();
+				await new Promise((r) => setTimeout(r, 10));
+			}
+
+			// The event loop must still be alive and the server still serving.
+			const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+			const { ws, reply } = await subscribe({ channel: CHANNEL, token });
+			assert.strictEqual(reply.type, 'subscribe_success');
+			ws.close();
+
+			assert.deepStrictEqual(unhandled, [], 'raw-socket errors during upgrade must not go unhandled');
+		} finally {
+			process.off('uncaughtException', onUnhandled);
+		}
+	});
+
+	it('attaches a socket error listener before routing, and error triggers destroy', async () => {
+		const probe = new PassThrough();
+
+		// Drive the server's own upgrade listeners with a non-/realtime path so the
+		// handler returns immediately after attaching its error listener.
+		const req = { url: '/not-realtime', headers: { host: `localhost:${port}` } };
+		for (const listener of httpServer.listeners('upgrade')) {
+			(listener as (r: unknown, s: unknown, h: unknown) => void)(req, probe, Buffer.alloc(0));
+		}
+
+		assert.ok(probe.listenerCount('error') > 0, 'upgrade handler must attach a socket error listener');
+		assert.doesNotThrow(() => probe.emit('error', new Error('ECONNRESET')));
+		assert.strictEqual(probe.destroyed, true, 'socket error must destroy the socket');
 	});
 });
 
@@ -179,5 +289,73 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 
 		sub.unsubscribe();
 		__resetConnectionsForTest();
+	});
+
+	it('fires onReconnect after the mock reconnects and resubscribes (not on the initial subscribe)', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+
+		const events: string[] = [];
+		const client = hydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: `ws://localhost:${port}/realtime`,
+			token,
+		}) as {
+			subscribe: (o: {
+				onMessage: (m: unknown) => void;
+				onDisconnect?: (reason: string) => void;
+				onReconnect?: () => void;
+			}) => { established: Promise<void>; connection: WebSocket; unsubscribe: () => void };
+		};
+
+		const sub = client.subscribe({
+			onMessage: () => {},
+			onDisconnect: () => { events.push('disconnect'); },
+			onReconnect: () => { events.push('reconnect'); },
+		});
+		await sub.established;
+
+		// onReconnect must NOT fire on the initial connect.
+		assert.strictEqual(events.length, 0, 'onReconnect must not fire on the initial subscribe');
+
+		// Force a reconnect by closing the underlying socket. The middleware's
+		// onclose schedules a reconnect that resubscribes and then fires onReconnect.
+		sub.connection.close();
+
+		// Wait for the reconnect (backoff starts ~1s) and resubscribe to complete.
+		await new Promise((r) => setTimeout(r, 1500));
+
+		assert.ok(events.includes('disconnect'), 'onDisconnect fires on the drop');
+		assert.ok(events.includes('reconnect'), 'onReconnect fires after the reconnect resubscribes');
+		assert.strictEqual(events[events.length - 1], 'reconnect', 'onReconnect fires after the disconnect');
+
+		sub.unsubscribe();
+		__resetConnectionsForTest();
+	});
+});
+
+describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
+	it('a WILDCARD opt-in (0.0.0.0 / ::) admits a same-origin page reached by IP address', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', '0.0.0.0', '192.168.1.10:3000'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
+	});
+
+	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {
+		// evil.example re-pointed at this machine: the browser sends Origin and Host both = evil.example
+		assert.strictEqual(isAllowedUpgradeOrigin('http://evil.example:3000', '0.0.0.0', 'evil.example:3000'), false);
+	});
+
+	it('a wildcard opt-in rejects a cross-origin IP, and requires a Host to compare against', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', '10.0.0.6:3000'), false);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://10.0.0.5:3000', '0.0.0.0', undefined), false);
+	});
+
+	it('a concrete opt-in admits exactly that host (case-insensitive) and nothing else', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('https://MyBox.example.com', 'mybox.example.com', 'mybox.example.com'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('https://other.example.com', 'mybox.example.com', 'other.example.com'), false);
+	});
+
+	it('without an opt-in, a LAN origin is rejected', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', undefined, '192.168.1.10:3000'), false);
 	});
 });

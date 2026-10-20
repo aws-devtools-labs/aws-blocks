@@ -35,10 +35,12 @@ new Hosting(blocksStack, 'Hosting', {
   buildOutputDir: '.output',
   framework: 'nuxt',
   api: blocksStack,
-  compute: {
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(30),
-  },
+  // HOSTING_COMPUTE_TYPE=web-function runs the same suite against AWS Lambda
+  // Web Functions (Nitro then builds with the node-server preset).
+  compute:
+    process.env.HOSTING_COMPUTE_TYPE === 'web-function'
+      ? { type: 'web-function', timeout: cdk.Duration.seconds(30) }
+      : { memorySize: 1024, timeout: cdk.Duration.seconds(30) },
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-nuxt');

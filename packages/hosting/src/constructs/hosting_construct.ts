@@ -10,6 +10,8 @@ import {
   RemovalPolicy,
   Size,
   Stack,
+  Stage,
+  Token,
 } from 'aws-cdk-lib';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
@@ -22,7 +24,6 @@ import {
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { type Alias, Code, type FunctionUrl, type IVersion, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -31,11 +32,16 @@ import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { type ITopic } from 'aws-cdk-lib/aws-sns';
+import type {
+  EmailSubscription,
+  UrlSubscription,
+} from 'aws-cdk-lib/aws-sns-subscriptions';
+import type { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -56,11 +62,13 @@ import type {
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
+import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
-import { createSecurityHeadersPolicy } from './security_headers.js';
+import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
+import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
 export { generateBuildId, generateBuildIdFunctionCode } from '../defaults.js';
@@ -136,6 +144,15 @@ export type HostingConstructProps = {
   waf?: HostingWafConfig;
   /** Compute (Lambda) overrides for all compute resources. */
   compute?: {
+    /**
+     * Where the SSR server runs: `'lambda'` (default — Lambda behind API
+     * Gateway) or `'web-function'` (AWS Lambda Web Functions behind CloudFront
+     * OAC; HTTP-server builds only, supported Regions only).
+     * @see HostingProps.compute.type for the full note.
+     */
+    type?: 'lambda' | 'web-function';
+    /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+    webFunction?: WebFunctionOptions;
     memorySize?: number;
     /**
      * Lambda timeout. Accepts either a `cdk.Duration` (preferred) or a
@@ -194,16 +211,34 @@ export type HostingConstructProps = {
       countries: string[];
     };
     /**
-     * Default TTL for SSR/compute cache behaviors when the origin response
-     * does not include a `Cache-Control` header. Set this to enable
-     * CloudFront edge caching of SSR responses and improve hit ratio.
+     * Default TTL for SSR/compute cache behaviors when the origin sends no
+     * `Cache-Control` header. Enables CloudFront edge caching of SSR
+     * responses; the origin can override via `s-maxage`/`no-store`. Synth
+     * fails closed if this resolves to `> 0` and neither {@link cacheKeyCookies}
+     * nor {@link cacheKeyHeaders} is set.
      *
-     * When set, SSR responses without an explicit `Cache-Control` header
-     * are cached at the edge for this duration. The origin can always
-     * override via `s-maxage` or `no-store`.
+     * @see HostingProps.cdn.ssrDefaultTtl for the full note on cache-key
+     * credentials and the fail-closed guard.
      * @default Duration.seconds(0) — no caching unless origin opts in
      */
     ssrDefaultTtl?: Duration;
+    /**
+     * Cookie names to include in the SSR cache key. Set your session cookie
+     * name(s) here so authenticated SSR responses are cached per-session
+     * rather than shared across users. Required (together with or instead of
+     * `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`.
+     * CloudFront allows at most 10 cookies in the cache key (2 are reserved
+     * for Next.js preview mode).
+     */
+    cacheKeyCookies?: string[];
+    /**
+     * Header names to include in the SSR cache key (e.g. `'authorization'`).
+     * Use to vary cached SSR responses by credential-bearing headers.
+     * `'accept-encoding'` is not allowed (handled automatically). Required
+     * (together with or instead of `cacheKeyCookies`) to safely enable
+     * `ssrDefaultTtl`.
+     */
+    cacheKeyHeaders?: string[];
     /**
      * Bring-your-own ResponseHeadersPolicy. When provided, the construct
      * skips creating its own policy — use this to share a single policy
@@ -336,7 +371,15 @@ export type HostingConstructProps = {
   monitoring?: {
     /** @default true */
     enabled?: boolean;
-    snsTopicArn?: string;
+    /**
+     * Endpoint subscriptions applied to both hosting alarm topics (the
+     * app-region topic and, off-region, the us-east-1 CloudFront topic).
+     * `EmailSubscription` / `UrlSubscription` from
+     * `aws-cdk-lib/aws-sns-subscriptions` only — resource-target
+     * subscriptions (Lambda/SQS) are not yet supported (they'd create an
+     * unresolvable cross-region reference to the us-east-1 topic).
+     */
+    subscriptions?: Array<EmailSubscription | UrlSubscription>;
   };
   /**
    * Cookie-based skew protection.
@@ -372,7 +415,14 @@ export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
   readonly distribution: Distribution;
   readonly distributionUrl: string;
+  /**
+   * Physical id of the `/*` CloudFront invalidation issued on a compute deploy
+   * (a CDK token), or `undefined` for a pure-static deploy. Surfaced so the L3
+   * owner can output it for a post-deploy `GetInvalidation` liveness poll.
+   */
+  readonly invalidationId?: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
+  private readonly cdn: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -380,6 +430,12 @@ export class HostingConstruct extends Construct {
    * alias instead of `$LATEST`.
    */
   readonly computeAliases: Map<string, Alias> = new Map();
+  /**
+   * SSR compute running on AWS Lambda Web Functions (`compute.type:
+   * 'web-function'`), keyed by compute name. These are NOT in
+   * {@link computeFunctions}, which holds Lambda functions only.
+   */
+  readonly computeWebFunctions: Map<string, WebFunctionConstruct> = new Map();
   readonly certificate?: ICertificate;
   readonly hostedZone?: IHostedZone;
   readonly webAcl?: CfnWebACL;
@@ -389,18 +445,33 @@ export class HostingConstruct extends Construct {
   readonly revalidationDlq?: Queue;
   readonly cacheBucket?: Bucket;
   /**
-   * SNS topic alarm actions are sent to. Set when monitoring is on
-   * (the default). The user subscribes (email, Slack via webhook,
-   * PagerDuty, etc.) via `monitoringTopic.addSubscription(...)` or by
-   * configuring an external listener with the topic ARN.
+   * Monitoring surface, set when monitoring is on (the default).
    *
-   * Not declared `readonly` because the `MonitoringConstruct` that
-   * owns the topic is built mid-constructor (after the SSR / image-opt
-   * Lambdas it alarms on are wired up), so the value is assigned
-   * after the field declaration runs. Treat it as logically immutable
+   * - `alarms`: every CloudWatch alarm created, across both regions
+   *   (includes the us-east-1 CloudFront alarm off-region). Attach
+   *   custom actions via `alarms.forEach(a => a.addAlarmAction(...))`.
+   * - `alarmTopics`: the alarm SNS topics (the app-region topic, plus
+   *   the us-east-1 topic off-region). Subscriptions passed via
+   *   `monitoring.subscriptions` are already attached to all of them;
+   *   this is for advanced callers who want the raw topics.
+   *
+   * Not declared `readonly` because the `MonitoringConstruct` that owns
+   * these is built mid-constructor (after the SSR / image-opt Lambdas it
+   * alarms on are wired up). Treat it as logically immutable
    * post-construction — do not reassign from outside the constructor.
    */
-  monitoringTopic?: ITopic;
+  monitoring?: {
+    alarms: Alarm[];
+    alarmTopics: ITopic[];
+  };
+
+  /**
+   * Registers a dependency that must finish before the new build becomes
+   * reachable through the KVS route table.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    this.cdn.addBuildAssetDependency(dependency);
+  }
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -516,6 +587,23 @@ export class HostingConstruct extends Construct {
       // Function URL. Image-opt etc. keep OAC + Function URL.
       const isSsrCompute = name === 'default' || name === 'server';
 
+      // Web Functions host the SSR server only; auxiliary compute (image
+      // optimization, revalidation, edge) stays on Lambda.
+      if (isSsrCompute && props.compute?.type === 'web-function') {
+        this.warnInapplicableWebFunctionOptions(props.compute);
+        const webFunction = new WebFunctionConstruct(this, `WebCompute-${name}`, {
+          name,
+          computeResource: resource,
+          timeout: computeTimeout,
+          logRetention: props.compute.logRetention,
+          skipRegionValidation: props.skipRegionValidation,
+          environment: props.compute.environment,
+          ...props.compute.webFunction,
+        });
+        this.computeWebFunctions.set(name, webFunction);
+        continue;
+      }
+
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
         computeResource: resource,
@@ -558,7 +646,8 @@ export class HostingConstruct extends Construct {
       });
 
       const cacheComputeName = manifest.cache.computeResource;
-      const cacheFunction = this.computeFunctions.get(cacheComputeName);
+      const cacheFunction =
+        this.computeFunctions.get(cacheComputeName) ?? this.computeWebFunctions.get(cacheComputeName);
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
@@ -567,7 +656,7 @@ export class HostingConstruct extends Construct {
       }
       this.cacheBucket.grantReadWrite(cacheFunction);
 
-      if (cacheFunction instanceof LambdaFunction) {
+      if (cacheFunction instanceof LambdaFunction || cacheFunction instanceof WebFunctionConstruct) {
         cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_BUCKET', this.cacheBucket.bucketName);
         cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_REGION', Stack.of(this).region);
       }
@@ -663,7 +752,8 @@ export class HostingConstruct extends Construct {
 
       // Grant cache access to the target compute resource
       const cacheComputeName = manifest.cache.computeResource;
-      const cacheFunction = this.computeFunctions.get(cacheComputeName);
+      const cacheFunction =
+        this.computeFunctions.get(cacheComputeName) ?? this.computeWebFunctions.get(cacheComputeName);
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
@@ -680,7 +770,7 @@ export class HostingConstruct extends Construct {
       }
 
       // ISR environment variables
-      if (cacheFunction instanceof LambdaFunction) {
+      if (cacheFunction instanceof LambdaFunction || cacheFunction instanceof WebFunctionConstruct) {
         cacheFunction.addEnvironment('CACHE_BUCKET_NAME', this.cacheBucket.bucketName);
         cacheFunction.addEnvironment('CACHE_BUCKET_REGION', Stack.of(this).region);
         cacheFunction.addEnvironment('OPEN_NEXT_BUILD_ID', buildId);
@@ -748,10 +838,24 @@ export class HostingConstruct extends Construct {
         });
         // `buildId` in the properties makes the custom resource re-run on
         // every new build (new prerendered tag set), not just on create.
-        new CustomResource(this, 'IsrTagTableSeed', {
+        const initSeed = new CustomResource(this, 'IsrTagTableSeed', {
           serviceToken: initProvider.serviceToken,
           properties: { buildId },
         });
+        // Retain the seed custom resource on stack DELETE so it is dropped
+        // without a delete-time provider invoke. This is the same teardown-wedge
+        // guard applied to the Custom::CDKBucketDeployment CRs below: a
+        // provider-backed CR whose delete invoke can hang will wedge the whole
+        // stack in DELETE_FAILED. Observed on long-lived e2e stacks whose seed CR
+        // sat DELETE_IN_PROGRESS until the 30-min custom-resource timeout while
+        // every other stack resource had already reached DELETE_COMPLETE.
+        // Safe to retain: the seed only writes build-time tag->path rows into
+        // the cache table, and that table is RemovalPolicy.DESTROY (above), so it
+        // is destroyed with the stack regardless -- skipping the delete invoke
+        // orphans no live resource. (RETAIN here only tells CFN to skip the
+        // Delete and forget the logical CR; the backing provider Lambda is a
+        // normal stack resource and still deletes with the stack.)
+        initSeed.applyRemovalPolicy(RemovalPolicy.RETAIN);
       }
     }
 
@@ -922,19 +1026,17 @@ export class HostingConstruct extends Construct {
         }
       }
 
-      for (const [, fn] of this.computeFunctions.entries()) {
-        if (fn instanceof LambdaFunction) {
-          for (const [key, value] of Object.entries(plain)) {
-            fn.addEnvironment(key, value);
-          }
-          // Managed markers (secret|config): inject the store locator + grant read/decrypt.
-          for (const marker of managed) {
-            wireManagedValue(fn, marker, storeConfig);
-          }
-          // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
-          for (const binding of byo) {
-            wireByo(fn, binding, storeConfig);
-          }
+      for (const [, fn] of this.envTargets()) {
+        for (const [key, value] of Object.entries(plain)) {
+          fn.addEnvironment(key, value);
+        }
+        // Managed markers (secret|config): inject the store locator + grant read/decrypt.
+        for (const marker of managed) {
+          wireManagedValue(fn, marker, storeConfig);
+        }
+        // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
+        for (const binding of byo) {
+          wireByo(fn, binding, storeConfig);
         }
       }
     }
@@ -953,8 +1055,7 @@ export class HostingConstruct extends Construct {
     if (props.compute?.tracing) {
       const tracing = props.compute.tracing;
       const serviceName = tracing.serviceName ?? 'hosting';
-      for (const [name, fn] of this.computeFunctions) {
-        if (!(fn instanceof LambdaFunction)) continue;
+      for (const [name, fn] of this.envTargets()) {
         fn.addEnvironment('OTEL_EXPORTER_OTLP_ENDPOINT', tracing.otelEndpoint);
         if (tracing.otelHeaders) {
           fn.addEnvironment('OTEL_EXPORTER_OTLP_HEADERS', tracing.otelHeaders);
@@ -1084,13 +1185,32 @@ export class HostingConstruct extends Construct {
     // X-XSS-Protection, and Referrer-Policy. CSP is intentionally omitted
     // from the default — frameworks (Next.js, Nuxt) emit their own CSP via
     // response headers, and a blanket L3 CSP would conflict.
+    //
+    // A Web Function names its internal log stream + revision in every
+    // response (`lambda-web-logstream`). Strip it with the policy rather than a
+    // viewer-response function: CloudFront skips viewer-response functions on
+    // 4xx/5xx origin responses, but applies response headers policies to all.
+    // The request id (`lambda-web-request-id`) stays, like API Gateway's
+    // `x-amzn-requestid`, for support correlation.
+    const removeOriginHeaders = this.computeWebFunctions.size > 0 ? [...WEB_FUNCTION_INTERNAL_HEADERS] : [];
     let securityHeadersPolicy: IResponseHeadersPolicy;
     if (props.cdn?.responseHeadersPolicy) {
       securityHeadersPolicy = props.cdn.responseHeadersPolicy;
+      if (removeOriginHeaders.length > 0) {
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
+          `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
+            "(internal Web Function log stream name) from responses. Make sure the policy's removeHeaders includes it " +
+            '(a shared policy like this avoids one Hosting-created policy per stack).',
+        );
+      }
     } else if (props.cdn?.contentSecurityPolicy) {
       securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
         contentSecurityPolicy: props.cdn.contentSecurityPolicy,
+        removeHeaders: removeOriginHeaders,
       });
+    } else if (removeOriginHeaders.length > 0) {
+      securityHeadersPolicy = createManagedEquivalentSecurityHeadersPolicy(this, 'SecurityHeaders', removeOriginHeaders);
     } else {
       securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
     }
@@ -1120,6 +1240,7 @@ export class HostingConstruct extends Construct {
       computeFunctionUrls: this.computeFunctionUrls,
       computeFunctions: this.computeFunctions,
       computeAliases: this.computeAliases,
+      computeWebFunctions: this.computeWebFunctions,
       middlewareEdgeFunction: middlewareEdgeVersion,
       routeEdgeFunctions,
       webAcl: this.webAcl,
@@ -1135,6 +1256,8 @@ export class HostingConstruct extends Construct {
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
+      cacheKeyCookies: props.cdn?.cacheKeyCookies,
+      cacheKeyHeaders: props.cdn?.cacheKeyHeaders,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages
@@ -1145,6 +1268,8 @@ export class HostingConstruct extends Construct {
         : undefined,
     });
 
+    this.cdn = cdn;
+    this.invalidationId = cdn.invalidationId;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 
@@ -1182,9 +1307,7 @@ export class HostingConstruct extends Construct {
     // externally without touching the construct again.
     const monitoringEnabled = props.monitoring?.enabled ?? true;
     if (monitoringEnabled) {
-      const userTopic = props.monitoring?.snsTopicArn
-        ? Topic.fromTopicArn(this, 'AlarmTopicImport', props.monitoring.snsTopicArn)
-        : undefined;
+      const subscriptions = props.monitoring?.subscriptions ?? [];
       const ssrComputeName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
@@ -1192,23 +1315,124 @@ export class HostingConstruct extends Construct {
           : undefined;
       const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
       const imgFn = this.computeFunctions.get('image-optimization');
+
+      // CloudFront metrics only exist in us-east-1 and an alarm can't
+      // watch a metric cross-region (issue #481). Off-region, defer the
+      // CloudFront alarm to a dedicated us-east-1 support stack.
+      //
+      // NOTE on the three region cases:
+      //   - region === 'us-east-1'      → alarm created locally (correct).
+      //   - region resolved, off-region → alarm deferred to the us-east-1
+      //     support stack below.
+      //   - region UNRESOLVED (token)   → we cannot decide at synth where
+      //     the app deploys, so the alarm is created locally. If that
+      //     deploy target turns out NOT to be us-east-1, the alarm can
+      //     never fire (the #481 bug). We can't fix that at synth, but we
+      //     refuse to do it silently. Warn so it's visible in build
+      //     output rather than a green-but-dead alarm.
+      const hostingStack = Stack.of(this);
+      const region = hostingStack.region;
+      const regionResolved = !Token.isUnresolved(region);
+      const offRegion = regionResolved && region !== 'us-east-1';
+
+      if (!regionResolved && this.distribution) {
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
+          `The hosting stack is environment-agnostic (region is an ` +
+            `unresolved token), so the CloudFront 5xx alarm is created ` +
+            `locally. AWS/CloudFront metrics only publish in us-east-1, so ` +
+            `if this app deploys outside us-east-1 the alarm will never ` +
+            `fire. Set env: { account, region } on the stack so the alarm ` +
+            `can be placed in a us-east-1 support stack (issue #481).`,
+        );
+      }
+
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
-        snsTopic: userTopic,
+        subscriptions,
         distribution: this.distribution,
         // Lambda@Edge functions don't accept the CW metric helpers we
         // use; only attach when the SSR compute is a regional Lambda.
         ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
         imageFunction: imgFn instanceof LambdaFunction ? imgFn : undefined,
         revalidationDlq: this.revalidationDlq,
+        createCloudFrontAlarmLocally: !offRegion,
       });
-      this.monitoringTopic = monitoring.topic;
+
+      const alarmTopics: ITopic[] = monitoring.topic ? [monitoring.topic] : [];
+      const alarms: Alarm[] = [...monitoring.alarms];
+
       if (monitoring.topic) {
         new CfnOutput(this, 'MonitoringTopicArn', {
           value: monitoring.topic.topicArn,
-          description: 'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
+          description: 'SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.',
         });
       }
+
+      // Off-region: place the CloudFront alarm in a us-east-1 support
+      // stack, always (no opt-out). The same subscriptions are applied to
+      // its topic so callers subscribe in one place and both topics are
+      // covered.
+      if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
+        if (Token.isUnresolved(hostingStack.account)) {
+          // Off-region + unresolved account (a legitimate single-synth,
+          // multi-account pipeline shape): we CANNOT build the us-east-1
+          // support stack, because a cross-region stack pairing needs a
+          // concrete account at synth. CDK bakes real ARNs into the
+          // cross-region export machinery, and Aws.ACCOUNT_ID / Ref is
+          // rejected. See docs/DECISIONS.md D-016.
+          //
+          // Rather than hard-throw (which forced monitoring.enabled:false
+          // and took down the working regional SSR/image/DLQ alarms too),
+          // skip ONLY the CloudFront alarm and warn loudly. A visible
+          // synth warning is not the silent-alarm failure #481 is about.
+          // The operator is told, in build output, exactly what is missing
+          // and how to get it (set env: { account, region }).
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
+            `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
+              `region is '${region}' but its account is unresolved, and a ` +
+              `us-east-1 support stack cannot be synthesized without a ` +
+              `concrete account. All other hosting alarms (SSR, image, ` +
+              `DLQ) are unaffected. Set env: { account, region } on the ` +
+              `stack to enable CloudFront 5xx coverage (issue #481).`,
+          );
+        } else {
+          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+          // than synthesize a mis-scoped us-east-1 support stack.
+          const stage = Stage.of(this);
+          if (!stage) {
+            throw new HostingError('MonitoringStageRequiredError', {
+              message:
+                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+                `enclosing App/Stage was found for this construct.`,
+              resolution:
+                `Instantiate hosting within a CDK App (or Stage).`,
+            });
+          }
+          // The us-east-1 CloudFront alarm must reference the regional
+          // distribution's id; CDK bridges that with its standard
+          // cross-region export reader/writer custom resources (added to
+          // both stacks automatically). The support stack applies the same
+          // subscriptions to its own us-east-1 topic. Its id folds in the
+          // construct's node addr so two Hosting constructs in one stage
+          // don't collide.
+          const cfMonitoring = new UsEast1MonitoringStack(
+            stage,
+            `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
+            {
+              env: { account: hostingStack.account, region: 'us-east-1' },
+              distributionId: this.distribution.distributionId,
+              subscriptions,
+            },
+          );
+          alarmTopics.push(cfMonitoring.topic);
+          alarms.push(cfMonitoring.alarm);
+        }
+      }
+
+      this.monitoring = { alarms, alarmTopics };
     }
 
     // ---- 9a. OPEN_NEXT_ORIGIN env var for URL construction ----
@@ -1219,15 +1443,18 @@ export class HostingConstruct extends Construct {
     // Image optimization and other secondary compute functions don't need it.
     if (hasCompute) {
       // Identify the primary server function (the one handling SSR routing)
-      const primaryComputeName = this.computeFunctions.has('default')
-        ? 'default'
-        : this.computeFunctions.has('server')
-          ? 'server'
-          : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware');
+      const primaryComputeName =
+        [...this.computeWebFunctions.keys()][0] ??
+        (this.computeFunctions.has('default')
+          ? 'default'
+          : this.computeFunctions.has('server')
+            ? 'server'
+            : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware'));
 
       if (primaryComputeName) {
-        const primaryFn = this.computeFunctions.get(primaryComputeName);
-        if (primaryFn && primaryFn instanceof LambdaFunction) {
+        const primaryFn =
+          this.computeWebFunctions.get(primaryComputeName) ?? this.computeFunctions.get(primaryComputeName);
+        if (primaryFn instanceof LambdaFunction || primaryFn instanceof WebFunctionConstruct) {
           // Build origin map with OTHER functions' URLs (not self → avoids cycle)
           const originEntries: string[] = [];
           for (const [urlName, fnUrl] of this.computeFunctionUrls.entries()) {
@@ -1247,17 +1474,11 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    // ---- 9b. KMS decrypt grant for CloudFront OAC ----
-    const kmsKey = props.storage?.encryptionKey ?? storage.bucket.encryptionKey;
-    if (props.storage?.encryption === 'KMS' && kmsKey) {
-      kmsKey.addToResourcePolicy(
-        new iam.PolicyStatement({
-          actions: ['kms:Decrypt'],
-          resources: ['*'],
-          principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        }),
-      );
-    }
+    // ---- 9b. KMS decrypt for CloudFront OAC ----
+    // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
+    // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
+    // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
+    // `AWS:SourceArn` matching this account's CloudFront distributions.
 
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {
@@ -1384,10 +1605,8 @@ export class HostingConstruct extends Construct {
       });
 
       // Set env var on all compute functions so they know the bucket name
-      for (const [, fn] of this.computeFunctions.entries()) {
-        if (fn instanceof LambdaFunction) {
-          fn.addEnvironment('HOSTING_BUILD_CACHE_BUCKET', this.buildCacheBucket.bucketName);
-        }
+      for (const [, fn] of this.envTargets()) {
+        fn.addEnvironment('HOSTING_BUILD_CACHE_BUCKET', this.buildCacheBucket.bucketName);
       }
     }
 
@@ -1670,6 +1889,41 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+  }
+
+  /**
+   * Every regional compute that takes environment variables and IAM grants:
+   * Lambda functions (Lambda\@Edge has no env vars — skipped) plus Web
+   * Functions.
+   */
+  private envTargets(): Array<[string, LambdaFunction | WebFunctionConstruct]> {
+    const targets: Array<[string, LambdaFunction | WebFunctionConstruct]> = [];
+    for (const [name, fn] of this.computeFunctions) {
+      if (fn instanceof LambdaFunction) targets.push([name, fn]);
+    }
+    for (const entry of this.computeWebFunctions) targets.push(entry);
+    return targets;
+  }
+
+  /**
+   * Lambda-only knobs have no Web Function equivalent — warn instead of
+   * silently ignoring them (an app switching `compute.type` often keeps its
+   * existing `memorySize`).
+   */
+  private warnInapplicableWebFunctionOptions(compute: NonNullable<HostingConstructProps['compute']>): void {
+    const ignored: Array<[keyof typeof compute, string]> = [
+      ['memorySize', 'each Web Function environment has a fixed 2 GB'],
+      ['reservedConcurrency', 'use `webFunction.maxEnvironments` to cap scale'],
+      ['provisionedConcurrency', 'Web Functions keep warm headroom automatically'],
+      ['warmup', 'Web Functions keep warm headroom automatically'],
+    ];
+    for (const [key, hint] of ignored) {
+      if (compute[key] === undefined) continue;
+      Annotations.of(this).addWarningV2(
+        `@aws-blocks/hosting:WebFunctionIgnores-${key}`,
+        `compute.${key} does not apply to compute.type 'web-function' and is ignored (${hint}).`,
+      );
+    }
   }
 
   /**

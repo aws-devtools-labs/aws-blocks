@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Duration } from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
@@ -20,7 +21,7 @@ import type {
 import { AsyncJobErrors, blocksError } from './errors.js';
 import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -31,6 +32,7 @@ export type {
 	AsyncJobTransition,
 	WaitUntilCompleteOptions,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 /** SQS event source limits: a batch may exceed 10 only when a batching window is set. */
 const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
@@ -72,12 +74,12 @@ function validateEventSourceOptions(
 	}
 }
 
-export class AsyncJob<T = unknown> extends Scope {
+export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly queue: Queue;
 	public readonly dlq: Queue;
 
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] } });
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
@@ -173,4 +175,8 @@ export class AsyncJob<T = unknown> extends Scope {
 	waitUntilComplete(_jobId: string, _options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
 		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	submit(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submit'); }
+	submitBatch(..._args: unknown[]): never { return synthGuard('AsyncJob', 'submitBatch'); }
 }

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
@@ -14,9 +14,10 @@ import {
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { validateBucketName } from './bucket-name.js';
+import { validateFileBucketOptions, assertValidKey } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef, CorsRule,
+	FileContent, FileInfo, ExternalBucketRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
@@ -34,28 +35,12 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
+import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_KEY_BYTES = 1024; // S3 key limit
-
-// Mirrors of the CDK synth-time-guard constants (index.cdk.ts). Duplicated here
-// rather than imported — the CDK entry (index.cdk.ts) pulls in aws-cdk-lib and
-// must never be imported into the mock runtime. Kept byte-identical to the CDK
-// definitions so the two guards below reject exactly what `cdk synth` rejects.
-
-/** Default number of days after which noncurrent object versions expire. */
-const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
-
-/** HTTP methods that mutate bucket state; unsafe to expose to wildcard origins. */
-const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 interface SidecarMeta {
 	contentType: string;
@@ -105,42 +90,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// deployed bucket name), not the `mock-` prefixed local name, to keep
 		// parity with the CDK path.
 		if (!options?.bucket) validateBucketName(this.fullId);
-		// Mirror the CDK's two synth-time guards (index.cdk.ts) VERBATIM so a
-		// local/unit run rejects exactly what `cdk synth` would. Gated on
-		// `!options?.bucket` alongside validateBucketName: the CDK's
-		// external-bucket branch returns before these checks, so a wrapped
-		// bucket bypasses them here too. Plain `throw new Error(...)` (no
-		// `name`, no blocksError factory) to match the CDK path exactly — using
-		// blocksError() would set an `error.name` the CDK guards don't, breaking
-		// mock↔cdk parity.
-		if (!options?.bucket) {
-			// Reject unsafe CORS: a wildcard origin ('*') combined with a mutating
-			// method (PUT/POST/DELETE) lets any site issue state-changing
-			// cross-origin requests.
-			for (const rule of options?.corsRules ?? []) {
-				if (rule.allowedOrigins.includes('*')) {
-					const mutating = rule.allowedMethods.filter(m => MUTATING_CORS_METHODS.includes(m));
-					if (mutating.length > 0) {
-						throw new Error(
-							`FileBucket "${this.fullId}": CORS rule with wildcard origin '*' must not allow mutating method(s) ${mutating.join(', ')}. ` +
-							`Specify explicit allowedOrigins (e.g. 'https://app.example.com') for ${mutating.join(', ')} instead of '*'.`,
-						);
-					}
-				}
-			}
-			// Reject a non-positive or non-integer noncurrent-version expiration.
-			// The FORMAT is validated regardless of `versioned` (matching CDK) so
-			// a malformed value is caught even when versioning is off.
-			if (options?.noncurrentVersionExpirationDays !== undefined) {
-				const days = options.noncurrentVersionExpirationDays;
-				if (!Number.isInteger(days) || days <= 0) {
-					throw new Error(
-						`FileBucket "${this.fullId}": noncurrentVersionExpirationDays must be a positive integer (got ${days}). ` +
-						`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
-					);
-				}
-			}
-		}
+		// Run the CDK's synth-time option guards locally too, via the shared
+		// validation.ts, so a local/unit run rejects exactly what `cdk synth`
+		// would. Gated on `!options?.bucket` alongside validateBucketName: the
+		// CDK's external-bucket branch returns before these checks, so a wrapped
+		// bucket bypasses them here too.
+		if (!options?.bucket) validateFileBucketOptions(this.fullId, options);
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.dataDir = getMockDataDir(this);
 		this.versioned = options?.versioned ?? true;
@@ -148,7 +103,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
 		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${this.fullId}` });
 		// Register in global registry so the file-server can delegate PUT to bucket.put()
-		const registry = ((globalThis as any).__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map());
+		const g = globalThis as any;
+		g.__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map();
+		const registry = g.__BLOCKS_FILE_BUCKET_REGISTRY__;
 		registry.set(this.fullId, this);
 	}
 
@@ -285,6 +242,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async deleteBatch(paths: string[]): Promise<void> {
+		// Validate every key up front, before deleting any, so a batch mixing a
+		// valid and an invalid key deletes nothing — matching the AWS runtime,
+		// where assertValidKey runs over the whole batch before any S3 send.
+		// (Without this, the per-element `delete()` below would delete the valid
+		// keys preceding the first invalid one — a mock↔AWS divergence.)
+		for (const p of paths) this.validateKey(p);
 		for (const p of paths) {
 			await this.delete(p);
 		}
@@ -303,6 +266,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = (options as any)?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'GET', expiresIn, LOCAL_FILE_SECRET);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -328,6 +292,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -398,6 +363,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
+		this.validateKey(path);
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -462,6 +428,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
+		this.validateKey(path);
 		const versionsDir = versionsDirFor(this.dataDir, path);
 		if (!existsSync(versionsDir)) return [];
 		const entries = readdirSync(versionsDir).filter(isVersionEntry);
@@ -504,9 +471,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * ```
 	 */
 	async restoreVersion(path: string, versionId: string): Promise<void> {
+		this.validateKey(path);
 		const vPath = versionContentPath(this.dataDir, path, versionId);
 		if (!existsSync(vPath)) {
-			throw blocksError('NoSuchVersion', `Version "${versionId}" does not exist for "${path}"`);
+			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
 		}
 		const body = readFileSync(vPath);
 		const meta = this.readVersionMeta(path, versionId);
@@ -525,6 +493,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	// ── Internal helpers ──────────────────────────────────────────────────
 
 	private validateKey(key: string): void {
+		// Portable, filesystem-independent key rules shared with the AWS runtime,
+		// so a key rejected here is rejected identically on AWS (and vice versa).
+		assertValidKey(key);
 		if (Buffer.byteLength(key, 'utf8') > MAX_KEY_BYTES) {
 			this.log.warn(`Key "${key}" exceeds S3's 1,024-byte limit`);
 		}

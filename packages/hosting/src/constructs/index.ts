@@ -21,6 +21,12 @@ export {
 	HostingWafConfig,
 } from './hosting_construct.js';
 export type { SkewProtectionConfig } from './skew_protection.js';
+export {
+	WEB_FUNCTION_SUPPORTED_REGIONS,
+	WebFunctionConstruct,
+	type WebFunctionConstructProps,
+	type WebFunctionOptions,
+} from './web_function_construct.js';
 export { HostingError } from '../hosting_error.js';
 export {
 	CacheConfig,

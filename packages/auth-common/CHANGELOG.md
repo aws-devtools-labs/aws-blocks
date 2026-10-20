@@ -1,5 +1,134 @@
 # @aws-blocks/auth-common
 
+## 0.2.0
+
+### Minor Changes
+
+- 8ca3692: feat: shared, framework-neutral `ui-theme` design-token layer
+  
+  Introduce a design-token layer for the Blocks UI so the shared Auth
+  components and the starter templates share one consistent, polished look
+  with no new runtime framework dependency.
+  
+  - `@aws-blocks/auth-common` ships a new theme module: CSS custom
+    properties (`--bb-*` for color, spacing, radius, typography, elevation)
+    on `:root`, a light and dark palette driven by `prefers-color-scheme`
+    with a `data-bb-theme` override hook, and base `.bb-*` component
+    classes. The palette declares `color-scheme` so UA-drawn widgets
+    (checkboxes, `<select>`, scrollbars, `::placeholder`, autofill) follow
+    the active palette, and `.bb-button` has a `:disabled` state. A new
+    idempotent, SSR-safe `injectTheme()` adds the stylesheet to the document
+    once. The shared `Authenticator`, `AccountMenuBar`, and
+    `AuthenticatedContent` now render against these token classes instead
+    of inline styles and inject the theme themselves, so the themed look
+    travels with the component into any host (lit-html, vanilla, React,
+    Next.js) with zero wiring. Every `data-testid` is preserved.
+  - `@aws-blocks/blocks` re-exports `injectTheme`, `THEME_CSS`, and
+    `THEME_STYLE_ID` from `@aws-blocks/blocks/ui`, and adds a lean
+    `@aws-blocks/blocks/theme` subpath that re-exports ONLY the token layer
+    (no `Authenticator`/WebAuthn surface) for non-auth hosts. `@aws-blocks/auth-common`
+    is marked `sideEffects: false` so a bundler can drop the unused UI
+    surface; `@aws-blocks/blocks` is not, because as an aggregator that
+    re-exports side-effecting building blocks it is not side-effect-free.
+  - `@aws-blocks/create-blocks-app` templates (`default`, `react`,
+    `nextjs`, `demo`, `auth-cognito`) adopt the tokens for their own page
+    chrome and todo UI, so the whole page is themed and dark-mode-aware;
+    the `bare` template stays deliberately minimal. The static templates
+    inline the first-paint palette and the `nextjs` template server-renders
+    the token `<style>` so a dark-mode user never sees a white flash before
+    the bundle runs. A `--bb-color-success` token keeps success messages
+    from reading as accent blue.
+  
+  Focus states use a real `outline` ring (preserved under forced-colors /
+  Windows high-contrast mode) rather than an `outline: none` + `box-shadow`
+  ring, which such modes drop.
+  
+  Additive and non-breaking.
+
+### Patch Changes
+
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+
+## 0.1.9
+
+### Patch Changes
+
+- 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
+- fac0e75: fix(auth-common): Enter submits the Authenticator form from any field, not just the last
+  
+  The rendered auth form isn't a native `<form>`, so submit-on-Enter is wired
+  explicitly — but the handler was bound only to the *last* visible input. In any
+  multi-field form, pressing Enter in an earlier field did nothing: the username in
+  a username+password sign-in, or the verification code in a code+newPassword
+  confirm-reset form. Enter now submits from every visible field, matching native
+  form behavior.
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/core@0.6.0
+
+## 0.1.8
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- Updated dependencies [2806ae2]
+- Updated dependencies [f552ebe]
+- Updated dependencies [9aa0814]
+- Updated dependencies [012cd89]
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+- Updated dependencies [21443ba]
+- Updated dependencies [acd1628]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [6496713]
+- Updated dependencies [302090a]
+  - @aws-blocks/core@0.5.0
+
 ## 0.1.7
 
 ### Patch Changes

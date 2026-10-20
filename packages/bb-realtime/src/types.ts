@@ -42,8 +42,12 @@ export type DisconnectReason = 'client' | 'timeout' | 'error' | 'unknown';
 export interface SubscribeOptions<T = unknown> {
 	/** Called for each incoming message. */
 	onMessage: (message: T) => void;
-	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Filter by reason to handle only unexpected drops. */
+	/** Called when the connection is closed for any reason, including user-initiated `unsubscribe()` (reason: `'client'`). Also fires with reason `'error'` when the server REJECTS a subscribe — whether the initial subscribe (e.g. a bad/expired channel token, alongside the rejected `established` promise) or a resubscribe after a reconnect (a stale replayed token) — because a rejected channel is effectively "gone" and is surfaced rather than dropped silently. When a `refresh()` fails during a reconnect it likewise fires with reason `'error'`: once per failed reconnect attempt, plus once more when retries are exhausted and the connection gives up (e.g. an original drop + 5 failed attempts + 1 give-up surfaces 7 `'error'` events). An app that COUNTS `'error'` events (rather than treating any as "connection unhealthy") should expect this fan-out; it is harmless for `useChat`/`createChat`, whose `armFailsafe` is idempotent and re-armed by any later chunk. Filter by reason to handle only unexpected drops. */
 	onDisconnect?: (reason: DisconnectReason) => void;
+	/** Called after the transport transparently reconnects and THIS channel's resubscribe has been re-confirmed by the server (with its stored token replayed). Fires once per successful reconnect for this channel, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. Routed per-channel: if this channel's resubscribe is rejected (e.g. its replayed token expired), `onReconnect` does NOT fire for it — it receives `onDisconnect('error')` instead; and a sibling channel's rejection never reaches this channel. Applies to client-side (hydrated) subscriptions only — a server-side `subscribe()` has no transport reconnect, so an `onReconnect` passed to a server-obtained handle is never fired. */
+	onReconnect?: () => void;
+	/** Called before each reconnect to obtain a freshly-minted channel descriptor (new connect + channel token) so the subscription can outlive the token TTLs (channel ~1h / connect ~2h). Without it, a reconnect replays the original tokens and will fail once they expire. Not called on the initial subscribe. Note: `refresh` is registered per-channel — a connection multiplexing several channels keeps each channel's own refresher and re-mints every live channel's token on reconnect (the instance-scoped connect token is taken from any one of them). A channel whose refresh fails falls back to its stored token. */
+	refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 /**
@@ -56,7 +60,7 @@ export interface RealtimeSubscription {
 	unsubscribe(): void;
 	/** Resolves when the server confirms the subscription. Rejects on auth failure. */
 	established: Promise<void>;
-	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. */
+	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. Implemented as a live getter, so it always reflects the current socket: after a transparent reconnect it returns the fresh socket rather than the closed one captured at subscribe time. */
 	connection?: WebSocket;
 }
 

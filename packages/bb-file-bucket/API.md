@@ -72,6 +72,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 export const FileBucketErrors: {
     readonly FileNotFound: "NoSuchKey";
     readonly FileTooLarge: "EntityTooLarge";
+    readonly VersionNotFound: "NoSuchVersion";
 };
 
 // @public (undocumented)

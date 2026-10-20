@@ -3,6 +3,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
@@ -78,13 +79,16 @@ test('execute returns rowCount for DELETE', async () => {
 
 // --- Core: error translation ---
 
-test('duplicate key throws UniqueConstraintViolation', async () => {
+test('duplicate key throws UniqueConstraintViolation as ApiError status 409', async () => {
   await setup();
   await engine.execute("INSERT INTO t (id, value) VALUES ('a', 'one')");
   await assert.rejects(
     () => engine.execute("INSERT INTO t (id, value) VALUES ('a', 'dupe')"),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409, 'duplicate key must be 409, not 500');
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.strictEqual(err.retriable, false, 'duplicate key is not retriable');
       return true;
     }
   );
@@ -154,7 +158,9 @@ test('error translation works within transactions', async () => {
   const handle = await engine.beginTransaction();
   await assert.rejects(
     () => engine.executeInTransaction(handle, "INSERT INTO t (id, value) VALUES ('a', 'dupe')"),
-    (err: Error) => {
+    (err: unknown) => {
+      assert.ok(err instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(err.status, 409);
       assert.strictEqual(err.name, DatabaseErrors.UniqueConstraintViolation);
       return true;
     }
@@ -327,4 +333,42 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   const rows = await engine.query<{ id: string }>('SELECT id FROM t');
   assert.deepStrictEqual(rows, [{ id: 'ok' }]);
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
+});
+
+// --- Regression: destroy() before the first query ---
+// PGlite 0.5.10's close() never resolves while the instance is still
+// initializing (electric-sql/pglite#1148). The other tests always query before
+// destroy(), which forces init, so these pin the never-queried path.
+
+/** Rejects if `promise` has not settled within `ms`, so a hang fails the test instead of stalling it. */
+async function settlesWithin<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test('destroy resolves for an engine that never ran a query', async () => {
+  engine = new PGliteEngine(join(TEST_DIR, 'destroy-before-query'));
+  await settlesWithin(engine.destroy(), 15_000, 'destroy()');
+});
+
+test('destroy waits for PGlite init to settle before closing', async () => {
+  let ready = false;
+  let closed = false;
+  // Mimics PGlite 0.5.10: close() hangs if it is called before init has settled.
+  const factory = (): PGlite =>
+    ({
+      waitReady: new Promise<void>((resolve) => setTimeout(() => { ready = true; resolve(); }, 50)),
+      query: async () => ({ rows: [] }),
+      close: () => (ready ? Promise.resolve().then(() => { closed = true; }) : new Promise<void>(() => {})),
+    }) as unknown as PGlite;
+  engine = new PGliteEngine(join(TEST_DIR, 'destroy-waits-for-init'), factory);
+  await settlesWithin(engine.destroy(), 5_000, 'destroy()');
+  assert.strictEqual(closed, true, 'destroy() should close the instance once init settles');
 });

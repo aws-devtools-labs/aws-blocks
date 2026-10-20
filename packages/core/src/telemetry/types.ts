@@ -18,6 +18,13 @@ export type CommandName =
 export type CommandState = 'SUCCESS' | 'FAIL' | 'ABORTED';
 
 /**
+ * The server validates `product.framework` against this enum with
+ * `additionalProperties: false`, so an out-of-enum value costs the whole event.
+ */
+export const REPORTED_FRAMEWORKS = ['nextjs', 'nitro', 'nuxt', 'astro', 'sveltekit', 'spa', 'static'] as const;
+export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
+
+/**
  * The telemetry event payload sent to the endpoint.
  *
  * Matches the server schema exactly (additionalProperties: false).
@@ -50,7 +57,7 @@ export interface BlocksTelemetryEvent {
   product?: {
     blocksVersion: string;
     cdkVersion?: string;
-    framework?: 'nextjs' | 'spa' | 'static';
+    framework?: ReportedFramework;
     template?: { name: string; version?: string };
     buildingBlocks?: Array<{ name: string; version: string }>;
   };
@@ -66,7 +73,7 @@ export interface BlocksTelemetryEvent {
 export interface TrackCommandOptions {
   template?: string;
   templateVersion?: string;
-  framework?: 'nextjs' | 'spa' | 'static';
+  framework?: ReportedFramework;
   cdkVersion?: string;
   blocksCount?: number;
 }
@@ -84,7 +91,7 @@ export interface BuildAndSendEventOptions {
   error?: { code: string; phase: string };
   product?: {
     cdkVersion?: string;
-    framework?: 'nextjs' | 'spa' | 'static';
+    framework?: ReportedFramework;
     template?: string;
     templateVersion?: string;
   };

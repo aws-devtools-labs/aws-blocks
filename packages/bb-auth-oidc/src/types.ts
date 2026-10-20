@@ -139,6 +139,13 @@ export interface StubProvider<N extends string = string> extends ProviderConfigB
 	readonly name: N;
 	readonly kind: 'stub';
 	readonly onAuthorize?: OnStubAuthorize;
+	/**
+	 * Inline test-user directory, declared in code. When provided (and non-empty)
+	 * it is the authoritative directory for the login screen and for the `users`
+	 * handed to `onAuthorize`, taking precedence over a `users.json` file and the
+	 * built-in default user.
+	 */
+	readonly users?: readonly StubUser[];
 }
 
 /**

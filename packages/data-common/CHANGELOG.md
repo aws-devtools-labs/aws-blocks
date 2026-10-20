@@ -1,5 +1,41 @@
 # @aws-blocks/data-common
 
+## 0.1.6
+
+### Patch Changes
+
+- 03ce866: Keep the local dev server alive when a PGlite init trap aborts constructor-time migrations, and recover from it
+  
+  A `Database` / `DistributedDatabase` configured with `migrationsPath` runs its
+  migrations eagerly in the constructor, before any query awaits them. If PGlite's
+  WASM `_pg_initdb` aborts (notably under memory pressure, where the WASM linear
+  heap can't grow), that eager, unawaited promise rejected with no handler — an
+  unhandled rejection that terminated the whole `npm run dev` process. A shared
+  `trackEager` helper (in `@aws-blocks/data-common`) now attaches a logging handler
+  so the dev server survives; the same rejection still reaches callers via the
+  ready-gate, so a query after a failed init surfaces a branded
+  `QueryFailedException` rather than being swallowed.
+  
+  A transient trap no longer wedges the data layer: on an init trap the cached
+  rejected promise is cleared, so the next query re-runs the idempotent migrations
+  once memory eases (matching the engine's own recover-on-retry behaviour).
+- @aws-blocks/bb-logger@0.2.2
+
+## 0.1.5
+
+### Patch Changes
+
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+- Updated dependencies [5eee114]
+- Updated dependencies [d7312f9]
+  - @aws-blocks/bb-logger@0.2.0
+
 ## 0.1.4
 
 ### Patch Changes

@@ -1,4 +1,4 @@
-## Unreleased
+## 0.1.4
 
 - Require `flutter_secure_storage` `^11.1.0`; 11.1.0 targets a compileSdk supported by current stable Flutter/AGP, fixing the Android build break that forced the earlier 10.x pin ([flutter_secure_storage#1224](https://github.com/juliansteenbakker/flutter_secure_storage/issues/1224))
 

@@ -467,6 +467,39 @@ describe('stub IdP /authorize', () => {
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
 
+	test('inline users appear on the login screen (and replace the default)', async () => {
+		const provider = stubIdp({
+			name: 'corporate',
+			users: [
+				{ sub: 'u-1', email: 'alice@example.com', name: 'Alice' },
+				{ sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+			],
+		});
+		const cap = authorizeContext('corporate', baseParams);
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 200);
+		const html = String(cap.sent);
+		assert.match(html, /alice@example\.com/);
+		assert.match(html, /bob@example\.com/);
+		// The built-in default user is no longer offered when inline users are set.
+		assert.doesNotMatch(html, /corporate-user@stub\.invalid/);
+	});
+
+	test('onAuthorize receives the inline users directory', async () => {
+		const provider = stubIdp({
+			name: 'corporate',
+			users: [
+				{ sub: 'u-1', email: 'alice@example.com', name: 'Alice' },
+				{ sub: 'u-2', email: 'bob@example.com', name: 'Bob' },
+			],
+			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
+		});
+		const cap = authorizeContext('corporate', { ...baseParams, login_hint: 'bob@example.com' });
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 302, 'inline user matched by loginHint signs in');
+		assert.match(cap.headers.get('Location')!, /code=/);
+	});
+
 	test('rejects custom-scheme redirect_uri', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', { ...baseParams, redirect_uri: 'myapp://callback' });

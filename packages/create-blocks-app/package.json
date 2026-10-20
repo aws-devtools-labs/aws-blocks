@@ -1,6 +1,13 @@
 {
   "name": "@aws-blocks/create-blocks-app",
-  "version": "0.1.22",
+  "version": "0.3.0",
+  "keywords": [
+    "aws-blocks",
+    "cli",
+    "scaffolding",
+    "starter",
+    "template"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -21,9 +28,12 @@
     "dev": "tsc --watch",
     "test": "node --test dist/**/*.test.js"
   },
+  "dependencies": {
+    "ci-info": "^4.4.0"
+  },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3"
   },
   "files": [
     "dist",

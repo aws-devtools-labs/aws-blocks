@@ -48,6 +48,93 @@ export interface DatabaseOptions {
   postgresVersion?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+  /**
+   * Where to place the Aurora cluster when the app runs in a VPC. Optional; by
+   * default Blocks prefers an **isolated** subnet tier (keeping the database off
+   * any NAT path) and falls back to `private-with-egress` if the VPC has no
+   * isolated tier. Aurora is reached over the RDS Data API (HTTPS via a VPC
+   * endpoint), so placement affects isolation posture, not reachability.
+   *
+   * A CDK-free mirror of `ec2.SubnetSelection` — the `Database` constructor
+   * resolves to a runtime entry point that must not import `aws-cdk-lib`, so
+   * subnets are referenced by **id** (a plain string, as CDK identifies them)
+   * and the tier by a string. The CDK layer resolves these against the VPC.
+   */
+  subnets?: SubnetSelection;
+  /**
+   * ARN of an existing customer-managed KMS key to use for the Aurora cluster's
+   * storage-at-rest encryption. The same key also encrypts the cluster's
+   * auto-generated credentials secret. When omitted, storage is still encrypted,
+   * but with the account's AWS-managed `aws/rds` key — storage encryption is
+   * always on regardless of this option.
+   *
+   * Referenced by **ARN** (a plain string) rather than a `kms.IKey` for the same
+   * reason as `subnets`: the `Database` constructor resolves to a runtime entry
+   * point that must not import `aws-cdk-lib`. The CDK layer rehydrates the ARN
+   * into a `kms.IKey` (via `kms.Key.fromKeyArn`) and passes it to the cluster.
+   *
+   * **Requirements for the key you pass.** The key is *imported* — Blocks binds
+   * to it by ARN and does not (cannot) modify its key policy — so the key's
+   * policy must already permit the principals that use it:
+   * - The **deploying principal** needs `kms:CreateGrant` and `kms:DescribeKey`
+   *   on the key: RDS uses a grant to encrypt the cluster's storage volume with it.
+   * - The runtime path reads the credentials secret over the RDS Data API, so
+   *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
+   *   adds the identity-side permission; the key policy must still allow it.
+   * - The key must be in the **same account and region** as the cluster.
+   *
+   * **Why this is a flat ARN** (rather than the `encryption:
+   * 'aws-managed' | 'customer-managed' | fromKmsKey(arn)` shape used by
+   * `bb-distributed-table` / `bb-kv-store`): `Database` resolves to a runtime
+   * entry point that must not import `aws-cdk-lib`, so it cannot expose the
+   * CDK-helper `fromKmsKey()` form, and the Data-API access model means there is
+   * no per-table managed-key choice to model — storage is either AWS-managed
+   * (default) or the one customer-managed key named here. Unifying the option
+   * shape across the data blocks is tracked as a follow-up.
+   */
+  storageEncryptionKeyArn?: string;
+  /**
+   * Automated-backup retention for the Aurora cluster, which is also its
+   * point-in-time-recovery (PITR) window — Aurora keeps continuous backups
+   * within this window and restores from it.
+   *
+   * A single knob, since the recovery window only means anything when backups
+   * are on:
+   * - `true` — enable backups with the standard 15-day window.
+   * - `false` — Aurora **cannot** turn automated backups off (the cluster
+   *   minimum is 1 day), so this clamps to the 1-day minimum rather than
+   *   disabling them.
+   * - `{ retentionDays: n }` — enable backups and pin the window. Aurora
+   *   requires an integer **1–35**; an out-of-range value warns at synth and
+   *   falls back to the 15-day default.
+   *
+   * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+   * from `BlocksPresets` — on under `production`, off under `sandbox`; a `false`
+   * default lands on the 1-day minimum per the clamp above). A per-block value
+   * always wins. The CDK layer resolves this into the cluster's backup retention.
+   */
+  pointInTimeRecovery?: boolean | { retentionDays: number };
+}
+
+/**
+ * A CDK-free structural mirror of the inputs of `ec2.SubnetSelection`, safe to
+ * reference from the runtime-resolved `Database` constructor (no `aws-cdk-lib`
+ * import). The CDK layer maps `subnetType` (string) to `ec2.SubnetType`,
+ * rehydrates `subnetIds` via `Subnet.fromSubnetId`, and passes the AZ/group/
+ * onePerAz fields through unchanged. Set at most one of `subnetType`,
+ * `subnetGroupName`, or `subnetIds` (mirrors CDK's mutual exclusion).
+ */
+export interface SubnetSelection {
+  /** Select all subnets of the given tier. Proxy for `ec2.SubnetType`. */
+  subnetType?: 'isolated' | 'private-with-egress' | 'public';
+  /** Restrict the selection to these Availability Zones (filter). */
+  availabilityZones?: string[];
+  /** Return at most one subnet per AZ. */
+  onePerAz?: boolean;
+  /** Select a named subnet group (from the VPC's `subnetConfiguration`). */
+  subnetGroupName?: string;
+  /** Explicitly select individual subnets by id. Mirrors `ec2` `subnets: ISubnet[]`. */
+  subnetIds?: string[];
 }
 
 /**

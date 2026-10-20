@@ -13,11 +13,11 @@ import XCTest
 /// shape and the generated Swift output against fixture specs.
 final class ConstraintsAndDefaultsTests: XCTestCase {
 
-    private func generate(_ spec: String) throws -> (models: String, api: String) {
+    private func generate(_ spec: String) throws -> GeneratedSources {
         let data = Data(spec.utf8)
         let rpcModel = try OpenRPCParser().parse(data: data)
         let codegen = CodegenModelBuilder().build(from: rpcModel)
-        return SwiftCodeGenerator().generate(from: codegen)
+        return try SwiftCodeGenerator().generate(from: codegen)
     }
 
     private func allOutput(_ spec: String) throws -> String {

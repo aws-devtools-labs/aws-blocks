@@ -4,13 +4,14 @@
 
 ```ts
 
+import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // @public
-export class Dashboard {
+export class Dashboard extends Scope {
     constructor(scope: ScopeParent, id: string, options?: DashboardOptions);
     readonly dashboardName: string;
-    readonly fullId: string;
+    get fullId(): string;
     readonly url: string | null;
 }
 

@@ -1,5 +1,202 @@
 # @aws-blocks/hosting
 
+## 0.4.1
+
+### Patch Changes
+
+- 8b5ef4a: fix(hosting): stop the SSR REST API from leaking an IAM role on every teardown
+  
+  The SSR origin's `RestApi` relied on CDK's default `cloudWatchRole: true`, which
+  provisions an account-level `AWS::ApiGateway::Account` plus a CloudWatch Logs IAM
+  role with `RemovalPolicy.RETAIN`. The SSR stage enables neither execution nor
+  access logging, so the role was unused, and because it is retained, every
+  `cdk destroy` of a hosting SSR stack left one orphaned IAM role behind — enough,
+  over repeated deploys, to exhaust the account's 3000 `RolesPerAccount` quota and
+  make all subsequent deploys fail with `ServiceLimitExceeded`. The SSR `RestApi`
+  now sets `cloudWatchRole: false` (matching `bb-lambda-compute`), so no role or
+  `ApiGateway::Account` is created. Existing stacks drop both resources on their
+  next deploy; the previously retained role is not removed by CloudFormation and
+  can be deleted manually — but first check `aws apigateway get-account`: if the
+  region's `cloudwatchRoleArn` still points at that role, deleting it breaks
+  logging for every other API Gateway stage in the region.
+- 382dac6: fix(hosting): the image-optimization Lambda no longer follows redirects on remote image fetches
+  
+  The IPX image Lambda validated a remote image URL against the allowlist
+  (`IMAGE_ALLOWED_HOSTNAMES` / `remotePatterns`) once, before fetching — and the
+  fetch then followed HTTP redirects without re-validating the target. An allowlisted
+  host with an open redirect (a user-content CDN, say) could therefore steer the fetch
+  to any host, including `127.0.0.1` inside the Lambda sandbox.
+  
+  Remote fetches now use `fetchOptions: { redirect: 'error' }`, so a 3xx fails the
+  image request instead of being followed, and the allowlist holds for every request
+  the Lambda makes. **If an allowlisted image host serves its images through a redirect,
+  allowlist the final location instead.** The generated Lambda also pins `ipx` to an
+  exact version (`3.1.1`) rather than `^3.0.0`, so the fetch behavior this guard relies
+  on can't change at deploy time.
+- c6d9e49: fix(hosting): the image-optimization Lambda's SVG gate now decides by content, not file extension
+  
+  With `dangerouslyAllowSVG` / `IMAGE_ALLOW_SVG` off, the image Lambda rejected SVG
+  sources only when the URL ended in `.svg`. An origin's content type isn't tied to its
+  path, so an SVG served from `/logo` or `/logo.png` passed the gate and was returned as
+  `image/svg+xml` from the application's own origin. SVGO, which IPX runs on SVG input,
+  is an optimiser rather than a sanitiser and keeps some script-capable constructs.
+  
+  The Lambda now sniffs the image bytes from both the S3 originals bucket and allowlisted
+  remote hosts, and rejects SVG content with a `415` before IPX processes it. That also
+  covers rasterizing requests such as `?f=png`. As a backstop it refuses any SVG output
+  unless SVG is enabled. The `.svg` extension check remains as a cheap pre-filter.
+  Nothing changes when SVG is enabled, or for raster images.
+- 7c19c4f: feat: `npm run deploy -- --wait-live` holds `BLOCKS_DEPLOYED` until the new build is actually served
+  
+  `cdk deploy` returning is not the same as the new frontend build being served.
+  Two edge windows stay open after CloudFormation reports complete, and emitting
+  `BLOCKS_DEPLOYED` while either is open lets a caller's immediate self-test hit a
+  stale bundle and silently miss a regression.
+  
+  - **New opt-in `--wait-live` flag.** When set, `npm run deploy` only prints
+    `BLOCKS_DEPLOYED` once the new build is confirmed live, so a request issued
+    immediately after the signal returns the new asset.
+  - **Per-build config match (the KVS cutover).** Each deploy stamps its build id
+    into the runtime config (`/.blocks-sandbox/config.json`) and surfaces it as a
+    `HostingBuildId` stack output; the poll declares the config live only when the
+    body CloudFront serves carries that exact id, distinguishing the new build from
+    a byte-identical config still served by an edge POP routing to the previous
+    build during cutover — the common re-deploy case.
+  - **Invalidation wait (the compute/SSR window).** For a compute deploy the `/*`
+    CloudFront invalidation that flushes the previous build's edge-cached SSR HTML
+    is fire-and-forget, so CloudFormation returns before it propagates. The deploy
+    now surfaces the invalidation id as a `HostingInvalidationId` stack output and,
+    under `--wait-live`, polls `GetInvalidation` until `Completed` before signalling
+    — closing the window where the edge still serves old SSR HTML (referencing old
+    hashed assets → 403). Pure-static deploys issue no invalidation and skip this.
+  - **Bounded probing.** Each config probe carries a per-request timeout
+    (`AbortSignal`), so one stalled response cannot hold the deploy past its budget.
+    `--wait-live-timeout=<seconds>` tunes the overall budget (default 180); if
+    liveness can't be confirmed in time, the deploy — which itself succeeded — prints
+    a clear warning and exits non-zero rather than emitting a false "live" signal.
+  - **No-op for backend-only apps** (no frontend to verify) and off by default, so the
+    existing deploy flow is unchanged unless you opt in.
+
+## 0.4.0
+
+### Minor Changes
+
+- 5501cb6: Fix off-region CloudFront 5xx alarm and rework alarm subscription wiring (#481).
+  
+  **Breaking change** (a minor bump pre-1.0):
+  
+  - The `monitoring.snsTopicArn` prop is **removed**. Attach notifications
+    with the new `monitoring.subscriptions` list instead: `EmailSubscription`
+    and `UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions` (endpoint
+    subscriptions only, for now). Each subscription is applied to **both**
+    hosting alarm topics, so you subscribe in one place and every alarm is
+    covered regardless of region.
+  - The `hosting.monitoringTopic` attribute is **removed**, replaced by
+    `hosting.monitoring` = `{ alarms, alarmTopics }` (all alarms and all
+    alarm topics across both regions).
+  
+  `AWS/CloudFront` metrics publish only in us-east-1 and a CloudWatch alarm
+  cannot watch a metric cross-region, so off-region the CloudFront 5xx alarm
+  never fired (it sat at `OK` under `treatMissingData: NOT_BREACHING`).
+  Off-region deployments now **always** place the CloudFront alarm in a
+  synthesized `<stackName>-CfMonitoring-<addr>` us-east-1 stack with its own
+  encrypted SNS topic; `monitoring.subscriptions` are applied to that topic
+  too. Off-region placement is always on; the only escape is when it is
+  genuinely impossible. When the region resolves but the account is
+  unresolved (a single-synth multi-account pipeline), the us-east-1 support
+  stack cannot be built, so the CloudFront alarm is skipped with a loud synth
+  warning and all other alarms are kept, rather than throwing. Set
+  `env: { account, region }` to enable CloudFront coverage.
+  
+  Migration: replace `monitoring: { snsTopicArn }` with
+  `monitoring: { subscriptions: [new subs.EmailSubscription('oncall@example.com')] }`
+  (or a `UrlSubscription`). Two escape paths cover what `subscriptions` no
+  longer does directly:
+  
+  - **Route alarms to an existing/central SNS topic:**
+    `hosting.monitoring.alarms.forEach(a => a.addAlarmAction(new cw_actions.SnsAction(myTopic)))`.
+  - **Resource-target (Lambda/SQS) subscriptions:** still valid on the
+    regional topic via `hosting.monitoring.alarmTopics[].addSubscription(...)`.
+    Only the automatic cross-region fan-out to the us-east-1 CloudFront topic
+    drops them (that would need an unresolvable cross-region reference).
+  
+  See `docs/DECISIONS.md` D-016 for the always-on and warn-and-skip rationale.
+  
+  `@aws-blocks/core` surfaces `monitoring.subscriptions` and the
+  `monitoring` attribute in place of `monitoringTopic`.
+- 5515483: fix(hosting): fail-closed SSR cache key + per-credential cache-key options
+  
+  Ensures cacheable SSR responses on compute deployments are keyed per credential, and adds the controls to include credentials in the SSR cache key.
+  
+  **BREAKING:** existing configs that set `cdn.ssrDefaultTtl > 0` now fail synth (`SsrCacheKeyCredentialsRequiredError`) until they include a credential in the SSR cache key. Enabling `ssrDefaultTtl > 0` makes SSR responses without an explicit `Cache-Control` header cacheable and shared at the CloudFront edge, keyed only on the Next.js router headers — not on `Authorization` or session cookies (CloudFront ignores `Vary`).
+  
+  Migration — pick one:
+  - Add `cacheKeyCookies: ['<your session cookie>']` and/or `cacheKeyHeaders: ['authorization']` so cached responses are keyed per credential; or
+  - Remove `ssrDefaultTtl` (and ensure personalized routes emit `Cache-Control: private`).
+  
+  - **Fail-closed guard on `cdn.ssrDefaultTtl`.** Synth throws unless `cacheKeyCookies` and/or `cacheKeyHeaders` is set, so credentials are in the cache key before per-credential responses can be cached. An unresolved-token TTL is treated as `> 0` (fail closed).
+  - **New `cdn.cacheKeyCookies` and `cdn.cacheKeyHeaders` options.** Add your session cookie name(s) and/or credential-bearing header(s) (e.g. `'authorization'`) to the SSR cache key so authenticated responses are cached per credential. `'accept-encoding'` is rejected (handled by the brotli/gzip flags), and at most 8 caller cookies are allowed (CloudFront's 10-cookie cap, 2 reserved for Next.js preview mode). The cookie/header caps are resolved via `QuotaBudget` (`quotas.cacheKeyCookies` / `quotas.cacheKeyHeaders`) so a granted quota increase raises them.
+  - **Shared-route cache key on compute deploys.** Compute deploys route every request through a single default cache behavior, so `cacheKeyCookies`/`cacheKeyHeaders` would key all routes per credential. The edge router now strips the configured cookies and `authorization` on static and image routes so shared assets keep a shared cache key, while SSR/compute routes stay keyed per credential.
+  - **Cache-key JSDoc** on `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` documenting how credentials enter the cache key and safe usage.
+  - **`@aws-blocks/core`:** `Hosting` exposes `ssrDefaultTtl`, `cacheKeyCookies`, and `cacheKeyHeaders` as top-level props and forwards them to the CDN cache-key config.
+  
+  Note: any route that sets cookies via `Set-Cookie`, or otherwise varies per user without opting into the cache key, must emit `Cache-Control: private` so its response is not cached as a single shared entry at the edge.
+
+### Patch Changes
+
+- 773cef2: fix(astro): allow an empty `dist/client` for pure-SSR builds
+  
+  A server/hybrid Astro app with no static assets — no `public/` files and no
+  prerendered pages — produces an empty `dist/client`. The adapter treated that as
+  a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
+  and deploy. `dist/server/entry.mjs` is the real required artifact; an empty (or
+  absent) `dist/client` is valid, since CloudFront routes every request to the SSR
+  Lambda. The adapter now requires only the server entry and ensures `dist/client`
+  exists (creating it when absent, with a build-log breadcrumb) instead of failing.
+- 6b7fe4c: fix(hosting): retain the ISR tag-table seed custom resource on stack delete
+  
+  The `IsrTagTableSeed` custom resource is backed by a Lambda through a CDK
+  `Provider`. On stack delete CloudFormation tore the provider's framework Lambda
+  down before it sent the custom resource its `Delete`, so the delete invoke hit
+  an already-gone function, received no response, and hung to the 30-minute
+  custom-resource timeout -- failing the whole stack delete with `DELETE_FAILED`
+  and re-failing identically on every retry. The seed custom resource now carries
+  `RemovalPolicy.RETAIN`, so CloudFormation drops it on delete without a delete
+  invoke and the stack tears down cleanly. This is behavior-preserving: the
+  OpenNext `dynamodb-provider` `remove()` path is a no-op, and the seeded rows
+  live only in the ISR tag table, which is destroyed with the stack -- so
+  retaining the custom resource orphans nothing.
+- dae7a86: fix(hosting): warn when a compute resource pins an end-of-life Node.js runtime
+  
+  `resolveRuntime` still accepts an explicitly pinned `nodejs18.x` or `nodejs20.x`
+  (so an existing/deployed function isn't hard-broken at synth), but both are past
+  their AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). It now
+  emits a CDK synth-time **deprecation warning** for those runtimes, pointing at
+  `nodejs22.x` / `nodejs24.x` (or omitting the runtime to use the default). A
+  supported runtime, or omitting it, warns nothing; the accepted set and the
+  hard error for unrecognized runtimes are unchanged.
+- 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
+  
+  - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
+    schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
+    schedule-group pattern).
+  - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
+    policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
+    conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+
+## 0.3.1
+
+### Patch Changes
+
+- 2806ae2: Ensure the hosting route cutover waits for the resolved client configuration deployment.
+- 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
+  
+  Every published package now carries an npm `keywords` array: the shared `aws-blocks`
+  discovery tag plus 2–5 functional keywords describing the package's domain and the
+  AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
+  `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
+  API, or behavior change.
+
 ## 0.3.0
 
 ### Minor Changes

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SESv2Client, SendEmailCommand, SendBulkEmailCommand } from '@aws-sdk/client-sesv2';
-import { Scope } from '@aws-blocks/core';
+import { Scope, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -16,12 +16,6 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 const BATCH_CHUNK_SIZE = 50;
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 function mapSesError(err: any): Error {
 	const message = err.message ?? 'Unknown SES error';
@@ -87,6 +81,7 @@ export class EmailClient extends Scope {
 			maxAttempts: 3,
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		installClientUserAgent(this.client);
 		this.fromAddress = options.fromAddress;
 		this.replyTo = options.replyTo;
 		this.configurationSet = options.configurationSet;

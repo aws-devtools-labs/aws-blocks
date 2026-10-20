@@ -199,31 +199,25 @@ final class BlocksClientTests: XCTestCase {
         // (We can't easily verify the cookie header without another request,
         // but at least verify it doesn't crash)
     }
-}
 
-// MARK: - Mock URLProtocol
+    // MARK: - Base Host
 
-private class MockURLProtocol: URLProtocol {
-    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    func testBaseHostCanBeSetAndReadFromConcurrentTasks() async {
+        XCTAssertEqual(BlocksClient.baseHost, "localhost")
+        defer { BlocksClient.baseHost = "localhost" }
+        let hosts = (0 ..< 100).map { "192.168.1.\($0)" }
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        guard let handler = MockURLProtocol.handler else {
-            client?.urlProtocol(self, didFailWithError: NSError(domain: "MockURLProtocol", code: -1))
-            return
+        let reads = await withTaskGroup(of: String.self) { group in
+            for host in hosts {
+                group.addTask {
+                    BlocksClient.baseHost = host
+                    return BlocksClient.baseHost
+                }
+            }
+            return await group.reduce(into: [String]()) { $0.append($1) }
         }
 
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
+        XCTAssertEqual(reads.filter { !hosts.contains($0) }, [])
+        XCTAssertTrue(hosts.contains(BlocksClient.baseHost))
     }
-
-    override func stopLoading() {}
 }

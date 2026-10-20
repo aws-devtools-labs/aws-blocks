@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, ApiError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, ApiError, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -22,22 +22,17 @@ export type {
 	PutOptions,
 	KVStoreOptions,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	ScanOptions,
 } from './types.js';
 
-import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
+import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
 import { KVStoreErrors } from './errors.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_ITEM_BYTES = 400 * 1024; // DynamoDB 400 KB limit
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Build the 409 ApiError for a conditional-write conflict. Maps to HTTP 409
@@ -261,6 +256,10 @@ export class KVStore<T = string> extends Scope {
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	// ── Disk persistence ──────────────────────────────────────────────────

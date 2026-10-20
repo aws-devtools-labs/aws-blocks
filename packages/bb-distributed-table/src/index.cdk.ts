@@ -3,6 +3,7 @@
 
 import { Construct } from 'constructs';
 import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
@@ -10,16 +11,17 @@ import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
-import { Scope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BB_NAME } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 
-export class DistributedTable<T = any> extends Scope {
+export class DistributedTable<T = any> extends BuildingBlockScope {
 	private table: ITable;
 
 	/**
@@ -47,7 +49,7 @@ export class DistributedTable<T = any> extends Scope {
 	}
 
 	constructor(scope: ScopeParent, id: string, public options: any) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
 
@@ -229,6 +231,27 @@ export class DistributedTable<T = any> extends Scope {
 			// key lets CDK provision a dedicated one.
 			encryptionKey,
 		});
+
+		// An auto-created CMK (`CUSTOMER_MANAGED` with no imported key) defaults
+		// to `RemovalPolicy.RETAIN`, so a table marked DESTROY would tear down but
+		// leave its dedicated key behind as an orphaned, billed, rotating key.
+		// Align the minted key's removal policy with the table's resolved policy
+		// so the key is never less durable than the table — it's only destroyed
+		// when the table is (sandbox DESTROY → DESTROY; production RETAIN stays
+		// RETAIN). An imported key (`encryptionKey` set via `fromKmsKey`) is owned
+		// by the caller and left untouched.
+		//
+		// Tradeoff when PITR is on (production + `protection: 'disposable'`, or
+		// sandbox + `pointInTimeRecovery: true`): CloudFormation keeps DynamoDB's
+		// system backup for 35 days and any on-demand/AWS Backup copies outlive
+		// the table, all encrypted under this CMK. A DESTROY key goes into
+		// `PendingDeletion` in the same stack delete, so those backups can't be
+		// restored once the 30-day KMS window elapses. This is intentional — a
+		// `disposable` table opts out of durable backups by definition — and
+		// mirrors `bb-kv-store`. See DESIGN.md D-DT-11.
+		if (encryption === TableEncryption.CUSTOMER_MANAGED && !encryptionKey) {
+			this.table.encryptionKey?.applyRemovalPolicy(removalPolicy);
+		}
 
 		this.table.grantReadWriteData(this.executionRole);
 

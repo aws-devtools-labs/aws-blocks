@@ -8,7 +8,12 @@ for (const port of ports) {
   try {
     const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8' }).trim().split('\n');
     for (const pid of pids) {
-      try { execSync(`kill ${pid}`); console.log(`✓ Killed process ${pid} on port ${port}`); } catch {}
+      try {
+        execSync(`kill ${pid}`);
+        console.log(`✓ Killed process ${pid} on port ${port}`);
+      } catch (err) {
+        console.warn(`⚠ Could not kill process ${pid} on port ${port}:`, err instanceof Error ? err.message : err);
+      }
     }
   } catch {}
 }

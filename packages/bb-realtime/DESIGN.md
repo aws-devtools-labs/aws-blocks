@@ -167,7 +167,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 **API Gateway limits:** `postToConnection` shares the account-level API Gateway TPS quota (~10K default, raisable). A single Lambda with 50 concurrent sockets is well within this. Multiple Lambdas publishing simultaneously could approach the limit — this is another reason to shard large fan-outs.
 
 **References:**
-- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame, 2hr connection, 500 new conn/sec, 10K TPS account-level)
+- [API Gateway WebSocket quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-execution-service-websocket-limits-table.html) — official limits (32 KB frame **and a separate 128 KiB logical message maximum**, 2hr connection, 500 new conn/sec, 10K TPS account-level)
 - [SO: postToConnection 429 throttling](https://stackoverflow.com/questions/61159703) — confirms account-level throttle applies to management API calls
 
 ### Environment Variables
@@ -206,7 +206,8 @@ Channel path:             my-app-collab/chat/room-123
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
-| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (128 KiB logical message, not the 32 KB frame quota — API Gateway reassembles frames) are now enforced in both environments |
+| Mock fires `onReconnect` connection-wide once resubscribe frames are sent; AWS fires it per-channel only after that channel's resubscribe is server-CONFIRMED | A multi-channel local test can observe `onReconnect` for a channel the real server would have rejected with `onDisconnect('error')` — so multi-channel reconnect-rejection behavior differs between local dev and deployed | Sandbox-test multi-channel reconnect flows; treat `onReconnect` as "resubscribe attempted", not "channel guaranteed live", and backfill from the durable store |
 
 ## Serialization
 
@@ -224,36 +225,86 @@ Channel path:             my-app-collab/chat/room-123
 
 ### The Problem
 
-API Gateway WebSocket has a hard 2-hour max connection duration. When the connection drops — whether from the 2-hour limit, a network interruption, or a server-side error — the client needs to:
+API Gateway WebSocket has a hard 2-hour max connection duration plus a 10-minute idle timeout, so a long-lived subscription **will** be dropped and re-established over its lifetime. On a drop the transport must: know the connection was lost (and whether it was intentional), re-establish the socket, re-subscribe every channel, and let the application backfill anything missed during the gap.
 
-1. Know the connection was lost (and whether it was intentional)
-2. Re-establish the WebSocket connection
-3. Re-subscribe to channels (which requires fresh tokens)
-4. Backfill any messages missed during the gap
+### Approach — transparent auto-reconnect
 
-### Approach
+The client transport (aws-middleware.ts, mirrored by mock-middleware.ts) reconnects on its own; the application does NOT re-subscribe manually. On an unexpected close it:
 
-The `subscribe()` method accepts an options form with an `onDisconnect` callback:
+1. **Reconnects with exponential backoff** (`min(1000·2^(n-1), MAX_DELAY_MS)`), capped at `MAX_RECONNECT` attempts. The attempt counter is reset per-outage (only once a resubscribe settles), not per socket-open, so a flapping socket still exhausts the cap.
+2. **Resubscribes every stored channel** by replaying its stored channel token, and re-arms the ~9-minute keep-alive ping on the fresh socket.
+3. **Fires `onReconnect`** per-channel: each channel's `onReconnect` fires once THAT channel's resubscribe is re-confirmed by the server. A channel whose resubscribe is rejected gets `onDisconnect('error')` and NOT `onReconnect` (see below).
+
+**Intent-based terminal classification.** Whether a close is terminal is decided by *intent*, not the close code: the transport reconnects on ANY unexpected close (a legitimate mid-connection drop can arrive as a clean `1000`/`1005` just as easily as `1001`/`1006`), and treats a close as terminal only when the client initiated it (`intentionalClose`: unsubscribe of the last channel, `__resetConnectionsForTest`, or the give-up path) or nothing remains to reconnect for (`subscriptions.size === 0`). On give-up (retries exhausted) it tears the pool entry down — rejecting pending establishments and firing a terminal `onDisconnect('error')` — so a later `subscribe()` rebuilds a fresh connection rather than reusing a zombie.
 
 ```typescript
 channel.subscribe({
   onMessage: (msg) => { ... },
   onDisconnect: (reason) => {
-    // reason: 'timeout' | 'error' | 'unknown'
-    // Re-fetch channel handle (new tokens), re-subscribe, backfill
+    // reason: 'client' | 'timeout' | 'error' | 'unknown'
+    // Fires on EVERY drop (deduped once per socket). Filter out 'client'.
+  },
+  onReconnect: () => {
+    // Fires once after the transport reconnected AND ≥1 channel was re-confirmed.
+    // Backfill missed messages here from the durable store.
   },
 });
 ```
 
 **Disconnect reasons:**
 - `client` — the client called `unsubscribe()`
-- `timeout` — API Gateway closed the connection (2-hour limit or idle timeout, WebSocket close code 1001)
-- `error` — WebSocket error or abnormal closure (close code 1006)
-- `unknown` — connection closed with any other close code
+- `timeout` — API Gateway closed the connection (2-hour limit or idle timeout, close code 1001)
+- `error` — WebSocket error or abnormal closure (close code 1006), OR a resubscribe rejected because its replayed token was stale
+- `unknown` — connection closed with any other close code (incl. clean 1000/1005 drops the client did not initiate)
 
-`onDisconnect` fires for all disconnects including user-initiated ones, following the Socket.IO / Ably convention. Consumers filter by reason if they only care about unexpected drops.
+`onDisconnect` fires for all disconnects including user-initiated ones (Socket.IO / Ably convention), and on *every* subsequent drop of the same logical subscription — deduped to once per socket so an abnormal drop (onerror + onclose) does not double-report.
 
-**Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
+**Stale-token fallback.** A resubscribe replays the stored channel token (≈1h TTL). If a socket was down long enough that the token expired, the server rejects the resubscribe; the transport drains that channel and surfaces `onDisconnect('error')` to THAT channel's owners only (not to healthy siblings, and not a socket-wide fanout) rather than dropping it silently. Handlers are routed per-channel, so a rejected channel receives `onDisconnect('error')` and NOT `onReconnect` — its owner is not given a false-recovery signal for a channel that was just removed. `onReconnect` fires only for the channels that actually re-confirmed; if every channel is rejected, no `onReconnect` fires at all.
+
+**Reconnect only spans the connect token's ~2h life.** The reconnect rebuilds the socket URL from the *stored* connect token (≈2h TTL, matching API Gateway's 2h max connection duration). Once that token expires, the server rejects the `$connect` handshake (403) — the socket closes without ever firing `onopen`, so each reconnect attempt fails, the connection exhausts `MAX_RECONNECT`, and it tears down with a terminal `onDisconnect('error')`. **Transparent auto-reconnect therefore recovers drops only within the connect token's ~2h window.** Past that, this is a known limitation: a subscription that must outlive 2h (e.g. a multi-hour agent turn) should treat the terminal `onDisconnect('error')` as the cue to re-fetch a fresh channel handle (new connect + channel tokens) and re-subscribe; the ~2h connect-token boundary is otherwise a hard ceiling on transparent recovery.
+
+**Backfill responsibility:** The Realtime BB does not provide message history. Backfill is the application's responsibility — typically by re-querying the data source from `onReconnect`. This is intentional: message history requires persistence and ordering guarantees that belong in the application layer, not the pub/sub transport.
+
+### Transparent auto-reconnect
+
+The client transport does not require the application to reconnect manually. On an unexpected
+drop it reconnects with exponential backoff (capped at `MAX_RECONNECT` attempts, `MAX_DELAY_MS`
+ceiling), resubscribes every active channel replaying its stored token, and re-arms the
+~9-minute keep-alive ping. `onReconnect` fires once the resubscribe is confirmed. Terminal vs
+reconnecting is decided by intent (`intentionalClose` / `subscriptions.size === 0`), not the
+close code — a legitimate drop can arrive as a clean `1000`/`1005`. Only when retries are
+exhausted, or a resubscribe is rejected (stale token past its TTL, revoked channel), does the
+transport surface `onDisconnect('error')` as the manual-recovery fallback.
+
+### `refresh` — outliving token TTLs
+
+Auto-reconnect replays the *stored* tokens, which carry TTLs (connect ~2h, channel ~1h). A
+subscription that must outlive those TTLs (e.g. a multi-hour agent turn crossing the 1h/2h
+boundaries) supplies `SubscribeOptions.refresh`: `() => Promise<RealtimeChannelDescriptor>`.
+
+- **Refresh-before-open ordering:** on reconnect the transport `await`s `refresh()` *before*
+  constructing the new socket, so the fresh connect token lands in the socket URL
+  (`?token=…`) and the fresh channel token is applied before the resubscribe frame is sent.
+- **Why the whole descriptor:** `refresh` returns the full descriptor (fresh `wsUrl` + connect
+  token + channel token), not just a channel token — a partial refresh would still fail once
+  the connect token expires past 2h. Minting is server-side (auth-gated), so the transport
+  cannot self-mint; the consumer supplies the callback that re-invokes its own channel method.
+- **Malformed / teardown guards:** a `refresh()` that resolves to a non-descriptor takes the
+  `onDisconnect('error')` + backoff path rather than reopening with stale tokens; the awaited
+  continuation re-checks teardown/pool-ownership both before and after applying the descriptor,
+  so an `unsubscribe()` during a pending refresh cannot resurrect a zombie socket.
+- **Per-channel refresh:** `refresh` is registered per-channel — a connection multiplexing
+  several channels keeps each channel's own refresher. On reconnect every live channel
+  re-mints its own token in parallel (the instance-scoped connect token is taken from any one
+  of them), then resubscribes with its fresh channel token. A channel whose `refresh` fails
+  falls back to its stored channel token; if that stored token has already lapsed, the server
+  rejects that channel's resubscribe and the drop is **channel-scoped** —
+  `onDisconnect('error')` reaches only that channel's owners, not its cleanly-reconnected
+  siblings. A connection-wide `onDisconnect('error')` fan-out is reserved for the refresh- or
+  reconnect-FAILURE path (retries exhausted / give-up), not a single sibling's stale-token
+  rejection.
+
+Absent `refresh`, reconnect replays the stored tokens (correct for short/transient drops).
 
 ## Channel Name Limits
 
@@ -266,11 +317,11 @@ Both the mock (local dev) and AWS runtimes enforce these limits at `publish()`, 
 | Limit | Value | Source | Validated at |
 |---|---|---|---|
 | Channel path (full) | 1024 bytes UTF-8 | DynamoDB sort key maximum | `publish`, `subscribe`, `getChannel` |
-| Published message size | 32,768 bytes | API Gateway WebSocket frame maximum | `publish` |
+| Published message size | 131,072 bytes | API Gateway WebSocket logical message maximum (128 KiB) | `publish` |
 
 **Channel path** is the fully-qualified string `{fullId}/{namespace}/{channel}` stored as the DynamoDB sort key. The validation uses `Buffer.byteLength(fullChannel, 'utf8')` so multi-byte characters (emoji, CJK, etc.) are counted correctly.
 
-**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. The 32 KB limit is the maximum single WebSocket frame that API Gateway will accept without closing the connection (code 1009).
+**Published message size** is the serialized wire envelope: `JSON.stringify({ type: 'message', channel: fullChannel, data })`. This includes the channel path and the user's data payload. API Gateway publishes **two distinct** WebSocket quotas: a 32 KB maximum *frame* size and a 128 KiB (131,072 byte) maximum *message* size. The service reassembles fragmented frames into one logical message, so the limit that applies to a published payload is **128 KiB** — the 32 KB frame quota is not the per-message cap. Do not "re-fix" this constant back to 32 KB. Exceeding 128 KiB is what causes API Gateway to reject the message (and close the connection with code 1009).
 
 ### Why Enforce in Both Environments
 
@@ -290,7 +341,7 @@ For a typical setup (`fullId` = `my-app-collab`, namespace = `cursors`):
 
 For publish size, the overhead is the JSON envelope wrapping the data:
 - Envelope: `{"type":"message","channel":"<fullChannel>","data":}` ≈ 40 + channel path length
-- Available for serialized data: ~32,700 bytes for typical channel paths
+- Available for serialized data: ~131,000 bytes for typical channel paths
 
 ### Binding Constraints
 
@@ -299,14 +350,15 @@ The full channel path (`{fullId}/{namespace}/{channel}`) is stored as a DynamoDB
 | Constraint | Limit | Impact |
 |---|---|---|
 | DynamoDB sort key | 1024 bytes | **Enforced** — hard limit on full channel path length |
-| API Gateway frame | 32 KB | **Enforced** — hard limit on published message size |
+| API Gateway message | 128 KiB (131,072 bytes) | **Enforced** — hard limit on published message size |
+| API Gateway frame | 32 KB | Not enforced — the service reassembles fragmented frames into one logical message |
 | DynamoDB partition key (GSI) | 2048 bytes | Not enforced — channel path hits SK limit first |
 | DynamoDB item size | 400 KB | Not a concern — items are ~200 bytes |
 | API Gateway billing | 32 KB increments | Long channel names marginally increase cost |
 
 ### Why We Recommend 256 Characters
 
-A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.8% to a 32 KB message — negligible for billing.
+A 256-character user channel name, combined with a typical prefix (`myapp-rt/cursors/` = ~18 chars), stays well under the 1024-byte sort key limit while leaving room for future metadata. At 256 chars, the channel name adds ~0.2% to a 128 KiB message — negligible for billing.
 
 Longer names are technically possible but offer no benefit. They increase DynamoDB read/write unit consumption (items are billed in 4 KB read / 1 KB write increments) and make WebSocket messages larger for no functional gain.
 

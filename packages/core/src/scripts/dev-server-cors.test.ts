@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { resolveDevCorsOrigin, LOCALHOST_PATTERN, buildDevCorsHeaders } from './dev-server.js';
 import { CORS_MAX_AGE } from '../cors.js';
+import { CLIENT_USER_AGENT_HEADER } from '../constants.js';
 
 describe('resolveDevCorsOrigin — dev server CORS', () => {
   it('reflects localhost origin back as-is', () => {
@@ -48,6 +49,13 @@ describe('buildDevCorsHeaders — dev server header set', () => {
     assert.strictEqual(
       buildDevCorsHeaders('https://evil.com')['Access-Control-Allow-Origin'],
       'http://localhost:3000'
+    );
+  });
+
+  it('allows the same headers as the Lambda path so a browser client works in both', () => {
+    assert.strictEqual(
+      buildDevCorsHeaders('http://localhost:3000')['Access-Control-Allow-Headers'],
+      `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
     );
   });
 });

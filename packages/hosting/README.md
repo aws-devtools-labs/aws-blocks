@@ -307,6 +307,118 @@ immediate — SSM Parameter Store has no recovery window.)
 └──────────────────────────────────────────────┘
 ```
 
+## SSR compute: Lambda or Lambda Web Functions
+
+By default the SSR server runs on a Lambda function behind an API Gateway REST
+API (`compute.type: 'lambda'`). HTTP-server frameworks run inside it via the
+Lambda Web Adapter. Set `compute.type: 'web-function'` to run it on
+[AWS Lambda Web Functions](https://docs.aws.amazon.com/lambda/latest/dg/web-functions.html)
+instead. The framework's own Node.js server then runs directly on Lambda, and
+CloudFront reaches it through origin access control (OAC):
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  compute: {
+    type: 'web-function',
+    timeout: Duration.seconds(60),
+    webFunction: { maxEnvironments: 20 }, // optional tuning
+  },
+});
+```
+
+```
+CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framework server
+```
+
+| | `'lambda'` (default) | `'web-function'` |
+|---|---|---|
+| Path | CloudFront → API Gateway → Lambda (+ Lambda Web Adapter) | CloudFront → Web Function endpoint |
+| Requests per environment | 1 | many (dynamic, up to `webFunction.maxConcurrencyPerEnvironment`, 1–128, default 64) |
+| Billing | duration × memory | active CPU + memory over the environment lifetime |
+| Origin auth | shared-secret header checked by API Gateway | IAM: OAC-signed, endpoint grants only this distribution |
+| Warm capacity | `provisionedConcurrency` / `warmup` | automatic headroom (scales to zero when idle) |
+| Regions | all | us-east-1, us-east-2, us-west-2, ap-northeast-1, eu-west-1 |
+| Runtime | Node.js 18–24, x86_64 | Node.js 24, Arm64, 2 GB per environment |
+
+**Requirements.**
+- An **HTTP-server build**. With `@aws-blocks/blocks`' `Hosting` every built-in
+  framework works unchanged, because the adapters switch their output when
+  Web Functions are selected:
+  - **Astro** (`@astrojs/node` standalone) and **SvelteKit** (`adapter-node`)
+    already emit an HTTP server.
+  - **Nuxt/Nitro** builds with the `node-server` preset instead of `aws-lambda`.
+  - **Next.js** builds with OpenNext's `node` wrapper/converter as a container
+    origin. A user `open-next.config.ts` must then set `wrapper: 'node'`,
+    `converter: 'node'` and `generateDockerfile: true`.
+- If you run an adapter yourself in front of `HostingConstruct`, wrap the run in
+  `withComputeTarget('web-function', …)` from `@aws-blocks/hosting/adapters` to
+  get the same output.
+- An event-handler build (an OpenNext `aws-lambda` wrapper or a Nitro
+  `aws-lambda` preset) fails synth with `WebFunctionUnsupportedComputeError`.
+- Synth also fails with `WebFunctionUnsupportedRegionError` outside the
+  supported Regions. If Web Functions have since launched in your Region,
+  bypass the check with `skipRegionValidation: true`.
+
+**What changes.**
+- **Lambda-only knobs are ignored with a synth warning:** `memorySize`,
+  `reservedConcurrency`, `provisionedConcurrency` and `warmup`. Use
+  `webFunction.maxEnvironments` and `webFunction.rateLimit` to cap scale.
+- **Only the SSR server moves.** Image optimization, ISR revalidation,
+  middleware and edge routes stay on Lambda.
+- **Native modules must be Arm64.** Astro's bundled `sharp` is installed for
+  Arm64 automatically.
+- **The default SSR CloudWatch alarms aren't created** for a Web Function yet.
+- **Separate resources.** The SSR server is exposed as
+  `HostingConstruct.computeWebFunctions`, not in `computeFunctions`. Grant it
+  access to AWS resources through its `grantPrincipal`.
+
+**Under the hood.**
+- **Code bucket.** Web Functions only read code from a versioned S3 object.
+  Each deploy copies the bundle zip onto one fixed key
+  (`web-function/<fn>/code.zip`) in a versioned code bucket, and pins the new
+  revision to the object version that copy returned. Superseded zips become
+  non-current versions, which a lifecycle rule expires after 30 days.
+- **Revisions.** Every revision property is create-only, so the revision's
+  logical ID is derived from its content, as with `lambda.Version`. A changed
+  bundle or environment variable adds a new revision and re-points the endpoint
+  (weight 100), then CloudFormation deletes the old revision during cleanup.
+  The deploy never needs a replacement update, which matters because sandbox
+  deploys run in Express Mode with rollback disabled, and CloudFormation
+  rejects replacements there.
+- **Header hygiene.** Responses from a Web Function carry `lambda-web-logstream`,
+  which names the internal log stream and revision. Hosting removes it with a
+  response headers policy, which applies to every status code including
+  4xx/5xx. The policy has the same settings as AWS's managed
+  `SecurityHeadersPolicy`, plus `removeHeaders`.
+  - It counts against the account's response headers policy quota (20 by
+    default). That's one policy per Web Function stack.
+  - To share one policy across stacks instead, create it once with
+    `removeHeaders` and pass it as `cdn.responseHeadersPolicy` in each stack:
+
+    ```ts
+    // once, e.g. in a shared-infra stack
+    new ResponseHeadersPolicy(shared, 'WebFunctionHeaders', {
+      securityHeadersBehavior: { /* … */ },
+      removeHeaders: ['lambda-web-logstream'],
+    });
+    // in each hosting stack
+    cdn: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) }
+    ```
+
+    A BYO policy gets a synth reminder to include the removal, because
+    Hosting can't inspect or extend it.
+- **Native modules.** Synth warns when the bundle contains x86-64 `.node`
+  binaries. Web Functions run on Arm64, and Lambda doesn't check that the
+  server starts when it activates a revision, so a server that crashes on
+  start would otherwise deploy green.
+- **Entry shim.** An entry shim, `__aws_blocks_web_entry.mjs`, is written into
+  the bundle. It maps the listen address in `AWS_LAMBDA_HTTP_ENDPOINT` onto
+  the framework's `HOST`/`PORT` variables, then imports the server entry.
+- **Resource policy.** CloudFormation has no resource type for a Web Function's
+  resource-based policy. A small custom resource grants the distribution
+  `lambda:InvokeWebFunctionEndpoint`.
+
 ## Build retention & rollback
 
 Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and
@@ -379,6 +491,47 @@ new HostingConstruct(stack, 'Hosting', {
 > delivery source must be created in **us-east-1** (same constraint as ACM
 > certificates). Synth throws `LoggingV2RegionError` in any other Region — deploy
 > the hosting stack to us-east-1 or use `version: 'v1'`.
+
+## SSR caching & cache-key credentials
+
+`cdn.ssrDefaultTtl` enables CloudFront edge caching of SSR responses that carry
+no explicit `Cache-Control` header. Those responses are then shared at the edge,
+and the SSR cache key does **not** include `Authorization` or session cookies by
+default — so one cached entry would answer requests regardless of their
+credentials. Set `cdn.cacheKeyCookies` (your session cookie name(s)) and/or
+`cdn.cacheKeyHeaders` (e.g. `'authorization'`) so cached responses are keyed per
+credential. Synth **fails closed**: if `ssrDefaultTtl` resolves to `> 0` and
+neither is set, synthesis throws.
+
+```ts
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
+  cdn: {
+    ssrDefaultTtl: Duration.seconds(60),
+    cacheKeyCookies: ['session'], // your session cookie name(s)
+  },
+});
+```
+
+The guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
+emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
+Astro SSR) are not seen by synth, so those routes must set the cache-key options
+themselves or emit `Cache-Control: private`. Any route that sets cookies or
+otherwise varies per user should emit `Cache-Control: private`.
+
+CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
+**8 cookies** and **5 headers** for callers. `accept-encoding` is handled
+automatically and is not allowed in `cacheKeyHeaders`.
+
+On a compute deploy every request is routed through a single default cache
+behavior, so `cacheKeyCookies`/`cacheKeyHeaders` affect the cache key for **all**
+routes on that behavior. To keep shared assets from being keyed per credential,
+the edge router deletes the configured cache-key cookies and headers on static
+and image routes before origin selection — those routes compute a shared cache
+key, while SSR/compute routes keep the credentials and stay keyed per credential.
+Because the router deletes them at viewer-request, those cookies and headers are
+also not forwarded to the origin on static and image routes (e.g. an auth-gated
+image source would not receive them).
 
 ## Custom domains
 
@@ -460,6 +613,60 @@ phases around the deploy:
 3. **After deploy:** in your DNS provider, create a CNAME from your domain
    (`app.example.com`) to the `DistributionDomainName` value. For an apex
    domain, use an ALIAS or ANAME record if your provider supports it.
+
+## Off-region CloudFront alarm parity
+
+AWS CloudFront metrics only publish in `us-east-1`. A CloudWatch alarm
+can only evaluate a metric in its own region, so the CloudFront 5xx
+alarm cannot be placed in a non-`us-east-1` hosting stack.
+
+When `HostingConstruct` detects that the stack's region is **not**
+`us-east-1` it automatically synthesizes a companion stack named
+`<stackName>-CfMonitoring-<addr>` (the `<addr>` suffix keeps the id
+unique when several hosting constructs share a stage) pinned to
+`us-east-1`. That stack:
+
+- creates its own encrypted SNS topic (the alarm action target),
+- wires the CloudFront 5xx rate alarm to that topic,
+- applies the same `monitoring.subscriptions` you pass to the hosting
+  construct, so you subscribe in one place and both regions are covered,
+  and
+- emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
+  who want the raw ARN can find it.
+
+> **Requirement:** because the companion stack is region-pinned you must
+> set `env: { account, region }` on the parent hosting stack when
+> deploying outside `us-east-1`, exactly as you would for a WAF stack
+> (see `waf_construct.ts`). If the region is resolved but the account is
+> unresolved, only the CloudFront alarm is skipped (with a loud synth
+> warning); all other alarms are kept. A fully env-agnostic stack
+> (unresolved-token region) creates the alarm locally and warns that it
+> will never fire if the app deploys outside `us-east-1`. See D-016.
+
+Off-region placement is **always on**; there is no opt-out. The
+CloudFront 5xx alarm is the whole point of `monitoring`, and a
+silently-missing alarm is exactly the bug this fixes (#481).
+
+Subscribe with endpoint subscriptions (`EmailSubscription` /
+`UrlSubscription` from `aws-cdk-lib/aws-sns-subscriptions`):
+
+```ts
+import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+
+new HostingConstruct(this, 'Hosting', {
+  // ...
+  monitoring: {
+    subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+  },
+});
+```
+
+Resource-target subscriptions (Lambda/SQS) are not yet supported —
+applying them to the us-east-1 topic would create an unresolvable
+cross-region reference. For a custom action, reach the alarms directly
+via `hosting.monitoring.alarms`. In `us-east-1` no companion stack is
+created — the alarm stays local.
+
 
 ## Development
 
