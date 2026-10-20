@@ -13,6 +13,18 @@ private final class AppModel {
     let blocks = Blocks()
 }
 
+/// Main-actor-isolated by default, like a sign-in screen's model.
+private final class SignInModel {
+    var provider: Auth.GetClient.Provider = .github
+}
+
+private nonisolated struct RefusedLauncher: BrowserLauncher {
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        XCTFail("sign-in should fail before the browser opens")
+        return authorizeURL
+    }
+}
+
 /// Creates and closes its own `Blocks` off the main actor.
 private actor Worker {
     let blocks = Blocks()
@@ -44,6 +56,23 @@ final nonisolated class MainActorDefaultTests: XCTestCase {
             XCTFail("expected ClientClosedError")
         } catch {
             XCTAssertTrue(error is ClientClosedError, "\(error)")
+        }
+    }
+
+    @MainActor
+    func testMainActorCodeSignsInWithAProviderEnum() async {
+        // Port 9 refuses the connection, so sign-in fails on its first request.
+        let blocks = Blocks(server: BlocksServer(name: "refused", url: "http://127.0.0.1:9/aws-blocks/api"))
+        let oidc = OIDCClient(
+            exchangePath: "/auth/exchange", refreshPath: "/auth/exchange/refresh", signOutPath: "/auth/signout",
+            providers: ["github"], providerConfigs: [:], baseUrl: blocks.client.baseUrl, client: blocks.client
+        )
+        let model = SignInModel()
+        do {
+            _ = try await oidc.signIn(provider: model.provider, relayTo: "app://auth", launcher: RefusedLauncher())
+            XCTFail("expected a connection error")
+        } catch {
+            XCTAssertTrue(error is URLError, "\(error)")
         }
     }
 

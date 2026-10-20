@@ -60,7 +60,7 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Helpers / naming | `Tests/BlocksCodegenTests/HelpersTests.swift` |
 | Generator output | `Tests/BlocksCodegenTests/SwiftCodeGeneratorTests.swift` |
 | Entry-point naming and emission | `Tests/BlocksCodegenTests/BlocksEntryPointGeneratorTests.swift` |
-| Golden files for the 27 shared fixtures | `Tests/BlocksCodegenTests/GoldenFileTests.swift` |
+| Golden files for the 28 shared fixtures | `Tests/BlocksCodegenTests/GoldenFileTests.swift` |
 | Hybrid-arm fixture spec | `../codegen-fixtures/18-hybrid-arm/spec.json` |
 | Runtime tests | `Tests/BlocksRuntimeTests/*` |
 | Build-plugin output compiled in Swift 6 language mode with `.treatAllWarnings(as: .error)`; any new compiler warning in generated code, such as one a runner Xcode update brings, fails CI | `Tests/BlocksGeneratedCodeTests/` (its `blocks.spec.json` is un-ignored in `.gitignore`) |

@@ -87,13 +87,20 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty {
+            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
-                emitOperationEnum(operation: operation, indent: "    ", lines: &apiLines)
+                emitOperationEnum(operation: operation, namespace: namespace.name, indent: "    ", lines: &apiLines)
             }
 
             apiLines.append("}")
             apiLines.append("")
+
+            for operation in namespace.operations {
+                emitOIDCProviderSignIn(operation, namespace: namespace.name, className: names.className, lines: &apiLines)
+                if let warning = oidcProviderRenameWarning(operation, namespace: namespace.name, className: names.className) {
+                    warnings.append(warning)
+                }
+            }
         }
 
         emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
@@ -108,12 +115,13 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Nested Type Emission
 
-    private func emitOperationEnum(operation: Operation, indent: String, lines: inout [String]) {
+    private func emitOperationEnum(operation: Operation, namespace: String, indent: String, lines: inout [String]) {
         let opName = pascalCase(operation.name)
         lines.append("\(indent)public enum \(opName) {")
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
+        emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
         lines.append("\(indent)}")
     }
 
@@ -1254,7 +1262,7 @@ public struct SwiftCodeGenerator {
     /// The transferable to hydrate for a result: a direct transferable, or a nullable-wrapped
     /// one whose tag has a known binding. A nullable unbound transferable returns nil (it keeps
     /// its prior `JSONValue?` behavior, since the UnknownTransferable fallback is direct-only).
-    private func transferableResult(_ type: ResolvedType) -> (type: ResolvedType, optional: Bool)? {
+    func transferableResult(_ type: ResolvedType) -> (type: ResolvedType, optional: Bool)? {
         switch type {
         case .transferable:
             return (type, false)

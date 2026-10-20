@@ -8,3 +8,5 @@
 // An app may declare types named like runtime ones; the generated `Blocks` must still compile.
 struct TokenStore {}
 struct InMemoryTokenStore {}
+struct OIDCUser {}
+struct BrowserLauncher {}

@@ -152,7 +152,7 @@ The OpenRPC document is emitted as a single self-contained file (`blocks.spec.js
 
 ### Blocks-specific extensions
 
-Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't capture Blocks semantics: `x-blocks-transferable` and `x-blocks-type-args` (on result schemas for Realtime / FileBucket handles).
+Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't capture Blocks semantics: `x-blocks-transferable` and `x-blocks-type-args` (on result schemas for Realtime / FileBucket / OIDC handles).
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 

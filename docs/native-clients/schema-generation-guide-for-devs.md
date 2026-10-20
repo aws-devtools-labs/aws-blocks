@@ -399,7 +399,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient` (`OIDCClient` on Swift) | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient` (`OIDCClient` on Swift); `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -418,7 +418,20 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 }
 ```
 
-Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload`, `oidc/client` today), this field is omitted.
+Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. The emitter writes the field when a method's return type spells out the arguments, on a namespace the entry file exports directly (`export const api = new ApiNamespace(...)`). It's omitted for non-generic transferables (`file-bucket/download`, `file-bucket/upload`), for a `RealtimeChannel` whose message type isn't written in the return type, and for every method of a namespace built elsewhere, such as a block's `createApi()` or a factory function.
+
+The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. `AuthOIDC.createApi()` types `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
+
+```json
+{
+	"x-blocks-transferable": "oidc/client",
+	"x-blocks-type-args": [
+		{ "type": "string", "enum": ["google", "github"] }
+	]
+}
+```
+
+Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and an `OIDCClient.signIn(provider:relayTo:launcher:)` overload that takes it. Kotlin and Dart ignore it for now.
 
 ### `x-blocks-native-packages` (document root)
 
