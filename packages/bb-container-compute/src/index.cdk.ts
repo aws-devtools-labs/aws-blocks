@@ -24,7 +24,7 @@
  * block, which builds this when the capabilities call for a container.
  */
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
 import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
@@ -38,16 +38,20 @@ import {
 	registerVpcRequirements,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
-import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { buildContainerHealthWidgets, buildContainerLoggingWidgets, buildContainerTracingWidgets } from './observability.js';
+import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
+import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { bundleContainerAsset } from './bundle.js';
+import {
+	buildContainerHealthWidgets,
+	buildContainerLoggingWidgets,
+	buildContainerTracingWidgets,
+} from './observability.js';
 import type { ContainerComputeProps } from './types.js';
 
 export type { ContainerComputeProps } from './types.js';
@@ -68,6 +72,19 @@ const DEFAULT_MEMORY_MB = 1024;
 
 /** Container port the runtime's health server listens on (worker mode still exposes it). */
 const CONTAINER_PORT = 8080;
+
+/**
+ * Default container image when the workload didn't set `image`. A stock, public,
+ * AWS-hosted Node image on the SAME Node major as the Lambda runtime
+ * ({@link DEFAULT_NODE_RUNTIME}, Node 24), so container and function behavior
+ * match. Pulled remotely by ECS at task start — Blocks builds NO image, so a
+ * deploy never needs a local Docker daemon. The app code is delivered separately
+ * as an S3 asset and fetched at boot (see `bootstrap.mjs`).
+ */
+const DEFAULT_CONTAINER_IMAGE = 'public.ecr.aws/docker/library/node:24-slim';
+
+/** Absolute in-container path the bootstrap runs from (also runs itself from here). */
+const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
 
 /** SQS queue URLs an AsyncJob assigned to a container registers here so the compute's
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
@@ -133,7 +150,7 @@ export class ContainerCompute extends ComputeBase {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 
-		const assetPath = this.buildImageAsset(options?.image);
+		const assetPath = this.buildCodeAsset();
 		if (!assetPath || !vpcContext) {
 			// No backend module discoverable (isolated unit test without a
 			// BlocksStack) — skip provisioning rather than fail synth, mirroring how
@@ -156,7 +173,8 @@ export class ContainerCompute extends ComputeBase {
 			cpu,
 			memoryLimitMiB,
 			// ARM64 (Graviton): cheaper at equal performance and matches the arm64
-			// image Blocks builds. Blocks defaults Lambda to arm64 too.
+			// Node base image. Blocks defaults Lambda to arm64 too. A custom `image`
+			// must therefore be arm64 (multi-arch images resolve automatically).
 			runtimePlatform: {
 				cpuArchitecture: ecs.CpuArchitecture.ARM64,
 				operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
@@ -166,10 +184,28 @@ export class ContainerCompute extends ComputeBase {
 
 		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
 
+		// Upload the co-bundled app code as an S3 asset (zip + upload — NO Docker).
+		// The container pulls a stock Node image and fetches these bundles at boot
+		// via bootstrap.mjs, so there is no local image build. CDK asset-hashing
+		// tracks code changes and re-uploads on change automatically.
+		const codeAsset = new s3assets.Asset(this, 'CodeAsset', { path: assetPath });
+		// The task runs as the execution role (= task role here); grant it read on
+		// the asset objects so bootstrap.mjs can download them with the task role.
+		codeAsset.grantRead(taskRole);
+
 		this.container = this.taskDefinition.addContainer('Backend', {
-			image: options?.image
-				? ecs.ContainerImage.fromRegistry(options.image)
-				: ecs.ContainerImage.fromAsset(assetPath, { platform: Platform.LINUX_ARM64 }),
+			// Stock public Node image by default, or the customer's image verbatim —
+			// either way via fromRegistry (a remote pull, never a local build). The
+			// image supplies the runtime environment (it must provide Node 24 on
+			// PATH); Blocks injects the app code at boot via the command override.
+			image: ecs.ContainerImage.fromRegistry(options?.image ?? DEFAULT_CONTAINER_IMAGE),
+			// Override the image's entrypoint/command: write the bootstrap to disk
+			// from a base64 arg (so no extra object to fetch), then run it. The
+			// bootstrap fetches main.js/worker.js from the code asset's S3 location
+			// using the task role and execs the parent. This is the sanctioned ECS
+			// "generic image + command override" pattern; see bootstrap.mjs.
+			entryPoint: ['node', '-e'],
+			command: [this.buildBootstrapLauncher(assetPath)],
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
@@ -178,6 +214,9 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CONFIG_KEY: configKey,
 				BLOCKS_COMPUTE_ID: this.fullId,
 				BLOCKS_SERVICE_MODE: 'worker',
+				// Where bootstrap.mjs fetches the app bundles from (the S3 asset).
+				BLOCKS_CODE_BUCKET: codeAsset.s3BucketName,
+				BLOCKS_CODE_PREFIX: cdk.Fn.select(0, cdk.Fn.split('.zip', codeAsset.s3ObjectKey)),
 			},
 			portMappings: [{ containerPort: CONTAINER_PORT }],
 		});
@@ -233,8 +272,7 @@ export class ContainerCompute extends ComputeBase {
 
 		// Resolve the strategy: explicit signals, or an inferred default. A compute
 		// that drains queues defaults to queue-depth; otherwise CPU.
-		const ownedQueues =
-			(this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
+		const ownedQueues = (this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
 		let signals: ScalingSignal[];
 		if (cfg.strategy) {
 			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
@@ -372,8 +410,10 @@ export class ContainerCompute extends ComputeBase {
 	 * root at a fixed id, mirroring the shared VPC.
 	 */
 	private getOrCreateCluster(vpc: ec2.IVpc): ecs.Cluster {
-		return getOrCreateOnRoot(this, Symbol.for('BLOCKS_CONTAINER_CLUSTER'), (root) =>
-			new ecs.Cluster(root, 'BlocksContainerCluster', { vpc }),
+		return getOrCreateOnRoot(
+			this,
+			Symbol.for('BLOCKS_CONTAINER_CLUSTER'),
+			(root) => new ecs.Cluster(root, 'BlocksContainerCluster', { vpc }),
 		);
 	}
 
@@ -383,16 +423,12 @@ export class ContainerCompute extends ComputeBase {
 	}
 
 	/**
-	 * Co-bundle the app backend + `runContainer()` into a Docker build context dir.
-	 * Returns undefined when the backend module path can't be discovered (isolated
-	 * unit tests) — the caller then skips provisioning.
+	 * Co-bundle the app backend + `runContainer()` into an S3 **code asset** dir
+	 * (NOT a Docker build context). Returns undefined when the backend module path
+	 * can't be discovered (isolated unit tests) — the caller then skips
+	 * provisioning. See {@link bundleContainerAsset}.
 	 */
-	private buildImageAsset(image?: string): string | undefined {
-		if (image) {
-			// A custom image is used verbatim (fromRegistry); no asset build needed.
-			// Return a sentinel non-undefined so provisioning proceeds.
-			return image;
-		}
+	private buildCodeAsset(): string | undefined {
 		const stack = (globalThis as any).CURRENT_BLOCKS_STACK as { backendModulePath?: string } | undefined;
 		const backendModulePath = stack?.backendModulePath;
 		if (!backendModulePath) return undefined;
@@ -402,5 +438,31 @@ export class ContainerCompute extends ComputeBase {
 		);
 		mkdirSync(outDir, { recursive: true });
 		return bundleContainerAsset(backendModulePath, outDir);
+	}
+
+	/**
+	 * Build the `node -e` program string the task runs as its command override.
+	 *
+	 * The container's own code (`main.js`/`worker.js`) lives in S3 and is fetched
+	 * at boot — but the fetcher itself (`bootstrap.mjs`) can't be fetched the same
+	 * way without a chicken-and-egg. So we inline the committed `bootstrap.mjs`
+	 * verbatim: write it to {@link BOOTSTRAP_PATH} and import it. The script then
+	 * reads `BLOCKS_CODE_BUCKET`/`BLOCKS_CODE_PREFIX`, downloads the bundles with
+	 * the task role, and execs the parent. No extra S3 round-trip for the booter,
+	 * and nothing baked into the image.
+	 *
+	 * @param assetDir - the synth-time asset dir containing `bootstrap.mjs`.
+	 */
+	private buildBootstrapLauncher(assetDir: string): string {
+		const bootstrapSource = readFileSync(join(assetDir, 'bootstrap.mjs'), 'utf8');
+		const b64 = Buffer.from(bootstrapSource, 'utf8').toString('base64');
+		// Write the ESM bootstrap to disk, then import() it (node -e runs CJS, so we
+		// can't inline ESM syntax directly — import() of a file works from CJS).
+		return [
+			'const {writeFileSync,mkdirSync}=require("node:fs");',
+			'mkdirSync("/app",{recursive:true});',
+			`writeFileSync(${JSON.stringify(BOOTSTRAP_PATH)},Buffer.from(${JSON.stringify(b64)},"base64"));`,
+			`import(${JSON.stringify(BOOTSTRAP_PATH)}).catch(e=>{console.error(e);process.exit(1);});`,
+		].join('');
 	}
 }

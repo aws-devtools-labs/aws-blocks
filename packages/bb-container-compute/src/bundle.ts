@@ -1,8 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 /**
- * Synth-time co-bundle for the container compute's image asset.
+ * Synth-time co-bundle for the container compute's code asset.
  *
  * The container process must run BOTH the developer's backend (which constructs
  * the real Building Blocks and their handler closures) AND core's
@@ -18,26 +21,22 @@
  * (not via CDK's `NodejsFunction`) to avoid the `PathNotUnderRoot` failure it
  * hits for npm-installed packages; `buildSync` because CDK synth is synchronous.
  *
- * The output dir is a Docker build context: `main.js` (the CJS bundle),
- * `package.json` (`{"type":"commonjs"}`), and a `Dockerfile` on a slim Node base
- * image that just runs `node main.js`. All JS (including the AWS SDK) is bundled
- * into `main.js`, so the image needs no `npm install` — a single-COPY, single-CMD
- * Dockerfile keeps the build fast and hermetic.
+ * ─── No local Docker ────────────────────────────────────────────────────────
+ * The output dir is NOT a Docker build context — it is an **S3 asset** directory
+ * (`main.js` the CJS parent bundle, `worker.js` the per-job worker bundle,
+ * `bootstrap.mjs` the dependency-free fetch-and-run entry). The container runs a
+ * stock public Node image directly (`fromRegistry`, no image build), and a task
+ * command override runs `bootstrap.mjs`, which downloads `main.js`/`worker.js`
+ * from this asset's S3 location at boot and execs them. Nothing here needs the
+ * Docker daemon — synth only shells out to esbuild. See `index.cdk.ts` for how
+ * the asset + command override are wired, and `bootstrap.mjs` for the fetch.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 import { buildSync } from 'esbuild';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /** bb-container-compute package root (dist/.. == package dir), esbuild's resolution base. */
 const PKG_ROOT = join(__dirname, '..');
-
-/**
- * Node base image for the container. Slim Debian variant of the same Node major
- * the Lambda runtime targets (22), so runtime behavior matches the function path.
- */
-const NODE_BASE_IMAGE = 'public.ecr.aws/docker/library/node:22-slim';
 
 /**
  * `import.meta.url` shim for the CJS bundle: any transitively-bundled code that
@@ -47,16 +46,16 @@ const NODE_BASE_IMAGE = 'public.ecr.aws/docker/library/node:22-slim';
 const CJS_BANNER = 'const importMetaUrl = require("url").pathToFileURL(__filename).href;';
 
 /**
- * Co-bundle the app backend + `runContainer()` into a self-contained Docker build
- * context directory.
+ * Co-bundle the app backend + `runContainer()` into a self-contained S3 asset
+ * directory (not a Docker build context).
  *
  * @param backendModulePath - absolute path to the app's backend module (the
  *   BlocksStack/BlocksBackend `backendCDKPath`). Imported by absolute PATH (not a
  *   `file://` URL — esbuild resolves paths) so it lands in the SAME module graph
  *   and its `@aws-blocks/*` deps dedupe to one instance.
- * @param outDir - directory to write the build context into (a stable,
- *   synth-scoped path under `cdk.out`).
- * @returns `outDir`, ready to hand to `ecs.ContainerImage.fromAsset`.
+ * @param outDir - directory to write the asset into (a stable, synth-scoped path
+ *   under `cdk.out`), uploaded as-is by `aws-s3-assets.Asset`.
+ * @returns `outDir`, ready to hand to `new s3assets.Asset({ path: outDir })`.
  */
 export function bundleContainerAsset(backendModulePath: string, outDir: string): string {
 	mkdirSync(outDir, { recursive: true });
@@ -64,7 +63,7 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 	const shared = {
 		bundle: true,
 		platform: 'node',
-		target: 'node22',
+		target: 'node24',
 		format: 'cjs',
 		minify: true,
 		// Resolve @aws-blocks/* (and the backend's BB constructions) to their
@@ -83,6 +82,7 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 		'(async () => {',
 		'  await loadConfigToProcessEnv();',
 		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
+		// bootstrap.mjs writes both bundles here before exec, so the path is stable.
 		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
 		`  await import(${JSON.stringify(backendModulePath)});`,
 		'  await runContainer();',
@@ -120,19 +120,12 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 	// ambient "type":"module" in a parent package.json.
 	writeFileSync(join(outDir, 'package.json'), '{"type":"commonjs"}');
 
-	// Minimal Docker build context: copy both bundles + package.json onto a slim
-	// Node base and run the parent. No `npm install` — every dependency is inlined
-	// into the bundles by esbuild above, so the image build is a single COPY.
-	const dockerfile = [
-		`FROM ${NODE_BASE_IMAGE}`,
-		'WORKDIR /app',
-		'COPY main.js worker.js package.json ./',
-		// Run as the built-in non-root `node` user (present in the official image).
-		'USER node',
-		'CMD ["node", "main.js"]',
-		'',
-	].join('\n');
-	writeFileSync(join(outDir, 'Dockerfile'), dockerfile);
+	// Ship the fetch-and-run bootstrap alongside the bundles. It is a committed,
+	// dependency-free ESM script (see bootstrap.mjs) — copied verbatim so the
+	// container's command override can run it from the pulled asset. No esbuild:
+	// it must use ONLY Node built-ins (no @aws-blocks/*, no SDK), because it runs
+	// before the app bundles exist on disk.
+	copyFileSync(join(PKG_ROOT, 'src', 'bootstrap.mjs'), join(outDir, 'bootstrap.mjs'));
 
 	return outDir;
 }

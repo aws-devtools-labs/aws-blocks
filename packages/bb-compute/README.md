@@ -53,7 +53,14 @@ type is a compile error.
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
   otherwise).
-- `image?` — a custom container image (ECR URI). Blocks builds one when omitted.
+- `image?` — the container image to run (public or ECR URI), used **verbatim**
+  (pulled by ECS at task start). Blocks builds **no** image and deploying needs
+  **no local Docker**: your application code is shipped separately as an S3 asset
+  and fetched at boot. So a custom image only supplies the runtime environment —
+  it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
+  handlers need (e.g. media tooling). Defaults to
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
+  [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
 
 ## Local development
 

@@ -18,7 +18,13 @@ export interface ContainerComputeProps {
 	size?: ContainerSize;
 	/** Instance-count bounds and scaling strategy (Application Auto Scaling). */
 	scaling?: ContainerScaling;
-	/** Custom container image (an ECR image URI). Blocks builds one when omitted. */
+	/**
+	 * The container image to run, as a public or ECR registry URI, used verbatim
+	 * (remote pull — no local image build). The app code is delivered separately
+	 * as an S3 asset and fetched at boot, so the image only supplies the runtime
+	 * environment and must provide a Node 24 runtime on `PATH`. Defaults to a
+	 * stock public Node 24 image when omitted.
+	 */
 	image?: string;
 	/**
 	 * CloudWatch Logs retention for this container's log group. Logs are always

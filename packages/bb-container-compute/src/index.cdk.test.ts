@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 /**
  * Verifies `ContainerCompute` provisions a Fargate service in the framework's
  * central lazy VPC, runs AS the shared execution role, and appends the
@@ -9,16 +12,12 @@
  * A tiny co-bundled backend is written to a temp dir so the image asset builds
  * (the container skips provisioning when no backend module is discoverable).
  */
-import { test, describe, before, after } from 'node:test';
-import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
-import { Match } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { ContainerCompute } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -206,5 +205,83 @@ describe('ContainerCompute — review-finding fixes', () => {
 			serialized.includes('ApproximateNumberOfMessagesNotVisible'),
 			'queue-depth alarm metric math should include ApproximateNumberOfMessagesNotVisible (in-flight)',
 		);
+	});
+});
+
+describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
+	test('runs a stock Node image via fromRegistry and ships code as an S3 asset — no image build', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerNoDockerStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+
+		new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.5, memory: 1024 } });
+
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+
+		// The task runs the stock public Node 24 image by default, pulled by ECS —
+		// NOT a locally-built image asset (which would carry an account/region ECR
+		// URI). The command override runs the inlined bootstrap.
+		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+			ContainerDefinitions: Match.arrayWith([
+				Match.objectLike({
+					Image: 'public.ecr.aws/docker/library/node:24-slim',
+					EntryPoint: ['node', '-e'],
+					Command: Match.arrayWith([Match.stringLikeRegexp('bootstrap\\.mjs')]),
+				}),
+			]),
+		});
+
+		// The injected env carries the code-asset location + worker mode. Assert
+		// each var independently (order-insensitive).
+		const td = Object.values(template.findResources('AWS::ECS::TaskDefinition'))[0] as any;
+		const env: Array<{ Name: string }> = td.Properties.ContainerDefinitions[0].Environment;
+		const names = env.map((e) => e.Name);
+		for (const required of [
+			'BLOCKS_CODE_BUCKET',
+			'BLOCKS_CODE_PREFIX',
+			'BLOCKS_SERVICE_MODE',
+			'BLOCKS_CONFIG_BUCKET',
+		]) {
+			assert.ok(names.includes(required), `expected env ${required}; got ${JSON.stringify(names)}`);
+		}
+
+		// The container image is a stock registry string, so no ECR image-asset
+		// repository is synthesized for it. (An image built via fromAsset would
+		// reference an aws-cdk/assets ECR repo in the image URI — assert the image
+		// is the literal stock string, which the check above already pins.)
+		const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
+		const images = Object.values(taskDefs).flatMap((td: any) =>
+			(td.Properties?.ContainerDefinitions ?? []).map((c: any) => c.Image),
+		);
+		assert.ok(
+			images.every((img: unknown) => typeof img === 'string' && !String(img).includes('dkr.ecr')),
+			`no container image should be a built ECR asset; got ${JSON.stringify(images)}`,
+		);
+	});
+
+	test('a custom image is used verbatim (still no local build)', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerCustomImageStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+
+		new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+			image: 'public.ecr.aws/example/custom-node:24',
+		});
+
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+			ContainerDefinitions: Match.arrayWith([
+				Match.objectLike({ Image: 'public.ecr.aws/example/custom-node:24' }),
+			]),
+		});
 	});
 });

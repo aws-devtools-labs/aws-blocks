@@ -42,16 +42,34 @@ export type ContainerSize =
 	| { vcpu: 1; memory: 2048 | 3072 | 4096 | 5120 | 6144 | 7168 | 8192 }
 	| {
 			vcpu: 2;
-			memory:
-				| 4096 | 5120 | 6144 | 7168 | 8192 | 9216 | 10240
-				| 11264 | 12288 | 13312 | 14336 | 15360 | 16384;
+			memory: 4096 | 5120 | 6144 | 7168 | 8192 | 9216 | 10240 | 11264 | 12288 | 13312 | 14336 | 15360 | 16384;
 	  }
 	| {
 			vcpu: 4;
 			memory:
-				| 8192 | 9216 | 10240 | 11264 | 12288 | 13312 | 14336 | 15360 | 16384
-				| 17408 | 18432 | 19456 | 20480 | 21504 | 22528 | 23552 | 24576
-				| 25600 | 26624 | 27648 | 28672 | 29696 | 30720;
+				| 8192
+				| 9216
+				| 10240
+				| 11264
+				| 12288
+				| 13312
+				| 14336
+				| 15360
+				| 16384
+				| 17408
+				| 18432
+				| 19456
+				| 20480
+				| 21504
+				| 22528
+				| 23552
+				| 24576
+				| 25600
+				| 26624
+				| 27648
+				| 28672
+				| 29696
+				| 30720;
 	  }
 	| {
 			vcpu: 8;
@@ -106,7 +124,22 @@ export interface ContainerComputeOptions {
 	size?: ContainerSize;
 	/** Instance-count bounds and scaling strategy. */
 	scaling?: ContainerScaling;
-	/** Custom container image (an ECR image URI). Blocks builds one when omitted. */
+	/**
+	 * The container image to run, as a public or ECR registry URI. Used verbatim
+	 * (pulled by ECS at task start — Blocks builds no image, so deploying needs no
+	 * local Docker).
+	 *
+	 * Your application code is NOT baked into this image; Blocks delivers it
+	 * separately and the container fetches it at boot. So the image only has to
+	 * provide the **runtime environment**: it must have a **Node 24** runtime on
+	 * `PATH` (matching the Lambda runtime), plus any system libraries your handlers
+	 * need (e.g. image/video tooling). Use this to add such libraries — otherwise
+	 * omit it.
+	 *
+	 * @default `public.ecr.aws/docker/library/node:24-slim` — a stock, public,
+	 * AWS-hosted Node 24 image. Must be arm64-compatible (Blocks runs Fargate on
+	 * Graviton); multi-arch images resolve automatically.
+	 */
 	image?: string;
 }
 
