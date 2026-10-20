@@ -16,7 +16,13 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors (canonical source)
 export { SecretErrors } from './errors.js';
-export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
+export type {
+	ExternalSecretRef,
+	SecretOptions,
+	SecretReadOptions,
+	SecretVersion,
+	SecretVersionInfo,
+} from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -108,63 +114,31 @@ let plaintextWarningLogged = false;
 
 // ── Secret (mock) ─────────────────────────────────────────────────────────
 
-/**
- * A single application secret backed by AWS Secrets Manager.
- *
- * Each instance represents exactly one secret value. Declare multiple `Secret`
- * instances for multiple secrets. `Secret` is the recommended home for
- * production secrets — a dedicated per-secret resource with its own access
- * controls and version history. For non-sensitive configuration use
- * `AppSetting`; `AppSetting` with `secret: true` is only a free, encrypted
- * fallback for a low-value secret.
- *
- * **When to use:** Third-party API keys, OAuth client secrets, database
- * connection strings, webhook signing keys, encryption keys.
- *
- * **When NOT to use:** For non-sensitive configuration (feature flags, display
- * strings, thresholds), use `AppSetting`. For application state, use `KVStore`
- * or `DistributedTable`.
- *
- * **Best practices:**
- * - One `Secret` per logical credential.
- * - Never commit real secret values to source — set them at runtime via `put()`
- *   (or out-of-band in the AWS console / CLI), then read them with `get()`.
- * - Use a schema when the secret is structured JSON (e.g. a set of related keys)
- *   to get type safety and validation.
- *
- * **Rotation:** rotate by setting a new value (`put()`, the console, or the AWS
- * CLI); the prior value stays readable via `get({ version: 'previous' })` for a
- * grace window. Automatic rotation is credential-type-specific and out of scope
- * — for custom schedules, drive `put()` from a `CronJob`.
- *
- * **Local dev:** The mock stores values as plaintext on disk under `.bb-data/`.
- * It is NOT secure — do not use real credentials locally. The mock reads the
- * current value from disk on every `get()`, so it does not cache and
- * `cacheTtlSeconds` has no effect locally.
- *
- * @typeParam T - The secret value type. Defaults to `string`; inferred from
- *   `schema` when one is provided.
- *
- * @example
- * ```typescript
- * // Opaque string secret
- * const stripeKey = new Secret(scope, 'stripe-api-key');
- * await stripeKey.put('sk_live_...');
- * const key = await stripeKey.get(); // string | null
- *
- * // Typed JSON secret with schema validation
- * const dbConfig = new Secret(scope, 'db-config', {
- *   schema: z.object({ host: z.string(), port: z.number() }),
- * });
- * await dbConfig.put({ host: 'db.internal', port: 5432 });
- * const config = await dbConfig.get(); // { host: string; port: number } | null
- * ```
- */
-export class Secret<T = string> extends Scope {
+/** @internal Implementation backing the public {@link Secret} constructor. */
+class SecretImpl<T = string> extends Scope {
 	/** The key this secret is stored under in `.bb-data/settings.json` — the explicit `name`, else the instance `fullId`. */
 	private storeKey: string;
 	private schema?: StandardSchemaV1<T>;
 	private external?: ExternalSecretRef;
+
+	/**
+	 * Update the secret value — **present only when the secret was constructed
+	 * with `allowRuntimeWrite: true`**. Otherwise this property is absent from the
+	 * instance (and the public read-only {@link Secret} type omits it).
+	 *
+	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
+	 * it, and stores the structured value. The prior value becomes the
+	 * `'previous'` version (readable via `get({ version: 'previous' })`).
+	 *
+	 * @param value - The new secret value.
+	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
+	 *
+	 * @example
+	 * ```typescript
+	 * await stripeKey.put('sk_live_new_value');
+	 * ```
+	 */
+	declare put?: (value: T) => Promise<void>;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -186,6 +160,14 @@ export class Secret<T = string> extends Scope {
 				? this.external.secretArn
 				: (options?.name ?? `mock-${this.fullId}`).substring(0, 255),
 		});
+
+		// Runtime writes are opt-in and least-privilege: only expose `put()` on the
+		// instance when `allowRuntimeWrite: true`. When absent/false the method is
+		// genuinely not on the object (not just a thrower), matching the read-only
+		// public type and the read-only IAM the CDK layer grants.
+		if (options?.allowRuntimeWrite === true) {
+			this.put = (value: T) => this.#put(value);
+		}
 
 		if (!plaintextWarningLogged) {
 			this.log.warn(
@@ -279,21 +261,10 @@ export class Secret<T = string> extends Scope {
 	}
 
 	/**
-	 * Update the secret value.
-	 *
-	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
-	 * it, and stores the structured value. The prior value becomes the
-	 * `'previous'` version (readable via `get({ version: 'previous' })`).
-	 *
-	 * @param value - The new secret value.
-	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
-	 *
-	 * @example
-	 * ```typescript
-	 * await stripeKey.put('sk_live_new_value');
-	 * ```
+	 * Internal write implementation, exposed as the public `put` only when
+	 * `allowRuntimeWrite: true` (see the constructor).
 	 */
-	async put(value: T): Promise<void> {
+	async #put(value: T): Promise<void> {
 		if (this.schema) {
 			await validateSchema(this.schema, value);
 		}
@@ -332,10 +303,37 @@ export class Secret<T = string> extends Scope {
 		const history = readVersions(this)[this.storeKey] ?? [];
 		return history.map(({ versionId, stages, createdDate }) => ({ versionId, stages, createdDate }));
 	}
+}
 
+/**
+ * The public, read-only `Secret` surface: `get()` + `listVersions()`, no `put()`.
+ * This is what you get from `new Secret(scope, id)` (or any construction without
+ * `allowRuntimeWrite: true`). The runtime object has no `put` method either.
+ */
+export type Secret<T = string> = Omit<SecretImpl<T>, 'put'>;
+
+/**
+ * A `Secret` constructed with `allowRuntimeWrite: true`: the read-only surface
+ * plus a non-optional {@link SecretImpl.put}.
+ */
+export type WritableSecret<T = string> = Secret<T> & { put(value: T): Promise<void> };
+
+/**
+ * The `Secret` constructor. Overloaded so the returned type reflects
+ * `allowRuntimeWrite`: `true` yields a {@link WritableSecret} (has `put`),
+ * anything else yields the read-only {@link Secret}.
+ */
+export interface SecretConstructor {
+	new <T = string>(
+		scope: ScopeParent,
+		id: string,
+		options: SecretOptions<T> & { allowRuntimeWrite: true },
+	): WritableSecret<T>;
+	new <T = string>(scope: ScopeParent, id: string, options?: SecretOptions<T>): Secret<T>;
 	/**
 	 * Wrap an existing AWS Secrets Manager secret. `Secret` will not create,
-	 * seed, or delete infrastructure for it — it only reads and writes the value.
+	 * seed, or delete infrastructure for it — it only reads (and, with
+	 * `allowRuntimeWrite: true`, writes) the value.
 	 *
 	 * @param secretArn - The ARN of the existing Secrets Manager secret.
 	 * @returns A reference to pass to the constructor's `secret` option.
@@ -347,7 +345,72 @@ export class Secret<T = string> extends Scope {
 	 * });
 	 * ```
 	 */
-	static fromExisting(secretArn: string): ExternalSecretRef {
-		return { __brand: 'ExternalSecretRef' as const, secretArn };
-	}
+	fromExisting(secretArn: string): ExternalSecretRef;
 }
+
+function fromExisting(secretArn: string): ExternalSecretRef {
+	return { __brand: 'ExternalSecretRef' as const, secretArn };
+}
+
+// Bind the overloaded constructor interface to the implementation. The single
+// cast is framework plumbing: a class cannot narrow its own constructor return
+// type per-overload, so the public `Secret` is the impl viewed through
+// `SecretConstructor`.
+Object.assign(SecretImpl, { fromExisting });
+/**
+ * A single application secret backed by AWS Secrets Manager.
+ *
+ * Each instance represents exactly one secret value. Declare multiple `Secret`
+ * instances for multiple secrets. `Secret` is the recommended home for
+ * production secrets — a dedicated per-secret resource with its own access
+ * controls and version history. For non-sensitive configuration use
+ * `AppSetting`; `AppSetting` with `secret: true` is only a free, encrypted
+ * fallback for a low-value secret.
+ *
+ * **When to use:** Third-party API keys, OAuth client secrets, database
+ * connection strings, webhook signing keys, encryption keys.
+ *
+ * **When NOT to use:** For non-sensitive configuration (feature flags, display
+ * strings, thresholds), use `AppSetting`. For application state, use `KVStore`
+ * or `DistributedTable`.
+ *
+ * **Read-only by default:** a `Secret` has no `put()` method and the deployed
+ * execution role gets read-only IAM. Pass `allowRuntimeWrite: true` to add
+ * `put()` and grant write access — only when the app itself sets/rotates the
+ * value at runtime. Most apps read a value set out-of-band (console / CLI / CI).
+ *
+ * **Best practices:**
+ * - One `Secret` per logical credential.
+ * - Never commit real secret values to source — set them out-of-band (console /
+ *   CLI), or via `put()` when `allowRuntimeWrite: true`, then read with `get()`.
+ * - Use a schema when the secret is structured JSON (e.g. a set of related keys)
+ *   to get type safety and validation.
+ *
+ * **Rotation:** rotate by setting a new value (console / CLI, or `put()` when
+ * `allowRuntimeWrite: true`); the prior value stays readable via
+ * `get({ version: 'previous' })` for a grace window. Automatic rotation is
+ * credential-type-specific and out of scope.
+ *
+ * **Local dev:** The mock stores values as plaintext on disk under `.bb-data/`.
+ * It is NOT secure — do not use real credentials locally.
+ *
+ * @example
+ * ```typescript
+ * // Read-only secret (default): value set out-of-band, read with get().
+ * const stripeKey = new Secret(scope, 'stripe-api-key');
+ * const key = await stripeKey.get(); // string | null  (no put())
+ *
+ * // Writable secret: the app sets/rotates the value itself.
+ * const token = new Secret(scope, 'self-rotating-token', { allowRuntimeWrite: true });
+ * await token.put('t-123');
+ *
+ * // Typed JSON secret with schema validation.
+ * const dbConfig = new Secret(scope, 'db-config', {
+ *   schema: z.object({ host: z.string(), port: z.number() }),
+ *   allowRuntimeWrite: true,
+ * });
+ * await dbConfig.put({ host: 'db.internal', port: 5432 });
+ * const config = await dbConfig.get(); // { host: string; port: number } | null
+ * ```
+ */
+export const Secret = SecretImpl as unknown as SecretConstructor;

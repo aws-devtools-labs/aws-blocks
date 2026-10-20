@@ -98,6 +98,22 @@ export interface SecretOptions<T = string> {
 	 */
 	cacheTtlSeconds?: number;
 	/**
+	 * Allow the application runtime to **write** this secret via `put()`.
+	 *
+	 * Defaults to `false`. A `Secret` is **read-only at runtime by default**: the
+	 * instantiated object has no `put()` method (it is absent from the object, and
+	 * from the type — a call is a compile error), and the CDK layer grants the
+	 * execution role **read-only** IAM (no `secretsmanager:PutSecretValue`). This
+	 * is the least-privilege default — most apps only read a credential that is
+	 * set out-of-band (console / CLI / CI). It applies to every secret, including
+	 * one wrapped via {@link Secret.fromExisting}.
+	 *
+	 * Set `allowRuntimeWrite: true` only when the app genuinely rotates or sets
+	 * the value itself at runtime (e.g. a self-rotating token). Then `put()` is
+	 * present on the object and the execution role is granted write access.
+	 */
+	allowRuntimeWrite?: boolean;
+	/**
 	 * Optional logger for internal Secret operations. Accepts a `Logger` instance
 	 * or any `ChildLogger` from `@aws-blocks/bb-logger`.
 	 *

@@ -77,6 +77,8 @@
     "blocks-telemetry": "./dist/scripts/telemetry-cli.js"
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
     "@types/cross-spawn": "^6.0.6",
     "@types/http-proxy": "^1.17.16",
     "@types/node": "^20.0.0",
