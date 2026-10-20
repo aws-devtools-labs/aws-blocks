@@ -23,5 +23,7 @@ export const AuthBasicErrors = {
 	UserAlreadyExists: 'UserAlreadyExistsException',
 	InvalidCode: 'InvalidCodeException',
 	SessionExpired: 'SessionExpiredException',
+	SessionRevoked: 'SessionRevokedException',
+	SignOutIncomplete: 'SignOutIncompleteException',
 	InvalidPassword: 'InvalidPasswordException',
 } as const;

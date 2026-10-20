@@ -63,6 +63,8 @@ export const AuthBasicErrors: {
     readonly UserAlreadyExists: "UserAlreadyExistsException";
     readonly InvalidCode: "InvalidCodeException";
     readonly SessionExpired: "SessionExpiredException";
+    readonly SessionRevoked: "SessionRevokedException";
+    readonly SignOutIncomplete: "SignOutIncompleteException";
     readonly InvalidPassword: "InvalidPasswordException";
 };
 

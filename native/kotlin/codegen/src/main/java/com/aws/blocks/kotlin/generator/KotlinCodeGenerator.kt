@@ -171,6 +171,13 @@ class KotlinCodeGenerator(
             }
         }
 
+        for (identity in (excludedPackages - model.nativeCatalogs.declaredPackages).sorted()) {
+            warnings.add(
+                "AWSBLOCKS-NATIVE-006: excluded native package '$identity' is not declared by " +
+                    "x-blocks-native-packages; nothing was opted out for it on kotlin.",
+            )
+        }
+
         for (identity in model.nativeCatalogs.unreferencedPackages - excludedPackages) {
             warnings.add(
                 "AWSBLOCKS-NATIVE-003: native package '$identity' is declared but no binding " +
