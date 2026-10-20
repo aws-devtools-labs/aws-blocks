@@ -15,6 +15,7 @@ def verify(registry=Path('/opt/registry'), app=Path('/app/todo-app'),
     # only have come from this run's registry: @aws-blocks has no public fallback.
     scaffolder = packages['@aws-blocks/create-blocks-app']['tarballS3Key']
     assert '/' + scaffolder in requests, 'scaffolder was not served by this run registry'
+    assert (app / 'package-lock.json').exists(), 'no package-lock.json'
     lock = json.loads((app / 'package-lock.json').read_text())
     checked = []
     for location, entry in lock['packages'].items():
