@@ -16,17 +16,23 @@ export interface ExternalSecretRef {
     readonly secretArn: string;
 }
 
+// Warning: (ae-forgotten-export) The symbol "SecretImpl" needs to be exported by the entry point index.aws.d.ts
+//
 // @public
-export class Secret<T = string> extends Scope {
-    constructor(scope: ScopeParent, id: string, options?: SecretOptions<T>);
+export type Secret<T = string> = Omit<SecretImpl<T>, 'put'>;
+
+// @public (undocumented)
+export const Secret: SecretConstructor;
+
+// @public
+export interface SecretConstructor {
     // (undocumented)
-    readonly bbName = "Secret";
-    static fromExisting(secretArn: string): ExternalSecretRef;
-    get(options?: SecretReadOptions): Promise<T | null>;
-    listVersions(): Promise<SecretVersionInfo[]>;
-    // @internal
-    protected log: ChildLogger;
-    put(value: T): Promise<void>;
+    new <T = string>(scope: ScopeParent, id: string, options: SecretOptions<T> & {
+        allowRuntimeWrite: true;
+    }): WritableSecret<T>;
+    // (undocumented)
+    new <T = string>(scope: ScopeParent, id: string, options?: SecretOptions<T>): Secret<T>;
+    fromExisting(secretArn: string): ExternalSecretRef;
 }
 
 // @public
@@ -38,6 +44,7 @@ export const SecretErrors: {
 
 // @public
 export interface SecretOptions<T = string> {
+    allowRuntimeWrite?: boolean;
     cacheTtlSeconds?: number;
     generate?: boolean;
     logger?: ChildLogger;
@@ -62,6 +69,11 @@ export interface SecretVersionInfo extends SecretVersion {
     readonly createdDate: Date;
     readonly stages: string[];
 }
+
+// @public
+export type WritableSecret<T = string> = Secret<T> & {
+    put(value: T): Promise<void>;
+};
 
 // (No @packageDocumentation comment for this package)
 
