@@ -24,12 +24,14 @@ export interface FileBucketOptions {
 	/**
 	 * CORS rules for browser-based access.
 	 *
-	 * Default: none — the deployed bucket rejects every cross-origin browser
-	 * request. Required whenever browser code fetches a presigned URL directly
+	 * Default: none — browsers block every cross-origin `fetch()` to the
+	 * deployed bucket. Required whenever browser code fetches a presigned URL directly
 	 * (`download()` / `upload()` on a file handle, or `fetch()` on a
 	 * `getUrl()` / `putUrl()` URL) against a deployed stack. Not inherited from
 	 * the stack's `defaults.allowedOrigins` or the Hosting domain. The local dev
 	 * server accepts any origin, so a missing rule only fails after deploy.
+	 * Ignored when `bucket` wraps an existing bucket — configure CORS on that
+	 * bucket itself.
 	 *
 	 * @example
 	 * ```ts

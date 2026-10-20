@@ -35,7 +35,7 @@ const bucket = new FileBucket(scope, id, options?)
 |--------|------|-------------|
 | `versioned` | `boolean` | Enable S3 object versioning. **Default: `true`.** Pass `versioned: false` to opt out. Note: the version-aware method typings (`versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings. |
 | `noncurrentVersionExpirationDays` | `number` | Days after which **noncurrent** (superseded) object versions are permanently expired, bounding the storage cost that versioning would otherwise let grow unbounded. Only applies when versioning is enabled (the default). **Default: `90`.** Must be a positive integer — a non-positive or non-integer value throws at synth. There is no disable sentinel; to drop the rule entirely, disable versioning (`versioned: false`). Ignored by the mock and browser runtimes. |
-| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. **Default: none — the deployed bucket rejects every cross-origin browser request.** Required whenever browser code fetches a presigned URL directly (`download()` / `upload()` on a file handle, or `fetch()` on a `getUrl()` / `putUrl()` URL) against a deployed sandbox or production stack. Not inherited from the stack's `defaults.allowedOrigins` or the Hosting domain. See [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors), and [CorsRule](#corsrule) for the wildcard-origin synth guard. |
+| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. **Default: none — browsers block every cross-origin `fetch()` to the deployed bucket.** Required whenever browser code fetches a presigned URL directly (`download()` / `upload()` on a file handle, or `fetch()` on a `getUrl()` / `putUrl()` URL) against a deployed sandbox or production stack. Not inherited from the stack's `defaults.allowedOrigins` or the Hosting domain. Ignored when `bucket` wraps an existing bucket. See [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors), and [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.accessLogging`)** when omitted — so a production-postured stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
@@ -164,9 +164,11 @@ Access to fetch at 'https://<bucket>.s3.<region>.amazonaws.com/...' from origin 
 has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
 ```
 
+For `upload()` / `PUT`, the browser fails at the preflight instead, and the message continues with `Response to preflight request doesn't pass access control check:` before the same text.
+
 `npm run dev` does not surface this: the local dev file-server accepts any origin, so the error first appears after you deploy.
 
-List every origin your frontend is served from — the local dev frontend (when it talks to a deployed sandbox) and your deployed app's domain:
+List every origin your frontend is served from — the local dev frontend (`http://localhost:3000`, when it talks to a deployed sandbox) and your deployed app's origin. With Hosting, that is the stack's `HostingUrl` output: your custom domain if you configured one, otherwise the generated `https://<id>.cloudfront.net` domain, which only exists after the first deploy (deploy once, copy `HostingUrl` into `corsRules`, then redeploy):
 
 ```typescript
 const bucket = new FileBucket(scope, 'uploads', {
@@ -178,12 +180,16 @@ const bucket = new FileBucket(scope, 'uploads', {
 });
 ```
 
+`aws-blocks/index.ts` is shared by sandbox and production deploys, so this rule also allows `http://localhost:3000` on the production bucket. Only a sandbox needs it; leaving it in production is low-risk because presigned URLs authenticate through their query-string signature, not ambient browser credentials.
+
 - `GET` covers `download()` and `fetch()` on a `getUrl()` URL; `PUT` covers `upload()` and a `putUrl()` URL.
 - `allowedHeaders` must list every header the browser sends. A cross-origin `PUT` always triggers a CORS preflight, and S3 rejects the preflight if a request header — such as the `Content-Type` that `upload()` sends — is not allowed.
-- `allowedOrigins` entries are literal origins (scheme + host + port, no trailing slash), not the regex patterns used by `defaults.allowedOrigins`.
-- `PUT`, `POST`, and `DELETE` require explicit origins — a wildcard (`'*'`) origin with a mutating method throws at synth (see [CorsRule](#corsrule)).
+- `allowedOrigins` entries are S3 origin strings (scheme + host + port, no trailing slash), optionally with a single `*` wildcard such as `https://*.example.com` — not the regex patterns used by `defaults.allowedOrigins`.
+- Use exact origins for `PUT`, `POST`, and `DELETE`. A bare `'*'` origin with a mutating method throws at synth (see [CorsRule](#corsrule)); a partial wildcard such as `https://*` is not caught, so avoid it for mutating methods.
 - Plain navigations to a `getUrl()` URL (`<img src>`, `<a href>`) are not CORS requests and work without a rule; `fetch()`, `download()`, and `upload()` do need one.
+- `exposedHeaders` (for example `ETag` or `x-amz-version-id`) is only needed when custom `fetch()` code reads response headers; the built-in handles don't. Every `PUT` preflights, so a `maxAge` (for example `3000`) saves a round trip per upload.
 - CORS is bucket configuration: redeploy after changing `corsRules`.
+- `corsRules` is ignored when `bucket` wraps an existing bucket (see [Wrapping an Existing Bucket](#wrapping-an-existing-bucket)) — configure CORS on that bucket itself.
 
 ### Listing Files with Scan
 
@@ -221,7 +227,7 @@ const bucket = new FileBucket(scope, 'legacy', {
 });
 ```
 
-> **A wrapped bucket does not receive FileBucket's secure defaults.** When you supply `bucket`, FileBucket binds to the existing bucket as-is and returns early — none of the secure defaults it normally applies are applied: not `enforceSSL`, versioning / noncurrent-version expiration, server access logging, `blockPublicAccess`, encryption, nor the wildcard-CORS guard. You own that bucket's security posture; configure these on the bucket itself (or via its own CDK construct) before wrapping it.
+> **A wrapped bucket does not receive FileBucket's secure defaults.** When you supply `bucket`, FileBucket binds to the existing bucket as-is and returns early — none of the secure defaults it normally applies are applied: not `enforceSSL`, versioning / noncurrent-version expiration, server access logging, `blockPublicAccess`, encryption, nor `corsRules` or the wildcard-CORS guard. You own that bucket's security posture; configure these on the bucket itself (or via its own CDK construct) before wrapping it.
 
 ### Versioned Bucket
 

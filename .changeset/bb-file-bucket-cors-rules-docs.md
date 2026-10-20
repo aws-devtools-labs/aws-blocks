@@ -14,11 +14,14 @@ stack's `defaults.allowedOrigins` or the Hosting domain.
 
 - **bb-file-bucket README** — new "Browser Uploads and Downloads (CORS)" section
   with the failing error, a working `corsRules` example (`GET`/`PUT`,
-  `allowedHeaders: ['Content-Type']`), and notes on preflight headers, literal
-  (non-regex) origins, and which requests need CORS. The `corsRules` option row,
-  Best Practices, and Local Development sections now point to it.
+  `allowedHeaders: ['Content-Type']`), how to find the deployed Hosting origin
+  (`HostingUrl`), and notes on preflight headers, S3 origin syntax, the scope of
+  the wildcard synth guard, which requests need CORS, and wrapped buckets. The
+  `corsRules` option row, Best Practices, and Local Development sections now
+  point to it.
 - **bb-file-bucket TSDoc / DESIGN.md** — `corsRules` documents its no-CORS
-  default and that it is not derived from `defaults.allowedOrigins`.
+  default, that it is ignored for wrapped buckets, and (new D-FB-15) why it is
+  not derived from `defaults.allowedOrigins` or the Hosting domain.
 - **blocks README** — the Security Considerations list notes that
   `defaults.allowedOrigins` covers the API only and FileBucket needs its own
   `corsRules`.
