@@ -1,5 +1,5 @@
 import type { Construct } from 'constructs';
-import { Stack, Token } from 'aws-cdk-lib';
+import { Annotations, Stack, Token } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import {
   CfnDelivery,
@@ -34,7 +34,9 @@ import { HostingError } from '../hosting_error.js';
  * created in **us-east-1** (mirrors the ACM-certificate constraint the hosting
  * construct already enforces). {@link wireStandardLoggingV2} validates this and
  * throws {@link HostingError} `LoggingV2RegionError` unless
- * `skipRegionValidation` is set (or the stack region is an unresolved token).
+ * `skipRegionValidation` is set. When the stack region is an unresolved token
+ * (an environment-agnostic stack) the check can't run at synth, so a
+ * `@aws-blocks/hosting:LoggingV2RegionUnresolved` warning is emitted instead.
  */
 
 /** Delivered log record formats supported by CloudFront standard logging v2. */
@@ -117,23 +119,40 @@ export const wireStandardLoggingV2 = (
 
   const stack = Stack.of(scope);
 
-  if (
-    !skipRegionValidation &&
-    !Token.isUnresolved(stack.region) &&
-    stack.region !== CLOUDFRONT_DELIVERY_REGION
-  ) {
-    throw new HostingError('LoggingV2RegionError', {
-      message: `CloudFront standard logging v2 requires the stack to be in ${CLOUDFRONT_DELIVERY_REGION} (the delivery source Region for the global CloudFront service), but this stack is in ${stack.region}.`,
-      resolution: `Deploy this hosting stack to ${CLOUDFRONT_DELIVERY_REGION}, use v1 logging (\`logging: { version: 'v1' }\`), or set \`skipRegionValidation\` if you know the deploy Region resolves to ${CLOUDFRONT_DELIVERY_REGION}.`,
-    });
+  if (!skipRegionValidation) {
+    if (Token.isUnresolved(stack.region)) {
+      Annotations.of(scope).addWarningV2(
+        '@aws-blocks/hosting:LoggingV2RegionUnresolved',
+        `CloudFront standard logging v2 requires the stack to be deployed to ${CLOUDFRONT_DELIVERY_REGION} (the delivery source Region for the global CloudFront service), but this stack's Region is not known at synth time. ` +
+          `Deployment fails if the stack lands in any other Region. Set the stack's \`env.region\` to ${CLOUDFRONT_DELIVERY_REGION} or use v1 logging (\`logging: { version: 'v1' }\`).`,
+      );
+    } else if (stack.region !== CLOUDFRONT_DELIVERY_REGION) {
+      throw new HostingError('LoggingV2RegionError', {
+        message: `CloudFront standard logging v2 requires the stack to be in ${CLOUDFRONT_DELIVERY_REGION} (the delivery source Region for the global CloudFront service), but this stack is in ${stack.region}.`,
+        resolution: `Deploy this hosting stack to ${CLOUDFRONT_DELIVERY_REGION}, use v1 logging (\`logging: { version: 'v1' }\`), or set \`skipRegionValidation\` if you know the deploy Region resolves to ${CLOUDFRONT_DELIVERY_REGION}.`,
+      });
+    }
   }
+
+  const source = new CfnDeliverySource(scope, 'AccessLogDeliverySource', {
+    name: `hosting-cf-${distributionId}`,
+    logType: CLOUDFRONT_ACCESS_LOGS_TYPE,
+    resourceArn: distributionArn,
+  });
 
   // Authorize the vended-logs delivery service to write to the bucket. With
   // BUCKET_OWNER_ENFORCED there are no ACLs, so authorization is entirely by
   // this resource policy: the SourceAccount + SourceArn conditions scope the
-  // grant to THIS account's THIS distribution, preventing a confused-deputy
-  // write from any other account or distribution.
-  logBucket.addToResourcePolicy(
+  // grant to THIS account's THIS delivery source, preventing a confused-deputy
+  // write from any other account or delivery source.
+  //
+  // The delivery service writes AS THE DELIVERY SOURCE
+  // (`arn:<partition>:logs:us-east-1:<account>:delivery-source:<name>`), not
+  // as the distribution, so `aws:SourceArn` must be the delivery-source ARN —
+  // matching it against the distribution ARN denies every write. Referencing
+  // `source.attrArn` scopes the grant to exactly this source and orders the
+  // bucket policy after the source.
+  const { policyDependable } = logBucket.addToResourcePolicy(
     new PolicyStatement({
       sid: 'AllowCloudFrontStandardLoggingV2',
       effect: Effect.ALLOW,
@@ -142,16 +161,10 @@ export const wireStandardLoggingV2 = (
       resources: [logBucket.arnForObjects('*')],
       conditions: {
         StringEquals: { 'aws:SourceAccount': stack.account },
-        ArnLike: { 'aws:SourceArn': distributionArn },
+        ArnLike: { 'aws:SourceArn': source.attrArn },
       },
     }),
   );
-
-  const source = new CfnDeliverySource(scope, 'AccessLogDeliverySource', {
-    name: `hosting-cf-${distributionId}`,
-    logType: CLOUDFRONT_ACCESS_LOGS_TYPE,
-    resourceArn: distributionArn,
-  });
 
   const destination = new CfnDeliveryDestination(
     scope,
@@ -172,7 +185,8 @@ export const wireStandardLoggingV2 = (
   });
 
   // The Delivery references the source by NAME (not by ref), so CloudFormation
-  // does not infer the create-order dependency; make it explicit.
-  delivery.addDependency(source);
-  delivery.addDependency(destination);
+  // does not infer the create-order dependency; make it explicit. It must also
+  // wait for the bucket policy that authorizes the delivery service's writes.
+  delivery.node.addDependency(source, destination);
+  if (policyDependable) delivery.node.addDependency(policyDependable);
 };

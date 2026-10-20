@@ -490,7 +490,15 @@ new HostingConstruct(stack, 'Hosting', {
 > **Region:** because CloudFront is a global service, standard logging v2's
 > delivery source must be created in **us-east-1** (same constraint as ACM
 > certificates). Synth throws `LoggingV2RegionError` in any other Region — deploy
-> the hosting stack to us-east-1 or use `version: 'v1'`.
+> the hosting stack to us-east-1 or use `version: 'v1'`. When the stack's Region
+> is unresolved at synth (an environment-agnostic stack), synth emits a
+> `LoggingV2RegionUnresolved` warning instead. `skipRegionValidation` skips this
+> check along with the WAF, ACM and Lambda Web Adapter Region checks.
+
+> **Entry point:** `version`, `partitioning` and `format` are available on
+> `HostingConstruct` from `@aws-blocks/hosting`. The `Hosting` block in
+> `@aws-blocks/core` currently accepts only `logging.enabled` and
+> `logging.retentionDays`, so it always uses v1.
 
 ## SSR caching & cache-key credentials
 

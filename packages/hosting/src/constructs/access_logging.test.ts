@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
 import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
@@ -28,6 +28,7 @@ const cdnWithLogging = (
     accessLogVersion?: 'v1' | 'v2';
     accessLogPartitioning?: 'date' | 'hive';
     accessLogFormat?: 'plain' | 'w3c' | 'json' | 'parquet';
+    skipLoggingRegionValidation?: boolean;
   },
 ): CdnConstruct => {
   const bucket = new Bucket(stack, 'Bucket');
@@ -139,6 +140,64 @@ void describe('access logging', () => {
       });
     });
 
+    void it('scopes the grant to this account and this delivery source', () => {
+      const stack = envStack();
+      cdnWithLogging(stack, { accessLogVersion: 'v2' });
+      const template = Template.fromStack(stack);
+      const [sourceId] = Object.keys(
+        template.findResources('AWS::Logs::DeliverySource'),
+      );
+
+      // Vended-logs delivery writes as the DELIVERY SOURCE
+      // (arn:<partition>:logs:us-east-1:<account>:delivery-source:<name>), not
+      // as the distribution, so SourceArn must be the delivery-source ARN.
+      template.hasResourceProperties('AWS::S3::BucketPolicy', {
+        PolicyDocument: Match.objectLike({
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Sid: 'AllowCloudFrontStandardLoggingV2',
+              Condition: {
+                StringEquals: { 'aws:SourceAccount': '123456789012' },
+                ArnLike: {
+                  'aws:SourceArn': { 'Fn::GetAtt': [sourceId, 'Arn'] },
+                },
+              },
+            }),
+          ]),
+        }),
+      });
+    });
+
+    void it('creates the delivery after the source and the bucket policy', () => {
+      const stack = envStack();
+      cdnWithLogging(stack, { accessLogVersion: 'v2' });
+      const template = Template.fromStack(stack);
+      const [sourceId] = Object.keys(
+        template.findResources('AWS::Logs::DeliverySource'),
+      );
+      const [policyId] = Object.keys(
+        template.findResources('AWS::S3::BucketPolicy', {
+          Properties: {
+            PolicyDocument: {
+              Statement: Match.arrayWith([
+                Match.objectLike({ Sid: 'AllowCloudFrontStandardLoggingV2' }),
+              ]),
+            },
+          },
+        }),
+      );
+      assert.ok(policyId, 'the v2 log-bucket policy should exist');
+
+      const delivery = Object.values(
+        template.findResources('AWS::Logs::Delivery'),
+      )[0] as { DependsOn?: string[] };
+      assert.ok(delivery.DependsOn?.includes(sourceId));
+      assert.ok(
+        delivery.DependsOn?.includes(policyId),
+        'the delivery must wait for the bucket policy that authorizes its writes',
+      );
+    });
+
     void it('honors partitioning and format options', () => {
       const stack = envStack();
       cdnWithLogging(stack, {
@@ -163,6 +222,42 @@ void describe('access logging', () => {
         (err: unknown) =>
           err instanceof HostingError &&
           err.name === 'LoggingV2RegionError',
+      );
+    });
+
+    void it('skipLoggingRegionValidation opts out of the us-east-1 check', () => {
+      const stack = envStack('eu-west-1');
+      assert.doesNotThrow(() =>
+        cdnWithLogging(stack, {
+          accessLogVersion: 'v2',
+          skipLoggingRegionValidation: true,
+        }),
+      );
+      Template.fromStack(stack).resourceCountIs('AWS::Logs::DeliverySource', 1);
+      Annotations.fromStack(stack).hasNoWarning(
+        '*',
+        Match.stringLikeRegexp('LoggingV2RegionUnresolved'),
+      );
+    });
+
+    void it('warns instead of throwing when the stack Region is an unresolved token', () => {
+      // No `env`: stack.region is the AWS::Region pseudo-parameter token.
+      const stack = new Stack(new App(), 'EnvAgnosticStack');
+      assert.doesNotThrow(() =>
+        cdnWithLogging(stack, { accessLogVersion: 'v2' }),
+      );
+      Annotations.fromStack(stack).hasWarning(
+        '*',
+        Match.stringLikeRegexp('LoggingV2RegionUnresolved'),
+      );
+    });
+
+    void it('does not warn when the stack Region is resolved to us-east-1', () => {
+      const stack = envStack();
+      cdnWithLogging(stack, { accessLogVersion: 'v2' });
+      Annotations.fromStack(stack).hasNoWarning(
+        '*',
+        Match.stringLikeRegexp('LoggingV2RegionUnresolved'),
       );
     });
   });

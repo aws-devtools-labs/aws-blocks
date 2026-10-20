@@ -135,6 +135,10 @@ export type HostingConstructProps = {
    * Skips region validation for WAF WebACL (must be us-east-1 for CloudFront),
    * ACM certificates (must be us-east-1 for CloudFront), and Lambda Web Adapter
    * compatibility checks. Useful for testing.
+   *
+   * Also skips the CloudFront standard logging v2 delivery-source Region check
+   * (`logging.version: 'v2'` must deploy to us-east-1), so a v2 stack outside
+   * us-east-1 synthesizes cleanly and then fails at deploy.
    */
   skipRegionValidation?: boolean;
 
