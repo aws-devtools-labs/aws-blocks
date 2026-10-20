@@ -84,7 +84,7 @@ swift run swift-code-generator path/to/blocks.spec.json path/to/output-dir
 
 This emits two files into the output directory: `Models.swift` (shared types) and `API.swift` (one class per API namespace with typed `async throws` methods, the `Blocks` entry point that holds them, and `Servers`).
 
-A `blocks.codegen.json` beside the spec is picked up by the plugin, or passed to the CLI as a third argument:
+A `blocks.codegen.json` beside the spec is picked up by the build plugin, or passed to the CLI as a third argument. In an Xcode project it must be a member of the target, like the spec; otherwise generation stops and names the file:
 
 ```json
 {
