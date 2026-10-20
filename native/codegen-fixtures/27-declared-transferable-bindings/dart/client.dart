@@ -12,6 +12,41 @@ export 'package:blocks_runtime/blocks_runtime.dart' show UnknownTransferable;
 
 // --- Models ---
 
+class DeviceLabel {
+  final String name;
+
+  DeviceLabel({
+    required this.name,
+  }) {
+    if (!(name.length >= 1)) throw ArgumentError('name must be at least 1 characters');
+  }
+
+  factory DeviceLabel.fromJson(Map<String, dynamic> json) {
+    return DeviceLabel(
+      name: json['name'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeviceLabel &&
+          name == other.name;
+
+  @override
+  int get hashCode => name.hashCode;
+
+  @override
+  String toString() => 'DeviceLabel(name: $name)';
+}
+
+
 class ConnectDeviceResultMessage {
   final num temperature;
   final num humidity;
