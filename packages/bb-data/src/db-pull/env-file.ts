@@ -74,8 +74,12 @@ function closingQuoteLine(lines: string[], from: number, quote: string): number 
  * Return `content` with `key` set to `value`, changing nothing else.
  *
  * - Every existing assignment of `key` (including `export KEY=` forms and quoted,
- *   multi-line values) is rewritten in place, keeping its indentation, `export`
- *   prefix, spacing around `=`, trailing `# comment`, and line ending. A line
+ *   multi-line values) is rewritten in place as one line: the text up to and
+ *   including `=` (indentation, `export` prefix, spacing before `=`) and the line
+ *   ending are kept, and everything after `=` is replaced by the new value. That
+ *   line is owned outright, so a trailing `# comment` on it is not kept: in an
+ *   unquoted value Node treats any `#` as a comment start, so a comment can't be
+ *   told apart from the tail of an old value that contained `#`. A line
  *   counts as an assignment of `key` only when Node's parser reads it as one:
  *   `export KEY=` with an empty value is read as the separate key `export KEY`,
  *   so it is left alone.
@@ -100,12 +104,12 @@ export function upsertEnvContent(content: string, key: string, value: string): s
 
 	const assignment = /^[ \t]*(?:export [ \t]*)?[^ \t#=][^=]*=[ \t]*(["'`])(.*)$/;
 	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const own = new RegExp(`^([ \\t]*(?:export [ \\t]*)?${escapedKey}[ \\t]*=[ \\t]*)(.*)$`);
+	const own = new RegExp(`^[ \\t]*(?:export [ \\t]*)?${escapedKey}[ \\t]*=`);
 
 	const out: string[] = [];
 	let found = false;
 	for (let i = 0; i < lines.length; i++) {
-		const { text, eol } = splitTerminator(lines[i]);
+		const { text } = splitTerminator(lines[i]);
 		const mine = own.exec(text);
 		const quoted = assignment.exec(text);
 		// A quoted value whose closing quote is on a later line spans those lines.
@@ -121,27 +125,7 @@ export function upsertEnvContent(content: string, key: string, value: string): s
 		}
 
 		found = true;
-		const rest = mine[2];
-		let suffix = '';
-		let lineEnd = eol;
-		if (quoted) {
-			const q = quoted[1];
-			if (last > i) {
-				const closing = splitTerminator(lines[last]);
-				suffix = closing.text.slice(closing.text.indexOf(q) + 1);
-				lineEnd = closing.eol;
-			} else {
-				const close = rest.indexOf(q, 1);
-				suffix = close === -1 ? '' : rest.slice(close + 1);
-			}
-		} else {
-			const hash = /[ \t]*#.*$/.exec(rest);
-			suffix = hash ? hash[0] : '';
-		}
-		// Keep only a trailing comment; anything else after a closing quote is
-		// ignored by the parser and would change meaning after a bare value.
-		if (!/^[ \t]*#/.test(suffix)) suffix = '';
-		out.push(`${mine[1]}${formatted}${suffix}${lineEnd}`);
+		out.push(`${mine[0]}${formatted}${splitTerminator(lines[last]).eol}`);
 		i = last;
 	}
 
@@ -175,31 +159,58 @@ function assertOnlyKeyChanged(before: string, after: string, key: string, value:
 }
 
 /**
+ * Read the env file at `filePath` as text, or `null` when it doesn't exist.
+ * Throws for any other read error, and for content that isn't valid UTF-8
+ * (decoding would replace the bad bytes, and writing that back would corrupt them).
+ */
+export function readEnvFile(filePath: string): string | null {
+	let raw: Buffer;
+	try {
+		raw = fs.readFileSync(filePath);
+	} catch (e: unknown) {
+		if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return null;
+		throw e;
+	}
+	const text = raw.toString('utf-8');
+	if (!Buffer.from(text, 'utf-8').equals(raw)) {
+		throw new Error(`${filePath} is not valid UTF-8. Edit it by hand.`);
+	}
+	return text;
+}
+
+/**
+ * Read the env file at `filePath` and compute it with `key` set to `value`
+ * ({@link readEnvFile} + {@link upsertEnvContent}), without writing anything.
+ * Throws exactly the content errors {@link upsertEnvFile} would, prefixed with
+ * the path, so a caller can check that an update will go through before doing
+ * other work. `original` is `null` when the file doesn't exist.
+ */
+export function prepareEnvFileUpsert(
+	filePath: string,
+	key: string,
+	value: string,
+): { original: string | null; next: string } {
+	const original = readEnvFile(filePath);
+	try {
+		return { original, next: upsertEnvContent(original ?? '', key, value) };
+	} catch (e: unknown) {
+		throw new Error(`${filePath}: ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
+
+/**
  * Set `key` to `value` in the env file at `filePath`, preserving everything else
  * in it (see {@link upsertEnvContent}). Creates the file when missing. The file is
  * rewritten in place, so it keeps its inode and with it its permission bits (e.g.
  * `0600`), owner, group and ACLs; a read-only file is refused (`EACCES`) rather
  * than replaced. A symlinked env file is updated at its target (a dangling link's
  * target is created). Returns whether the file was created.
+ *
+ * The file is read fresh on every call (see {@link prepareEnvFileUpsert}), so a
+ * check made earlier doesn't pin stale content.
  */
 export function upsertEnvFile(filePath: string, key: string, value: string): { created: boolean } {
-	let original: string | null = null;
-	try {
-		const raw = fs.readFileSync(filePath);
-		original = raw.toString('utf-8');
-		if (!Buffer.from(original, 'utf-8').equals(raw)) {
-			throw new Error(`${filePath} is not valid UTF-8. Set ${key} in it by hand.`);
-		}
-	} catch (e: unknown) {
-		if (!(e instanceof Error && 'code' in e && e.code === 'ENOENT')) throw e;
-	}
-
-	let next: string;
-	try {
-		next = upsertEnvContent(original ?? '', key, value);
-	} catch (e: unknown) {
-		throw new Error(`${filePath}: ${e instanceof Error ? e.message : String(e)}`);
-	}
+	const { original, next } = prepareEnvFileUpsert(filePath, key, value);
 	if (next !== original) fs.writeFileSync(filePath, next);
 	return { created: original === null };
 }

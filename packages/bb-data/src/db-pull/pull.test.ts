@@ -14,7 +14,7 @@
  */
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -189,7 +189,7 @@ describe('writeProductionEnv', () => {
       const envProdPath = path.join(dir, '.env.production');
       fs.writeFileSync(envProdPath, `A=1\nSUPABASE_DB_URL=${SUPA_DEV} # old\nB=2\n`);
       writeProductionEnv(dir, SUPA_PROD);
-      assert.equal(fs.readFileSync(envProdPath, 'utf-8'), `A=1\nSUPABASE_DB_URL=${SUPA_PROD} # old\nB=2\n`);
+      assert.equal(fs.readFileSync(envProdPath, 'utf-8'), `A=1\nSUPABASE_DB_URL=${SUPA_PROD}\nB=2\n`);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -315,9 +315,9 @@ for (const k of ['SUPABASE_DB_URL', 'AWS_PROFILE', 'OIDC_CLIENT_SECRET', 'QUOTED
 console.log('ENV=' + JSON.stringify(seen));
 `;
 
-/** Run `dbPull` in `dir` (answering "y" to its consent prompt); returns what core's env loader then reads. */
-function runDbPull(dir: string, conn: string): Record<string, string | undefined> {
-  const out = execFileSync(
+/** Run `dbPull` in a child process in `dir`, answering "y" to its consent prompt. */
+function spawnDbPull(dir: string, conn: string) {
+  return spawnSync(
     process.execPath,
     ['--experimental-test-module-mocks', '--no-warnings', '--input-type=module', '-e', childScript(conn)],
     {
@@ -328,8 +328,14 @@ function runDbPull(dir: string, conn: string): Record<string, string | undefined
       env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
     },
   );
-  const line = out.split('\n').find(l => l.startsWith('ENV='));
-  assert.ok(line, `dbPull child produced no env report:\n${out}`);
+}
+
+/** Run `dbPull` in `dir` and require it to succeed; returns what core's env loader then reads. */
+function runDbPull(dir: string, conn: string): Record<string, string | undefined> {
+  const child = spawnDbPull(dir, conn);
+  assert.equal(child.status, 0, `dbPull child failed:\n${child.stdout}\n${child.stderr}`);
+  const line = child.stdout.split('\n').find(l => l.startsWith('ENV='));
+  assert.ok(line, `dbPull child produced no env report:\n${child.stdout}`);
   return JSON.parse(line.slice('ENV='.length));
 }
 
@@ -403,6 +409,28 @@ describe('dbPull .env.local handling', () => {
       const seen = runDbPull(dir, conn);
       assert.equal(seen.SUPABASE_DB_URL, conn);
       assert.equal(seen.AWS_PROFILE, 'deployment');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('fails before generating anything when .env.local cannot be updated', () => {
+    const dir = tmpProject();
+    try {
+      // Node reads this file as A="SUPABASE_DB_URL=old", so no edit keeps A as it is.
+      const envPath = path.join(dir, '.env.local');
+      const before = 'A= \nSUPABASE_DB_URL=old\n';
+      fs.writeFileSync(envPath, before);
+
+      const child = spawnDbPull(dir, SUPA_DEV);
+
+      assert.notEqual(child.status, 0, `dbPull should fail:\n${child.stdout}`);
+      assert.match(child.stderr, /Could not update SUPABASE_DB_URL without changing how other entries are read \(A\)/);
+      for (const file of ['database.types.ts', 'database.meta.ts', 'database.ca.ts', 'supabase.ts', 'MIGRATION_GUIDE.md']) {
+        assert.equal(fs.existsSync(path.join(dir, 'aws-blocks', file)), false, `${file} must not be written`);
+      }
+      assert.equal(fs.existsSync(path.join(dir, '.bb-data', 'settings.json')), false, 'db-url AppSetting must not be seeded');
+      assert.equal(fs.readFileSync(envPath, 'utf-8'), before);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

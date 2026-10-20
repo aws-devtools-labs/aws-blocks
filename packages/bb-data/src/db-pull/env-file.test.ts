@@ -12,7 +12,7 @@ import * as path from 'node:path';
  */
 import { afterEach, describe, test } from 'node:test';
 import { parseEnv } from 'node:util';
-import { formatEnvValue, upsertEnvContent, upsertEnvFile } from './env-file.js';
+import { formatEnvValue, readEnvFile, upsertEnvContent, upsertEnvFile } from './env-file.js';
 
 const KEY = 'SUPABASE_DB_URL';
 const URL1 = 'postgresql://postgres.ref1:pw@host:5432/postgres';
@@ -39,11 +39,19 @@ describe('upsertEnvContent', () => {
 		assert.equal(upsertAndCheck(''), `${KEY}=${URL1}\n`);
 	});
 
-	test('replaces an existing assignment in place (no duplicate), keeping spacing, export and comment', () => {
+	test('replaces an existing assignment in place (no duplicate), keeping indentation, export and spacing before "="', () => {
 		assert.equal(upsertAndCheck(`A=1\n${KEY}=old\nB=2\n`), `A=1\n${KEY}=${URL1}\nB=2\n`);
-		assert.equal(upsertAndCheck(`export ${KEY} = old # dev db\n`), `export ${KEY} = ${URL1} # dev db\n`);
-		assert.equal(upsertAndCheck(`${KEY}="old" # c\n`), `${KEY}=${URL1} # c\n`);
+		assert.equal(upsertAndCheck(`  export ${KEY} =old\n`), `  export ${KEY} =${URL1}\n`);
 		assert.equal(upsertAndCheck(`${KEY}=\n`), `${KEY}=${URL1}\n`);
+	});
+
+	test('rewrites everything after "=" on its own line, so no old text survives', () => {
+		// An unquoted `#` starts a comment for Node, so an older `db pull` that wrote a
+		// `#` password bare left the rest of the password and host after it.
+		assert.equal(upsertAndCheck(`${KEY}=postgres://u:p#ss@h:5432/db\nA=1\n`), `${KEY}=${URL1}\nA=1\n`);
+		assert.equal(upsertAndCheck(`export ${KEY}=old # note\n`), `export ${KEY}=${URL1}\n`);
+		assert.equal(upsertAndCheck(`${KEY}="old" # c\n`), `${KEY}=${URL1}\n`);
+		assert.equal(upsertAndCheck(`${KEY}='old'tail\n`), `${KEY}=${URL1}\n`);
 	});
 
 	test('rewrites every assignment of the key when it is duplicated; other duplicates untouched', () => {
@@ -80,7 +88,7 @@ describe('upsertEnvContent', () => {
 	});
 
 	test('replaces a multi-line quoted value of the key with a single line', () => {
-		assert.equal(upsertAndCheck(`A=1\n${KEY}="line1\nline2" # c\nB=2\n`), `A=1\n${KEY}=${URL1} # c\nB=2\n`);
+		assert.equal(upsertAndCheck(`A=1\n${KEY}="line1\nline2" # c\nB=2\n`), `A=1\n${KEY}=${URL1}\nB=2\n`);
 	});
 
 	test('does not treat a commented-out assignment as the key', () => {
@@ -206,5 +214,37 @@ describe('upsertEnvFile', () => {
 		fs.writeFileSync(file, bytes);
 		assert.throws(() => upsertEnvFile(file, KEY, URL1), /not valid UTF-8/);
 		assert.ok(fs.readFileSync(file).equals(bytes));
+	});
+});
+
+describe('readEnvFile', () => {
+	const dirs: string[] = [];
+	const tmp = () => {
+		const d = fs.mkdtempSync(path.join(os.tmpdir(), 'env-file-'));
+		dirs.push(d);
+		return d;
+	};
+	afterEach(() => {
+		for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+	});
+
+	test('returns the content of an existing file', () => {
+		const file = path.join(tmp(), '.env.local');
+		fs.writeFileSync(file, 'A=1\r\n');
+		assert.equal(readEnvFile(file), 'A=1\r\n');
+	});
+
+	test('returns null for a missing file', () => {
+		assert.equal(readEnvFile(path.join(tmp(), '.env.local')), null);
+	});
+
+	test('throws for a file that is not valid UTF-8', () => {
+		const file = path.join(tmp(), '.env.local');
+		fs.writeFileSync(file, Buffer.from([0x41, 0x3d, 0xff, 0x0a]));
+		assert.throws(() => readEnvFile(file), /not valid UTF-8/);
+	});
+
+	test('throws other read errors', () => {
+		assert.throws(() => readEnvFile(tmp()), { code: 'EISDIR' });
 	});
 });
