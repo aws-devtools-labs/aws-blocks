@@ -7,7 +7,8 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
+import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 
 describe('getCdkTelemetryEnv', () => {
   const originalEnv = { ...process.env };
@@ -71,5 +72,37 @@ describe('getCdkTelemetryEnv', () => {
     assert.ok(prodEnv.CDK_CLI_USERAGENT.endsWith('/production'));
 
     rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('getFrameworkSinkEnv', () => {
+  const originalEnv = { ...process.env };
+  const originalCwd = process.cwd();
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    process.chdir(originalCwd);
+  });
+
+  it('returns the sink path when telemetry is enabled', () => {
+    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    const tmp = join(tmpdir(), `framework-sink-env-test-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+    process.chdir(tmp);
+
+    assert.deepStrictEqual(getFrameworkSinkEnv('/tmp/sink'), { [FRAMEWORK_SINK_ENV]: '/tmp/sink' });
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('returns nothing when the user opted out, so the sink file is never written', () => {
+    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+
+    assert.deepStrictEqual(getFrameworkSinkEnv('/tmp/sink'), {});
+  });
+
+  it('returns nothing when no sink directory could be created', () => {
+    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    assert.deepStrictEqual(getFrameworkSinkEnv(undefined), {});
   });
 });
