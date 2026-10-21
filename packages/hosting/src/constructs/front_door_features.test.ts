@@ -163,7 +163,7 @@ describe('HostingConstruct — frontDoor.features', () => {
           waf: { enabled: true, rateLimit: 700, webAclArn: WEB_ACL },
           logging: { enabled: true, retentionDays: 14 },
           monitoring: { subscriptions: [email] },
-          geoRestriction: { type: 'blacklist', countries: ['KP'] },
+          geoRestriction: { type: 'denylist', countries: ['KP'] },
           skewProtection: { enabled: true, maxAge: 600 },
         },
       },
@@ -175,7 +175,7 @@ describe('HostingConstruct — frontDoor.features', () => {
     assert.deepEqual(input.features.waf, { enabled: true, webAclArn: WEB_ACL, rateLimit: 700 });
     assert.deepEqual(input.features.logging, { enabled: true, retentionDays: 14 });
     assert.deepEqual(input.features.monitoring, { subscriptions: [email] });
-    assert.deepEqual(input.features.geoRestriction, { type: 'blacklist', countries: ['KP'] });
+    assert.deepEqual(input.features.geoRestriction, { type: 'denylist', countries: ['KP'] });
     assert.deepEqual(input.features.skewProtection, { enabled: true, maxAge: 600 });
   });
 
@@ -259,7 +259,7 @@ describe('HostingConstruct — frontDoor.features', () => {
   it('a top-level prop the kind does not implement fails synth, naming the kind and the prop', () => {
     const cases: Array<[Partial<HostingConstructProps>, string, string]> = [
       [{ frontDoor: { kind: 'alb' }, cdn: { geoRestriction: { type: 'whitelist', countries: ['US'] } } }, 'alb', '`cdn.geoRestriction`'],
-      [{ frontDoor: { kind: 'alb' }, domain: { domainName: 'app.example.com' } }, 'alb', '`domain`'],
+      [{ frontDoor: { kind: 'alb' }, domain: { domainName: 'app.example.com', wwwRedirect: 'toWww' } }, 'alb', '`domain.wwwRedirect`'],
       [{ frontDoor: { kind: 'alb' }, skewProtection: { enabled: true } }, 'alb', '`skewProtection`'],
       [{ frontDoor: { kind: 'alb' }, monitoring: { subscriptions: [new EmailSubscription('a@example.com')] } }, 'alb', '`monitoring.subscriptions`'],
       [{ frontDoor: { kind: 'apiGateway' }, waf: { enabled: true } }, 'apiGateway', '`waf`'],
@@ -291,6 +291,94 @@ describe('HostingConstruct — frontDoor.features', () => {
       () => synth({ frontDoor: forced }),
       (e: Error) => e.name === 'UnsupportedFrontDoorSettingError' && e.message.includes('`frontDoor.features.priceClass`'),
     );
+  });
+});
+
+describe('HostingConstruct — frontDoor is validated (plain JavaScript, or a cast)', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-validate-'));
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), '<html></html>');
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  /** Synthesize with a `frontDoor` value as JavaScript could pass it. */
+  const synthJs = (frontDoor: unknown, extra: Partial<HostingConstructProps> = {}) => {
+    const stack = new Stack(new App(), 'Js', { env: { account: '111111111111', region: 'us-east-1' } });
+    const manifest: DeployManifest = {
+      version: 1,
+      buildId: 'js1',
+      compute: {},
+      staticAssets: { directory: tmpDir, spaFallback: true },
+      routes: [{ pattern: '/*', target: 'static' }],
+    };
+    return new HostingConstruct(stack, 'Hosting', {
+      manifest,
+      skipRegionValidation: true,
+      frontDoor: frontDoor as HostingConstructProps['frontDoor'],
+      ...extra,
+    });
+  };
+  const fails = (frontDoor: unknown, name: string, pattern: RegExp, extra: Partial<HostingConstructProps> = {}) =>
+    assert.throws(
+      () => synthJs(frontDoor, extra),
+      (e: Error) => e.name === name && pattern.test(e.message),
+      JSON.stringify(frontDoor),
+    );
+
+  it('an unknown door — a string kind, a wrong case, the backend prop spelling — fails instead of building CloudFront', () => {
+    fails('alb', 'UnsupportedFrontDoorError', /Unknown front door "alb"/);
+    fails({ kind: 'ALB' }, 'UnsupportedFrontDoorError', /Unknown front door/);
+    fails({ kind: 'apigateway' }, 'UnsupportedFrontDoorError', /Unknown front door/);
+    fails({ kind: 'none' }, 'UnsupportedFrontDoorError', /Unknown front door/);
+    fails({ kind: 'ALB', features: {} }, 'UnsupportedFrontDoorError', /Unknown front door/);
+  });
+
+  it('null is the default door, as if omitted', () => {
+    assert.equal(synthJs(null).frontDoorKind, 'cloudfront');
+  });
+
+  it('an option the kind does not take, or a value of the wrong shape, fails naming it', () => {
+    fails({ kind: 'alb', feature: { waf: { enabled: true } } }, 'InvalidFrontDoorOptionError', /`frontDoor\.feature` is not an option of the 'alb'/);
+    fails({ kind: 'alb', restrictToCloudFront: true }, 'InvalidFrontDoorOptionError', /`frontDoor\.restrictToCloudFront`/);
+    fails({ kind: 'alb', backendApiUrl: 'https://x.example.com/aws-blocks/api' }, 'InvalidFrontDoorOptionError', /backendApiUrl/);
+    fails({ kind: 'alb', internal: 'false' }, 'InvalidFrontDoorOptionError', /`frontDoor\.internal` must be true or false/);
+    fails({ kind: 'apiGateway', api: 'REST' }, 'InvalidFrontDoorOptionError', /`frontDoor\.api` must be 'http' or 'rest'/);
+    fails({ kind: 'apiGateway', api: 'websocket' }, 'InvalidFrontDoorOptionError', /`frontDoor\.api`/);
+    fails(
+      { kind: 'alb', certificate: 'arn:aws:acm:us-east-1:111111111111:certificate/x' },
+      'InvalidFrontDoorOptionError',
+      /not an ARN string/,
+    );
+    fails({ kind: 'cloudfront', vpc: {} }, 'InvalidFrontDoorOptionError', /`frontDoor\.vpc`/);
+    fails({ kind: 'alb', features: 'waf' }, 'InvalidFrontDoorOptionError', /`frontDoor\.features` must be an object/);
+  });
+
+  it('a custom door without `door` fails with the clear error, not a TypeError', () => {
+    fails({ kind: 'custom' }, 'InvalidPropsError', /has no `door`/);
+  });
+
+  it('an unknown key inside a setting fails naming it (a typo must not drop the WAF)', () => {
+    fails({ kind: 'alb', features: { waf: { enable: true } } }, 'InvalidFrontDoorSettingError', /`frontDoor\.features\.waf\.enable` is not a waf setting/);
+    fails({ features: { logging: { enabeld: true } } }, 'InvalidFrontDoorSettingError', /logging\.enabeld/);
+    fails({ features: { waf: true } }, 'InvalidFrontDoorSettingError', /`frontDoor\.features\.waf` must be an object/);
+  });
+
+  it("geo restriction: 'allowlist' / 'denylist' build the matching restriction; an unknown type fails instead of denying", () => {
+    const geo = (type: string) =>
+      Template.fromStack(Stack.of(synthJs({ features: { geoRestriction: { type, countries: ['US'] } } })))
+        .findResources('AWS::CloudFront::Distribution');
+    const restriction = (type: string) =>
+      Object.values(geo(type))[0]?.Properties.DistributionConfig.Restrictions.GeoRestriction.RestrictionType;
+    assert.equal(restriction('allowlist'), 'whitelist');
+    assert.equal(restriction('whitelist'), 'whitelist');
+    assert.equal(restriction('denylist'), 'blacklist');
+    fails({ features: { geoRestriction: { type: 'allow', countries: ['US'] } } }, 'InvalidFrontDoorSettingError', /must be 'allowlist' or 'denylist'/);
+  });
+
+  it('an ALB certificate without a custom domain fails (the browser would be at a domain the app does not know)', () => {
+    const certificate = { certificateArn: 'arn:aws:acm:us-east-1:111111111111:certificate/x' };
+    fails({ kind: 'alb', certificate }, 'AlbCertificateNeedsDomainError', /no custom domain/);
   });
 });
 

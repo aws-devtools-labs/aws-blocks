@@ -16,9 +16,8 @@
  * (so cookie auth works with no CORS), and maps the custom domain when the app
  * has one. On the HTTP API, SSR responses are buffered (an HTTP API Lambda
  * integration can't stream, so `HostingConstruct` builds the server buffered);
- * the REST API streams them. There are no redirects, error pages, edge cache,
- * response headers, session pinning, WAF, geo restriction, access logs or
- * alarms at an edge.
+ * the REST API streams them. It has no edge cache, session pinning (skew
+ * protection), WAF, geo restriction, access logs or alarms.
  *
  * The app's redirects, per-pattern response headers and error pages are applied
  * by the asset proxy instead, with the CloudFront door's semantics (each
@@ -70,12 +69,15 @@ export const apiGatewayDoor = defineFrontDoor<ApiGatewayDoorInput, FrontDoorResu
       return {
         url: apigw.url,
         originHandle: { domainName: Fn.select(2, Fn.split('/', apigw.url)), protocol: 'https' },
+        // The asset proxy's environment names the build (see `FrontDoorResult.cutover`).
+        cutover: [apigw.assetProxy],
       };
     }
     const apigw = new ApiGatewayConstruct(scope, 'ApiGateway', { ...input.apiGateway, apiPaths });
     return {
       url: apigw.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', apigw.url)), protocol: 'https' },
+      cutover: [apigw.assetProxy],
     };
   },
 });

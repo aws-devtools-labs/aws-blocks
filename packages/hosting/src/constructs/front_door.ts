@@ -51,8 +51,8 @@
 import type { IFunction, IFunctionUrl } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
-import type { Construct } from 'constructs';
-import type { HostingGeoRestriction, HostingLoggingConfig, HostingMonitoringConfig } from './front_door_options.js';
+import type { Construct, IConstruct } from 'constructs';
+import type { HostingLoggingConfig, HostingMonitoringConfig } from './front_door_options.js';
 import type { HostingDomainConfig, HostingWafConfig } from './hosting_construct.js';
 import type { OriginHandle } from './layer.js';
 
@@ -111,7 +111,7 @@ export type ImageOrigin = {
 export type ApiOrigin = {
   /** Discriminant. */
   readonly kind: 'api';
-  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`. */
+  /** The backend's full API URL (a CDK token), e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks/api`. */
   readonly url: string;
   /** The API host (no scheme, no path), derived from {@link url} in-template. */
   readonly host: string;
@@ -220,8 +220,12 @@ export type DoorFeatures = {
   readonly logging?: Readonly<HostingLoggingConfig>;
   /** Alarms on the door's metrics, with the endpoints to notify. */
   readonly monitoring?: Readonly<HostingMonitoringConfig>;
-  /** Geo restriction: the country codes to allow (`whitelist`) or deny (`blacklist`). */
-  readonly geoRestriction?: Readonly<HostingGeoRestriction>;
+  /**
+   * Geo restriction: the country codes to allow (`'allowlist'`) or deny
+   * (`'denylist'`). The app may write the legacy `'whitelist'` / `'blacklist'`;
+   * the door always receives these two.
+   */
+  readonly geoRestriction?: { readonly type: 'allowlist' | 'denylist'; readonly countries: readonly string[] };
   /** Skew protection: keep a visitor on one build for `maxAge` seconds. */
   readonly skewProtection?: { readonly enabled: true; readonly maxAge: number };
 };
@@ -292,8 +296,23 @@ export type FrontDoorResult = {
    * the door can declare resources that must run after them (e.g. a cache
    * invalidation via `cf.invalidate`). Like the door itself, it only DECLARES
    * resources; CloudFormation runs them during the deploy.
+   *
+   * Declare them under the door's `scope` (or a construct inside it): those
+   * also wait for the uploads AWS Blocks declares later (the
+   * `@aws-blocks/core` `Hosting` uploads the resolved runtime config after
+   * the door). A resource created directly under the stack is not ordered
+   * after that later upload.
    */
   readonly onUpload?: (ctx: UploadContext) => void;
+  /**
+   * The constructs that switch traffic to the new build — whatever holds the
+   * build id or prefix (e.g. a proxy Lambda whose environment names
+   * `builds/<buildId>`, a function that rewrites to it). AWS Blocks makes each
+   * one depend on every asset upload of the build, the later runtime-config
+   * upload included, so CloudFormation updates it only once the new files are
+   * in place and the previous build keeps serving until then.
+   */
+  readonly cutover?: readonly IConstruct[];
 };
 
 /**

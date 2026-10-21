@@ -1,7 +1,7 @@
 /**
- * `buildCapabilityPlan` — the service-agnostic core.
+ * `buildHostingPlan` — the service-agnostic core.
  *
- * Turns a framework-agnostic {@link DeployManifest} into a {@link CapabilityPlan}
+ * Turns a framework-agnostic {@link DeployManifest} into a {@link HostingPlan}
  * (origins + route table + policies + release) with ZERO service vocabulary. A
  * built-in front door (CloudFront, ALB, …) consumes the plan and renders it.
  *
@@ -12,7 +12,7 @@
 import type { DeployManifest } from '../manifest/types.js';
 import { normalizeBasePath, prependBasePath } from '../adapters/shared/basepath.js';
 import { buildRouteTable } from './route-table.js';
-import type { BackendOrigin, CapabilityPlan, HeaderRule, Origin, RedirectRule } from './types.js';
+import type { BackendOrigin, HostingPlan, HeaderRule, Origin, RedirectRule } from './types.js';
 
 /** Stable origin ids shared by every renderer (a CloudFront behavior, an ALB target, …). */
 export const ORIGIN_IDS = {
@@ -21,8 +21,8 @@ export const ORIGIN_IDS = {
   image: 'blocks-image',
 } as const;
 
-/** Inputs to {@link buildCapabilityPlan}. All service-agnostic. */
-export type BuildCapabilityPlanInput = {
+/** Inputs to {@link buildHostingPlan}. All service-agnostic. */
+export type BuildHostingPlanInput = {
   manifest: DeployManifest;
   buildId: string;
   /** Whether the deploy has a server (compute) origin. */
@@ -53,14 +53,14 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
 };
 
 /**
- * Build the service-agnostic {@link CapabilityPlan} from a manifest.
+ * Build the service-agnostic {@link HostingPlan} from a manifest.
  *
  * The plan captures the same routing/origin/policy decisions the CloudFront
  * construct makes today, but in neutral form: any adapter can render it. The
  * route entries come from {@link buildRouteTable} (shared with the CloudFront
  * KVS renderer, so classification/coalescing/ordering stay in one place).
  */
-export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): CapabilityPlan => {
+export const buildHostingPlan = (input: BuildHostingPlanInput): HostingPlan => {
   const { manifest, buildId, hasServer, hasImage } = input;
   const basePath = manifest.basePath ? normalizeBasePath(manifest.basePath) : undefined;
   const imagePrefix = hasImage ? manifest.imageOptimization?.baseURL : undefined;

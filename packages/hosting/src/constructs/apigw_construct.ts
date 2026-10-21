@@ -21,11 +21,13 @@
  * image function or the backend don't pass through it, which synth reports
  * (`@aws-blocks/hosting:DoorRulesNotApplied`).
  *
- * Not provided (an app that asks for these deploys without them — there is no
- * feature check): no global edge cache, no per-route response-header
- * injection on server/API responses, no skew-pin, buffered SSR only (HTTP API can't stream). API Gateway also imposes a ~29 s request timeout and a
- * ~10 MB payload / ~6 MB response cap. Stage-level config (WAF, TLS/domain,
- * access logs, throttle) applies to the whole API, not per route.
+ * Not provided: no global edge cache, no per-route response headers on
+ * server/API responses (synth names them), no skew protection, buffered SSR
+ * only (an HTTP API can't stream). Unsupported settings are a type error in
+ * `frontDoor.features` and a synth error through the deprecated top-level
+ * props. API Gateway also imposes a ~29 s request timeout and a ~10 MB
+ * payload / ~6 MB response cap. Stage-level config (TLS/domain, throttle)
+ * applies to the whole API, not per route.
  */
 import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
 import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -35,21 +37,23 @@ import { AaaaRecord, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { ApiGatewayv2DomainProperties } from 'aws-cdk-lib/aws-route53-targets';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
   APIGW_DEFAULT_ROUTE_QUOTA,
-  apiPathToRoute,
+  apiPathToRoutes,
   backendBaseUrl,
   DEFAULT_API_PATHS,
   globToProxyPath,
+  hasInnerWildcard,
 } from './apigw_routes.js';
+import { assetProxyEnvironment } from './asset_proxy_core.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayConstructProps = {
-  plan: CapabilityPlan;
+  plan: HostingPlan;
   bucket: IBucket;
   computeFunctions?: Map<string, IFunction>;
   serverComputeName?: string;
@@ -74,6 +78,11 @@ export type ApiGatewayConstructProps = {
 export class ApiGatewayConstruct extends Construct {
   readonly api: HttpApi;
   readonly url: string;
+  /**
+   * The static asset-proxy Lambda. Its `ASSET_KEY_PREFIX` environment names
+   * the build, so it is the door's switch to a new build (its `cutover`).
+   */
+  readonly assetProxy: LambdaFunction;
 
   constructor(scope: Construct, id: string, props: ApiGatewayConstructProps) {
     super(scope, id);
@@ -101,13 +110,19 @@ export class ApiGatewayConstruct extends Construct {
       ),
       timeout: Duration.seconds(15),
       memorySize: 256,
-      environment: { ASSET_BUCKET: bucket.bucketName, ASSET_KEY_PREFIX: `builds/${buildId}` },
+      environment: assetProxyEnvironment({ bucket, prefix: `builds/${buildId}` }),
     });
     bucket.grantRead(assetProxy);
+    this.assetProxy = assetProxy;
 
-    const assetIntegration = new HttpLambdaIntegration('AssetInt', assetProxy);
-    const serverIntegration = serverFn ? new HttpLambdaIntegration('SsrInt', serverFn) : undefined;
-    const imageIntegration = imageFn ? new HttpLambdaIntegration('ImageInt', imageFn) : undefined;
+    // One API-scoped invoke permission per function, not one per route: a
+    // per-route permission per path would grow each function's resource policy
+    // toward Lambda's 20 KB limit. The trust boundary is the same (this API).
+    const lambdaIntegration = (id: string, fn: IFunction) =>
+      new HttpLambdaIntegration(id, fn, { scopePermissionToRoute: false });
+    const assetIntegration = lambdaIntegration('AssetInt', assetProxy);
+    const serverIntegration = serverFn ? lambdaIntegration('SsrInt', serverFn) : undefined;
+    const imageIntegration = imageFn ? lambdaIntegration('ImageInt', imageFn) : undefined;
 
     this.api = new HttpApi(this, 'HttpApi', {
       apiName: `blocks-${buildId}`.substring(0, 128),
@@ -135,17 +150,17 @@ export class ApiGatewayConstruct extends Construct {
       if (origin.namespace === '*') {
         let i = 0;
         for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
-          const route = apiPathToRoute(pattern);
-          if (!route || backendPaths.has(route.path)) continue;
-          backendPaths.add(route.path);
-          // The first id stays `BackendRpc` (the `/aws-blocks/*` route), so an
-          // existing deploy's integration keeps its logical id.
-          const id = i++ === 0 ? 'BackendRpc' : `BackendRoute${i - 1}`;
-          this.api.addRoutes({
-            path: route.path,
-            methods: [HttpMethod.ANY],
-            integration: new HttpUrlIntegration(id, `${base}${route.target}`),
-          });
+          for (const route of apiPathToRoutes(pattern, 'API Gateway')) {
+            if (backendPaths.has(route.path)) continue;
+            backendPaths.add(route.path);
+            // `BackendRpc` is the `/aws-blocks/{proxy+}` route's integration.
+            const id = route.path === '/aws-blocks/{proxy+}' ? 'BackendRpc' : `BackendRoute${++i}`;
+            this.api.addRoutes({
+              path: route.path,
+              methods: [HttpMethod.ANY],
+              integration: new HttpUrlIntegration(id, `${base}${route.target}`),
+            });
+          }
         }
       } else {
         const ns = origin.namespace;
@@ -169,13 +184,20 @@ export class ApiGatewayConstruct extends Construct {
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
     }
+    const inexpressible: string[] = [];
     for (const entry of plan.routes.entries) {
+      // A wildcard inside a segment (`/*.js`) has no route form: the default serves it.
+      if (hasInnerWildcard(entry.pattern)) {
+        inexpressible.push(entry.pattern);
+        continue;
+      }
       const path = globToProxyPath(entry.pattern);
       if (path === null || seen.has(path) || backendPaths.has(path)) continue;
       if (path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: integrationForKind(entry.kind) });
     }
+    warnInexpressibleRoutes(this, 'API Gateway', inexpressible);
     const routeCount = seen.size + backendPaths.size + 1; // + $default
     if (routeCount > APIGW_DEFAULT_ROUTE_QUOTA) {
       Annotations.of(this).addWarning(
@@ -220,3 +242,19 @@ export class ApiGatewayConstruct extends Construct {
     new CfnOutput(this, 'ApiGatewayUrl', { value: this.url, description: 'API Gateway HTTP API front-door URL' });
   }
 }
+
+/**
+ * Warn at synth (`@aws-blocks/hosting:RouteNotExpressible`) for route-table
+ * patterns API Gateway has no path form for (a wildcard inside a segment):
+ * the door's default integration serves them instead.
+ *
+ * @internal Framework-only.
+ */
+export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns: readonly string[]): void => {
+  if (patterns.length === 0) return;
+  Annotations.of(scope).addWarningV2(
+    '@aws-blocks/hosting:RouteNotExpressible',
+    `The ${door} front door can't express these route patterns (a wildcard inside a path segment), so its default ` +
+      `integration serves them: ${patterns.join(', ')}.`,
+  );
+};

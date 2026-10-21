@@ -1,7 +1,7 @@
 /**
  * Service-agnostic hosting contracts — the Ports & Adapters seam.
  *
- * The CORE computes a {@link CapabilityPlan} (what to serve) from a
+ * The CORE computes a {@link HostingPlan} (what to serve) from a
  * `DeployManifest`; a built-in front door (see `constructs/front_door.ts`)
  * renders that plan onto a concrete service (CloudFront, ALB, API Gateway, …),
  * and the plan is also what the `DoorInput` handed to a bring-your-own door is
@@ -9,7 +9,7 @@
  * SDK — it is pure data + interfaces, so the plan layer stays free of any
  * single front door's assumptions.
  *
- * Types only. Behaviour lives in `route-table.ts` / `capability-plan.ts` (core)
+ * Types only. Behaviour lives in `route-table.ts` / `hosting-plan.ts` (core)
  * and in each front door (renderers).
  */
 import type { RouteEntry } from './route-table.js';
@@ -126,11 +126,11 @@ export type BackendPlan = {
 
 /**
  * The complete service-agnostic description of a deployment. Produced by the
- * core (`buildCapabilityPlan`); consumed by the built-in front doors.
+ * core (`buildHostingPlan`); consumed by the built-in front doors.
  * Contains NO service types — a plan is identical whether it is later rendered
  * onto CloudFront, an ALB, or emitted as a portable bundle.
  */
-export type CapabilityPlan = {
+export type HostingPlan = {
   origins: Origin[];
   routes: RouteTable;
   policies: PlanPolicies;

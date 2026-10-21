@@ -23,9 +23,9 @@
  */
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
-import { buildCapabilityPlan } from '../plan/capability-plan.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { toTerseRows } from '../plan/route-table.js';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 
 // The pure routing helpers moved to the service-agnostic plan layer (so every
 // front-door adapter shares one implementation). Re-export them here for
@@ -144,7 +144,7 @@ const chunkRows = (rows: unknown[]): string[] => {
 
 /**
  * Render the KVS key/value map for a deploy from a service-agnostic
- * {@link CapabilityPlan}. This is the CloudFront RENDERER: it takes the neutral
+ * {@link HostingPlan}. This is the CloudFront RENDERER: it takes the neutral
  * plan (origins + route table + policies + release) the core produced and
  * projects it onto CloudFront's KeyValueStore encoding. Keys:
  *   - `meta`  : metadata blob (buildId, basePath, spaFallback, image prefix,
@@ -163,7 +163,7 @@ const chunkRows = (rows: unknown[]): string[] => {
  *   stripped the same way (lowercased + de-duped). CloudFront-specific.
  */
 export const renderKvsEntries = (
-  plan: CapabilityPlan,
+  plan: HostingPlan,
   opts: { maxChunksPerTable?: number; cacheKeyCookies?: string[]; cacheKeyHeaders?: string[] } = {},
 ): Record<string, string> => {
   const { policies, routes, release } = plan;
@@ -320,7 +320,7 @@ export const renderKvsEntries = (
 /**
  * Build the KVS key/value map directly from a manifest (+ deploy flags).
  *
- * Thin wrapper over the service-agnostic core: it builds a {@link CapabilityPlan}
+ * Thin wrapper over the service-agnostic core: it builds a {@link HostingPlan}
  * and renders it with {@link renderKvsEntries}. Retained as the historical entry
  * point so existing callers/tests are unchanged; new CloudFront code builds the
  * plan explicitly and calls `renderKvsEntries` (so the plan is the single source
@@ -328,7 +328,7 @@ export const renderKvsEntries = (
  */
 export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   renderKvsEntries(
-    buildCapabilityPlan({
+    buildHostingPlan({
       manifest: input.manifest,
       buildId: input.buildId,
       hasServer: input.hasServer,

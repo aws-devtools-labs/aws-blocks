@@ -81,14 +81,17 @@ describe("compute.type 'web-function' × every front door", () => {
   });
 
   const unsupported: Array<[string, HostingConstructProps['frontDoor'], Partial<HostingConstructProps>?]> = [
-    ['alb', { kind: 'alb', backendApiUrl: API_URL }],
-    ['apiGateway (http)', { kind: 'apiGateway', backendApiUrl: API_URL }],
+    ['alb', { kind: 'alb' }, { backendApi: { url: API_URL } }],
+    ['apiGateway (http)', { kind: 'apiGateway' }, { backendApi: { url: API_URL } }],
     [
       'apiGateway (rest)',
-      { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL },
-      { domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' } },
+      { kind: 'apiGateway', api: 'rest' },
+      {
+        backendApi: { url: API_URL },
+        domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' },
+      },
     ],
-    ['custom', { kind: 'custom', door: customCloudFrontDoor, backendApiUrl: API_URL }],
+    ['custom', { kind: 'custom', door: customCloudFrontDoor }, { backendApi: { url: API_URL } }],
     ['none', 'none'],
   ];
   for (const [label, frontDoor, extra] of unsupported) {

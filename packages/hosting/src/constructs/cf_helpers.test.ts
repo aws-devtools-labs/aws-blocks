@@ -5,11 +5,11 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { cf, registerUploads, trimSlashes } from './cf_helpers.js';
 import { buildDoorInput } from './door_input.js';
 
-const plan: CapabilityPlan = {
+const plan: HostingPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: {
     entries: [

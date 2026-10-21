@@ -1,8 +1,8 @@
 /**
  * `@aws-blocks/hosting` plan layer — the service-agnostic core.
  *
- * The barrel for the Ports & Adapters seam: the {@link CapabilityPlan} contracts
- * and the neutral {@link buildRouteTable} / {@link buildCapabilityPlan} builders.
+ * The barrel for the Ports & Adapters seam: the {@link HostingPlan} contracts
+ * and the neutral {@link buildRouteTable} / {@link buildHostingPlan} builders.
  * Nothing here imports `aws-cdk-lib` or a service SDK — front-door specifics
  * live in each door's `build` (`constructs/front_door.ts`).
  *
@@ -12,7 +12,7 @@ export type {
   BackendIngress,
   BackendOrigin,
   BackendPlan,
-  CapabilityPlan,
+  HostingPlan,
   HeaderRule,
   Origin,
   PlanPolicies,
@@ -28,5 +28,5 @@ export {
   toTerseRows,
 } from './route-table.js';
 export type { BuildRouteTableInput, TerseRouteKind } from './route-table.js';
-export { buildCapabilityPlan, ORIGIN_IDS } from './capability-plan.js';
-export type { BuildCapabilityPlanInput } from './capability-plan.js';
+export { buildHostingPlan, ORIGIN_IDS } from './hosting-plan.js';
+export type { BuildHostingPlanInput } from './hosting-plan.js';

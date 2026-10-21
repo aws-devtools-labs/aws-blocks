@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { DeployManifest, RouteBehavior } from '../manifest/types.js';
-import { buildCapabilityPlan, ORIGIN_IDS } from './capability-plan.js';
+import { buildHostingPlan, ORIGIN_IDS } from './hosting-plan.js';
 
 const manifestWith = (routes: RouteBehavior[], extra: Partial<DeployManifest> = {}): DeployManifest => ({
   version: 1,
@@ -11,9 +11,9 @@ const manifestWith = (routes: RouteBehavior[], extra: Partial<DeployManifest> = 
   ...extra,
 });
 
-describe('buildCapabilityPlan — origins', () => {
+describe('buildHostingPlan — origins', () => {
   it('always includes the static origin', () => {
-    const plan = buildCapabilityPlan({
+    const plan = buildHostingPlan({
       manifest: manifestWith([]),
       buildId: 'b1',
       hasServer: false,
@@ -23,7 +23,7 @@ describe('buildCapabilityPlan — origins', () => {
   });
 
   it('adds server and image origins when present', () => {
-    const plan = buildCapabilityPlan({
+    const plan = buildHostingPlan({
       manifest: manifestWith([]),
       buildId: 'b1',
       hasServer: true,
@@ -37,14 +37,14 @@ describe('buildCapabilityPlan — origins', () => {
   });
 });
 
-describe('buildCapabilityPlan — routes, redirects, headers', () => {
+describe('buildHostingPlan — routes, redirects, headers', () => {
   it('exposes the neutral route table and basePath-resolves redirects + headers', () => {
     const manifest = manifestWith([{ pattern: '/a', target: 'static' }], {
       basePath: '/app',
       redirects: [{ source: '/old', destination: '/new', statusCode: 308 }],
       headers: [{ source: '/secure/*', headers: { 'X-Frame-Options': 'DENY' } }],
     });
-    const plan = buildCapabilityPlan({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
+    const plan = buildHostingPlan({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
 
     assert.equal(plan.routes.entries[0]?.pattern, '/app/a');
     assert.deepEqual(plan.routes.redirects, [
@@ -56,7 +56,7 @@ describe('buildCapabilityPlan — routes, redirects, headers', () => {
   });
 });
 
-describe('buildCapabilityPlan — policies + release', () => {
+describe('buildHostingPlan — policies + release', () => {
   it('carries the cross-cutting policy flags and buildId', () => {
     const manifest = manifestWith([], {
       basePath: '/app',
@@ -64,7 +64,7 @@ describe('buildCapabilityPlan — policies + release', () => {
       imageOptimization: { bundle: '/x', handler: 'h', formats: [], sizes: [], baseURL: '/_ipx' },
       staticAssets: { directory: '/tmp/static', spaFallback: true },
     });
-    const plan = buildCapabilityPlan({
+    const plan = buildHostingPlan({
       manifest,
       buildId: 'build-123',
       hasServer: true,
@@ -86,7 +86,7 @@ describe('buildCapabilityPlan — policies + release', () => {
   });
 
   it('defaults skewEnabled/spaFallback to false and imagePrefix to undefined without an image origin', () => {
-    const plan = buildCapabilityPlan({
+    const plan = buildHostingPlan({
       manifest: manifestWith([]),
       buildId: 'b1',
       hasServer: false,

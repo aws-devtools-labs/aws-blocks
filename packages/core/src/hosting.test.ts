@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -2552,13 +2553,22 @@ describe('Hosting', () => {
   });
 
   describe("every door's url is the app's public origin (HostingUrl, BLOCKS_PUBLIC_ORIGIN, CORS)", () => {
-    const doors: Array<[string, HostingProps['frontDoor'], boolean]> = [
-      ['alb', { kind: 'alb' }, true],
-      ['apiGateway', { kind: 'apiGateway' }, true],
-      ['stacked', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, true],
-      ['none', 'none', false],
+    // Each door's origin, resolved: the scheme and the resource attribute it is
+    // built from — not `hosting.url` (the same variable), which would make the
+    // check circular.
+    const doors: Array<[string, HostingProps['frontDoor'], boolean, { scheme: string; type: string; attr: string; id?: RegExp }]> = [
+      // A plain-HTTP door doesn't claim: native clients keep the backend's HTTPS API URL.
+      ['alb', { kind: 'alb' }, false, { scheme: 'http://', type: 'AWS::ElasticLoadBalancingV2::LoadBalancer', attr: 'DNSName' }],
+      ['apiGateway', { kind: 'apiGateway' }, true, { scheme: '', type: 'AWS::ApiGatewayV2::Api', attr: 'ApiEndpoint' }],
+      [
+        'stacked',
+        { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+        true,
+        { scheme: 'https://', type: 'AWS::CloudFront::Distribution', attr: 'DomainName', id: /CfOverAlb/ },
+      ],
+      ['none', 'none', false, { scheme: '', type: 'AWS::S3::Bucket', attr: 'WebsiteURL' }],
     ];
-    for (const [label, frontDoor, claims] of doors) {
+    for (const [label, frontDoor, claims, origin] of doors) {
       it(`${label}: registers the door url and ${claims ? 'claims' : 'does not claim'} the API front-door role`, () => {
         createSpaBuildOutput(tmpDir);
         const stack = new Stack(new App(), `PublicOrigin-${label}`, { env: { account: '111111111111', region: 'us-east-1' } });
@@ -2568,11 +2578,20 @@ describe('Hosting', () => {
         const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
           Symbol.for('BLOCKS_CONFIG_REGISTRY')
         ]?.entries;
-        assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), hosting.url);
-        assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), hosting.url);
-        const outputs = Template.fromStack(stack).findOutputs('*');
-        const hostingUrl = Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1];
-        assert.deepStrictEqual(hostingUrl?.Value, stack.resolve(hosting.url));
+        const t = Template.fromStack(stack);
+        const ids = Object.keys(t.findResources(origin.type)).filter((id) => !origin.id || origin.id.test(id));
+        const expected = (resolved: unknown) => {
+          const json = JSON.stringify(resolved);
+          assert.ok(json.includes(origin.scheme), `${label}: ${json} starts with ${origin.scheme}`);
+          assert.ok(
+            ids.some((id) => json.includes(JSON.stringify({ 'Fn::GetAtt': [id, origin.attr] }))),
+            `${label}: ${json} is built from ${origin.type}.${origin.attr}`,
+          );
+        };
+        expected(stack.resolve(entries?.get('BLOCKS_PUBLIC_ORIGIN')));
+        expected(stack.resolve(entries?.get('CORS_HOSTING_ORIGINS')));
+        const outputs = t.findOutputs('*');
+        expected(Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1]?.Value);
         assert.deepStrictEqual(claimed, claims ? [hosting.url] : []);
         // `distribution` keeps its released type: the stacked door exposes its
         // CloudFront edge; a door with no CloudFront distribution throws on read.
@@ -2580,6 +2599,59 @@ describe('Hosting', () => {
         else assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
       });
     }
+
+    it('the REST door: the trusted and CORS origins are the bare domain, which a browser Origin matches', async () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'PublicOrigin-rest', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: {
+          kind: 'apiGateway',
+          api: 'rest',
+          features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' } },
+        },
+      });
+      const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+        Symbol.for('BLOCKS_CONFIG_REGISTRY')
+      ]?.entries;
+      assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://app.example.com');
+      assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), 'https://app.example.com');
+      const { _resetCorsPatterns, isOriginAllowed } = await import('./cors.js');
+      const previous = process.env.CORS_HOSTING_ORIGINS;
+      process.env.CORS_HOSTING_ORIGINS = String(entries?.get('CORS_HOSTING_ORIGINS'));
+      _resetCorsPatterns();
+      try {
+        assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+      } finally {
+        if (previous === undefined) delete process.env.CORS_HOSTING_ORIGINS;
+        else process.env.CORS_HOSTING_ORIGINS = previous;
+        _resetCorsPatterns();
+      }
+    });
+
+    it('the ALB door with a certificate and a custom domain: the origins are the domain', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'PublicOrigin-albdomain', { env: { account: '111111111111', region: 'us-east-1' } });
+      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+        stack,
+        'Cert',
+        'arn:aws:acm:us-east-1:111111111111:certificate/c',
+      );
+      const claimed: string[] = [];
+      const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claimed.push(url) };
+      const hosting = new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api,
+        frontDoor: { kind: 'alb', certificate, features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' } } },
+      });
+      const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+        Symbol.for('BLOCKS_CONFIG_REGISTRY')
+      ]?.entries;
+      assert.strictEqual(hosting.url, 'https://app.example.com');
+      assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://app.example.com');
+      assert.deepStrictEqual(claimed, ['https://app.example.com'], 'an HTTPS ALB claims the API role');
+    });
   });
 
   describe("frontDoor: { kind: 'apiGateway' } (API Gateway owns routing — no CloudFront)", () => {
@@ -2810,6 +2882,128 @@ describe('Hosting', () => {
       for (const id of uploads) assert.ok(dependsOn.includes(id), `the function waits for ${id}`);
     });
 
+    it('the static function also waits for the resolved config.json, and the config upload invalidates nothing on the stacked edge', () => {
+      const t = stackedSynth('CfOverAlbConfigGate');
+      const fns = t.findResources('AWS::CloudFront::Function');
+      const fnId = Object.keys(fns).find((id) => String(fns[id].Properties.FunctionCode).includes('resolveIndex'));
+      assert.ok(fnId);
+      const config = Object.entries(t.findResources('Custom::CDKBucketDeployment')).find(([id]) => id.includes('BlocksConfigDeployment'));
+      assert.ok(config);
+      const dependsOn = [fns[fnId].DependsOn ?? []].flat() as string[];
+      assert.ok(dependsOn.includes(config[0]), 'the cutover waits for the resolved config');
+      // The new build's config key was never cached (the edge rewrites to /builds/<id>/…).
+      assert.strictEqual(config[1].Properties.DistributionId, undefined);
+    });
+
+    it("the static function rewrites to this deploy's own build prefix, and strips the basePath first", () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbBuildId', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        basePath: '/app',
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+      const t = Template.fromStack(stack);
+      const buildId = Object.entries(t.findOutputs('*')).find(([k]) => k.includes('HostingBuildId'))?.[1]?.Value;
+      assert.ok(typeof buildId === 'string' && buildId.length > 0);
+      const fn = staticFunction(t);
+      assert.strictEqual(fn({ request: { uri: '/app/assets/a.js' } }).uri, `/builds/${buildId}/assets/a.js`);
+      assert.strictEqual(fn({ request: { uri: '/app/dashboard' } }).uri, `/builds/${buildId}/index.html`);
+    });
+
+    it('security headers on the default behavior and every S3 behavior; the S3 default has index.html as root object', () => {
+      const t = stackedSynth('CfOverAlbHeadersEverywhere');
+      const edge = edgeOf(t);
+      const policies = Object.keys(t.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
+      assert.strictEqual(policies.length, 1);
+      const ref = { Ref: policies[0] };
+      const def = edge.config.DefaultCacheBehavior as unknown as { ResponseHeadersPolicyId?: unknown };
+      assert.deepStrictEqual(def.ResponseHeadersPolicyId, ref, 'the S3 default behavior carries the security headers');
+      const all = (edge.config.CacheBehaviors ?? []) as unknown as Array<{ PathPattern: string; ResponseHeadersPolicyId?: unknown }>;
+      assert.ok(all.length > 0);
+      for (const b of all) assert.deepStrictEqual(b.ResponseHeadersPolicyId, ref, `${b.PathPattern} carries the security headers`);
+      assert.strictEqual((edge.config as unknown as { DefaultRootObject?: string }).DefaultRootObject, 'index.html');
+    });
+
+    it('router behaviors: the viewer host as x-forwarded-host; the API uncached; the SSR default keys cookies', () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbRouterBehaviors', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+      const t = Template.fromStack(stack);
+      const fns = t.findResources('AWS::CloudFront::Function');
+      const hostFn = Object.keys(fns).find((id) => String(fns[id].Properties.FunctionCode).includes('x-forwarded-host'));
+      assert.ok(hostFn, 'a function copies the viewer host');
+      const run = new Function(`${String(fns[hostFn].Properties.FunctionCode)}\nreturn handler;`)() as (e: unknown) => {
+        headers: Record<string, { value: string }>;
+      };
+      assert.strictEqual(run({ request: { headers: { host: { value: 'd1.cloudfront.net' } } } }).headers['x-forwarded-host']?.value, 'd1.cloudfront.net');
+      const edge = edgeOf(t);
+      type B = { PathPattern?: string; CachePolicyId?: unknown; FunctionAssociations?: Array<{ EventType: string; FunctionARN: unknown }> };
+      const def = edge.config.DefaultCacheBehavior as unknown as B;
+      const behaviors = (edge.config.CacheBehaviors ?? []) as unknown as B[];
+      const api = behaviors.find((b) => b.PathPattern === '/aws-blocks/*');
+      assert.ok(api);
+      // CachingDisabled (the AWS-managed policy).
+      assert.strictEqual(api.CachePolicyId, '4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
+      const viewerRequest = (b: B) => JSON.stringify(b.FunctionAssociations?.filter((f) => f.EventType === 'viewer-request'));
+      assert.ok(viewerRequest(api).includes(hostFn));
+      assert.ok(viewerRequest(def).includes(hostFn), 'the SSR default sees the public host');
+      const policies = t.findResources('AWS::CloudFront::CachePolicy');
+      const policyOf = (b: B) => policies[(b.CachePolicyId as { Ref: string }).Ref]?.Properties.CachePolicyConfig;
+      assert.strictEqual(policyOf(def).ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig.CookieBehavior, 'all');
+    });
+
+    it('SSR: the edge is invalidated after the uploads, the resolved config, the cutover and the new server', () => {
+      createNextjsBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'CfOverAlbInvalidate', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
+      });
+      const t = Template.fromStack(stack);
+      const invalidations = Object.entries(t.findResources('Custom::AWS')).filter(([, r]) =>
+        JSON.stringify(r.Properties.Create ?? r.Properties.Update ?? '').includes('createInvalidation'),
+      );
+      assert.strictEqual(invalidations.length, 1, 'one deploy invalidation');
+      const dependsOn = [invalidations[0][1].DependsOn ?? []].flat() as string[];
+      for (const id of Object.keys(t.findResources('Custom::CDKBucketDeployment'))) {
+        assert.ok(dependsOn.includes(id), `the invalidation waits for ${id}`);
+      }
+      const fns = t.findResources('AWS::CloudFront::Function');
+      const staticFn = Object.keys(fns).find((id) => String(fns[id].Properties.FunctionCode).includes('resolveIndex'));
+      assert.ok(staticFn && dependsOn.includes(staticFn), 'after the cutover');
+      // A static site has no server, so nothing at the edge can be stale.
+      const spa = stackedSynth('CfOverAlbNoInvalidate');
+      assert.strictEqual(
+        Object.values(spa.findResources('Custom::AWS')).filter((r) => JSON.stringify(r.Properties.Create ?? r.Properties.Update ?? '').includes('createInvalidation')).length,
+        0,
+      );
+    });
+
+    it('a stacked SPA whose static routes reach the router warns about files over the ALB 1 MB limit', () => {
+      createSpaBuildOutput(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, 'dist', 'big.js'), crypto.randomBytes(1_200_000));
+      for (let i = 0; i < 30; i++) registerRoute({ method: 'POST', path: `/hook${i}`, handler: async () => {} });
+      const stack = new Stack(new App(), 'CfOverAlbBig', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('AssetExceedsProxyLimit'));
+      assert.strictEqual(warnings.length, 1);
+      assert.match(String(warnings[0]?.entry.data), /big\.js/);
+      // With the API within the budget, the SPA is served from S3: no warning.
+      clearRouteRegistry();
+      const small = new Stack(new App(), 'CfOverAlbSmall', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(small, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
+      assert.strictEqual(Annotations.fromStack(small).findWarning('*', Match.stringLikeRegexp('AssetExceedsProxyLimit')).length, 0);
+    });
+
     it('SSR: a static route is an S3 behavior; the server catch-all and the API stay on the ALB', () => {
       createNextjsBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'CfOverAlbS3Ssr', { env: { account: '111111111111', region: 'us-east-1' } });
@@ -2884,10 +3078,15 @@ describe('Hosting', () => {
         frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
       const edge = edgeOf(Template.fromStack(stack));
-      assert.ok(edge.behaviors.length <= 25, `at most 25 behaviors (got ${edge.behaviors.length})`);
-      assert.strictEqual(edge.behaviors[0][0], '/aws-blocks/*');
+      // 25 behaviors per distribution, the default included.
+      assert.strictEqual(edge.behaviors.length, 24, `24 behaviors besides the default (got ${edge.behaviors.length})`);
+      // The budget goes to S3: the API paths no static route can shadow are left
+      // to the router default (which reaches them), not given behaviors.
+      assert.ok(!edge.behaviors.some(([p]) => p === '/aws-blocks/*'));
+      assert.strictEqual(edge.behaviors[0][0], '/.blocks-sandbox/*');
       const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedEdgeBehaviorLimit'));
       assert.strictEqual(warnings.length, 1);
+      assert.doesNotMatch(String(warnings[0]?.entry.data), /raise the quota/);
     });
 
     it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
@@ -3033,7 +3232,10 @@ describe('Hosting', () => {
       assert.ok(albIngress(t).some((r) => r.CidrIp === '0.0.0.0/0'));
       const listener = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::Listener'))[0];
       assert.strictEqual((listener.Properties.DefaultActions as Array<{ Type: string }>)[0].Type, 'forward');
-      assert.ok(!JSON.stringify(t.toJSON()).includes(ORIGIN_VERIFY));
+      // No rule checks the origin-verify header (the API forwarder only strips it).
+      const rules = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+      assert.ok(rules.length > 0);
+      assert.ok(!rules.some((r) => JSON.stringify(r.Properties.Conditions).includes(ORIGIN_VERIFY)));
     });
 
     it("stacked + compute.type 'web-function' fails synth naming the stacked door", () => {
@@ -3244,7 +3446,8 @@ describe('Hosting — frontDoor.features', () => {
       geoRestriction: { type: 'blacklist', countries: ['KP'] },
     });
     assert.deepEqual(seen?.features.waf, { enabled: true, rateLimit: 100 });
-    assert.deepEqual(seen?.features.geoRestriction, { type: 'blacklist', countries: ['KP'] });
+    // The legacy spelling reaches the door as the inclusive one.
+    assert.deepEqual(seen?.features.geoRestriction, { type: 'denylist', countries: ['KP'] });
   });
 
   it('a config() domain in frontDoor.features needs Hosting.create(), like the top-level domain', () => {

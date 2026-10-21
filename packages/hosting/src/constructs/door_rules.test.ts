@@ -92,7 +92,7 @@ describe("regional doors apply the app's redirects, header rules and error pages
     warnings.map((w) => String(w.entry.data)).join('\n');
 
   it('ALB: the asset proxy carries the redirects, header rules and the 404 page', () => {
-    const { t } = synth(spa(), { kind: 'alb', backendApiUrl: API_URL });
+    const { t } = synth(spa(), { kind: 'alb' }, { backendApi: { url: API_URL } });
     const source = assetProxySource(t);
     assert.ok(source.includes('["/old/*","/new/*",301]'));
     assert.ok(source.includes('["/legacy","/",302]'));
@@ -106,12 +106,12 @@ describe("regional doors apply the app's redirects, header rules and error pages
   });
 
   it('ALB SPA (no server): every response passes through a proxy, so no warning', () => {
-    const { warnings } = synth(spa(), { kind: 'alb', backendApiUrl: API_URL }, { errorPages: undefined });
+    const { warnings } = synth(spa(), { kind: 'alb' }, { backendApi: { url: API_URL }, errorPages: undefined });
     assert.deepEqual(warnings, []);
   });
 
   it('ALB SSR: warns that SSR responses get no header rules and server/API errors pass through', () => {
-    const { warnings } = synth(ssr(), { kind: 'alb', backendApiUrl: API_URL });
+    const { warnings } = synth(ssr(), { kind: 'alb' }, { backendApi: { url: API_URL } });
     assert.equal(warnings.length, 1);
     const text = warningText(warnings);
     assert.match(text, /ALB front door/);
@@ -121,12 +121,12 @@ describe("regional doors apply the app's redirects, header rules and error pages
   });
 
   it("stacked router (CloudFront-only ALB): no warning — the edge applies the rules to every response", () => {
-    const { warnings } = synth(ssr(), { kind: 'alb', backendApiUrl: API_URL, restrictToCloudFront: true });
+    const { warnings } = synth(ssr(), { kind: 'stackedRouter' }, { backendApi: { url: API_URL } });
     assert.deepEqual(warnings, []);
   });
 
   it('API Gateway (HTTP): each redirect source routes to the asset proxy; warns about API and SSR responses', () => {
-    const { t, warnings } = synth(ssr(), { kind: 'apiGateway', backendApiUrl: API_URL });
+    const { t, warnings } = synth(ssr(), { kind: 'apiGateway' }, { backendApi: { url: API_URL } });
     const routes = Object.values(t.findResources('AWS::ApiGatewayV2::Route'));
     const integrations = t.findResources('AWS::ApiGatewayV2::Integration');
     const assetIntegrationIds = Object.entries(integrations)
@@ -147,7 +147,7 @@ describe("regional doors apply the app's redirects, header rules and error pages
   });
 
   it('API Gateway (REST): each redirect source is a resource on the asset proxy', () => {
-    const { t } = synth(ssr(), { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL }, {
+    const { t } = synth(ssr(), { kind: 'apiGateway', api: 'rest' }, { backendApi: { url: API_URL }, 
       domain: { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' },
     });
     const parts = Object.values(t.findResources('AWS::ApiGateway::Resource')).map((r) => String(r.Properties.PathPart));

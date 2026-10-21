@@ -5,13 +5,13 @@ import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { cf } from './cf_helpers.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 
-const plan: CapabilityPlan = {
+const plan: HostingPlan = {
 	origins: [{ id: 'blocks-s3', kind: 'static' }],
 	routes: {
 		entries: [

@@ -23,6 +23,8 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  */
 /**
  * Build the inline handler source for the API Gateway / Function URL asset-proxy Lambda.
+ * The function reads its bucket and build prefix from the environment
+ * ({@link assetProxyEnvironment}) and needs read access to the bucket.
  *
  * @param opts.stripPrefix   basePath/assetPrefix to strip from the URL before lookup (default '')
  * @param opts.spaFallback   serve `index.html` on a miss (SPA) vs a real 404

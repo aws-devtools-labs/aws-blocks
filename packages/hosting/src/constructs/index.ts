@@ -106,7 +106,6 @@ export {
 	type FrontDoorKind,
 	type FrontDoorSettingName,
 	type FrontDoorSettings,
-	frontDoorKind,
 	type HostingFrontDoor,
 	type HostingGeoRestriction,
 	type HostingLoggingConfig,
@@ -123,7 +122,7 @@ export type {
 	BackendIngress,
 	BackendOrigin,
 	BackendPlan,
-	CapabilityPlan,
+	HostingPlan,
 	HeaderRule,
 	Origin,
 	PlanPolicies,
@@ -131,7 +130,7 @@ export type {
 	ReleasePlan,
 	RouteTable,
 } from '../plan/types.js';
-export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
+export { buildHostingPlan, ORIGIN_IDS } from '../plan/hosting-plan.js';
 export { cloudFrontDoor, type CloudFrontDoorInput, type CloudFrontDoorResult } from './cloudfront_door.js';
 export {
 	cloudFrontEdgeDoor,
@@ -156,8 +155,9 @@ export { buildFrontDoor, type BuildFrontDoorOptions, type FrontDoorBuild } from 
 export { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 export { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 // The asset proxies' options (prefix strip, SPA fallback, and the app's
-// redirects, header rules and error pages — `input.app.*`).
-export type { AssetProxyOptions } from './asset_proxy_core.js';
+// redirects, header rules and error pages — `input.app.*`), and the
+// environment a proxy function needs (`ASSET_BUCKET`, `ASSET_KEY_PREFIX`).
+export { type AssetProxyOptions, assetProxyEnvironment } from './asset_proxy_core.js';
 // The ALB door's same-origin API forwarder (a Lambda target relaying to the
 // backend, multi-value headers, the app's header rules).
 export { generateAlbApiProxyCode } from './alb_api_proxy.js';

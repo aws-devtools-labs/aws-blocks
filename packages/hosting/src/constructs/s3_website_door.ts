@@ -16,14 +16,14 @@
  */
 import { Fn } from 'aws-cdk-lib';
 import { HostingError } from '../hosting_error.js';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
 
 /** The S3-website door's input: the {@link DoorInput} plus the internal-only route plan. */
 export type S3WebsiteDoorInput = DoorInput & {
   /** The route plan (SPA fallback decides the error document). Internal to the built-in door. */
-  plan: CapabilityPlan;
+  plan: HostingPlan;
 };
 
 /** The built-in S3 static-website door. */

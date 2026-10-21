@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
 import { albDoor } from './alb_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
 
-const staticPlan: CapabilityPlan = {
+const staticPlan: HostingPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: {
     entries: [
@@ -23,7 +25,7 @@ const staticPlan: CapabilityPlan = {
   release: { buildId: 'testbuild' },
 };
 
-const synth = (plan: CapabilityPlan) => {
+const synth = (plan: HostingPlan) => {
   const app = new App();
   const stack = new Stack(app, 'S', { env: { account: '111111111111', region: 'us-west-2' } });
   const bucket = new Bucket(stack, 'Assets');
@@ -48,9 +50,10 @@ describe('AlbConstruct — static plan', () => {
     });
   });
 
-  it('creates a listener rule per route entry plus one per redirect', () => {
-    // 2 routes + 1 redirect = 3 rules.
-    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
+  it('creates a rule for the redirect; routes that go where the default goes need none', () => {
+    // The two static routes go to the asset proxy, the default target, so only
+    // the redirect source needs a rule.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 1);
   });
 
   it('routes the redirect source to the asset proxy, which answers the redirect (wildcard tail spliced, as on CloudFront)', () => {
@@ -133,23 +136,28 @@ describe('AlbConstruct — BYO VPC vs default', () => {
 
 describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
   it('forwards /aws-blocks/* (RPC + sign-in) to one ingress via a forwarder Lambda (single-compute)', () => {
-    const plan: CapabilityPlan = {
+    const plan: HostingPlan = {
       ...staticPlan,
       backend: {
         origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }],
       },
     };
     const t = synth(plan);
-    // 2 routes + 1 redirect + 1 API rule (/aws-blocks/*, which covers /aws-blocks/auth/*) = 4 rules.
-    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 4);
-    // The forwarder target group preserves multiple Set-Cookie headers.
-    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-      TargetType: 'lambda',
-    });
+    // 1 redirect + 1 API rule (/aws-blocks/*, which covers /aws-blocks/auth/*) = 2 rules.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+    // The forwarder target group runs in multi-value mode: the forwarder reads
+    // `multiValueHeaders` (cookies) and relays every Set-Cookie.
+    const apiTgs = Object.entries(t.findResources('AWS::ElasticLoadBalancingV2::TargetGroup')).filter(([id]) =>
+      id.includes('ApiProxyTg'),
+    );
+    assert.equal(apiTgs.length, 1);
+    assert.deepEqual(apiTgs[0]?.[1].Properties.TargetGroupAttributes, [
+      { Key: 'lambda.multi_value_headers.enabled', Value: 'true' },
+    ]);
   });
 
   it('provisions one forwarder Lambda + rule per named namespace (multi-compute)', () => {
-    const plan: CapabilityPlan = {
+    const plan: HostingPlan = {
       ...staticPlan,
       backend: {
         origins: [
@@ -159,13 +167,13 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
       },
     };
     const t = synth(plan);
-    // 2 routes + 1 redirect + 2 namespace API rules = 5 rules.
-    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 5);
+    // 1 redirect + 2 namespace API rules = 3 rules.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
   });
 });
 
 describe('albDoor — free-form build', () => {
-  const buildAlb = (id: string, plan: CapabilityPlan) => {
+  const buildAlb = (id: string, plan: HostingPlan) => {
     const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
     const input = buildDoorInput({ plan, bucket, staticDir: '.' });
@@ -180,11 +188,163 @@ describe('albDoor — free-form build', () => {
     assert.ok(res.construct instanceof AlbConstruct);
   });
 
-  it('runs no capability check: a skew-on plan (an edge feature the ALB lacks) still builds', () => {
-    const skewPlan: CapabilityPlan = {
+  it('builds with no feature check: a skew-on plan (an edge feature the ALB lacks) still builds', () => {
+    const skewPlan: HostingPlan = {
       ...staticPlan,
       policies: { ...staticPlan.policies, skewEnabled: true },
     };
     assert.ok(buildAlb('S2', skewPlan).url.startsWith('http'));
+  });
+});
+
+/** Every listener rule's path patterns, in priority order. */
+const rulePaths = (t: Template): Array<{ priority: number; paths: string[]; header?: string[] }> =>
+  Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'))
+    .map((r) => {
+      const conditions = r.Properties.Conditions as Array<{
+        Field: string;
+        PathPatternConfig?: { Values: string[] };
+        HttpHeaderConfig?: { Values: string[] };
+      }>;
+      return {
+        priority: r.Properties.Priority as number,
+        paths: conditions.flatMap((c) => c.PathPatternConfig?.Values ?? []),
+        header: conditions.find((c) => c.HttpHeaderConfig)?.HttpHeaderConfig?.Values,
+      };
+    })
+    .sort((a, b) => a.priority - b.priority);
+
+describe('AlbConstruct — listener rules are packed and bounded', () => {
+  const serverPlan = (entries: HostingPlan['routes']['entries'], redirects: HostingPlan['routes']['redirects'] = []): HostingPlan => ({
+    ...staticPlan,
+    routes: { entries, redirects, headers: [] },
+    policies: { ...staticPlan.policies, hasServer: true },
+  });
+  const synthWithServer = (plan: HostingPlan, opts: { restrictToCloudFront?: boolean; apiPaths?: string[] } = {}) => {
+    const stack = new Stack(new App(), 'P', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const server = new LambdaFunction(stack, 'Server', {
+      runtime: Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: Code.fromInline('exports.handler = async () => ({})'),
+    });
+    new AlbConstruct(stack, 'Alb', {
+      plan,
+      bucket,
+      computeFunctions: new Map([['server', server]]),
+      serverComputeName: 'server',
+      ...opts,
+    });
+    return { t: Template.fromStack(stack), stack };
+  };
+
+  it('packs redirect sources five to a rule (they all go to the asset proxy)', () => {
+    const redirects = Array.from({ length: 12 }, (_, i) => ({ source: `/old-${i}`, destination: `/new-${i}`, statusCode: 301 as const }));
+    const { t } = synthWithServer(serverPlan([], redirects));
+    const rules = rulePaths(t);
+    assert.deepEqual(rules.map((r) => r.paths.length), [5, 5, 2]);
+    assert.deepEqual(rules.flatMap((r) => r.paths), redirects.map((r) => r.source));
+  });
+
+  it('packs consecutive routes with the same target, keeps the order between targets, and drops trailing default-target routes', () => {
+    const { t } = synthWithServer(
+      serverPlan([
+        { pattern: '/a/*', kind: 'static' },
+        { pattern: '/b/*', kind: 'static' },
+        { pattern: '/c/*', kind: 'server' },
+        { pattern: '/d/*', kind: 'static' },
+        { pattern: '/e', kind: 'server' },
+        { pattern: '/f', kind: 'server' },
+      ]),
+    );
+    assert.deepEqual(
+      rulePaths(t).map((r) => r.paths),
+      [['/a/*', '/b/*'], ['/c/*'], ['/d/*']],
+    );
+  });
+
+  it('a locked router: every rule carries the origin-verify header, with four paths beside it', () => {
+    const redirects = [{ source: '/old', destination: '/new', statusCode: 301 as const }];
+    const apiPaths = ['/aws-blocks/*', '/a/*', '/b/*', '/c/*', '/d/*', '/e/*'];
+    const plan: HostingPlan = {
+      ...serverPlan([{ pattern: '/assets/*', kind: 'static' }], redirects),
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+    };
+    const { t } = synthWithServer(plan, { restrictToCloudFront: true, apiPaths });
+    const rules = rulePaths(t);
+    for (const rule of rules) {
+      assert.equal(rule.header?.length, 1, `rule ${rule.priority} checks the header`);
+      assert.match(rule.header?.[0] ?? '', /^[0-9a-f]{64}$/);
+    }
+    // API: 6 paths, 4 per rule → 2 rules; the redirect; the static route; the catch-all.
+    assert.deepEqual(rules.map((r) => r.paths), [
+      ['/aws-blocks/*', '/a/*', '/b/*', '/c/*'],
+      ['/d/*', '/e/*'],
+      ['/old'],
+      ['/assets/*'],
+      [],
+    ]);
+  });
+
+  it('warns when the rules exceed the default quota of 100 per load balancer', () => {
+    const entries = Array.from({ length: 202 }, (_, i) => ({ pattern: `/p${i}/*`, kind: i % 2 === 0 ? ('static' as const) : ('server' as const) }));
+    const { stack } = synthWithServer(serverPlan(entries));
+    const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('AlbRuleLimit'));
+    assert.equal(warnings.length, 1);
+    assert.match(String(warnings[0]?.entry.data), /201 listener rules/);
+    // Under the quota: no warning.
+    const { stack: small } = synthWithServer(serverPlan(entries.slice(0, 20)));
+    assert.equal(Annotations.fromStack(small).findWarning('*', Match.stringLikeRegexp('AlbRuleLimit')).length, 0);
+  });
+});
+
+describe('AlbConstruct — custom domain', () => {
+  const synthDomain = (domain: { names: string[]; hostedZone?: string; hostedZoneId?: string }) => {
+    const stack = new Stack(new App(), 'D', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const certificate = Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-west-2:111111111111:certificate/c');
+    const alb = new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, certificate, domain });
+    return { t: Template.fromStack(stack), alb };
+  };
+
+  it('serves HTTPS (TLS 1.2+) at the domain, redirects port 80 to 443, and points the names at the ALB', () => {
+    const { t, alb } = synthDomain({ names: ['app.example.com', 'www.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z123' });
+    assert.equal(alb.url, 'https://app.example.com');
+    assert.equal(alb.originHandle.domainName, 'app.example.com');
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+      Port: 443,
+      Protocol: 'HTTPS',
+      SslPolicy: 'ELBSecurityPolicy-TLS13-1-2-2021-06',
+    });
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+      Port: 80,
+      DefaultActions: [Match.objectLike({ Type: 'redirect', RedirectConfig: Match.objectLike({ Port: '443', Protocol: 'HTTPS' }) })],
+    });
+    t.resourceCountIs('AWS::Route53::RecordSet', 4);
+    t.hasResourceProperties('AWS::Route53::RecordSet', { Name: 'www.example.com.', Type: 'AAAA' });
+  });
+
+  it('without a hosted zone: no DNS records (you point your DNS at the ALB), the URL is still the domain', () => {
+    const { t, alb } = synthDomain({ names: ['app.example.com'] });
+    assert.equal(alb.url, 'https://app.example.com');
+    t.resourceCountIs('AWS::Route53::RecordSet', 0);
+  });
+
+  it('internal with the default VPC: the ALB sits in isolated private subnets (no NAT)', () => {
+    const stack = new Stack(new App(), 'I', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, internal: true });
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::EC2::NatGateway', 0);
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', { Scheme: 'internal' });
+    const subnets = Object.entries(t.findResources('AWS::EC2::Subnet'));
+    const privateIds = subnets.filter(([id]) => id.includes('private')).map(([id]) => id);
+    assert.equal(privateIds.length, 2);
+    const lb = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer'))[0];
+    assert.ok(lb);
+    assert.deepEqual(
+      (lb.Properties.Subnets as Array<{ Ref: string }>).map((s) => s.Ref).sort(),
+      privateIds.sort(),
+    );
   });
 });

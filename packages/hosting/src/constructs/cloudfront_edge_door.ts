@@ -25,15 +25,27 @@
  * looked up after the distribution, since CloudFormation doesn't return it).
  *
  * `build` creates:
- *   - a cache policy that HONORS the router's origin `Cache-Control`
- *     (`immutable` hashed assets edge-cached; `no-cache` HTML/API not), with
- *     cookies forwarded and keyed so cookie auth works through the edge;
+ *   - for the dynamic routes (SSR) and the default, a cache policy that HONORS
+ *     the router's origin `Cache-Control` (no `Cache-Control`, no caching),
+ *     with cookies forwarded and keyed so cookie auth works through the edge;
+ *     a viewer-request function copies the viewer `Host` into
+ *     `x-forwarded-host`, so the server builds absolute URLs on the public
+ *     host, not the router's;
+ *   - for the API paths, no caching at all (as on the CloudFront door);
+ *   - for static and image routes the router serves (beyond the behavior
+ *     budget, or image optimization), the origin's TTLs with no cookies in the
+ *     key, so visitors with different cookies share one cached object;
  *   - the security headers (HSTS, X-Frame-Options, …) the ALB can't inject;
  *   - the BYO CLOUDFRONT-scoped web ACL (`webAclArn`), when the app brings one —
  *     the router carries its own regional WAF separately. Building a web ACL and
  *     custom domain/TLS on the edge are follow-ons.
+ *
+ * The router still sees `x-forwarded-proto: http` on the edge → router hop
+ * when that hop is plain HTTP (the ALB sets the header from its listener).
  */
 import { Annotations, Duration } from 'aws-cdk-lib';
+import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
+import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import {
   AllowedMethods,
   type BehaviorOptions,
@@ -126,14 +138,35 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     // The app's header rules, at the edge on every behavior (as on the
     // CloudFront door): a response served from S3 never passes the router.
     const headerFunctions = cf.headers(scope, app.headers);
-    const routerBehavior: BehaviorOptions = {
+    // The router's origin Host is the ALB's; the server reads the public host
+    // from `x-forwarded-host` (as behind the CloudFront door's KVS router).
+    const forwardedHost = inlineFunction(scope, 'CfOverAlbForwardedHost', 'stacked edge', FORWARDED_HOST_CODE);
+    const routerBase = {
       origin,
       allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy,
       originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       responseHeadersPolicy: securityHeaders,
-      ...(headerFunctions.length > 0 ? { functionAssociations: headerFunctions } : {}),
+      functionAssociations: [{ function: forwardedHost, eventType: FunctionEventType.VIEWER_REQUEST }, ...headerFunctions],
+    } satisfies BehaviorOptions;
+    const routerBehavior: BehaviorOptions = { ...routerBase, cachePolicy };
+    // The API: never cached at the edge (as on the CloudFront door).
+    const apiBehavior: BehaviorOptions = { ...routerBase, cachePolicy: CachePolicy.CACHING_DISABLED };
+    // Static and image routes the router serves: the origin's TTLs, no cookies
+    // in the key (the response doesn't vary by visitor).
+    let assetCachePolicy: CachePolicy | undefined;
+    const routerAssetBehavior = (): BehaviorOptions => {
+      assetCachePolicy ??= new CachePolicy(scope, 'CfAlbAssetCache', {
+        defaultTtl: Duration.seconds(0),
+        minTtl: Duration.seconds(0),
+        maxTtl: Duration.days(365),
+        cookieBehavior: CacheCookieBehavior.none(),
+        headerBehavior: CacheHeaderBehavior.allowList('accept'),
+        queryStringBehavior: CacheQueryStringBehavior.all(),
+        enableAcceptEncodingGzip: true,
+        enableAcceptEncodingBrotli: true,
+      });
+      return { ...routerBase, cachePolicy: assetCachePolicy };
     };
 
     // Static routes are served straight from the private bucket (Origin Access
@@ -155,16 +188,34 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
         functionAssociations: [{ function: staticFn, eventType: FunctionEventType.VIEWER_REQUEST }, ...headerFunctions],
       };
     }
-    const behaviorFor = (target: EdgeTarget): BehaviorOptions =>
-      target === 's3' && s3Behavior ? s3Behavior : routerBehavior;
+    const behaviorFor = (target: EdgeTarget): BehaviorOptions => {
+      if (target === 's3' && s3Behavior) return s3Behavior;
+      if (target === 'api') return apiBehavior;
+      if (target === 'routerAsset') return routerAssetBehavior();
+      return routerBehavior;
+    };
     if (plan.truncated) {
       Annotations.of(scope).addWarningV2(
         '@aws-blocks/hosting:StackedEdgeBehaviorLimit',
         `The stacked door's edge needs ${plan.wanted} cache behaviors to serve every static route from S3; ` +
-          `CloudFront allows ${MAX_EDGE_BEHAVIORS} per distribution by default. The edge keeps ${plan.behaviors.length}; ` +
-          'the remaining static routes are served through the ALB router (correct, but not edge-direct). ' +
-          'Group static routes under fewer prefixes, or raise the quota.',
+          `a CloudFront distribution allows ${MAX_EDGE_BEHAVIORS} besides its default by default. The edge keeps ` +
+          `${plan.behaviors.length}; the remaining static routes are served through the ALB router (correct, but not ` +
+          'edge-direct, and subject to its 1 MB response limit). Group static routes under fewer prefixes, or move ' +
+          'raw backend routes under `/aws-blocks/`.',
       );
+    }
+    // What reaches the router's asset proxy (the ALB's 1 MB Lambda response
+    // limit): with the router as the default, every static file no S3
+    // behavior serves. With S3 as the default, no static file goes there.
+    if (plan.defaultTarget === 'router') {
+      warnOversizedProxyAssets(scope, {
+        door: 'stacked (ALB router)',
+        limitBytes: ALB_LAMBDA_RESPONSE_LIMIT,
+        limitLabel: '1 MB',
+        staticDir: origins.assets.sourceDir,
+        urlPrefix: app.basePath ?? '',
+        servedElsewhere: plan.behaviors.filter(([, t]) => t === 's3').map(([p]) => p),
+      });
     }
 
     // The app's error pages, as on the CloudFront door: every 404 / 500 from
@@ -262,38 +313,66 @@ const admitVpcOrigin = (
 
 // ── Which behaviors the edge needs ──────────────────────────────────────────
 
-/** Where an edge behavior sends a request: the private bucket, or the ALB router. */
-type EdgeTarget = 's3' | 'router';
+/**
+ * Where an edge behavior sends a request: the private bucket, or the ALB
+ * router — for the API (never cached), a static or image route (the origin's
+ * TTLs, no cookies in the key), or anything else (the origin's TTLs, cookies
+ * keyed).
+ */
+type EdgeTarget = 's3' | 'router' | 'api' | 'routerAsset';
 
-/** CloudFront's default quota of cache behaviors per distribution. */
-export const MAX_EDGE_BEHAVIORS = 25;
+/**
+ * CloudFront's default quota of cache behaviors per distribution, less the
+ * default behavior: the additional behaviors an edge can have (as the
+ * CloudFront door counts them, see `quota_budget.ts`).
+ */
+export const MAX_EDGE_BEHAVIORS = AWS_DEFAULT_QUOTAS.cacheBehaviors - 1;
 
 /** The path-pattern characters CloudFront accepts (and at most 255 of them). */
 const CLOUDFRONT_PATH_PATTERN = /^[A-Za-z0-9_\-.*$/~"'@:+&]{1,255}$/;
 
 const CATCH_ALL_PATTERNS = new Set(['*', '/*']);
 
+/** A pattern's literal prefix (before its first wildcard). */
+const literalPrefix = (pattern: string): string => {
+  const star = pattern.indexOf('*');
+  return star === -1 ? pattern : pattern.substring(0, star);
+};
+
+/**
+ * Whether a request under `apiPattern` could match `s3Pattern` (so the API
+ * behavior must stay ahead of it): either literal prefix extends the other.
+ */
+const mayOverlap = (apiPattern: string, s3Pattern: string): boolean => {
+  const a = literalPrefix(apiPattern);
+  const b = literalPrefix(s3Pattern);
+  return a.startsWith(b) || b.startsWith(a);
+};
+
 /**
  * The edge's behaviors, in the router's order of precedence (the ALB rules:
  * the API first, then the routes most-specific first), so a request reaches
  * the same origin through the edge as through the router alone:
  *
- * - the API paths → the router;
+ * - the API paths → the router, uncached;
  * - the error-page paths → S3;
- * - each route: a static (assets) route → S3, any other → the router;
+ * - each route: a static (assets) route → S3, an image route → the router
+ *   (cookies not keyed), any other → the router;
  * - the default: S3 when the implicit catch-all is static (a site without a
  *   server), else the router.
  *
  * Trailing behaviors that go where the default goes are dropped (they change
- * nothing). Over CloudFront's {@link MAX_EDGE_BEHAVIORS}, the default becomes
- * the router (which serves everything correctly) and the list is cut to a
- * prefix — still correct, since the edge evaluates it in the router's order.
+ * nothing). Over {@link MAX_EDGE_BEHAVIORS}, the default becomes the router
+ * (which serves everything correctly); the API behaviors no kept S3 pattern
+ * can shadow are dropped first (the router default reaches them, and without
+ * a `Cache-Control` it does not cache them), then the list is cut to a prefix
+ * — still correct, since the edge evaluates it in the router's order.
  */
 const planEdgeBehaviors = (
   input: DoorInput,
 ): {
   behaviors: Array<[string, EdgeTarget]>;
-  defaultTarget: EdgeTarget;
+  defaultTarget: 's3' | 'router';
   usesS3: boolean;
   truncated: boolean;
   wanted: number;
@@ -307,14 +386,17 @@ const planEdgeBehaviors = (
     seen.add(pattern);
     wanted.push([pattern, target]);
   };
-  for (const path of origins.api?.paths ?? []) add(path, 'router');
+  for (const path of origins.api?.paths ?? []) add(path, 'api');
   for (const r of customErrorResponses(app.errorPages, { pathPrefix: buildPrefix(input), hasCompute: Boolean(origins.server) })) {
     if (r.responsePagePath) add(r.responsePagePath, 's3');
   }
   // The catch-all is implicit in the route table: the server when there is
   // one, else the static assets (the router's default target, too).
-  const catchAll: EdgeTarget = origins.server ? 'router' : 's3';
-  for (const route of app.routes) add(route.pattern, route.origin.kind === 'assets' ? 's3' : 'router');
+  const catchAll: 's3' | 'router' = origins.server ? 'router' : 's3';
+  for (const route of app.routes) {
+    const kind = route.origin.kind;
+    add(route.pattern, kind === 'assets' ? 's3' : kind === 'image' ? 'routerAsset' : 'router');
+  }
   const trim = (list: Array<[string, EdgeTarget]>, dflt: EdgeTarget) => {
     const out = [...list];
     while (out.length > 0 && out[out.length - 1][1] === dflt) out.pop();
@@ -326,11 +408,25 @@ const planEdgeBehaviors = (
   if (behaviors.length > MAX_EDGE_BEHAVIORS) {
     truncated = true;
     defaultTarget = 'router';
-    behaviors = trim(trim(wanted, 'router').slice(0, MAX_EDGE_BEHAVIORS), 'router');
+    const s3Patterns = wanted.filter(([, t]) => t === 's3').map(([p]) => p);
+    const kept = wanted.filter(([p, t]) => t !== 'api' || s3Patterns.some((s) => mayOverlap(p, s)));
+    behaviors = trim(trim(kept, 'router').slice(0, MAX_EDGE_BEHAVIORS), 'router');
   }
   const usesS3 = defaultTarget === 's3' || behaviors.some(([, t]) => t === 's3');
   return { behaviors, defaultTarget, usesS3, truncated, wanted: trim(wanted, catchAll).length };
 };
+
+/**
+ * The viewer-request function of the router behaviors (CloudFront Functions,
+ * JS 2.0): the viewer's `Host` as `x-forwarded-host` (the origin request
+ * carries the router's host).
+ */
+const FORWARDED_HOST_CODE = `function handler(event) {
+  var request = event.request;
+  var host = request.headers.host && request.headers.host.value;
+  if (host) { request.headers['x-forwarded-host'] = { value: host }; }
+  return request;
+}`;
 
 /**
  * The viewer-request function of the edge's S3 behaviors (CloudFront

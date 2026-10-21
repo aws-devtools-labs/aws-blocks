@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { albDoor } from './alb_door.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { buildFrontDoor } from './custom_door.js';
@@ -13,7 +13,7 @@ import { buildDoorInput } from './door_input.js';
 import { originHandleFromUrl } from './layer.js';
 import { s3WebsiteDoor } from './s3_website_door.js';
 
-const staticPlan: CapabilityPlan = {
+const staticPlan: HostingPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: { entries: [], redirects: [], headers: [] },
   policies: { spaFallback: true, hasServer: false, skewEnabled: false },

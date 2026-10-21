@@ -6,6 +6,7 @@
  * the plan-derived path math is identical and lives here.
  */
 import { Fn } from 'aws-cdk-lib';
+import { HostingError } from '../hosting_error.js';
 
 /**
  * Convert a route-table glob pattern to an API Gateway proxy path, or `null` for
@@ -33,17 +34,42 @@ export const backendBaseUrl = (ingressUrl: string): string => Fn.select(0, Fn.sp
  */
 export const DEFAULT_API_PATHS: readonly string[] = ['/aws-blocks/*'];
 
+/** Whether a route-table pattern has a wildcard API Gateway can't express (anything but one trailing `/*`). */
+export const hasInnerWildcard = (pattern: string): boolean => {
+	const body = pattern.endsWith('/*') ? pattern.slice(0, -2) : pattern;
+	return body.includes('*');
+};
+
 /**
- * One backend API path as an API Gateway route: the route path, and the
+ * One backend API path as API Gateway routes: each route path, and the
  * backend URL suffix to proxy it to (`{proxy}` carries the greedy tail).
- * `/aws-blocks/*` → `/aws-blocks/{proxy+}` → `/aws-blocks/{proxy}`;
- * `/hooks/door-probe` → itself. Returns `null` for the catch-all `/*`, which
- * would swallow the whole site (the CloudFront door can't route it either).
+ * `/hooks/*` → `/hooks/{proxy+}` → `/hooks/{proxy}`, plus `/hooks` itself —
+ * `{proxy+}` needs at least one character, and `/hooks/` matches `/hooks/*` on
+ * the CloudFront and ALB doors; `/hooks/door-probe` → itself. Returns `[]` for
+ * the catch-all `/*`, which would swallow the whole site (the CloudFront door
+ * can't route it either).
+ *
+ * @param door the door's name, for the error.
+ * @throws HostingError('UnsupportedRoutePatternError') for a wildcard other than one trailing `/*` (e.g. `/files*`).
  */
-export const apiPathToRoute = (pattern: string): { path: string; target: string } | null => {
+export const apiPathToRoutes = (pattern: string, door: string): Array<{ path: string; target: string }> => {
+	if (hasInnerWildcard(pattern)) {
+		throw new HostingError('UnsupportedRoutePatternError', {
+			message:
+				`The backend route pattern '${pattern}' can't be routed by the ${door} front door: API Gateway paths take a ` +
+				'wildcard only as a whole trailing segment (`/files/*`).',
+			resolution:
+				'Register the route as `/files/{name}` or `/files/*` (a whole segment), or use the CloudFront or ALB door.',
+		});
+	}
 	const path = globToProxyPath(pattern);
-	if (path === null) return null;
-	return { path, target: path.endsWith('/{proxy+}') ? `${path.slice(0, -'{proxy+}'.length)}{proxy}` : path };
+	if (path === null) return [];
+	if (!path.endsWith('/{proxy+}')) return [{ path, target: path }];
+	const prefix = path.slice(0, -'/{proxy+}'.length);
+	return [
+		...(prefix ? [{ path: prefix, target: prefix }] : []),
+		{ path, target: `${prefix}/{proxy}` },
+	];
 };
 
 /** API Gateway's default per-API route/resource quota (adjustable). */

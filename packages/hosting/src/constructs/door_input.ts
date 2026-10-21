@@ -4,7 +4,7 @@
 /**
  * Assembling the {@link DoorInput} — what AWS Blocks hands a front door.
  *
- * The app facts come from the {@link CapabilityPlan} (the neutral route table
+ * The app facts come from the {@link HostingPlan} (the neutral route table
  * built from the framework's build output) and the `Hosting` props; the
  * origins are the resources `HostingConstruct` already provisioned. Building
  * the input has no side effects on the template: the server's Function URL is
@@ -15,7 +15,7 @@
 import { Fn } from 'aws-cdk-lib';
 import { FunctionUrlAuthType, type IFunction, type IFunctionUrl, InvokeMode } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import type { FrontDoorSettings } from './front_door_options.js';
 import type {
   ApiOrigin,
@@ -41,7 +41,7 @@ const canAddFunctionUrl = (fn: IFunction): fn is UrlCapableFunction =>
 
 /** Inputs to {@link buildDoorInput}: the plan, the provisioned resources, and the feature props. */
 export type BuildDoorInputParams = {
-  plan: CapabilityPlan;
+  plan: HostingPlan;
   /** The private assets bucket. */
   bucket: IBucket;
   /** The local static build output directory. */
@@ -214,7 +214,10 @@ export function toDoorFeatures(settings: DoorFeatureSettings): DoorFeatures {
   }
   if (settings.logging?.enabled) features.logging = settings.logging;
   if (settings.monitoring && settings.monitoring.enabled !== false) features.monitoring = settings.monitoring;
-  if (settings.geoRestriction) features.geoRestriction = settings.geoRestriction;
+  if (settings.geoRestriction) {
+    const { type, countries } = settings.geoRestriction;
+    features.geoRestriction = { type: type === 'whitelist' || type === 'allowlist' ? 'allowlist' : 'denylist', countries };
+  }
   if (settings.skewProtection?.enabled ?? true) {
     features.skewProtection = { enabled: true, maxAge: settings.skewProtection?.maxAge ?? DEFAULT_SKEW_MAX_AGE };
   }

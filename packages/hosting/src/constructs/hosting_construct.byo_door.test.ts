@@ -69,13 +69,11 @@ describe('HostingConstruct — bring-your-own front door', () => {
   it('hands the door a DoorInput: routes joined to origins, API paths incl. raw routes, features only when asked', () => {
     const seen: { input?: DoorInput } = {};
     synth(
+      { kind: 'custom', door: docDoor(seen) },
       {
-        kind: 'custom',
-        door: docDoor(seen),
-        backendApiUrl: API_URL,
-        backendApiPaths: ['/webhooks/*'],
+        backendApi: { url: API_URL, paths: ['/webhooks/*'] },
+        waf: { enabled: true, webAclArn: 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/x/1' },
       },
-      { waf: { enabled: true, webAclArn: 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/x/1' } },
     );
     const input = seen.input;
     assert.ok(input, 'build was called');
@@ -96,7 +94,7 @@ describe('HostingConstruct — bring-your-own front door', () => {
   });
 
   it("uses the door's url as the deploy's address", () => {
-    const { stack, hosting } = synth({ kind: 'custom', door: docDoor(), backendApiUrl: API_URL });
+    const { stack, hosting } = synth({ kind: 'custom', door: docDoor() }, { backendApi: { url: API_URL } });
     assert.equal(hosting.distributionUrl, hosting.frontDoor.url);
     assert.equal(hosting.frontDoor.service, 'my-cdn');
     assert.deepEqual(stack.resolve(hosting.distributionUrl), {
@@ -121,7 +119,7 @@ describe('HostingConstruct — bring-your-own front door', () => {
   });
 
   it('onUpload runs after the uploads are declared: the invalidation depends on every asset upload', () => {
-    const { stack } = synth({ kind: 'custom', door: docDoor(), backendApiUrl: API_URL });
+    const { stack } = synth({ kind: 'custom', door: docDoor() }, { backendApi: { url: API_URL } });
     const t = Template.fromStack(stack).toJSON();
     const resources = t.Resources as Record<string, { Type: string; DependsOn?: string[] }>;
     const uploads = Object.entries(resources)
@@ -159,7 +157,7 @@ describe('HostingConstruct — bring-your-own front door', () => {
       },
     });
     assert.throws(
-      () => synth({ kind: 'custom', door, backendApiUrl: API_URL }),
+      () => synth({ kind: 'custom', door }, { backendApi: { url: API_URL } }),
       (err: Error) => err.name === 'UnsupportedFrontDoorError' && /ProxySameOriginApi/.test(err.message),
     );
   });
@@ -174,15 +172,15 @@ describe('HostingConstruct — bring-your-own front door', () => {
         return { url: `https://${dist.distributionDomainName}` };
       },
     });
-    assert.throws(() => synth({ kind: 'custom', door, backendApiUrl: API_URL }), /ServeStaticAsset/);
-    assert.doesNotThrow(() => synth({ kind: 'custom', door, backendApiUrl: API_URL, wiringCheck: false }));
+    assert.throws(() => synth({ kind: 'custom', door }, { backendApi: { url: API_URL } }), /ServeStaticAsset/);
+    assert.doesNotThrow(() => synth({ kind: 'custom', door, wiringCheck: false }, { backendApi: { url: API_URL } }));
   });
 
   it('runs no feature check: a door that ignores a requested custom domain and logging still synthesizes', () => {
     assert.doesNotThrow(() =>
       synth(
-        { kind: 'custom', door: docDoor(), backendApiUrl: API_URL },
-        { domain: { domainName: 'app.example.com' }, logging: { enabled: true } },
+        { kind: 'custom', door: docDoor() },
+        { backendApi: { url: API_URL }, domain: { domainName: 'app.example.com' }, logging: { enabled: true } },
       ),
     );
   });

@@ -39,7 +39,31 @@
  *
  * @internal Framework-only.
  */
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
+
+/**
+ * The environment an asset-proxy function reads: the bucket (`ASSET_BUCKET`)
+ * and the build's key prefix (`ASSET_KEY_PREFIX`). Set it on the function
+ * that runs `generateAlbAssetProxyCode` / `generateApiGwAssetProxyCode`, and
+ * grant it read access to the bucket (`assets.bucket.grantRead(fn)`).
+ *
+ * @example
+ * const proxy = new Function(scope, 'Assets', {
+ *   runtime: Runtime.NODEJS_22_X,
+ *   handler: 'index.handler',
+ *   code: Code.fromInline(generateApiGwAssetProxyCode({ spaFallback: app.spaFallback, redirects: app.redirects })),
+ *   environment: assetProxyEnvironment(origins.assets),
+ * });
+ * origins.assets.bucket.grantRead(proxy);
+ *
+ * @param assets the assets origin (`input.origins.assets`): its bucket and build prefix.
+ * @returns the environment variables.
+ */
+export const assetProxyEnvironment = (assets: { readonly bucket: IBucket; readonly prefix: string }): Record<string, string> => ({
+  ASSET_BUCKET: assets.bucket.bucketName,
+  ASSET_KEY_PREFIX: assets.prefix.replace(/\/+$/, ''),
+});
 
 /**
  * Content types the asset proxies gzip for a client that accepts it (and the

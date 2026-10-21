@@ -5,8 +5,9 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  *
  * An Application Load Balancer (ALB) cannot use an S3 bucket as a target
  * directly (and the assets bucket is private — BLOCK_ALL, no public read). So
- * the ALB routes static paths to this tiny Lambda TARGET, which streams the
- * object out of `builds/<buildId>/<path>` in the private bucket. This is the
+ * the ALB routes static paths to this tiny Lambda TARGET, which reads the
+ * object from `builds/<buildId>/<path>` in the private bucket and returns it
+ * whole (base64, gzipped when compressible). This is the
  * ALB analogue of CloudFront's S3+OAC origin.
  *
  * The handler speaks the ALB↔Lambda contract (NOT API Gateway): the event is
@@ -34,10 +35,10 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  */
 
 /**
- * Build the inline handler source for the asset-proxy Lambda.
+ * Build the inline handler source for the asset-proxy Lambda. The function
+ * reads its bucket and build prefix from the environment
+ * ({@link assetProxyEnvironment}) and needs read access to the bucket.
  *
- * @param opts.bucketEnv     env var name holding the bucket name (default `ASSET_BUCKET`)
- * @param opts.keyPrefixEnv  env var name holding the `builds/<id>` key prefix (default `ASSET_KEY_PREFIX`)
  * @param opts.stripPrefix   basePath/assetPrefix to strip from the URL before lookup (default '')
  * @param opts.spaFallback   serve `index.html` on a miss (SPA) vs a real 404
  * @param opts.redirects     the app's redirects (first match wins), answered before any S3 read

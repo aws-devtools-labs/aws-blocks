@@ -14,8 +14,12 @@ import {
 } from '@aws-blocks/hosting/adapters';
 import {
   buildFrontDoor,
+  cf,
   cloudFrontEdgeDoor,
+  FRONT_DOOR_SETTINGS,
   type FrontDoorAliases,
+  type FrontDoorKind,
+  type FrontDoorSettingName,
   type FrontDoorSettings,
   generateBuildId,
   HostingConstruct,
@@ -754,9 +758,10 @@ export class Hosting extends Construct {
     // through a regional ALB. Detected up front so the L3 stays on the default
     // CloudFront path and the ALB is stacked in during API-behavior wiring.
     const cfOverRouter: CloudFrontOverRouterFrontDoor | undefined =
-      typeof props.frontDoor === 'object' && 'kind' in props.frontDoor && props.frontDoor.kind === 'stacked'
+      typeof props.frontDoor === 'object' && props.frontDoor !== null && props.frontDoor.kind === 'stacked'
         ? props.frontDoor
         : undefined;
+    if (cfOverRouter) validateStackedDoor(cfOverRouter);
 
     // The door's effective settings: `frontDoor.features` plus the deprecated
     // top-level aliases. Resolved before the build, so a conflicting or
@@ -964,66 +969,48 @@ export class Hosting extends Construct {
       // and enabled flow straight through —, skew protection, the CloudFront
       // cache/CSP/price-class/geo/quotas settings) reach the L3 only as
       // `frontDoor.features`, already merged with the deprecated top-level
-      // props above.
-      // For the ALB front door, thread the backend API Gateway URL so the L3
-      // wires the same-origin `/aws-blocks/*` proxy (a Lambda target) — the ALB
-      // analogue of the CloudFront API behaviors below.
-      // The composed CF → ALB door builds a NORMAL CloudFront distribution at
-      // the L3 (`frontDoor: undefined`); the ALB is stacked in below, between
-      // the edge and the backend, by re-pointing the API behaviors at it. So the
-      // L3 only ever sees a `kind`-based door or the default.
-      // Composed CF → ALB door: the L3 builds the FULL ALB router
-      // (asset-proxy → S3, SSR, image, API-forwarder → backend), exactly the
-      // standalone ALB door. A thin CloudFront edge is stacked in front below
-      // (its single default behavior → the ALB), so CloudFront's ONE origin is
-      // the ALB and the ALB routes to everything. The internal CF → ALB hop is
-      // HTTP (no cert on the ALB); the viewer hop is HTTPS at the edge.
-      // Every door that proxies the API same-origin is handed every path that
-      // must reach the backend: `/aws-blocks/*` (added by the L3) plus this
-      // backend's raw routes, so it can't silently drop one — the same set the
-      // CloudFront default turns into behaviors (`addApiBehaviors`).
+      // props above. The stacked door reaches the L3 as its router (the ALB,
+      // locked to the CloudFront edge built below), with the router's settings.
       frontDoor: cfOverRouter
         ? {
-            kind: 'alb',
+            kind: 'stackedRouter',
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
-            // The router admits only the CloudFront edge in front of it.
-            restrictToCloudFront: true,
-            backendApiUrl: props.api?.apiUrl,
-            ...(props.api ? { backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)) } : {}),
-            // The router layer's settings (a REGIONAL web ACL, access logs, alarms).
             ...(cfOverRouter.features?.router ? { features: cfOverRouter.features.router } : {}),
           }
-        : toL3FrontDoor(
-            nonStacked(props.frontDoor),
-            l3Settings,
-            props.api
-              ? {
-                  backendApiUrl: props.api.apiUrl,
-                  backendApiPaths: backendApiPathsFor(this.ownerRootIdFor(props.api)),
-                }
-              : undefined,
-          ),
+        : toL3FrontDoor(nonStacked(props.frontDoor), l3Settings),
+      // Every door that proxies the API same-origin (the ALB, API Gateway, the
+      // stacked router, a custom door) is handed every path that must reach the
+      // backend: `/aws-blocks/*` (added by the L3) plus this backend's raw routes,
+      // so it can't silently drop one — the same set the CloudFront default turns
+      // into behaviors (`addApiBehaviors`). The CloudFront door and `'none'`
+      // ignore it.
+      ...(props.api
+        ? { backendApi: { url: props.api.apiUrl, paths: backendApiPathsFor(this.ownerRootIdFor(props.api)) } }
+        : {}),
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
 
-    // ── 7. Front door: API proxy / composed edge ─────────────────
+    // ── 7. Front door: API proxy / stacked edge ──────────────────
     // The public origin the app is served from. Defaults to the L3's front-door
-    // URL; the composed CF → ALB door overrides it to the CloudFront edge below.
+    // URL; the stacked door overrides it to the CloudFront edge below.
     let publicUrl = hosting.distributionUrl;
-    const isCloudFrontDoor = hosting.frontDoor.service === 'cloudfront';
+    // The door's resolved kind (a bring-your-own door's `service` is free-form).
+    const isCloudFrontDoor = hosting.frontDoorKind === 'cloudfront' && !cfOverRouter;
     let publicDistribution = isCloudFrontDoor ? hosting.distribution : undefined;
+    let stackedEdge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function } | undefined;
 
     if (cfOverRouter) {
-      // Composed CF → ALB. The L3 already built the FULL ALB router
-      // (it routes static/SSR/image/API). Stack a thin CloudFront edge whose
-      // single default behavior forwards EVERYTHING to that ALB: CloudFront's one
-      // origin is the ALB, and the ALB routes to the rest of the infra. The app
-      // is served same-origin from the CloudFront domain (auth/CORS unaffected).
-      const cf = this.addCloudFrontOverAlb(hosting, props);
-      publicUrl = cf.url;
-      publicDistribution = cf.distribution;
+      // The stacked door. The L3 built the ALB router (it routes static, SSR,
+      // image and the API); the CloudFront edge in front serves the static
+      // routes from S3 (origin access control) and sends the API and the
+      // dynamic routes through the router. The app is served same-origin from
+      // the edge's domain.
+      const edge = this.addCloudFrontOverAlb(hosting, props);
+      publicUrl = edge.url;
+      publicDistribution = edge.distribution;
+      stackedEdge = edge;
     }
 
     if (props.api && isCloudFrontDoor && !cfOverRouter) {
@@ -1036,14 +1023,17 @@ export class Hosting extends Construct {
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
       this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
-    } else if (props.api && props.frontDoor !== 'none') {
+    } else if (props.api && props.frontDoor !== 'none' && !publicUrl.startsWith('http://')) {
       // Every other door that proxies the API same-origin (ALB, API Gateway, the
-      // composed CF → ALB, a custom door) routes it inside its own router. It is
+      // stacked door, a custom door) routes it inside its own router. It is
       // still the app's public origin for the API, so claim the API front-door
       // role with the door's URL — the backend's managed `cloudfront`
       // distribution then stands down, exactly as for the CloudFront default.
       // `'none'` (S3 website) proxies nothing: the client calls the backend
-      // cross-origin, so it does not claim.
+      // cross-origin, so it does not claim. Nor does a plain-HTTP door (an ALB
+      // without a certificate): the API URL native clients use (`ApiUrl`) stays
+      // the backend's own HTTPS endpoint — the browser app still reaches the
+      // API same-origin through the door.
       props.api.claimApiFrontDoor?.(publicUrl);
     }
 
@@ -1097,11 +1087,12 @@ export class Hosting extends Construct {
         destinationBucket: configBucket,
         destinationKeyPrefix: configKeyPrefix,
         prune: false,
-        // CloudFront-only: attach the distribution + post-rewrite invalidation
-        // paths so a redeploy clears the edge entry for config.json. On a
-        // non-CloudFront door (ALB) there is no distribution to invalidate; the
-        // ALB reads S3 live, so the upload alone suffices.
-        ...(publicDistribution
+        // The CloudFront door: attach the distribution + post-rewrite
+        // invalidation paths so a redeploy clears the edge entry for
+        // config.json. Every other door serves the new build's key only after
+        // this upload (its cutover waits for it), so there is nothing to clear:
+        // the stacked edge rewrites to `/builds/<buildId>/…`, a key never cached.
+        ...(isCloudFrontDoor && publicDistribution
           ? {
               distribution: publicDistribution,
               // The skew-protection viewer-request CloudFront function rewrites
@@ -1139,6 +1130,8 @@ export class Hosting extends Construct {
 
       // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
+
+      if (stackedEdge) this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);
     }
 
     // ── 9. Register public origin + CORS hosting origin into S3 config ──
@@ -1261,19 +1254,20 @@ export class Hosting extends Construct {
   }
 
   /**
-   * Front the full ALB router (already built by the L3) with a THIN
-   * CloudFront edge whose SINGLE default behavior forwards everything to the ALB.
-   * CloudFront's one origin is the ALB, and the ALB routes to the rest of the
-   * infra (asset-proxy → S3, SSR, image, API-forwarder → backend). The edge keeps
-   * TLS, the global cache, WAF and custom domain; routing / atomic-release / skew
-   * live on the ALB. The internal CF → ALB hop is HTTP; the viewer hop is HTTPS.
+   * Front the ALB router (built by the L3) with the stacked door's CloudFront
+   * edge: static routes from S3 (origin access control), the API and the
+   * dynamic routes through the ALB router, which admits only the edge. The
+   * edge has the viewer TLS, the cache, the security headers and a BYO edge
+   * web ACL; there is no custom domain or skew protection on it yet. The
+   * edge → router hop is HTTP; the viewer hop is HTTPS.
    *
-   * @returns the CloudFront distribution + its public URL (the app's real origin).
+   * @returns the CloudFront distribution, its public URL (the app's origin),
+   *   and the static function that carries the build id (its cutover).
    */
   private addCloudFrontOverAlb(
     hosting: HostingConstruct,
     props: HostingProps,
-  ): { distribution: Distribution; url: string } {
+  ): { distribution: Distribution; url: string; staticFunction?: cdk.aws_cloudfront.Function } {
     // The L3 built the full ALB router as its front door. The edge is a
     // free-form door (`cloudFrontEdgeDoor`) built from the same DoorInput, with
     // the ALB as its `upstream`: CloudFront's single origin is that ALB, and the
@@ -1304,14 +1298,47 @@ export class Hosting extends Construct {
     );
     // The edge's build cutover (its static function carries the build id) waits
     // for every asset upload of the build, so it never points at a prefix that
-    // isn't there yet. (Not the resolved config upload: that one invalidates
-    // the distribution, which already waits for the function.)
+    // isn't there yet (and, see `gateStackedEdge`, for the resolved config).
     if (result.staticFunction) {
       for (const upload of hosting.node.findAll().filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment)) {
         result.staticFunction.node.addDependency(upload);
       }
     }
-    return { distribution: result.distribution, url: result.url };
+    return {
+      distribution: result.distribution,
+      url: result.url,
+      ...(result.staticFunction ? { staticFunction: result.staticFunction } : {}),
+    };
+  }
+
+  /**
+   * The stacked edge after the resolved runtime config is uploaded:
+   *
+   * - its static function (the build cutover) waits for the config upload, so
+   *   the edge never serves the new build's `config.json` placeholder;
+   * - with a server, a CloudFront invalidation (as on the CloudFront door: the
+   *   edge honors the server's `Cache-Control`, so edge-cached pages of the
+   *   previous build would reference its assets) runs after the uploads, the
+   *   cutover and the new server — `manifest.invalidationPaths`, else `/*`.
+   */
+  private gateStackedEdge(
+    hosting: HostingConstruct,
+    manifest: DeployManifest,
+    edge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function },
+    configDeployment: s3deploy.BucketDeployment,
+    buildId: string,
+  ): void {
+    edge.staticFunction?.node.addDependency(configDeployment);
+    const server = hosting.doorInput.origins.server;
+    if (!server) return;
+    const paths = manifest.invalidationPaths ?? ['/*'];
+    if (paths.length === 0) return;
+    const uploads = hosting.node
+      .findAll()
+      .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+    const invalidation = cf.invalidate(edge.distribution, { after: [...uploads, configDeployment], paths, buildId });
+    if (edge.staticFunction) invalidation.node.addDependency(edge.staticFunction);
+    invalidation.node.addDependency(server.fn);
   }
 
   /**
@@ -1413,10 +1440,17 @@ function backendApiPathsFor(ownerRootId: string): string[] {
   return rawRouteBehaviors(ownerRootId).map((r) => r.pattern);
 }
 
-/** The custom domain set in `frontDoor.features`, if the chosen door takes one. */
+/**
+ * The custom domain set in `frontDoor.features`, when the chosen door takes
+ * one (per `FRONT_DOOR_SETTINGS`); the stacked door takes none.
+ */
 function featuresDomainOf(frontDoor: HostingProps['frontDoor']): Omit<HostingDomain, 'wwwRedirect'> | undefined {
-  if (typeof frontDoor !== 'object' || frontDoor.kind === 'stacked' || frontDoor.kind === 'alb') return undefined;
-  return frontDoor.features?.domain;
+  if (typeof frontDoor !== 'object' || frontDoor === null || frontDoor.kind === 'stacked') return undefined;
+  const kind: FrontDoorKind = frontDoor.kind ?? 'cloudfront';
+  const settings: readonly FrontDoorSettingName[] | undefined = FRONT_DOOR_SETTINGS[kind];
+  if (!settings?.includes('domain')) return undefined;
+  const features: { domain?: Omit<HostingDomain, 'wwwRedirect'> } | undefined = frontDoor.features;
+  return features?.domain;
 }
 
 /**
@@ -1475,26 +1509,133 @@ function nonStacked(frontDoor: HostingProps['frontDoor']): HostingFrontDoor<Host
 }
 
 /**
- * The `frontDoor` the L3 receives: the app's door with its effective settings
- * as `features` (domain markers resolved), plus the backend API to proxy
- * same-origin for the doors that route it themselves.
+ * The `frontDoor` the L3 receives: the app's door — its documented options
+ * only, picked one by one (never spread), with its effective settings as
+ * `features` (domain markers resolved). The backend API reaches the L3 as its
+ * own prop (`backendApi`).
+ *
+ * @throws HostingError('UnsupportedFrontDoorError') for an unknown door (already validated, so defensive).
  */
-function toL3FrontDoor(
-  frontDoor: HostingFrontDoor<HostingDomain> | undefined,
-  features: FrontDoorSettings,
-  backend: { backendApiUrl: string; backendApiPaths: string[] } | undefined,
-): HostingFrontDoor {
+function toL3FrontDoor(frontDoor: HostingFrontDoor<HostingDomain> | null | undefined, features: FrontDoorSettings): HostingFrontDoor {
   if (frontDoor === 'none') return 'none';
-  if (frontDoor === undefined || frontDoor === 'cloudfront' || frontDoor.kind === undefined || frontDoor.kind === 'cloudfront') {
+  if (
+    frontDoor === undefined ||
+    frontDoor === null ||
+    frontDoor === 'cloudfront' ||
+    frontDoor.kind === undefined ||
+    frontDoor.kind === 'cloudfront'
+  ) {
     return { kind: 'cloudfront', features };
   }
   switch (frontDoor.kind) {
     case 'alb':
-      return { ...frontDoor, ...backend, features };
+      return { kind: 'alb', vpc: frontDoor.vpc, internal: frontDoor.internal, certificate: frontDoor.certificate, features };
     case 'apiGateway':
-      return { ...frontDoor, ...backend, features };
+      return { kind: 'apiGateway', api: frontDoor.api, certificate: frontDoor.certificate, features };
     case 'custom':
-      return { ...frontDoor, ...backend, features };
+      return { kind: 'custom', door: frontDoor.door, wiringCheck: frontDoor.wiringCheck, features };
+    default:
+      throw new HostingError('UnsupportedFrontDoorError', {
+        message: `Unknown front door ${JSON.stringify(frontDoor)}.`,
+        resolution: "Use 'cloudfront' (default), 'none', { kind: 'alb' }, { kind: 'apiGateway' }, { kind: 'stacked', … } or { kind: 'custom', door }.",
+      });
+  }
+}
+
+/** The options the stacked door takes besides `kind`. */
+const STACKED_OPTION_KEYS = new Set(['kind', 'edge', 'router', 'vpc', 'internal', 'features']);
+/** The keys of the stacked door's `features.edge`. */
+const STACKED_EDGE_KEYS = new Set(['waf', 'contentSecurityPolicy']);
+
+/**
+ * Check the stacked door's options and its `features` shape (plain JavaScript,
+ * or a cast, can pass anything): only `edge: 'cloudfront'` and
+ * `router: 'alb'`; `features` holds only `edge` and `router`; `edge` holds
+ * `waf: { webAclArn }` and `contentSecurityPolicy`; the router's settings are
+ * checked as the ALB door's, with errors naming `frontDoor.features.router`.
+ *
+ * @throws HostingError('InvalidFrontDoorOptionError') for an unknown or mistyped option.
+ * @throws HostingError('InvalidFrontDoorSettingError') for a wrong-shaped `features` entry.
+ * @throws HostingError('UnsupportedFrontDoorSettingError') for a router setting the ALB doesn't implement.
+ */
+function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
+  const option = (message: string, resolution: string) =>
+    new HostingError('InvalidFrontDoorOptionError', { message, resolution });
+  const setting = (message: string, resolution: string) =>
+    new HostingError('InvalidFrontDoorSettingError', { message, resolution });
+  const raw: Record<string, unknown> = { ...door };
+  for (const key of Object.keys(raw)) {
+    if (raw[key] !== undefined && !STACKED_OPTION_KEYS.has(key)) {
+      throw option(
+        `\`frontDoor.${key}\` is not an option of the 'stacked' front door.`,
+        'Remove it. The stacked door takes: frontDoor.edge, frontDoor.router, frontDoor.vpc, frontDoor.internal, and `frontDoor.features`.',
+      );
+    }
+  }
+  if (raw.edge !== 'cloudfront' || raw.router !== 'alb') {
+    throw option(
+      `The 'stacked' front door is \`edge: 'cloudfront', router: 'alb'\` (got edge ${JSON.stringify(raw.edge)}, router ${JSON.stringify(raw.router)}).`,
+      "Use `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` — the only layers today.",
+    );
+  }
+  if (raw.internal !== undefined && typeof raw.internal !== 'boolean') {
+    throw option(`\`frontDoor.internal\` must be true or false (got ${JSON.stringify(raw.internal)}).`, 'Pass a boolean.');
+  }
+  const features: unknown = door.features;
+  if (features === undefined) return;
+  if (features === null || typeof features !== 'object') {
+    throw option('`frontDoor.features` must be an object.', 'Pass `features: { edge: { … }, router: { … } }`, or omit it.');
+  }
+  const layers: Record<string, unknown> = { ...features };
+  for (const key of Object.keys(layers)) {
+    if (layers[key] !== undefined && key !== 'edge' && key !== 'router') {
+      throw setting(
+        `\`frontDoor.features.${key}\` is not a setting of the 'stacked' front door: it takes its settings per layer.`,
+        'Set them on the layer that implements them: `frontDoor.features.edge` (`waf.webAclArn`, `contentSecurityPolicy`) ' +
+          'or `frontDoor.features.router` (`waf`, `logging`, `monitoring`).',
+      );
+    }
+  }
+  const edge = layers.edge;
+  if (edge !== undefined) {
+    if (edge === null || typeof edge !== 'object') {
+      throw setting('`frontDoor.features.edge` must be an object.', 'Pass `edge: { waf: { webAclArn }, contentSecurityPolicy }`, or omit it.');
+    }
+    const edgeSettings: Record<string, unknown> = { ...edge };
+    for (const key of Object.keys(edgeSettings)) {
+      if (edgeSettings[key] !== undefined && !STACKED_EDGE_KEYS.has(key)) {
+        throw setting(
+          `\`frontDoor.features.edge.${key}\` is not a setting of the stacked door's edge.`,
+          'Remove it. The edge takes: frontDoor.features.edge.waf (`{ webAclArn }`), frontDoor.features.edge.contentSecurityPolicy.',
+        );
+      }
+    }
+    const waf = edgeSettings.waf;
+    if (waf !== undefined) {
+      const wafSettings: Record<string, unknown> = waf !== null && typeof waf === 'object' ? { ...waf } : {};
+      const extra = Object.keys(wafSettings).filter((k) => k !== 'webAclArn' && wafSettings[k] !== undefined);
+      if (typeof wafSettings.webAclArn !== 'string' || wafSettings.webAclArn.length === 0 || extra.length > 0) {
+        throw setting(
+          "`frontDoor.features.edge.waf` takes your CLOUDFRONT-scoped web ACL's ARN only: `{ webAclArn }`.",
+          'The edge builds no web ACL. Pass `edge: { waf: { webAclArn } }` (a web ACL in us-east-1), or a REGIONAL one on the router: `router: { waf: { enabled: true } }`.',
+        );
+      }
+    }
+  }
+  const router = layers.router;
+  if (router !== undefined) {
+    const routerSettings: Record<string, unknown> = router !== null && typeof router === 'object' ? { ...router } : {};
+    if (routerSettings.domain !== undefined) {
+      throw new HostingError('UnsupportedFrontDoorSettingError', {
+        message: "`frontDoor.features.router.domain` is not supported by the 'stacked' front door: the edge is the public address.",
+        resolution: 'Remove it.',
+      });
+    }
+    resolveFrontDoorFeatures(
+      { kind: 'alb', features: door.features?.router },
+      {},
+      { featuresPath: 'frontDoor.features.router', label: 'stacked' },
+    );
   }
 }
 

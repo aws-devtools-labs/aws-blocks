@@ -19,10 +19,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { DeployManifest } from '../manifest/types.js';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { AlbConstruct } from './alb_construct.js';
 import { cf } from './cf_helpers.js';
 import { type DoorInput, defineFrontDoor } from './front_door.js';
@@ -112,7 +113,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
 
   describe('A — every origins.api.paths entry reaches the backend', () => {
     it('ALB: one rule carries /aws-blocks/* plus each raw route; no stale /aws-blocks-auth/*', () => {
-      const { t } = synth(spaManifest(), { kind: 'alb', backendApiUrl: API_URL, backendApiPaths: RAW_ROUTES });
+      const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       const paths = albRulePaths(t);
       for (const p of ['/aws-blocks/*', ...RAW_ROUTES]) assert.ok(paths.includes(p), `ALB routes ${p}`);
       assert.ok(!paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* rule');
@@ -120,7 +121,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
 
     it('ALB: more paths than one rule can hold (5 path values) are split across rules', () => {
       const many = Array.from({ length: 11 }, (_, i) => `/raw${i}`);
-      const { t } = synth(spaManifest(), { kind: 'alb', backendApiUrl: API_URL, backendApiPaths: many });
+      const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: many } });
       const rules = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
       for (const r of rules) {
         for (const c of r.Properties.Conditions as Array<{ PathPatternConfig?: { Values: string[] } }>) {
@@ -134,19 +135,19 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     it('ALB: too many API paths for the reserved priority band fails synth with a clear error', () => {
       const tooMany = Array.from({ length: 500 }, (_, i) => `/raw${i}`);
       assert.throws(
-        () => synth(spaManifest(), { kind: 'alb', backendApiUrl: API_URL, backendApiPaths: tooMany }),
+        () => synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: tooMany } }),
         /TooManyApiPathsError|listener rule/,
       );
     });
 
     it('stacked (the ALB router): the raw routes reach the backend', () => {
       // The Blocks layer builds the stacked door's router as `{ kind: 'alb' }`.
-      const { t } = synth(spaManifest(), { kind: 'alb', backendApiUrl: API_URL, backendApiPaths: RAW_ROUTES });
+      const { t } = synth(spaManifest(), { kind: 'alb' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       assert.ok(albRulePaths(t).includes('/hooks/door-probe'));
     });
 
     it('API Gateway HTTP: a route per raw route, proxied to the same path on the backend', () => {
-      const { t } = synth(spaManifest(), { kind: 'apiGateway', backendApiUrl: API_URL, backendApiPaths: RAW_ROUTES });
+      const { t } = synth(spaManifest(), { kind: 'apiGateway' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       const keys = httpRouteKeys(t);
       assert.ok(keys.includes('ANY /aws-blocks/{proxy+}'));
       assert.ok(keys.includes('ANY /hooks/door-probe'), `routes: ${keys.join(', ')}`);
@@ -162,8 +163,8 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     it('API Gateway REST: a resource per raw route with an HTTP_PROXY method', () => {
       const { t } = synth(
         spaManifest(),
-        { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL, backendApiPaths: RAW_ROUTES },
-        { domain: DOMAIN },
+        { kind: 'apiGateway', api: 'rest' },
+        { domain: DOMAIN, backendApi: { url: API_URL, paths: RAW_ROUTES } },
       );
       const parts = restPathParts(t);
       for (const p of ['hooks', 'door-probe', 'users']) assert.ok(parts.includes(p), `REST resource ${p}`);
@@ -171,16 +172,12 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
     });
 
     it('the door input lists the same paths the door routes', () => {
-      const { hosting } = synth(spaManifest(), {
-        kind: 'apiGateway',
-        backendApiUrl: API_URL,
-        backendApiPaths: RAW_ROUTES,
-      });
+      const { hosting } = synth(spaManifest(), { kind: 'apiGateway' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
       assert.deepEqual(hosting.doorInput?.origins.api?.paths, ['/aws-blocks/*', ...RAW_ROUTES]);
     });
 
     it('construct default (no paths given): the single-compute backend gets /aws-blocks/* only', () => {
-      const plan: CapabilityPlan = {
+      const plan: HostingPlan = {
         origins: [{ id: 'blocks-s3', kind: 'static' }],
         routes: { entries: [], redirects: [], headers: [] },
         policies: { spaFallback: true, hasServer: false, skewEnabled: false },
@@ -255,16 +252,160 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
   describe('D — REST door without a custom domain', () => {
     it('fails synth with an actionable error', () => {
       assert.throws(
-        () => synth(spaManifest(), { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL }),
+        () => synth(spaManifest(), { kind: 'apiGateway', api: 'rest' }, { backendApi: { url: API_URL } }),
         (err: Error) =>
           err.name === 'RestFrontDoorNeedsDomainError' && /\/prod/.test(err.message) && /domain/.test(err.message),
       );
     });
 
     it('builds with a custom domain mapped to the stage (the URL is the domain root)', () => {
-      const { hosting } = synth(spaManifest(), { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL }, { domain: DOMAIN });
+      const { hosting } = synth(spaManifest(), { kind: 'apiGateway', api: 'rest' }, { backendApi: { url: API_URL }, domain: DOMAIN });
       // A bare origin: the browser's Origin header has no trailing slash, and the
       // URL becomes BLOCKS_PUBLIC_ORIGIN and the CORS hosting origin.
+      assert.equal(hosting.distributionUrl, 'https://app.example.com');
+    });
+  });
+
+  // ── E. The build cutover waits for the uploads ───────────────────────────
+
+  describe('E — the asset proxy switches to the new build only after every upload', () => {
+    /** The asset-proxy function's logical id and its `DependsOn`. */
+    const proxyDependsOn = (t: Template_): string[] => {
+      const json = t.toJSON().Resources as Record<string, { Type: string; DependsOn?: string[]; Properties?: { Environment?: { Variables?: Record<string, unknown> } } }>;
+      const proxy = Object.values(json).find(
+        (r) => r.Type === 'AWS::Lambda::Function' && r.Properties?.Environment?.Variables?.ASSET_KEY_PREFIX !== undefined,
+      );
+      assert.ok(proxy, 'an asset proxy');
+      return proxy.DependsOn ?? [];
+    };
+    const uploads = (t: Template_): string[] => Object.keys(t.findResources('Custom::CDKBucketDeployment'));
+
+    const cases: Array<[string, HostingConstructProps['frontDoor'], Partial<HostingConstructProps>]> = [
+      ['ALB', { kind: 'alb' }, {}],
+      ['API Gateway HTTP', { kind: 'apiGateway' }, {}],
+      ['API Gateway REST', { kind: 'apiGateway', api: 'rest' }, { domain: DOMAIN }],
+      ['the stacked router', { kind: 'stackedRouter' }, {}],
+    ];
+    for (const [label, frontDoor, extra] of cases) {
+      it(`${label}: the proxy (whose environment names the build) depends on every Custom::CDKBucketDeployment`, () => {
+        const { t } = synth(spaManifest(), frontDoor, { errorPages: undefined, ...extra });
+        const deps = proxyDependsOn(t);
+        const all = uploads(t);
+        assert.ok(all.length >= 2);
+        for (const u of all) assert.ok(deps.includes(u), `${label}: proxy waits for ${u}`);
+      });
+    }
+
+    it('an upload declared later (the runtime config) is ordered before the proxy too', () => {
+      const stack = new Stack(new App(), 'Later', { env: { account: '111111111111', region: 'us-west-2' } });
+      const hosting = new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: { kind: 'alb' } });
+      const later = new Bucket(stack, 'Later');
+      hosting.addBuildAssetDependency(later);
+      const deps = proxyDependsOn(Template.fromStack(stack));
+      assert.ok(deps.some((d) => d.startsWith('Later')), 'the proxy waits for the later dependency');
+    });
+  });
+
+  // ── F. API Gateway route shapes and resource policies ────────────────────
+
+  describe('F — API Gateway routes and permissions', () => {
+    it('a wildcard prefix route also gets its bare path (`/users/*` serves `/users` and `/users/`)', () => {
+      const { t } = synth(spaManifest(), { kind: 'apiGateway' }, { backendApi: { url: API_URL, paths: RAW_ROUTES } });
+      const keys = httpRouteKeys(t);
+      assert.ok(keys.includes('ANY /users/{proxy+}'));
+      assert.ok(keys.includes('ANY /users'));
+    });
+
+    it('a backend route with a wildcard inside a segment fails with a named error on both flavors', () => {
+      for (const [door, extra] of [
+        [{ kind: 'apiGateway' }, {}],
+        [{ kind: 'apiGateway', api: 'rest' }, { domain: DOMAIN }],
+      ] as const) {
+        assert.throws(
+          () => synth(spaManifest(), door, { ...extra, backendApi: { url: API_URL, paths: ['/files*'] } }),
+          (e: Error) => e.name === 'UnsupportedRoutePatternError' && /\/files\*/.test(e.message),
+        );
+      }
+    });
+
+    it('one API-scoped invoke permission per function, however many routes (HTTP and REST)', () => {
+      const routes = Array.from({ length: 40 }, (_, i) => ({ pattern: `/s${i}/*`, target: 'static' }));
+      const many = (): DeployManifest => ({ ...spaManifest(), routes: [...routes, { pattern: '/*', target: 'static' }] });
+      for (const [door, extra] of [
+        [{ kind: 'apiGateway' }, {}],
+        [{ kind: 'apiGateway', api: 'rest' }, { domain: DOMAIN }],
+      ] as const) {
+        const { t } = synth(many(), door, extra);
+        const perms = Object.values(t.findResources('AWS::Lambda::Permission')).filter(
+          (p) => p.Properties.Principal === 'apigateway.amazonaws.com',
+        );
+        assert.equal(perms.length, 1, `${JSON.stringify(door)}: one permission for the asset proxy`);
+      }
+    });
+
+    it('the REST door counts resources (every segment), not methods, against the 300 quota', () => {
+      const deep = Array.from({ length: 100 }, (_, i) => ({ pattern: `/a${i}/b/c`, target: 'static' }));
+      const stack = new Stack(new App(), 'Deep', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: { ...spaManifest(), routes: [...deep, { pattern: '/*', target: 'static' }] },
+        frontDoor: { kind: 'apiGateway', api: 'rest' },
+        domain: DOMAIN,
+      });
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('defines \\d+ resources'));
+      assert.equal(warnings.length, 1);
+      // 100 × 3 segments, the greedy `{proxy+}` and the root; only 102 methods.
+      assert.match(String(warnings[0]?.entry.data), /defines 302 resources/);
+    });
+  });
+
+  // ── G. The door's kind, address and transport ────────────────────────────
+
+  describe("G — frontDoorKind, loadBalancerDnsName, plain HTTP", () => {
+    const namedCloudFront = defineFrontDoor({
+      service: 'cloudfront',
+      build(scope, input: DoorInput) {
+        const bucket = new Bucket(scope, 'Unused');
+        cf.recordWired(input.origins.assets);
+        return { url: `https://${bucket.bucketDomainName}` };
+      },
+    });
+
+    it('a custom door may be called `cloudfront`: its kind is still custom, and it has no distribution or ALB name', () => {
+      const { hosting } = synth(spaManifest(), { kind: 'custom', door: namedCloudFront });
+      assert.equal(hosting.frontDoorKind, 'custom');
+      assert.equal(hosting.frontDoor.service, 'cloudfront');
+      assert.equal(hosting.loadBalancerDnsName, undefined);
+      assert.throws(() => hosting.distribution, (e: Error) => e.name === 'FrontDoorNotCloudFrontError');
+    });
+
+    it('the built-in kinds', () => {
+      assert.equal(synth(spaManifest(), undefined).hosting.frontDoorKind, 'cloudfront');
+      assert.equal(synth(spaManifest(), 'none').hosting.frontDoorKind, 'none');
+      const alb = synth(spaManifest(), { kind: 'alb' }).hosting;
+      assert.equal(alb.frontDoorKind, 'alb');
+      assert.ok(alb.loadBalancerDnsName);
+      assert.equal(synth(spaManifest(), { kind: 'stackedRouter' }).hosting.frontDoorKind, 'alb');
+      assert.equal(synth(spaManifest(), { kind: 'apiGateway' }).hosting.loadBalancerDnsName, undefined);
+    });
+
+    it('a plain-HTTP door with an API warns that sign-in and cookies travel unencrypted', () => {
+      const warn = (frontDoor: HostingConstructProps['frontDoor'], extra: Partial<HostingConstructProps> = {}) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor, ...extra });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      };
+      assert.equal(warn({ kind: 'alb' }, { backendApi: { url: API_URL } }).length, 1);
+      assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
+      assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
+    });
+
+    it('the ALB door with a custom domain: the URL, the trusted origin and the CORS origin are the domain', () => {
+      const certificate = Certificate.fromCertificateArn(
+        new Stack(new App(), 'CertScope', { env: { account: '111111111111', region: 'us-west-2' } }),
+        'C',
+        'arn:aws:acm:us-west-2:111111111111:certificate/c',
+      );
+      const { hosting } = synth(spaManifest(), { kind: 'alb', certificate, features: { domain: DOMAIN } });
       assert.equal(hosting.distributionUrl, 'https://app.example.com');
     });
   });

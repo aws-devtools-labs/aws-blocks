@@ -21,7 +21,6 @@ import {
   type IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
-  OriginProtocolPolicy,
   OriginRequestCookieBehavior,
   OriginRequestHeaderBehavior,
   OriginRequestPolicy,
@@ -67,7 +66,7 @@ import {
   renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
-import { buildCapabilityPlan } from '../plan/capability-plan.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
 import type { WebFunctionConstruct } from './web_function_construct.js';
 import {
@@ -132,14 +131,6 @@ export type CdnConstructProps = {
    * built-in default CSP is used.
    */
   contentSecurityPolicy?: string;
-  /**
-   * Extra public HTTP origins to front as nested child layers (composition:
-   * CloudFront edge → a child router/origin, e.g. CF → ALB). Each becomes an
-   * `HttpOrigin(domainName)` bound to an additional behavior at `pattern`, with
-   * cookies/Authorization forwarded and caching disabled. Omit for the default
-   * CloudFront-over-own-origins shape (byte-identical).
-   */
-  extraHttpOrigins?: { pattern: string; domainName: string; protocol: 'http' | 'https' }[];
   /** Map of compute name → Function URL for per-origin routing. */
   computeFunctionUrls?: Map<string, IFunctionUrl>;
   /** Map of compute name → Lambda function for OAC permission patching. */
@@ -189,9 +180,9 @@ export type CdnConstructProps = {
   skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
-  /** Geo-restriction configuration. */
+  /** Geo-restriction configuration (`'allowlist'` / `'denylist'`, or the legacy `'whitelist'` / `'blacklist'`). */
   geoRestriction?: {
-    type: 'whitelist' | 'blacklist';
+    type: 'allowlist' | 'denylist' | 'whitelist' | 'blacklist';
     countries: string[];
   };
   /** Custom error page HTML. */
@@ -973,11 +964,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    // Build the service-agnostic CapabilityPlan (origins + route table +
+    // Build the service-agnostic HostingPlan (origins + route table +
     // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
     // single source of routing truth every front-door adapter shares; CloudFront
     // is one renderer of it.
-    const plan = buildCapabilityPlan({
+    const plan = buildHostingPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -1122,25 +1113,6 @@ export class CdnConstruct extends Construct {
         functionAssociations: [
           { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
         ],
-      };
-    }
-
-    // ---- Nested-layer origins (composition: CloudFront edge → a child layer) ----
-    // Each entry fronts a child front-door layer (e.g. an ALB router) as a public
-    // HTTP origin at its own path — the same mechanism as the API HttpOrigin
-    // above. Cookies/Authorization are forwarded and caching is disabled so the
-    // child owns the response. Empty/undefined ⇒ no behaviors added ⇒ the default
-    // CloudFront template is byte-identical (guarded by the golden test).
-    for (const child of props.extraHttpOrigins ?? []) {
-      additionalBehaviors[child.pattern] = {
-        origin: new HttpOrigin(child.domainName, {
-          protocolPolicy: child.protocol === 'https' ? OriginProtocolPolicy.HTTPS_ONLY : OriginProtocolPolicy.HTTP_ONLY,
-        }),
-        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: AllowedMethods.ALLOW_ALL,
-        cachePolicy: CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-        responseHeadersPolicy: props.securityHeadersPolicy,
       };
     }
 
@@ -1408,7 +1380,7 @@ export class CdnConstruct extends Construct {
       ...(props.geoRestriction
         ? {
             geoRestriction:
-              props.geoRestriction.type === 'whitelist'
+              props.geoRestriction.type === 'whitelist' || props.geoRestriction.type === 'allowlist'
                 ? GeoRestriction.allowlist(...props.geoRestriction.countries)
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }

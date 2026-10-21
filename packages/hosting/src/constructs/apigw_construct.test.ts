@@ -3,14 +3,14 @@ import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
 import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
 
-const staticPlan: CapabilityPlan = {
+const staticPlan: HostingPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: {
     entries: [
@@ -24,12 +24,12 @@ const staticPlan: CapabilityPlan = {
   release: { buildId: 'testbuild' },
 };
 
-const withBackendApiUrl = (plan: CapabilityPlan, url: string): CapabilityPlan => ({
+const withBackendApiUrl = (plan: HostingPlan, url: string): HostingPlan => ({
   ...plan,
   backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url } }] },
 });
 
-const synth = (plan: CapabilityPlan) => {
+const synth = (plan: HostingPlan) => {
   const app = new App();
   const stack = new Stack(app, 'S', { env: { account: '111111111111', region: 'us-west-2' } });
   const bucket = new Bucket(stack, 'Assets');
@@ -59,14 +59,15 @@ describe('ApiGatewayConstruct — static plan', () => {
 describe('ApiGatewayConstruct — with backend proxy', () => {
   it('adds the same-origin backend route (/aws-blocks/*, which covers sign-in) via HTTP integration', () => {
     const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'));
-    // 2 static + 1 backend + $default = 4 routes
-    t.resourceCountIs('AWS::ApiGatewayV2::Route', 4);
+    // 2 static + 2 backend (`/aws-blocks/{proxy+}`, and `/aws-blocks` itself — a
+    // greedy `{proxy+}` needs at least one character) + $default = 5 routes
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
     // At least one HTTP_PROXY integration to the backend
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
   });
 
   it('path-routes each named namespace to its own ingress (multi-compute)', () => {
-    const plan: CapabilityPlan = {
+    const plan: HostingPlan = {
       ...staticPlan,
       backend: {
         origins: [
@@ -82,7 +83,7 @@ describe('ApiGatewayConstruct — with backend proxy', () => {
   });
 });
 
-const synthRest = (plan: CapabilityPlan) => {
+const synthRest = (plan: HostingPlan) => {
 	const app = new App();
 	const stack = new Stack(app, 'SR', { env: { account: '111111111111', region: 'us-west-2' } });
 	const bucket = new Bucket(stack, 'Assets');
@@ -169,7 +170,7 @@ describe('ApiGatewayConstruct (HTTP) — custom domain', () => {
 	});
 });
 
-const buildApiGw = (stack: Stack, plan: CapabilityPlan, apiType?: 'rest' | 'http') => {
+const buildApiGw = (stack: Stack, plan: HostingPlan, apiType?: 'rest' | 'http') => {
 	const bucket = new Bucket(stack, 'Assets');
 	const input = buildDoorInput({ plan, bucket, staticDir: '.' });
 	return buildFrontDoor(stack, apiGatewayDoor, { ...input, apiType, apiGateway: { plan, bucket } }, { wiringCheck: false })
@@ -209,10 +210,10 @@ describe('apiGatewayDoor — free-form build', () => {
     assert.ok(res.url);
     assert.equal(res.originHandle?.protocol, 'https');
   });
-  it('runs no capability check: a streaming-SSR plan builds (served buffered)', () => {
+  it('builds with no feature check: a streaming-SSR plan builds (served buffered)', () => {
     const app = new App();
     const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
-    const streamPlan: CapabilityPlan = {
+    const streamPlan: HostingPlan = {
       ...staticPlan,
       origins: [...staticPlan.origins, { id: 'blocks-server', kind: 'server' as const }],
       policies: { ...staticPlan.policies, hasServer: true },

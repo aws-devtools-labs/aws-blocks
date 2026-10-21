@@ -68,16 +68,20 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
       { pattern: '/*', target: 'server' },
     ],
   });
-  const warnings = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor']): string[] => {
+  const warnings = (
+    manifest: DeployManifest,
+    frontDoor: HostingConstructProps['frontDoor'],
+    extra: Partial<HostingConstructProps> = {},
+  ): string[] => {
     const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-west-2' } });
-    new HostingConstruct(stack, 'Hosting', { manifest, frontDoor });
+    new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
     return Annotations.fromStack(stack)
       .findWarning('*', Match.stringLikeRegexp(WARNING))
       .map((w) => String(w.entry.data));
   };
 
   it('ALB: lists every asset whose base64 response exceeds 1 MB', () => {
-    const found = warnings(spa(), { kind: 'alb', backendApiUrl: API_URL });
+    const found = warnings(spa(), { kind: 'alb' }, { backendApi: { url: API_URL } });
     assert.equal(found.length, 1);
     assert.match(found[0], /\/assets\/vendor\.js/);
     assert.match(found[0], /\/downloads\/manual\.pdf/);
@@ -93,21 +97,18 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
   });
 
   it('API Gateway: uses its own (Lambda 6 MB) limit', () => {
-    const found = warnings(spa(), { kind: 'apiGateway', backendApiUrl: API_URL });
+    const found = warnings(spa(), { kind: 'apiGateway' }, { backendApi: { url: API_URL } });
     assert.equal(found.length, 1);
     assert.match(found[0], /\/downloads\/manual\.pdf/);
     assert.doesNotMatch(found[0], /vendor\.js/);
     assert.match(found[0], /6 MB/);
   });
 
-  it('stacked router: files the edge serves from S3 are not listed', () => {
-    // A SPA behind the stacked door is served from S3 entirely.
-    assert.deepEqual(warnings(spa(), { kind: 'alb', backendApiUrl: API_URL, restrictToCloudFront: true }), []);
-    // With a server, the static routes (`/assets/*`) come from S3; the rest go through the ALB.
-    const found = warnings(ssr(), { kind: 'alb', backendApiUrl: API_URL, restrictToCloudFront: true });
-    assert.equal(found.length, 1);
-    assert.match(found[0], /\/downloads\/manual\.pdf/);
-    assert.doesNotMatch(found[0], /vendor\.js/);
+  it('the stacked router alone does not check: what reaches it depends on the edge in front (which checks)', () => {
+    // See cloudfront_edge_door.test.ts: the edge lists only the files no S3
+    // behavior serves.
+    assert.deepEqual(warnings(spa(), { kind: 'stackedRouter' }, { backendApi: { url: API_URL } }), []);
+    assert.deepEqual(warnings(ssr(), { kind: 'stackedRouter' }, { backendApi: { url: API_URL } }), []);
   });
 
   it('CloudFront: no warning (S3 serves the files directly)', () => {

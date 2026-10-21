@@ -15,7 +15,7 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Distribution, FunctionEventType } from 'aws-cdk-lib/aws-cloudfront';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { DeployManifest } from '../manifest/types.js';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { cf } from './cf_helpers.js';
 import { buildDoorInput } from './door_input.js';
 import { customErrorResponses } from './error_responses.js';
@@ -35,7 +35,7 @@ const functionCode = (stack: Stack): string => {
   return String(fns[0]?.Properties.FunctionCode);
 };
 
-const plan = (extra: Partial<CapabilityPlan['routes']> = {}, hasServer = false): CapabilityPlan => ({
+const plan = (extra: Partial<HostingPlan['routes']> = {}, hasServer = false): HostingPlan => ({
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: { entries: [{ pattern: '/*', kind: 'static' }], redirects: [], headers: [], ...extra },
   policies: { spaFallback: true, hasServer, skewEnabled: false },

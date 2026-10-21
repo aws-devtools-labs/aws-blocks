@@ -8,10 +8,10 @@
  * `build` creates the ALB: listener rules route static paths to an asset-proxy
  * Lambda (private S3, build-id-prefixed keys), SSR and image paths to their
  * Lambdas, apply the app's redirects, and proxy the same-origin API through a
- * forwarder Lambda. Natively, it adds an HTTPS listener (custom domain), a
- * REGIONAL WAF, access logs, and alarms on the ALB's own metrics when the app
- * asked for them. It has no edge: no edge cache, per-route response headers,
- * branded error pages, session pinning or geo restriction.
+ * forwarder Lambda. Natively, it adds an HTTPS listener and DNS records (custom
+ * domain), a REGIONAL WAF, access logs, and alarms on the ALB's own metrics
+ * when the app asked for them. It has no edge: no edge cache, session pinning
+ * (skew protection) or geo restriction.
  *
  * The app's rules are applied by its proxies instead, with the CloudFront
  * door's semantics: redirects (each source → the asset proxy), per-pattern
@@ -58,6 +58,9 @@ export const albDoor = defineFrontDoor<AlbDoorInput, AlbDoorResult>({
       // The ALB's DNS name, plus the origin-verify header (and, internal, the
       // balancer for a VPC origin) when it admits only a CloudFront door in front.
       originHandle: alb.originHandle,
+      // The asset proxy's environment names the build: it switches to the new
+      // build only once every upload has landed.
+      cutover: [alb.assetProxy],
       construct: alb,
     };
   },

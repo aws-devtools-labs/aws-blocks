@@ -42,6 +42,7 @@ import {
 import { FunctionUrlOrigin, HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
+import { Stack } from 'aws-cdk-lib';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
@@ -263,7 +264,9 @@ export interface CloudFrontHelpers {
    * Declare a CloudFront invalidation that runs AFTER the given uploads. Meant
    * for `onUpload`: `onUpload: ({ uploads }) => cf.invalidate(dist, { after: uploads })`.
    * The caller reference is keyed on the build id, so an unchanged build is a
-   * no-op and a new build issues a fresh invalidation.
+   * no-op and a new build issues a fresh invalidation; a second invalidation
+   * of the same distribution in one build gets its own. The
+   * `cloudfront:CreateInvalidation` grant is scoped to this distribution.
    *
    * @param distribution the distribution to invalidate (a construct in this app).
    * @param options.after the uploads the invalidation must wait for.
@@ -441,8 +444,14 @@ ${headerRowsJs('HEADERS', '  ')}
       });
     }
     const paths = [...(options.paths ?? ['/*'])];
+    // A second invalidation of the same distribution in one build gets its own
+    // CallerReference (CloudFront rejects a reused one with different paths).
     let id = 'BlocksInvalidation';
-    for (let n = 2; distribution.node.tryFindChild(id); n++) id = `BlocksInvalidation${n}`;
+    let suffix = '';
+    for (let n = 2; distribution.node.tryFindChild(id); n++) {
+      id = `BlocksInvalidation${n}`;
+      suffix = `-${n}`;
+    }
     const invalidation = new AwsCustomResource(distribution, id, {
       onUpdate: {
         service: 'CloudFront',
@@ -450,15 +459,26 @@ ${headerRowsJs('HEADERS', '  ')}
         parameters: {
           DistributionId: distribution.distributionId,
           InvalidationBatch: {
-            CallerReference: `blocks-${buildId}`,
+            CallerReference: `blocks-${buildId}${suffix}`,
             Paths: { Quantity: paths.length, Items: paths },
           },
         },
-        physicalResourceId: PhysicalResourceId.of(`invalidation-${buildId}`),
+        physicalResourceId: PhysicalResourceId.of(`invalidation-${buildId}${suffix}`),
       },
-      // createInvalidation is not resource-scopable in IAM.
+      // Scoped to this distribution: the grant lands on the stack's shared
+      // custom-resource role, which must not invalidate every distribution.
       policy: AwsCustomResourcePolicy.fromStatements([
-        new PolicyStatement({ actions: ['cloudfront:CreateInvalidation'], resources: ['*'] }),
+        new PolicyStatement({
+          actions: ['cloudfront:CreateInvalidation'],
+          resources: [
+            Stack.of(distribution).formatArn({
+              service: 'cloudfront',
+              region: '',
+              resource: 'distribution',
+              resourceName: distribution.distributionId,
+            }),
+          ],
+        }),
       ]),
       installLatestAwsSdk: false,
     });

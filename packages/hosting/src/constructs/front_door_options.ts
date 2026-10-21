@@ -25,7 +25,7 @@
  *
  * | Setting | CloudFront | ALB | API Gateway | Custom (BYO) |
  * | --- | --- | --- | --- | --- |
- * | `domain` | ✓ | – (use `certificate`) | ✓ (no `wwwRedirect`) | ✓ |
+ * | `domain` | ✓ | ✓ (no `wwwRedirect`) | ✓ (no `wwwRedirect`) | ✓ |
  * | `waf` | ✓ (CLOUDFRONT scope) | ✓ (REGIONAL scope) | – | ✓ |
  * | `logging` | ✓ | ✓ | – | ✓ |
  * | `monitoring` | ✓ | ✓ (`enabled` only) | – | ✓ |
@@ -87,9 +87,15 @@ export type HostingMonitoringConfig = {
   subscriptions?: Array<EmailSubscription | UrlSubscription>;
 };
 
-/** Geo restriction: the country codes to allow (`whitelist`) or deny (`blacklist`). */
+/**
+ * Geo restriction: the country codes to allow (`'allowlist'`) or deny
+ * (`'denylist'`). `'whitelist'` and `'blacklist'` are accepted as the legacy
+ * spellings of the same two; any other value fails synth
+ * (`InvalidFrontDoorSettingError`). The door receives `'allowlist'` /
+ * `'denylist'` (see `DoorFeatures.geoRestriction`).
+ */
 export type HostingGeoRestriction = {
-  type: 'whitelist' | 'blacklist';
+  type: 'allowlist' | 'denylist' | 'whitelist' | 'blacklist';
   countries: string[];
 };
 
@@ -139,11 +145,21 @@ export type CloudFrontDoorFeatures<TDomain = HostingDomainConfig> = {
 };
 
 /**
- * Settings the ALB door implements. It has no edge: no custom-domain records
- * (give the door a regional `certificate` and point your DNS at the ALB), geo
- * restriction, price class, CSP header or skew protection.
+ * Settings the ALB door implements. It has no edge: no geo restriction, price
+ * class, CSP header or skew protection.
+ *
+ * `TDomain` is the custom-domain shape (see {@link CloudFrontDoorFeatures}).
  */
-export type AlbDoorFeatures = {
+export type AlbDoorFeatures<TDomain = HostingDomainConfig> = {
+  /**
+   * Custom domain(s) served by the load balancer over HTTPS: the door's
+   * `certificate`, else `domain.certificate`, else a DNS-validated regional
+   * certificate (needs `hostedZone` / `hostedZoneId`); Route 53 A/AAAA alias
+   * records to the ALB when a hosted zone is given; and a port 80 → 443
+   * redirect. The primary name is the app's URL (`HostingUrl`, the trusted
+   * public origin, the CORS hosting origin). No `wwwRedirect`.
+   */
+  domain?: Omit<TDomain, 'wwwRedirect'>;
   /**
    * A REGIONAL web ACL on the load balancer: a rate-limited one built for you
    * (`enabled`), or yours (`webAclArn`, a REGIONAL ACL in the stack's region).
@@ -211,8 +227,8 @@ export type StackedDoorFeatures = {
     /** `Content-Security-Policy` header value for the edge's security-headers policy. */
     contentSecurityPolicy?: string;
   };
-  /** The ALB router behind the edge: the {@link AlbDoorFeatures}. */
-  router?: AlbDoorFeatures;
+  /** The ALB router behind the edge: the {@link AlbDoorFeatures}, without a custom domain (the edge is the public address). */
+  router?: Omit<AlbDoorFeatures, 'domain'>;
 };
 
 // ── The door options ────────────────────────────────────────────────────────
@@ -225,40 +241,51 @@ export type CloudFrontDoorOptions<TDomain = HostingDomainConfig> = {
   features?: CloudFrontDoorFeatures<TDomain>;
 };
 
-/** An Application Load Balancer door (regional, no CDN). */
-export type AlbDoorOptions = {
+/**
+ * An Application Load Balancer door (regional, no CDN).
+ *
+ * `TDomain` is the custom-domain shape (see {@link CloudFrontDoorFeatures}).
+ */
+export type AlbDoorOptions<TDomain = HostingDomainConfig> = {
   kind: 'alb';
   /** BYO VPC; a default 2-AZ VPC is created when omitted. */
   vpc?: IVpc;
-  /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
+  /**
+   * Internal (private) ALB vs internet-facing. Default: internet-facing. An
+   * internal ALB is placed in the VPC's private subnets when it has any (the
+   * default VPC is public-only: bring a VPC with private subnets).
+   */
   internal?: boolean;
-  /** Regional ACM certificate for an HTTPS listener (same region as the ALB). */
+  /**
+   * Regional ACM certificate for the HTTPS listener (same region as the ALB).
+   * It must cover `features.domain`, which is required with it: a certificate
+   * can't cover the ALB's own `*.elb.amazonaws.com` name, so the app is
+   * reached at the custom domain.
+   */
   certificate?: ICertificate;
-  /**
-   * Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) through
-   * the ALB via a Lambda target. Set by the Blocks integration layer from
-   * the `api` prop; enables cookie auth with no CORS.
-   */
-  backendApiUrl?: string;
-  /**
-   * Extra path patterns that must reach the backend (the backend's raw
-   * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-   * each gets a listener rule to the API forwarder.
-   */
-  backendApiPaths?: string[];
-  /**
-   * Admit only a CloudFront door in front of this ALB. Set by the Blocks
-   * integration layer for the stacked door's router: every listener rule then
-   * requires a per-deploy origin-verify header (the default action is a 403),
-   * and the security group admits only CloudFront — the origin-facing managed
-   * prefix list for a public ALB, a CloudFront VPC origin for an `internal`
-   * one. The door in front reads the header and the private balancer from the
-   * door's `originHandle`.
-   * @default false — a standalone ALB door is public by design.
-   */
-  restrictToCloudFront?: boolean;
   /** The settings the app asks the ALB door for. */
-  features?: AlbDoorFeatures;
+  features?: AlbDoorFeatures<TDomain>;
+};
+
+/**
+ * The ALB door as the stacked door's router, as `@aws-blocks/core` `Hosting`
+ * hands it to the L3. Not for apps: it locks the ALB to a CloudFront door in
+ * front of it (every listener rule requires the origin-verify header, the
+ * default action is a 403, and the security group admits only CloudFront —
+ * the origin-facing managed prefix list for a public ALB, a CloudFront VPC
+ * origin for an `internal` one), so without that edge the site is unreachable.
+ * Use `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` on `Hosting`.
+ *
+ * @internal Framework-only.
+ */
+export type StackedRouterDoorOptions = {
+  kind: 'stackedRouter';
+  /** BYO VPC; a default 2-AZ VPC is created when omitted. */
+  vpc?: IVpc;
+  /** Internal (private) ALB, reached through a CloudFront VPC origin. */
+  internal?: boolean;
+  /** The router's settings. */
+  features?: Omit<AlbDoorFeatures, 'domain'>;
 };
 
 /** An Amazon API Gateway door (regional, no CDN, no VPC). */
@@ -280,19 +307,6 @@ export type ApiGatewayDoorOptions<TDomain = HostingDomainConfig> = {
   api?: 'rest' | 'http';
   /** Regional ACM certificate for a custom-domain HTTPS listener (same region). */
   certificate?: ICertificate;
-  /**
-   * Backend API URL to proxy same-origin (`/aws-blocks/*`) through the
-   * gateway. Set by the Blocks integration layer from the `api` prop;
-   * enables cookie auth with no CORS. API Gateway proxies an external
-   * HTTPS URL natively — no forwarder Lambda (unlike the ALB door).
-   */
-  backendApiUrl?: string;
-  /**
-   * Extra path patterns that must reach the backend (the backend's raw
-   * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-   * each gets a route proxied to the same path on the backend.
-   */
-  backendApiPaths?: string[];
   /** The settings the app asks the API Gateway door for. */
   features?: ApiGatewayDoorFeatures<TDomain>;
 };
@@ -318,18 +332,6 @@ export type CustomDoorOptions<TDomain = HostingDomainConfig> = {
    * @default true
    */
   wiringCheck?: boolean;
-  /**
-   * Backend API URL to proxy same-origin (`/aws-blocks/*`). Set by the
-   * Blocks integration layer from the `api` prop; surfaces as
-   * `input.origins.api`.
-   */
-  backendApiUrl?: string;
-  /**
-   * Extra path patterns that must reach the backend (the backend's raw
-   * routes), beyond `/aws-blocks/*`. Set by the Blocks integration layer;
-   * surfaces in `input.origins.api.paths`.
-   */
-  backendApiPaths?: string[];
   /** The settings the door receives as `input.features` (see {@link CustomDoorFeatures}). */
   features?: CustomDoorFeatures<TDomain>;
 };
@@ -351,7 +353,7 @@ export type HostingFrontDoor<TDomain = HostingDomainConfig> =
    */
   | 'none'
   | CloudFrontDoorOptions<TDomain>
-  | AlbDoorOptions
+  | AlbDoorOptions<TDomain>
   | ApiGatewayDoorOptions<TDomain>
   | CustomDoorOptions<TDomain>;
 
@@ -368,9 +370,12 @@ export type FrontDoorSettingName = keyof FrontDoorSettings;
 
 /**
  * The settings each door kind implements — the single source for the
- * unsupported-setting error (and the table in the module doc).
+ * unsupported-setting error, for whether a kind takes a custom domain, and for
+ * the table in the module doc. Each list is checked against that kind's
+ * `features` type (an entry the type lacks is a compile error; a key the type
+ * has but the list misses fails `front_door_options.types.test.ts`).
  */
-export const FRONT_DOOR_SETTINGS: Readonly<Record<FrontDoorKind, readonly FrontDoorSettingName[]>> = {
+export const FRONT_DOOR_SETTINGS = {
   cloudfront: [
     'domain',
     'waf',
@@ -386,10 +391,16 @@ export const FRONT_DOOR_SETTINGS: Readonly<Record<FrontDoorKind, readonly FrontD
     'responseHeadersPolicy',
     'quotas',
   ],
-  alb: ['waf', 'logging', 'monitoring'],
+  alb: ['domain', 'waf', 'logging', 'monitoring'],
   apiGateway: ['domain'],
   custom: ['domain', 'waf', 'logging', 'monitoring', 'geoRestriction', 'skewProtection'],
   none: [],
+} as const satisfies {
+  readonly cloudfront: readonly (keyof CloudFrontDoorFeatures)[];
+  readonly alb: readonly (keyof AlbDoorFeatures)[];
+  readonly apiGateway: readonly (keyof ApiGatewayDoorFeatures)[];
+  readonly custom: readonly (keyof CustomDoorFeatures)[];
+  readonly none: readonly never[];
 };
 
 /** A deprecated top-level prop: its value and the name the app wrote it under (for errors). */
@@ -402,41 +413,204 @@ export type FrontDoorAliases<TDomain = HostingDomainConfig> = {
 
 /** What {@link resolveFrontDoorFeatures} returns. */
 export type ResolvedFrontDoor<TDomain = HostingDomainConfig> = {
-  /** The door kind. */
+  /** The door kind (the stacked door's router resolves to `'alb'`). */
   kind: FrontDoorKind;
   /** The effective settings: `frontDoor.features` plus every alias that was set. */
   features: FrontDoorSettings<TDomain>;
 };
 
-/** The resolved kind of a `frontDoor` value. */
-export const frontDoorKind = (frontDoor: HostingFrontDoor<unknown> | undefined): FrontDoorKind => {
-  if (frontDoor === undefined || frontDoor === 'cloudfront') return 'cloudfront';
+/** Options of {@link resolveFrontDoorFeatures}. */
+export type ResolveFrontDoorOptions = {
+  /**
+   * Where the app wrote `features`, for the errors (e.g.
+   * `frontDoor.features.router` for the stacked door's router).
+   * @default 'frontDoor.features'
+   */
+  readonly featuresPath?: string;
+  /** The door as the app named it, for the errors (e.g. `stacked`). @default the kind */
+  readonly label?: string;
+};
+
+/** The options each door kind takes besides `kind` and `features` (unknown keys fail synth). */
+const DOOR_OPTION_KEYS: Readonly<Record<FrontDoorKind | 'stackedRouter', readonly string[]>> = {
+  cloudfront: [],
+  none: [],
+  alb: ['vpc', 'internal', 'certificate'],
+  apiGateway: ['api', 'certificate'],
+  custom: ['door', 'wiringCheck'],
+  stackedRouter: ['vpc', 'internal'],
+};
+
+/** The keys each object-shaped setting takes inside `frontDoor.features` (unknown keys fail synth). */
+const SETTING_KEYS: Readonly<Partial<Record<FrontDoorSettingName, readonly string[]>>> = {
+  domain: ['domainName', 'hostedZone', 'hostedZoneId', 'certificate', 'wwwRedirect'],
+  waf: ['enabled', 'rateLimit', 'webAclArn'],
+  logging: ['enabled', 'retentionDays', 'version', 'partitioning', 'format'],
+  monitoring: ['enabled', 'subscriptions'],
+  skewProtection: ['enabled', 'maxAge'],
+  geoRestriction: ['type', 'countries'],
+};
+
+const GEO_TYPES: Readonly<Record<string, 'allowlist' | 'denylist'>> = {
+  allowlist: 'allowlist',
+  whitelist: 'allowlist',
+  denylist: 'denylist',
+  blacklist: 'denylist',
+};
+
+const KNOWN_DOORS =
+  "'cloudfront' (default), 'none' (S3 website), { kind: 'alb' }, { kind: 'apiGateway' }, or { kind: 'custom', door }";
+
+/**
+ * The resolved kind of a `frontDoor` value (`null` is treated as omitted; the
+ * stacked door's router is `'alb'`).
+ *
+ * @throws HostingError('UnsupportedFrontDoorError') for a value that is not a front door.
+ * @internal Framework-only.
+ */
+export const frontDoorKind = (frontDoor: HostingFrontDoor<unknown> | StackedRouterDoorOptions | null | undefined): FrontDoorKind => {
+  if (frontDoor === undefined || frontDoor === null || frontDoor === 'cloudfront') return 'cloudfront';
   if (frontDoor === 'none') return 'none';
-  return frontDoor.kind ?? 'cloudfront';
+  if (typeof frontDoor !== 'object') throw unknownDoor(frontDoor);
+  switch (frontDoor.kind) {
+    case undefined:
+    case 'cloudfront':
+      return 'cloudfront';
+    case 'alb':
+    case 'stackedRouter':
+      return 'alb';
+    case 'apiGateway':
+    case 'custom':
+      return frontDoor.kind;
+    default:
+      throw unknownDoor(frontDoor);
+  }
 };
 
-const KIND_LABEL: Record<FrontDoorKind, string> = {
-  cloudfront: 'cloudfront',
-  none: 'none',
-  alb: 'alb',
-  apiGateway: 'apiGateway',
-  custom: 'custom',
-};
+const unknownDoor = (frontDoor: unknown): HostingError =>
+  new HostingError('UnsupportedFrontDoorError', {
+    message: `Unknown front door ${JSON.stringify(frontDoor)}.`,
+    resolution:
+      `Use ${KNOWN_DOORS}. A door other than 'cloudfront' and 'none' is an object with a \`kind\` ` +
+      "(e.g. `{ kind: 'alb' }`, not `'alb'`); kinds are case-sensitive.",
+  });
 
-const unsupported = (kind: FrontDoorKind, prop: string, extra?: string): HostingError =>
+const invalidOption = (message: string, resolution: string): HostingError =>
+  new HostingError('InvalidFrontDoorOptionError', { message, resolution });
+
+const unsupported = (kind: FrontDoorKind, label: string, featuresPath: string, prop: string, extra?: string): HostingError =>
   new HostingError('UnsupportedFrontDoorSettingError', {
-    message: `\`${prop}\` is not supported by the '${KIND_LABEL[kind]}' front door${extra ? ` (${extra})` : ''}.`,
+    message: `\`${prop}\` is not supported by the '${label}' front door${extra ? ` (${extra})` : ''}.`,
     resolution:
       FRONT_DOOR_SETTINGS[kind].length > 0
-        ? `Remove \`${prop}\`. The '${KIND_LABEL[kind]}' front door implements: ` +
-          `${FRONT_DOOR_SETTINGS[kind].map((s) => `frontDoor.features.${s}`).join(', ')}.`
-        : `Remove \`${prop}\`: the '${KIND_LABEL[kind]}' front door takes no settings.`,
+        ? `Remove \`${prop}\`. The '${label}' front door implements: ` +
+          `${FRONT_DOOR_SETTINGS[kind].map((s) => `${featuresPath}.${s}`).join(', ')}.`
+        : `Remove \`${prop}\`: the '${label}' front door takes no settings.`,
   });
 
 /**
- * Merge the deprecated top-level props into the effective `frontDoor.features`
- * — the one place the alias rules live:
+ * Check the door's own options (everything but `features`): each kind takes
+ * only its documented keys, with values of the right shape. Plain JavaScript
+ * (or a cast) can pass anything; a typo must fail synth, not deploy a door
+ * without the setting.
  *
+ * @throws HostingError('InvalidFrontDoorOptionError') naming the option.
+ */
+const validateDoorOptions = (frontDoor: object, kind: FrontDoorKind, label: string): void => {
+  const door = frontDoor as Record<string, unknown>;
+  const optionKind = door.kind === 'stackedRouter' ? 'stackedRouter' : kind;
+  const allowed = new Set(['kind', 'features', ...DOOR_OPTION_KEYS[optionKind]]);
+  for (const key of Object.keys(door)) {
+    if (door[key] === undefined || allowed.has(key)) continue;
+    throw invalidOption(
+      `\`frontDoor.${key}\` is not an option of the '${label}' front door.`,
+      DOOR_OPTION_KEYS[optionKind].length > 0
+        ? `Remove it. The '${label}' front door takes: ${DOOR_OPTION_KEYS[optionKind].map((k) => `frontDoor.${k}`).join(', ')}, and \`frontDoor.features\`.`
+        : `Remove it. The '${label}' front door takes only \`frontDoor.features\`.`,
+    );
+  }
+  if (door.features !== undefined && (door.features === null || typeof door.features !== 'object')) {
+    throw invalidOption('`frontDoor.features` must be an object.', 'Pass the settings as `features: { … }`, or omit it.');
+  }
+  if (door.internal !== undefined && typeof door.internal !== 'boolean') {
+    throw invalidOption(`\`frontDoor.internal\` must be true or false (got ${JSON.stringify(door.internal)}).`, 'Pass a boolean.');
+  }
+  if (door.wiringCheck !== undefined && typeof door.wiringCheck !== 'boolean') {
+    throw invalidOption(`\`frontDoor.wiringCheck\` must be true or false (got ${JSON.stringify(door.wiringCheck)}).`, 'Pass a boolean.');
+  }
+  if (door.api !== undefined && door.api !== 'http' && door.api !== 'rest') {
+    throw invalidOption(
+      `\`frontDoor.api\` must be 'http' or 'rest' (got ${JSON.stringify(door.api)}).`,
+      "Use 'http' (HTTP API, the default) or 'rest' (REST API); the values are lower-case.",
+    );
+  }
+  const certificate = door.certificate as { certificateArn?: unknown } | undefined;
+  if (certificate !== undefined && (certificate === null || typeof certificate !== 'object' || certificate.certificateArn === undefined)) {
+    throw invalidOption(
+      '`frontDoor.certificate` must be an ACM certificate construct, not an ARN string.',
+      'Import an existing certificate with `Certificate.fromCertificateArn(scope, id, arn)` (aws-cdk-lib/aws-certificatemanager).',
+    );
+  }
+  if (kind === 'custom' && door.door === undefined) {
+    throw new HostingError('InvalidPropsError', {
+      message: "`frontDoor: { kind: 'custom' }` has no `door`.",
+      resolution: 'Pass the door: `{ kind: \'custom\', door: defineFrontDoor({ service, build }) }`.',
+    });
+  }
+};
+
+/**
+ * Check the keys inside `frontDoor.features` settings (`waf`, `logging`, …),
+ * and normalize the geo-restriction type. Only `frontDoor.features` is checked
+ * for unknown keys; the deprecated top-level props keep their released
+ * behavior.
+ *
+ * @throws HostingError('InvalidFrontDoorSettingError') naming the setting.
+ */
+const validateSettingKeys = (explicit: Record<string, unknown>, featuresPath: string): void => {
+  for (const [name, value] of Object.entries(explicit)) {
+    const keys = SETTING_KEYS[name as FrontDoorSettingName];
+    if (!keys || value === undefined) continue;
+    if (value === null || typeof value !== 'object') {
+      throw new HostingError('InvalidFrontDoorSettingError', {
+        message: `\`${featuresPath}.${name}\` must be an object.`,
+        resolution: `Pass \`${name}: { ${keys.join(', ')} }\`, or omit it.`,
+      });
+    }
+    for (const key of Object.keys(value)) {
+      if (keys.includes(key) || (value as Record<string, unknown>)[key] === undefined) continue;
+      throw new HostingError('InvalidFrontDoorSettingError', {
+        message: `\`${featuresPath}.${name}.${key}\` is not a ${name} setting.`,
+        resolution: `Remove it. \`${name}\` takes: ${keys.join(', ')}.`,
+      });
+    }
+  }
+};
+
+/**
+ * The geo restriction with its type normalized to `'allowlist'` / `'denylist'`.
+ *
+ * @throws HostingError('InvalidFrontDoorSettingError') for any other type.
+ */
+const normalizeGeo = (geo: HostingGeoRestriction, prop: string): HostingGeoRestriction => {
+  const type = GEO_TYPES[geo.type];
+  if (!type) {
+    throw new HostingError('InvalidFrontDoorSettingError', {
+      message: `\`${prop}.type\` must be 'allowlist' or 'denylist' (got ${JSON.stringify(geo.type)}).`,
+      resolution: "Use 'allowlist' (only these countries) or 'denylist' (all but these countries).",
+    });
+  }
+  return { ...geo, type };
+};
+
+/**
+ * Validate the `frontDoor` prop and merge the deprecated top-level props into
+ * the effective `frontDoor.features` — the one place the alias rules live:
+ *
+ * - `frontDoor` must be a known door: `'cloudfront'`, `'none'`, or an object
+ *   whose `kind` is a known kind (`null` is treated as omitted); each kind
+ *   takes only its own options, with values of the right shape, and only the
+ *   documented keys inside each `features` setting;
  * - a top-level prop that is set is moved to `features.<name>`;
  * - a setting set BOTH top-level and in `frontDoor.features` fails synth
  *   (`FrontDoorSettingConflictError`, naming both);
@@ -445,26 +619,36 @@ const unsupported = (kind: FrontDoorKind, prop: string, extra?: string): Hosting
  *   type system can't catch it through a top-level prop.
  *
  * Within a setting, the sub-settings a door doesn't implement fail the same
- * way: `monitoring.subscriptions` on the ALB, `domain.wwwRedirect` on API
- * Gateway.
+ * way: `monitoring.subscriptions` on the ALB, `domain.wwwRedirect` on the ALB
+ * and API Gateway. A geo restriction's type is normalized to `'allowlist'` /
+ * `'denylist'` (the legacy `'whitelist'` / `'blacklist'` map to them).
  *
  * @param frontDoor the `frontDoor` prop.
  * @param aliases the deprecated top-level props, with the names the app wrote them under.
+ * @param options where the app wrote `features`, and the door's name, for the errors.
  * @returns the door kind and its effective settings.
+ * @throws HostingError('UnsupportedFrontDoorError') when `frontDoor` is not a known door.
+ * @throws HostingError('InvalidFrontDoorOptionError') for an unknown or mistyped door option.
+ * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, or an unknown geo type.
  * @throws HostingError('FrontDoorSettingConflictError') when a setting is set twice.
  * @throws HostingError('UnsupportedFrontDoorSettingError') when the kind doesn't implement a setting.
- * @internal Framework-only.
+ * @internal Framework-only: the merge `HostingConstruct` and the `@aws-blocks/core` `Hosting` share.
  */
 export function resolveFrontDoorFeatures<TDomain>(
-  frontDoor: HostingFrontDoor<TDomain> | undefined,
+  frontDoor: HostingFrontDoor<TDomain> | StackedRouterDoorOptions | null | undefined,
   aliases: FrontDoorAliases<TDomain>,
+  options: ResolveFrontDoorOptions = {},
 ): ResolvedFrontDoor<TDomain> {
   const kind = frontDoorKind(frontDoor);
+  const label = options.label ?? KIND_LABEL[kind];
+  const featuresPath = options.featuresPath ?? 'frontDoor.features';
+  if (typeof frontDoor === 'object' && frontDoor !== null) validateDoorOptions(frontDoor, kind, label);
   const supported = new Set<string>(FRONT_DOOR_SETTINGS[kind]);
-  // Each kind's `features` is a subset of the settings (API Gateway's `domain`
-  // without `wwwRedirect`, the ALB's `monitoring` without `subscriptions`).
+  // Each kind's `features` is a subset of the settings (the `domain` of the
+  // ALB and API Gateway without `wwwRedirect`, the ALB's `monitoring` without
+  // `subscriptions`).
   const explicit = (
-    typeof frontDoor === 'object' && frontDoor.features ? { ...frontDoor.features } : {}
+    typeof frontDoor === 'object' && frontDoor !== null && frontDoor.features ? { ...frontDoor.features } : {}
   ) as FrontDoorSettings<TDomain>;
   const features: { -readonly [K in FrontDoorSettingName]?: FrontDoorSettings<TDomain>[K] } = { ...explicit };
 
@@ -472,33 +656,43 @@ export function resolveFrontDoorFeatures<TDomain>(
   // cast (or from JavaScript); reject it the same way as an alias.
   for (const name of Object.keys(explicit)) {
     if (explicit[name as FrontDoorSettingName] !== undefined && !supported.has(name)) {
-      throw unsupported(kind, `frontDoor.features.${name}`);
+      throw unsupported(kind, label, featuresPath, `${featuresPath}.${name}`);
     }
   }
+  validateSettingKeys(explicit, featuresPath);
 
   for (const name of Object.keys(aliases) as FrontDoorSettingName[]) {
     const alias = aliases[name];
     if (!alias || alias.value === undefined) continue;
     if (explicit[name] !== undefined) {
       throw new HostingError('FrontDoorSettingConflictError', {
-        message: `\`${alias.prop}\` and \`frontDoor.features.${name}\` are both set. They are the same setting.`,
-        resolution: `Keep \`frontDoor.features.${name}\` and remove \`${alias.prop}\` (deprecated).`,
+        message: `\`${alias.prop}\` and \`${featuresPath}.${name}\` are both set. They are the same setting.`,
+        resolution: `Keep \`${featuresPath}.${name}\` and remove \`${alias.prop}\` (deprecated).`,
       });
     }
-    if (!supported.has(name)) throw unsupported(kind, alias.prop);
+    if (!supported.has(name)) throw unsupported(kind, label, featuresPath, alias.prop);
     Object.assign(features, { [name]: alias.value });
   }
 
   // Sub-settings a door doesn't implement.
   const propOf = (name: FrontDoorSettingName): string =>
-    explicit[name] !== undefined ? `frontDoor.features.${name}` : (aliases[name]?.prop ?? name);
+    explicit[name] !== undefined ? `${featuresPath}.${name}` : (aliases[name]?.prop ?? name);
   if (kind === 'alb' && features.monitoring?.subscriptions && features.monitoring.subscriptions.length > 0) {
-    throw unsupported(kind, `${propOf('monitoring')}.subscriptions`, 'its alarms have no subscriptions; only `enabled` applies');
+    throw unsupported(kind, label, featuresPath, `${propOf('monitoring')}.subscriptions`, 'its alarms have no subscriptions; only `enabled` applies');
   }
   const domain = features.domain as { wwwRedirect?: string } | undefined;
-  if (kind === 'apiGateway' && domain?.wwwRedirect !== undefined && domain.wwwRedirect !== 'none') {
-    throw unsupported(kind, `${propOf('domain')}.wwwRedirect`);
+  if ((kind === 'apiGateway' || kind === 'alb') && domain?.wwwRedirect !== undefined && domain.wwwRedirect !== 'none') {
+    throw unsupported(kind, label, featuresPath, `${propOf('domain')}.wwwRedirect`);
   }
+  if (features.geoRestriction) features.geoRestriction = normalizeGeo(features.geoRestriction, propOf('geoRestriction'));
 
   return { kind, features };
 }
+
+const KIND_LABEL: Record<FrontDoorKind, string> = {
+  cloudfront: 'cloudfront',
+  none: 'none',
+  alb: 'alb',
+  apiGateway: 'apiGateway',
+  custom: 'custom',
+};

@@ -4,10 +4,10 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Code, Function as LambdaFunction, FunctionUrlAuthType, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { buildDoorInput } from './door_input.js';
 
-const ssrPlan: CapabilityPlan = {
+const ssrPlan: HostingPlan = {
   origins: [
     { id: 'blocks-s3', kind: 'static' },
     { id: 'blocks-server', kind: 'server' },
@@ -155,7 +155,8 @@ describe('buildDoorInput — features are present only when the app asked for th
     assert.deepEqual(input.features.waf, { enabled: true, rateLimit: 500 });
     assert.deepEqual(input.features.logging, { enabled: true, retentionDays: 7 });
     assert.deepEqual(input.features.monitoring, { enabled: true });
-    assert.deepEqual(input.features.geoRestriction, { type: 'whitelist', countries: ['US', 'CA'] });
+    // The legacy spelling reaches the door as the inclusive one.
+    assert.deepEqual(input.features.geoRestriction, { type: 'allowlist', countries: ['US', 'CA'] });
     assert.deepEqual(input.app.errorPages, { notFound: '404.html' });
   });
 

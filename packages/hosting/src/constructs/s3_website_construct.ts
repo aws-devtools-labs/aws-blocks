@@ -20,10 +20,10 @@ import { AnyPrincipal, Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 
 export type S3WebsiteConstructProps = {
-  plan: CapabilityPlan;
+  plan: HostingPlan;
   /** The built static assets directory (manifest.staticAssets.directory) to publish. */
   staticDir: string;
 };

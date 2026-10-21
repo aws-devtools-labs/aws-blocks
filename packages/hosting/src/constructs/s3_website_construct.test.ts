@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { S3WebsiteConstruct } from './s3_website_construct.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
@@ -15,7 +15,7 @@ import { s3WebsiteDoor } from './s3_website_door.js';
 const staticDir = mkdtempSync(join(tmpdir(), 's3site-'));
 writeFileSync(join(staticDir, 'index.html'), '<!doctype html><title>x</title>');
 
-const spaPlan: CapabilityPlan = {
+const spaPlan: HostingPlan = {
   origins: [{ id: 'blocks-s3', kind: 'static' }],
   routes: { entries: [], redirects: [], headers: [] },
   policies: { spaFallback: true, hasServer: false, skewEnabled: false },
@@ -53,7 +53,7 @@ describe('S3WebsiteConstruct — static/SPA', () => {
 });
 
 describe('s3WebsiteDoor — free-form build', () => {
-  const buildSite = (stack: Stack, plan: CapabilityPlan) => {
+  const buildSite = (stack: Stack, plan: HostingPlan) => {
     const input = buildDoorInput({ plan, bucket: new Bucket(stack, 'Assets'), staticDir });
     return buildFrontDoor(stack, s3WebsiteDoor, { ...input, plan }, { wiringCheck: false }).result;
   };
@@ -72,7 +72,7 @@ describe('s3WebsiteDoor — free-form build', () => {
   it('rejects an SSR plan (a website bucket cannot run a server)', () => {
     const app = new App();
     const stack = new Stack(app, 'S3', { env: { account: '111111111111', region: 'us-west-2' } });
-    const ssrPlan: CapabilityPlan = {
+    const ssrPlan: HostingPlan = {
       ...spaPlan,
       origins: [
         { id: 'blocks-s3', kind: 'static' },

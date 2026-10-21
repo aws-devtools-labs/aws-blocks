@@ -33,9 +33,11 @@
  * image function or the backend don't pass through it, which synth reports
  * (`@aws-blocks/hosting:DoorRulesNotApplied`).
  *
- * Trade-offs (an app that asks for these deploys without them — there is no
- * feature check): no global edge cache, no per-route response headers on
- * server/API responses, no skew-pin, ~10 MB payload cap, ~29 s integration timeout.
+ * Trade-offs: no global edge cache, no per-route response headers on
+ * server/API responses (synth names them), no skew protection, a ~10 MB
+ * payload cap, a ~29 s integration timeout. Unsupported settings are a type
+ * error in `frontDoor.features` and a synth error through the deprecated
+ * top-level props.
  */
 import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
 import {
@@ -46,6 +48,7 @@ import {
 	Integration,
 	IntegrationType,
 	LambdaIntegration,
+	Resource,
 	ResponseTransferMode,
 	RestApi,
 	SecurityPolicy,
@@ -55,21 +58,24 @@ import { AaaaRecord, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { ApiGatewayDomain } from 'aws-cdk-lib/aws-route53-targets';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
-import type { CapabilityPlan } from '../plan/types.js';
+import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
 	APIGW_DEFAULT_ROUTE_QUOTA,
-	apiPathToRoute,
+	apiPathToRoutes,
 	backendBaseUrl,
 	DEFAULT_API_PATHS,
 	globToProxyPath,
+	hasInnerWildcard,
 } from './apigw_routes.js';
+import { warnInexpressibleRoutes } from './apigw_construct.js';
+import { assetProxyEnvironment } from './asset_proxy_core.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type ApiGatewayRestConstructProps = {
-	plan: CapabilityPlan;
+	plan: HostingPlan;
 	bucket: IBucket;
 	computeFunctions?: Map<string, IFunction>;
 	serverComputeName?: string;
@@ -101,6 +107,11 @@ export type ApiGatewayRestConstructProps = {
 export class ApiGatewayRestConstruct extends Construct {
 	readonly api: RestApi;
 	readonly url: string;
+	/**
+	 * The static asset-proxy Lambda. Its `ASSET_KEY_PREFIX` environment names
+	 * the build, so it is the door's switch to a new build (its `cutover`).
+	 */
+	readonly assetProxy: LambdaFunction;
 
 	constructor(scope: Construct, id: string, props: ApiGatewayRestConstructProps) {
 		super(scope, id);
@@ -141,9 +152,10 @@ export class ApiGatewayRestConstruct extends Construct {
 			),
 			timeout: Duration.seconds(15),
 			memorySize: 256,
-			environment: { ASSET_BUCKET: bucket.bucketName, ASSET_KEY_PREFIX: `builds/${buildId}` },
+			environment: assetProxyEnvironment({ bucket, prefix: `builds/${buildId}` }),
 		});
 		bucket.grantRead(assetProxy);
+		this.assetProxy = assetProxy;
 
 		// REGIONAL: no CloudFront in front, so no edge-optimized double proxy.
 		// All bodies binary so the asset-proxy's base64 output decodes and binary
@@ -155,17 +167,24 @@ export class ApiGatewayRestConstruct extends Construct {
 			binaryMediaTypes: ['*/*'],
 		});
 
-		const assetIntegration = new LambdaIntegration(assetProxy, { proxy: true });
+		// One API-scoped invoke permission per function (`scopePermissionToMethod:
+		// false`), not two per method: per-method permissions would grow each
+		// function's resource policy toward Lambda's 20 KB limit. The trust
+		// boundary is the same (this API).
+		const assetIntegration = new LambdaIntegration(assetProxy, { proxy: true, scopePermissionToMethod: false });
 		// A streaming server (the Lambda Web Adapter in `response_stream` mode, the
 		// OpenNext streaming wrapper) needs a STREAM integration, as on the
 		// CloudFront door's SSR origin; a plain invoke would return its framing.
 		const serverIntegration = serverFn
 			? new LambdaIntegration(serverFn, {
 					proxy: true,
+					scopePermissionToMethod: false,
 					...(props.serverStreaming !== false ? { responseTransferMode: ResponseTransferMode.STREAM } : {}),
 				})
 			: undefined;
-		const imageIntegration = imageFn ? new LambdaIntegration(imageFn, { proxy: true }) : undefined;
+		const imageIntegration = imageFn
+			? new LambdaIntegration(imageFn, { proxy: true, scopePermissionToMethod: false })
+			: undefined;
 		// Catch-all: SSR when present, else the asset proxy (SPA fallback on miss).
 		const defaultIntegration = serverIntegration ?? assetIntegration;
 
@@ -221,11 +240,12 @@ export class ApiGatewayRestConstruct extends Construct {
 				// Every API path: `/aws-blocks/*` (RPC, and sign-in at
 				// `/aws-blocks/auth/*`) plus the backend's raw routes.
 				for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
-					const route = apiPathToRoute(pattern);
-					if (!route || backendPaths.has(route.path)) continue;
-					backendPaths.add(route.path);
-					if (route.path.endsWith('/{proxy+}')) addProxyRoute(route.path, `${base}${route.target}`);
-					else addExactRoute(route.path, `${base}${route.target}`);
+					for (const route of apiPathToRoutes(pattern, 'API Gateway (REST)')) {
+						if (backendPaths.has(route.path)) continue;
+						backendPaths.add(route.path);
+						if (route.path.endsWith('/{proxy+}')) addProxyRoute(route.path, `${base}${route.target}`);
+						else addExactRoute(route.path, `${base}${route.target}`);
+					}
 				}
 			} else {
 				const ns = origin.namespace;
@@ -245,17 +265,25 @@ export class ApiGatewayRestConstruct extends Construct {
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', assetIntegration);
 		}
+		const inexpressible: string[] = [];
 		for (const entry of plan.routes.entries) {
+			// A wildcard inside a segment (`/*.js`) has no resource form: the default serves it.
+			if (hasInnerWildcard(entry.pattern)) {
+				inexpressible.push(entry.pattern);
+				continue;
+			}
 			const path = globToProxyPath(entry.pattern);
 			if (path === null || seen.has(path) || backendPaths.has(path)) continue;
 			if (path.startsWith('/aws-blocks/')) continue; // backend owns these
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', integrationForKind(entry.kind));
 		}
-		const resourceCount = this.api.methods.length;
+		warnInexpressibleRoutes(this, 'API Gateway (REST)', inexpressible);
+		// The quota counts resources (every path segment is one), not methods.
+		const resourceCount = this.api.node.findAll().filter((c) => c instanceof Resource).length + 1; // + the root
 		if (resourceCount > APIGW_DEFAULT_ROUTE_QUOTA) {
 			Annotations.of(this).addWarning(
-				`The API Gateway REST front door defines ${resourceCount} methods; a REST API allows ${APIGW_DEFAULT_ROUTE_QUOTA} resources by default. ` +
+				`The API Gateway REST front door defines ${resourceCount} resources; a REST API allows ${APIGW_DEFAULT_ROUTE_QUOTA} resources by default. ` +
 					'Request a quota increase, or group raw routes under fewer path prefixes.',
 			);
 		}
