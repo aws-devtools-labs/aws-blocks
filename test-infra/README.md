@@ -126,19 +126,8 @@ Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
 environment and as a Dependabot secret. Deploy this stack only into the
 dedicated E2E account.
 
-## Security: the role is admin-equivalent in the E2E account
-
-The role deploys through the CDK bootstrap `deploy-role`, which hands
-CloudFormation the `cfn-exec` role. A default `cdk bootstrap` gives `cfn-exec`
-`AdministratorAccess`, so any job that can assume `blocks-github-e2e` can deploy
-a stack that does anything in the account, including changing this role's
-trust policy or creating IAM users with access keys. Such changes outlive the
-PR that made them, and redeploying this stack only restores the trust policy.
-
-The scoped statements in `github-oidc-stack.ts` limit what the role does
-directly. They are not a security boundary. The containment is the account
-itself: keep it free of anything except E2E test stacks, and don't trust it
-with credentials or data from other accounts.
+CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep this
+account limited to E2E test stacks.
 
 `npm test` checks that the trust policy stays pinned to this repo's `e2e`
 environment with `StringEquals` and no wildcards.
