@@ -9,7 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import type { ApiFrontDoorTier } from '../common/index.js';
@@ -26,7 +26,7 @@ import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
@@ -208,7 +208,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
 /** What {@link buildSharedGateway} reads and writes on a `BlocksStack` / `BlocksBackend`. @internal */
 export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
-	readonly _defaultCompute?: Compute;
+	readonly _defaultCompute?: ComputeBase;
 	readonly defaults: BlocksDefaults;
 	_sharedGateway?: SharedGateway;
 }
@@ -272,6 +272,29 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 }
 
 /**
+ * Attach the Lambda VPC-access managed policy (`AWSLambdaVPCAccessExecutionRole`,
+ * ENI management) to the shared execution role when a VPC is active on `root` —
+ * provided OR derived. The role is built eagerly in {@link setupBlocksInfra} and
+ * only gets this policy there when `defaults.vpc` is set; but a container compute
+ * can *derive* a VPC during the backend import, and a `LambdaCompute` then
+ * auto-places its function in that VPC. Without this the serverless function
+ * would land in the VPC with no ENI permissions and fail at ENI creation / cold
+ * start — order-dependently. Called from both `BlocksStack` and `BlocksBackend`
+ * finalize. Idempotent: CDK dedupes a repeat managed policy, so it's a no-op on
+ * the provided-VPC path (where the policy was already attached eagerly).
+ *
+ * @internal
+ */
+export function ensureVpcAccessPolicyWhenVpcActive(root: { executionRole: iam.IRole }): void {
+	if (!isVpcInitialized(root as never)) return;
+	if (root.executionRole instanceof iam.Role) {
+		root.executionRole.addManagedPolicy(
+			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+		);
+	}
+}
+
+/**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
  * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
  *
@@ -301,7 +324,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	/** Infrastructure defaults for Building Blocks created under this backend. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	_defaultCompute?: ComputeBase;
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
@@ -478,10 +501,21 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(backend);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(backend)) compute.finalize();
+
 		// Finalize VPC. Derived resource: use the customer's if provided, else
 		// lazily create one only if a Building Block requires it.
+		//
+		// A container compute may have already derived + initialized the shared VPC
+		// during the backend import (it needs the VPC at construction), so skip
+		// re-initializing when that happened but still run finalizeVpc for endpoints.
 		if (backend._vpcOptions) {
 			finalizeVpc(backend, backend._vpcOptions);
+		} else if (isVpcInitialized(backend)) {
+			finalizeVpc(backend, { network: getOrCreateVpc(backend) });
 		} else if (anyRequirementNeedsVpc(backend)) {
 			const derived = getOrCreateVpc(backend);
 			const options = { network: derived };
@@ -494,6 +528,11 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 					'bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// A LambdaCompute auto-places its function in whatever VPC is initialized on
+		// the backend — including one a container sibling *derived* during the import.
+		// Ensure the shared role carries ENI permissions in that case (see helper).
+		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		return backend;
 	}

@@ -15,7 +15,7 @@ import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { getConfigLocation } from './config-registry.js';
 import { Scope } from './index.js';
@@ -30,7 +30,7 @@ import { getVpcContext } from './vpc.js';
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeBackend), exactly as
 // @aws-blocks/blocks injects LambdaCompute.
-class StubLambdaCompute extends Compute {
+class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
