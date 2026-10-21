@@ -18,7 +18,9 @@
  *      paths must reach it (`ProxySameOriginApi`). An API path the door left
  *      unwired is a synth warning, and so are app redirects, per-pattern
  *      headers or error pages it left unwired (`cf.redirects`, `cf.headers`,
- *      `cf.errorPages` wire them; `cf.recordWired` declares hand-wired ones).
+ *      `cf.errorPages` wire them; `cf.recordWired` declares hand-wired ones),
+ *      and so are more behaviors from `cf.behaviors` / `cf.apiBehaviors` than
+ *      a distribution allows by default.
  *
  * There is no feature check: AWS Blocks does not verify that a door applies
  * the features the app asked for (`input.features`) — the door's author owns
@@ -35,6 +37,10 @@ import { HostingError } from '../hosting_error.js';
 import { startWiringRecord, type WiringRecord } from './cf_helpers.js';
 import type { DoorInput, FrontDoor, FrontDoorResult } from './front_door.js';
 import { type OriginHandle, originHandleFromUrl } from './layer.js';
+import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
+
+/** A CloudFront distribution's default quota of behaviors, less the default behavior. */
+const MAX_ADDITIONAL_BEHAVIORS = AWS_DEFAULT_QUOTAS.cacheBehaviors - 1;
 
 /** Options for {@link buildFrontDoor}. */
 export type BuildFrontDoorOptions = {
@@ -144,6 +150,14 @@ function checkWiring(scope: Construct, service: string, input: DoorInput, wiring
       '@aws-blocks/hosting:FrontDoorRuleUnwired',
       `Front door '${service}' did not wire the app's ${unwiredRules.join(', ')}, so they won't apply. ` +
         'Wire them with the named helpers, or declare hand-wired ones with cf.recordWired(app.redirects) (etc.).',
+    );
+  }
+  if (wiring.behaviors.size > MAX_ADDITIONAL_BEHAVIORS) {
+    Annotations.of(scope).addWarningV2(
+      '@aws-blocks/hosting:FrontDoorBehaviorLimit',
+      `Front door '${service}' asked the cf.* helpers for ${wiring.behaviors.size} cache behaviors; a CloudFront ` +
+        `distribution allows ${MAX_ADDITIONAL_BEHAVIORS} besides its default by default, so the deploy fails unless the ` +
+        'quota was raised. Group routes under fewer prefixes, or move raw backend routes under `/aws-blocks/`.',
     );
   }
   if (problems.length === 0) return;

@@ -27,13 +27,17 @@ import {
   AccessLevel,
   AllowedMethods,
   type BehaviorOptions,
+  CacheCookieBehavior,
+  CacheHeaderBehavior,
   CachePolicy,
+  CacheQueryStringBehavior,
   type ErrorResponse,
   type FunctionAssociation,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
   Function as CloudFrontFunction,
+  type ICachePolicy,
   type IDistribution,
   type IOrigin,
   OriginRequestPolicy,
@@ -42,9 +46,9 @@ import {
 import { FunctionUrlOrigin, HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
-import { Stack } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, type IConstruct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import { customErrorResponses } from './error_responses.js';
 import type {
@@ -70,6 +74,8 @@ export type WiringRecord = {
   readonly apiPaths: Set<string>;
   /** The app rules (`app.redirects`, `app.headers`, `app.errorPages`) that were wired. */
   readonly rules: Set<WiredRule>;
+  /** The path patterns `cf.behaviors` and `cf.apiBehaviors` returned behaviors for (against the per-distribution quota). */
+  readonly behaviors: Set<string>;
 };
 
 /** An app rule a door can wire: its redirects, per-pattern headers, or error pages. */
@@ -91,7 +97,7 @@ const recordsByOrigin = new WeakMap<object, WiringRecord>();
  * @internal Framework-only (`HostingConstruct`, the conformance kit).
  */
 export function startWiringRecord(input: DoorInput): WiringRecord {
-  const record: WiringRecord = { origins: new Set(), apiPaths: new Set(), rules: new Set() };
+  const record: WiringRecord = { origins: new Set(), apiPaths: new Set(), rules: new Set(), behaviors: new Set() };
   const { assets, server, image, api } = input.origins;
   for (const origin of [assets, server, image, api]) {
     if (origin) recordsByOrigin.set(origin, record);
@@ -194,9 +200,13 @@ export interface CloudFrontHelpers {
   origin(origin: DoorOrigin | ApiOrigin): IOrigin;
   /**
    * One CloudFront behavior per route (most-specific first), each pointing at
-   * its route's origin, with safe defaults per origin kind (assets cached,
-   * compute uncached). The catch-all route (`/*`) is skipped — that is the
-   * distribution's `defaultBehavior`. Records each origin as wired.
+   * its route's origin, with safe defaults per origin kind: assets cached;
+   * image optimization cached on the origin's `Cache-Control` (the query
+   * string and `Accept` in the key, no cookies — one cache policy per stack);
+   * server rendering uncached. The catch-all route (`/*`) is skipped — that is
+   * the distribution's `defaultBehavior`. Records each origin as wired. A
+   * distribution allows 25 behaviors by default (24 besides the default); the
+   * wiring check warns past that (`@aws-blocks/hosting:FrontDoorBehaviorLimit`).
    *
    * @param routes the app's routes (`input.app.routes`).
    * @returns `additionalBehaviors` entries, keyed by path pattern.
@@ -296,10 +306,42 @@ const markWired = (origin: DoorOrigin | ApiOrigin): void => {
   recordOf(origin)?.origins.add(origin.kind);
 };
 
-const behaviorFor = (origin: DoorOrigin): BehaviorOptions => ({
-  origin: cf.origin(origin),
-  ...(origin.kind === 'assets' ? ASSET_BEHAVIOR : DYNAMIC_BEHAVIOR),
-});
+/**
+ * The cache policy of image-optimization behaviors, one per stack: the
+ * origin's `Cache-Control` honored (as on the built-in CloudFront door), the
+ * query string (the image parameters) and `Accept` (the format) in the key,
+ * no cookies.
+ */
+const imageCachePolicy = (fn: IConstruct): ICachePolicy => {
+  const stack = Stack.of(fn);
+  const existing = stack.node.tryFindChild(IMAGE_CACHE_POLICY_ID);
+  if (existing instanceof CachePolicy) return existing;
+  return new CachePolicy(stack, IMAGE_CACHE_POLICY_ID, {
+    comment: 'Image optimization: honor origin Cache-Control; key on the query string and Accept',
+    minTtl: Duration.seconds(0),
+    defaultTtl: Duration.seconds(0),
+    maxTtl: Duration.days(365),
+    cookieBehavior: CacheCookieBehavior.none(),
+    headerBehavior: CacheHeaderBehavior.allowList('accept'),
+    queryStringBehavior: CacheQueryStringBehavior.all(),
+    enableAcceptEncodingGzip: true,
+    enableAcceptEncodingBrotli: true,
+  });
+};
+const IMAGE_CACHE_POLICY_ID = 'BlocksImageCachePolicy';
+
+const behaviorFor = (origin: DoorOrigin): BehaviorOptions => {
+  if (origin.kind === 'assets') return { origin: cf.origin(origin), ...ASSET_BEHAVIOR };
+  if (origin.kind === 'image') {
+    return {
+      origin: cf.origin(origin),
+      ...DYNAMIC_BEHAVIOR,
+      allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+      cachePolicy: imageCachePolicy(origin.fn),
+    };
+  }
+  return { origin: cf.origin(origin), ...DYNAMIC_BEHAVIOR };
+};
 
 /**
  * `value` without leading or trailing `/`. A linear scan rather than a
@@ -369,6 +411,8 @@ export const cf: CloudFrontHelpers = {
     for (const route of routes) {
       if (CATCH_ALL.has(route.pattern) || behaviors[route.pattern]) continue;
       behaviors[route.pattern] = behaviorFor(route.origin);
+      const record = recordOf(route.origin);
+      if (record) record.behaviors.add(route.pattern);
     }
     return behaviors;
   },
@@ -380,6 +424,7 @@ export const cf: CloudFrontHelpers = {
     for (const path of api.paths) {
       behaviors[path] = { origin, ...DYNAMIC_BEHAVIOR };
       recordOf(api)?.apiPaths.add(path);
+      recordOf(api)?.behaviors.add(path);
     }
     return behaviors;
   },

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Distribution, FunctionEventType } from 'aws-cdk-lib/aws-cloudfront';
+import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { DeployManifest } from '../manifest/types.js';
 import type { HostingPlan } from '../plan/types.js';
@@ -160,6 +161,31 @@ describe('cf.errorPages', () => {
     );
   });
 
+  it('an app with a server: only 404 and 500 get the pages (the server answers 502–504), from the assets origin', () => {
+    const stack = newStack();
+    const server = new LambdaFunction(stack, 'Server', {
+      runtime: Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: Code.fromInline('exports.handler = async () => ({})'),
+    });
+    const input = buildDoorInput({
+      plan: plan({}, true),
+      bucket: new Bucket(stack, 'A'),
+      staticDir: '.',
+      server: { fn: server, streaming: true },
+      errorPages: { notFound: './404.html', serverError: './500.html' },
+    });
+    const pages = cf.errorPages(input.app.errorPages, input.origins);
+    assert.deepEqual(
+      pages.errorResponses.map((r) => [r.httpStatus, r.responsePagePath]),
+      [
+        [404, '/404.html'],
+        [500, '/500.html'],
+      ],
+    );
+    assert.equal(pages.behaviors['/500.html']?.origin, cf.origin(input.origins.assets));
+  });
+
   it('empty when the app has no error pages', () => {
     const stack = newStack();
     const input = buildDoorInput({ plan: plan(), bucket: new Bucket(stack, 'A'), staticDir: '.' });
@@ -216,7 +242,11 @@ describe('HostingConstruct — a BYO door and the app rules', () => {
     const warnings = unwiredWarnings(synth(door(() => ({}))));
     assert.equal(warnings.length, 1);
     const text = String(warnings[0]?.entry.data);
-    for (const rule of ['app.redirects', 'app.headers', 'app.errorPages']) assert.ok(text.includes(rule), rule);
+    // Each clause names the rule and its helper (the resolution text names
+    // `cf.recordWired(app.redirects)` too, so the bare rule name would match it).
+    for (const clause of ['app.redirects (cf.redirects)', 'app.headers (cf.headers)', 'app.errorPages (cf.errorPages)']) {
+      assert.ok(text.includes(clause), clause);
+    }
   });
 
   it('no warning when the helpers wire them', () => {

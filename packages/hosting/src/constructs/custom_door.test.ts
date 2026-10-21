@@ -25,7 +25,7 @@ const plan: HostingPlan = {
 	release: { buildId: 'testbuild' },
 };
 
-const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks';
+const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
 
 const setup = (opts: { api?: boolean; rawRoutes?: string[] } = {}) => {
 	const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
@@ -181,6 +181,19 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 		});
 		buildFrontDoor(stack, door, input);
 		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('/webhooks/\\*'));
+	});
+
+	it('warns when the helpers hand out more behaviors than a distribution allows by default (24 + the default)', () => {
+		const warn = (count: number) => {
+			const { stack, input } = setup({ api: true, rawRoutes: Array.from({ length: count }, (_, i) => `/hook${i}/*`) });
+			buildFrontDoor(stack, helperDoor(), input);
+			return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('FrontDoorBehaviorLimit'));
+		};
+		// `/assets/*` + `/aws-blocks/*` + the raw routes.
+		assert.equal(warn(22).length, 0, '24 behaviors fit');
+		const over = warn(23);
+		assert.equal(over.length, 1, '25 do not');
+		assert.match(String(over[0]?.entry.data), /25 cache behaviors/);
 	});
 
 	describe('escape hatches for a door wired with raw CDK', () => {
