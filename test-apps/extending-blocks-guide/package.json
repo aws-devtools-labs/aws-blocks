@@ -16,9 +16,9 @@
     "test:e2e": "tsx --test test/e2e.test.ts"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-table": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
     "@aws-sdk/client-cloudformation": "^3.1153.0",
     "@aws-sdk/client-sqs": "^3.1152.0",
