@@ -16,6 +16,11 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
+// Optional IAM permissions boundary on every role AWS Blocks creates
+// (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
+// synthesizes with it set to prove every Building Block's roles are covered.
+const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
+
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
@@ -37,7 +42,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: BlocksPresets.sandbox,
+  defaults: { ...BlocksPresets.sandbox, permissionsBoundary },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB

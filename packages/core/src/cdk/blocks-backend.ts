@@ -22,6 +22,9 @@ import {
 } from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { attachIamReport } from './iam-report.js';
+import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
@@ -197,6 +200,21 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+
+	// ── Permissions boundary + IAM report ─────────────────────────────────
+	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
+	// aspect, so roles blocks add later are covered too), then apply the opt-in
+	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
+	// templates unchanged. The report lists what the shared role accumulated; it is
+	// written at synth (after every block has granted) beside the template.
+	coverBlocksRoot(scope);
+	applyBlocksPermissionsBoundary(scope);
+	const owningStack = cdk.Stack.of(scope);
+	attachIamReport(
+		scope,
+		executionRole,
+		cdk.Stack.isStack(scope) ? owningStack.artifactId : `${owningStack.artifactId}.${scope.node.id}`,
+	);
 
 	// ── Resource Groups ───────────────────────────────────────────────────
 	let rootStack = cdk.Stack.of(scope);
@@ -515,6 +533,9 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		// Stack-level children before this backend exists, so the boundary can also
+		// cap the per-stack CDK singletons its blocks add (see the end of create()).
+		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));
 		const backend = new BlocksBackend(scope, id, props);
 		// Create the default compute before importing the backend: it owns the
 		// Lambda function (the shared gateway's target), and a block reading
@@ -588,6 +609,10 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// the backend — including one a container sibling *derived* during the import.
 		// Ensure the shared role carries ENI permissions in that case (see helper).
 		ensureVpcAccessPolicyWhenVpcActive(backend);
+
+		// Last, so every role a block or finalizer hoisted to stack scope exists.
+		coverStackLevelAdditions(backend, stackChildrenBefore);
+		warnOnMixedBoundaries(backend);
 
 		return backend;
 	}
