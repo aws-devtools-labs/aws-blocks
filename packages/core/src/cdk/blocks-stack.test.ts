@@ -6,12 +6,13 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
+import { AUDIT_WARNING } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -269,6 +270,23 @@ describe('assertCdkConditionActive', () => {
 			process.env.NODE_OPTIONS = origNodeOptions;
 			process.execArgv = origExecArgv;
 		}
+	});
+});
+
+describe('production access-logging audit-gap synth warning (BlocksStack path)', () => {
+	// setupBlocksInfra runs the warning on the scope it is passed. BlocksStack
+	// (index.ts) passes itself, so the annotation lands on the stack node — a
+	// different node than the BlocksBackend construct path. This covers the path a
+	// real create-blocks-app takes (`BlocksStack.create` with a durable posture).
+	// AUDIT_WARNING is the shared matcher (see audit-warning-matcher.ts).
+
+	test('BlocksStack with a durable posture and accessLogging off warns at synth', async () => {
+		const app = new cdk.App();
+
+		// makeStack uses BlocksPresets.production (durable, accessLogging: false).
+		const stack = await makeStack(app, 'AuditWarnStackLevel', sideEffectBackendPath);
+
+		Annotations.fromStack(stack).hasWarning('*', AUDIT_WARNING);
 	});
 });
 
