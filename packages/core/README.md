@@ -162,6 +162,15 @@ cat .blocks-sandbox/config.json
 
 So a real config problem looks like the client throwing `Blocks API URL not configured` (or `... is not configured (source: ...)`), not like a `404` on `/config.json`. If a **deployed** origin keeps serving `{"_placeholder":true}` after a successful deploy, that is a genuine bug: the config upload or the CloudFront invalidation did not land.
 
+### Shared API gateway
+
+A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
+
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
+- **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
+- **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
+- **WAF** is not included by default. Associate a `REGIONAL` WebACL with the gateway's stage (`new wafv2.CfnWebACLAssociation(stack, 'ApiWaf', { resourceArn: stack.gateway.deploymentStage.stageArn, webAclArn })`, with `wafv2` from `aws-cdk-lib/aws-wafv2`), or enable it on the CloudFront distribution when you use `Hosting` (`waf: { enabled: true }`).
+
 ### API front door
 
 How the backend's API is exposed to clients is chosen with the `apiFrontDoor` prop on `BlocksStack` / `BlocksBackend` (default `'apigateway'`):
@@ -172,6 +181,14 @@ How the backend's API is exposed to clients is chosen with the `apiFrontDoor` pr
 Under either tier, the URL clients should call is `publicApiUrl` on the stack or backend — for a `BlocksStack` that is also the `ApiUrl` stack output. With `'cloudfront'` it is the distribution's URL + `/aws-blocks/api`; otherwise it equals `apiUrl`, the gateway's own URL.
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
+
+Either tier serves the API at the same path. The typed client (and any manual caller) POSTs JSON-RPC to a per-namespace path:
+
+```
+POST /aws-blocks/api/{namespace}
+```
+
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function.
 
 **Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
 
@@ -468,3 +485,149 @@ Multiple patterns are comma-separated. If a pattern is invalid regex, it falls b
 > **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
+
+## IAM: permissions boundary and the composed-policy report
+
+Every Blocks compute (the API handler, raw routes, queue/cron/WebSocket handlers, the agent runtime) runs as **one shared execution role**, and every Building Block grants its permissions onto that role. The role is therefore the union of what all your blocks need.
+
+### See what the role holds: `<stack>.blocks-iam.json`
+
+Every synth writes a report of the shared role's composed policy next to the template in `cdk.out/`: `<stackName>.blocks-iam.json` for a `BlocksStack`, or `<stackName>.<backendId>.blocks-iam.json` for each embedded `BlocksBackend`. It lists every statement (actions, resources, conditions), the managed policies and the boundary in force, plus an inventory (`roles`) of every IAM role Blocks created, each with its boundary and tags exactly as the template carries them. Each statement carries a `blocks` field: the `fullId`s of the Building Blocks that own the resources it references. The file is sorted and deterministic, so a CI step can diff it against the previous build and fail when an app's permissions grow unexpectedly:
+
+```bash
+NODE_OPTIONS="--conditions=cdk" npx cdk synth --quiet
+jq '.executionRole.statements[] | {actions, blocks}' cdk.out/my-app.blocks-iam.json
+```
+
+The report is CDK-only and doesn't change the CloudFormation template.
+
+The file is written on **every** synth, whether or not `permissionsBoundary` is set, so expect it in `cdk.out/` if you check that directory's contents. It's a side file only: it isn't part of any CloudFormation template and isn't listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it isn't deployed and `cdk diff` (which compares stack templates) doesn't see it. Producing it costs one walk over the stack's constructs per synth, which is small next to bundling.
+
+### Cap every role: `defaults.permissionsBoundary`
+
+A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).
+
+```typescript
+// aws-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' },
+});
+```
+
+Pass the policy's name (resolved in the deploying account), its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. The option is unset in both presets, and unset leaves templates unchanged.
+
+This is the hook a platform needs when many apps deploy through one pipeline: the platform restricts its CloudFormation execution role so that `iam:CreateRole` / `iam:PutRolePolicy` are allowed only with an `iam:PermissionsBoundary` condition naming its boundary, and each app sets `permissionsBoundary` to that policy. A role created without it fails the deploy.
+
+- **Scope.** On a `BlocksStack` the boundary covers every role in the stack. On an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK singleton roles its blocks add; roles your stack already had are left alone. Bound those, and any other stack, yourself with `iam.PermissionsBoundary.of(stack).apply(policy)`.
+- **With CDK's `@aws-cdk/core:permissionsBoundary` context.** The context bounds every role in the app. When both are set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns. Set the context in `cdk.json` (the `-c '@aws-cdk/core:permissionsBoundary={"name":"…"}'` CLI form passes a string, which CDK ignores). The context doesn't reach the cross-region-reference provider roles CDK adds while preparing the app, such as the ones off-region `Hosting` causes; `defaults.permissionsBoundary` does.
+- **What it doesn't do.** A boundary caps the shared role; it doesn't split it. Every handler still runs as the same role, so a bug in one block can still use another block's grants, up to the boundary. Separately deployed apps that need isolation from each other belong in separate AWS accounts.
+
+### Running many apps in one AWS account (a shared platform)
+
+Some platforms deploy many independently written apps, often generated by AI (artificial intelligence) coding agents, through one CI (continuous integration) pipeline into **one AWS account**. Each app's CDK (Cloud Development Kit) code decides the permissions of its own roles. Nothing in the app stops it from granting itself another app's resources: a single `AppSetting.fromExisting(scope, 'x', { name: '/apps/other-app/secret', secret: true })` gives App A read access to App B's secret, and the deploy succeeds.
+
+**The strongest isolation is one AWS account per app** (AWS Organizations with SCPs (Service Control Policies)). When apps must share an account, the platform can enforce a per-app ceiling at deploy time, outside the apps' code. It takes three parts:
+
+| Part | Who provides it |
+|---|---|
+| 1. A boundary policy that only allows each app its own resources | The platform |
+| 2. **Every** role the app creates carries that boundary and the app's tag | AWS Blocks (`defaults.permissionsBoundary`) plus the platform's tag |
+| 3. The deploy role refuses any role created without them | The platform |
+
+**1. The boundary policy.** One shared managed policy can serve every app by using ABAC (attribute-based access control): the policy variable `${aws:PrincipalTag/app}` resolves to the calling role's `app` tag at request time. This example lets each app read only SSM (AWS Systems Manager) parameters under its own `/apps/<app>/` path:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": "*", "Resource": "*" },
+    {
+      "Sid": "OnlyOwnAppParameters",
+      "Effect": "Deny",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+      "NotResource": "arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*"
+    },
+    {
+      "Sid": "UntaggedRolesReadNoParameters",
+      "Effect": "Deny",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+      "Resource": "*",
+      "Condition": { "Null": { "aws:PrincipalTag/app": "true" } }
+    }
+  ]
+}
+```
+
+The first statement keeps the ceiling open for everything else, so the boundary only removes the cross-app reads. The last one stops a role with no `app` tag from reading any app's parameters, so leaving the tag off isn't a way around the rule. Narrow the policy for your platform.
+
+**2. In each app.** Point `permissionsBoundary` at the shared policy, keep the app's resources under its own path, and tag the stack with the app's name (the platform should set the tag value, not the app's own code):
+
+```typescript
+// aws-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: { ...BlocksPresets.production, permissionsBoundary: 'apps-boundary' },
+});
+cdk.Tags.of(blocksStack).add('app', 'my-app');
+```
+
+```typescript
+// aws-blocks/index.ts
+const apiKey = new AppSetting(scope, 'api-key', { name: '/apps/my-app/api-key', secret: true });
+```
+
+AWS Blocks puts the boundary on every role it creates for the app. That includes the CDK helper roles and the roles CDK adds while preparing the app, which CDK's own `@aws-cdk/core:permissionsBoundary` context misses, so the deploy-time check in step 3 doesn't break AWS Blocks deploys.
+
+**3. The deploy role's condition.** Give the CloudFormation execution role that deploys an app IAM (Identity and Access Management) permissions only on these terms, with one execution role per app so the app's tag value can be pinned:
+
+```json
+[
+  {
+    "Effect": "Allow",
+    "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:PutRolePermissionsBoundary"],
+    "Resource": "arn:aws:iam::*:role/*",
+    "Condition": { "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::111122223333:policy/apps-boundary" } }
+  },
+  {
+    "Effect": "Deny",
+    "Action": "iam:CreateRole",
+    "Resource": "*",
+    "Condition": {
+      "StringNotEquals": { "aws:RequestTag/app": "my-app" },
+      "Null": { "aws:RequestTag/app": "false" }
+    }
+  },
+  { "Effect": "Deny", "Action": "iam:DeleteRolePermissionsBoundary", "Resource": "*" },
+  {
+    "Effect": "Deny",
+    "Action": ["iam:CreatePolicyVersion", "iam:DeletePolicy", "iam:SetDefaultPolicyVersion"],
+    "Resource": "arn:aws:iam::111122223333:policy/apps-boundary"
+  },
+  {
+    "Effect": "Deny",
+    "Action": ["iam:TagRole", "iam:UntagRole"],
+    "Resource": "*",
+    "Condition": { "ForAnyValue:StringEquals": { "aws:TagKeys": ["app"] } }
+  }
+]
+```
+
+A role created without the boundary, or tagged as another app, then fails the deploy. The rule denies a wrong `app` tag rather than requiring one, because `cdk.Tags.of()` doesn't reach every role: the CDK custom-resource provider roles (for example the S3 auto-delete and cross-region-reference providers) can't carry tags. Those roles get the boundary but no tag, and the boundary's last statement keeps them out of every app's parameters. A role that has the boundary can't read another app's parameter at runtime (`AccessDenied`), whatever the app's code granted it. The exact action list depends on how your pipeline deploys; test the policy in a sandbox account first.
+
+**Check it in the pipeline.** The IAM report lists every role AWS Blocks created with its boundary and tags, so a pipeline step can verify both before deploying:
+
+```bash
+# Fails when any Blocks role lacks the boundary or the app tag
+jq -e '[.roles[] | select(.permissionsBoundary == null or ([.tags[] | select(.Key == "app")] | length == 0))] | length == 0' \
+  cdk.out/my-app.blocks-iam.json
+```
+
+**Limits.**
+
+- **One rule per resource type.** Each service needs its own ABAC statement (SSM paths, Secrets Manager names, S3 (Amazon Simple Storage Service) prefixes, DynamoDB table names…), and not every service supports matching resources to principal tags. Secrets plus one or two other resource types is practical.
+- **Name resources by app.** The rules match resource names, so each app's resources must live under its own prefix or path.
+- **It doesn't isolate handlers inside one app.** Every handler in the app still runs as the same role, under the same boundary.
+- **One account per app remains the stronger model.** A boundary only enforces what its rules cover.

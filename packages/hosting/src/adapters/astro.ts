@@ -105,7 +105,7 @@ const ASTRO_SHARP_VERSION = SHARP_VERSION_RANGE;
  * consumed by the X.1 cross-adapter version-pin test, which asserts it
  * stays a parseable range with an explicit upper bound.
  */
-export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
+export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <8.0.0';
 
 /**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
@@ -634,7 +634,14 @@ const loadAstroConfig = (projectDir: string): AstroConfigShape => {
   const configPath = findAstroConfigPath(projectDir);
   if (!configPath) return {};
   try {
-    const jiti = createJiti(projectDir, { interopDefault: true });
+    // `tryNative`: import the config natively first. Astro 7's `astro/config`
+    // pulls in a Vite build that uses `import.meta.require`, which jiti's
+    // CJS transform rejects, silently dropping the whole config (redirects,
+    // trailingSlash, image settings).
+    const jiti = createJiti(projectDir, {
+      interopDefault: true,
+      tryNative: true,
+    });
     const mod = jiti(configPath) as
       | AstroConfigShape
       | { default?: AstroConfigShape };

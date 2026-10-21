@@ -1975,6 +1975,40 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       `should not warn when @opennextjs/aws is absent; stderr was: ${stderrChunks.join('')}`,
     );
   });
+
+  void it('always passes --dangerously-use-unsupported-next-version=true to the OpenNext build', () => {
+    // We pass the flag unconditionally: it is inert on a supported Next
+    // (OpenNext reads it only inside its `if (!isSupported)` branch) and
+    // prevents the hard exit(1) once a major ages out — so the deploy never
+    // breaks on a calendar date, and OpenNext's own check stays the source of
+    // truth for the supported/unsupported decision.
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = syncMock.mock.calls
+      .map((c) => c.arguments[1])
+      .find(
+        (a): a is string[] => Array.isArray(a) && a[0] === '@opennextjs/aws',
+      );
+    assert.ok(buildArgs, 'expected an `npx @opennextjs/aws build` spawn');
+    const flagIdx = buildArgs.indexOf(
+      '--dangerously-use-unsupported-next-version',
+    );
+    assert.ok(
+      flagIdx !== -1,
+      `build args should carry the override flag; got: ${JSON.stringify(buildArgs)}`,
+    );
+    // The value token is load-bearing: OpenNext's parseArgs records the flag
+    // only when a following non-`-` token exists, else stores undefined and
+    // the override never applies. A bare trailing flag would silently no-op.
+    assert.strictEqual(
+      buildArgs[flagIdx + 1],
+      'true',
+      `the flag must be followed by its 'true' value or OpenNext ignores it; got: ${JSON.stringify(buildArgs)}`,
+    );
+  });
 });
 
 void describe('stripBasePathPrefix', () => {

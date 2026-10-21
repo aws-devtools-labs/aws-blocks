@@ -334,7 +334,7 @@ class KotlinCodeGenerator(
 
         val kdoc = buildDataClassKdoc(record.description, record.fields)
         if (kdoc.isNotEmpty()) {
-            classBuilder.addKdoc("%L", kdoc)
+            classBuilder.addKdoc("%L", neutraliseKdoc(kdoc))
         }
 
         for (field in record.fields) {
@@ -456,18 +456,22 @@ class KotlinCodeGenerator(
         if (type is ResolvedType.Primitive && type.kind == PrimitiveKind.STRING) {
             constraints.minLength?.let { min ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.length >= %L) { \"%L must be at least %L characters\" }\n",
-                        if (isOptional) "it" else fieldName, min, fieldName, min)))
+                    CodeBlock.of("require(%L.length >= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, min, "$fieldName must be at least $min characters")))
             }
             constraints.maxLength?.let { max ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.length <= %L) { \"%L must be at most %L characters\" }\n",
-                        if (isOptional) "it" else fieldName, max, fieldName, max)))
+                    CodeBlock.of("require(%L.length <= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, max, "$fieldName must be at most $max characters")))
             }
             constraints.pattern?.let { pattern ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.matches(Regex(%S))) { \"%L must match pattern %L\" }\n",
-                        if (isOptional) "it" else fieldName, pattern, fieldName, pattern)))
+                    // Pattern via kotlinStringLiteral, not %S: %S turns a value with a newline into a
+                    // trimMargin raw string, which drops a CR.
+                    CodeBlock.of("require(%L.matches(Regex(%L))) { %L }\n",
+                        if (isOptional) "it" else fieldName, kotlinStringLiteral(pattern),
+                        // Not %S: it would rewrite every `$` as `${'$'}`, changing benign output such as `^[A-Z]{3}$`.
+                        kotlinMessageLiteral("$fieldName must match pattern $pattern"))))
             }
             constraints.format?.let { format ->
                 val validationBlock = generateFormatValidation(fieldName, format, isOptional)
@@ -480,33 +484,33 @@ class KotlinCodeGenerator(
             constraints.minimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L >= %L) { \"%L must be >= %L\" }\n",
-                        if (isOptional) "it" else fieldName, minVal, fieldName, minVal)))
+                    CodeBlock.of("require(%L >= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, minVal, "$fieldName must be >= $minVal")))
             }
             constraints.maximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L <= %L) { \"%L must be <= %L\" }\n",
-                        if (isOptional) "it" else fieldName, maxVal, fieldName, maxVal)))
+                    CodeBlock.of("require(%L <= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, maxVal, "$fieldName must be <= $maxVal")))
             }
             constraints.exclusiveMinimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L > %L) { \"%L must be > %L\" }\n",
-                        if (isOptional) "it" else fieldName, minVal, fieldName, minVal)))
+                    CodeBlock.of("require(%L > %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, minVal, "$fieldName must be > $minVal")))
             }
             constraints.exclusiveMaximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L < %L) { \"%L must be < %L\" }\n",
-                        if (isOptional) "it" else fieldName, maxVal, fieldName, maxVal)))
+                    CodeBlock.of("require(%L < %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, maxVal, "$fieldName must be < $maxVal")))
             }
             constraints.multipleOf?.let { mult ->
                 val multVal = if (type.kind == PrimitiveKind.INTEGER) mult.toInt().toString() else mult.toString()
                 val zeroVal = if (type.kind == PrimitiveKind.INTEGER) "0" else "0.0"
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L %% %L == %L) { \"%L must be a multiple of %L\" }\n",
-                        if (isOptional) "it" else fieldName, multVal, zeroVal, fieldName, multVal)))
+                    CodeBlock.of("require(%L %% %L == %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, multVal, zeroVal, "$fieldName must be a multiple of $multVal")))
             }
         }
 
@@ -514,13 +518,13 @@ class KotlinCodeGenerator(
         if (type is ResolvedType.ListType) {
             type.constraints.minItems?.let { min ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.size >= %L) { \"%L must have at least %L items\" }\n",
-                        if (isOptional) "it" else fieldName, min, fieldName, min)))
+                    CodeBlock.of("require(%L.size >= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, min, "$fieldName must have at least $min items")))
             }
             type.constraints.maxItems?.let { max ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.size <= %L) { \"%L must have at most %L items\" }\n",
-                        if (isOptional) "it" else fieldName, max, fieldName, max)))
+                    CodeBlock.of("require(%L.size <= %L) { %S }\n",
+                        if (isOptional) "it" else fieldName, max, "$fieldName must have at most $max items")))
             }
         }
 
@@ -543,17 +547,17 @@ class KotlinCodeGenerator(
         val ref = if (isOptional) "it" else fieldName
         return when (format) {
             "email" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.contains(%S) && %L.contains(%S)) { \"%L must be a valid email address\" }\n",
-                    ref, "@", ref, ".", fieldName))
+                CodeBlock.of("require(%L.contains(%S) && %L.contains(%S)) { %S }\n",
+                    ref, "@", ref, ".", "$fieldName must be a valid email address"))
             "uri" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.startsWith(%S) || %L.startsWith(%S)) { \"%L must be a valid URI\" }\n",
-                    ref, "http://", ref, "https://", fieldName))
+                CodeBlock.of("require(%L.startsWith(%S) || %L.startsWith(%S)) { %S }\n",
+                    ref, "http://", ref, "https://", "$fieldName must be a valid URI"))
             "ipv4" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.matches(Regex(%S))) { \"%L must be a valid IPv4 address\" }\n",
-                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", fieldName))
+                CodeBlock.of("require(%L.matches(Regex(%S))) { %S }\n",
+                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", "$fieldName must be a valid IPv4 address"))
             "ipv6" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.contains(%S)) { \"%L must be a valid IPv6 address\" }\n",
-                    ref, ":", fieldName))
+                CodeBlock.of("require(%L.contains(%S)) { %S }\n",
+                    ref, ":", "$fieldName must be a valid IPv6 address"))
             else -> null
         }
     }
@@ -563,14 +567,24 @@ class KotlinCodeGenerator(
     private fun jsonElementToKotlinDefault(element: kotlinx.serialization.json.JsonElement, type: ResolvedType): CodeBlock? {
         val primitive = element as? JsonPrimitive ?: return null
         return when {
+            // Not %S: a value containing a newline would become a trimMargin raw string, which drops a CR.
             type is ResolvedType.Primitive && type.kind == PrimitiveKind.STRING ->
-                CodeBlock.of("%S", primitive.content)
+                CodeBlock.of("%L", kotlinStringLiteral(primitive.content))
+            // Non-string defaults are emitted as code, so only well-formed literals are passed through;
+            // anything else returns null and the caller falls back to the no-default path.
+            // INTEGER maps to Kotlin `Int`, so the value must also fit in Int range.
             type is ResolvedType.Primitive && type.kind == PrimitiveKind.INTEGER ->
-                CodeBlock.of("%L", primitive.content)
+                primitive.content
+                    .takeIf { JSON_INTEGER_LITERAL.matches(it) && it.toIntOrNull() != null }
+                    ?.let { CodeBlock.of("%L", it) }
+            // NUMBER maps to Kotlin `Double`, which needs a fraction or exponent, so `3` is emitted as `3.0`.
             type is ResolvedType.Primitive && type.kind == PrimitiveKind.NUMBER ->
-                CodeBlock.of("%L", primitive.content)
+                primitive.content
+                    .takeIf { JSON_NUMBER_LITERAL.matches(it) }
+                    ?.let { if (it.any { c -> c == '.' || c == 'e' || c == 'E' }) it else "$it.0" }
+                    ?.let { CodeBlock.of("%L", it) }
             type is ResolvedType.Primitive && type.kind == PrimitiveKind.BOOLEAN ->
-                CodeBlock.of("%L", primitive.content)
+                primitive.content.takeIf { it == "true" || it == "false" }?.let { CodeBlock.of("%L", it) }
             else -> null
         }
     }
@@ -847,10 +861,11 @@ class KotlinCodeGenerator(
                 PropertySpec
                     .builder(toCamelCase(entry.name), blocksServerClass)
                     .initializer(
-                        "%T(name = %S, url = %S)",
+                        // url via kotlinStringLiteral, not %S, so a newline/CR in it is preserved exactly.
+                        "%T(name = %S, url = %L)",
                         blocksServerClass,
                         entry.name,
-                        entry.url,
+                        kotlinStringLiteral(entry.url),
                     )
                     .build(),
             )
@@ -1218,7 +1233,7 @@ class KotlinCodeGenerator(
 
         val kdoc = buildMethodKdoc(operation)
         if (kdoc.isNotEmpty()) {
-            funBuilder.addKdoc("%L", kdoc)
+            funBuilder.addKdoc("%L", neutraliseKdoc(kdoc))
         }
 
         for (param in operation.parameters) {
@@ -1590,15 +1605,65 @@ class KotlinCodeGenerator(
             "'$safeTag' on kotlin; generated UnknownTransferable with $typeArgClause."
     }
 
-    /** Kotlin literal for [value]; %S would emit a trimMargin raw string that drops the CR from a CRLF tag. */
+    /**
+     * Quoted Kotlin literal for a validation message. Escapes `\\`, `"` and control characters, and escapes
+     * `$` only where it would start a string template (before a letter, `_`, `{` or a backtick), so benign
+     * text such as a pattern ending in `$` is emitted unchanged.
+     */
+    private fun kotlinMessageLiteral(value: String): String {
+        val sb = StringBuilder("\"")
+        for ((i, c) in value.withIndex()) {
+            when {
+                c == '\\' -> sb.append("\\\\")
+                c == '"' -> sb.append("\\\"")
+                c == '\n' -> sb.append("\\n")
+                c == '\r' -> sb.append("\\r")
+                c == '\t' -> sb.append("\\t")
+                c.code < 0x20 -> sb.append("\\u%04x".format(c.code))
+                // KotlinPoet rewrites raw U+00B7 / U+2662 in %L text as layout markers; escape them.
+                c == '\u00b7' -> sb.append("\\u00b7")
+                c == '\u2662' -> sb.append("\\u2662")
+                c == '$' -> {
+                    val next = value.getOrNull(i + 1)
+                    val startsTemplate = next != null && (next.isLetter() || next == '_' || next == '{' || next == '`')
+                    sb.append(if (startsTemplate) "\\$" else "$")
+                }
+                else -> sb.append(c)
+            }
+        }
+        return sb.append('"').toString()
+    }
+
+    // Rewrites comment delimiters in KDoc text so a closing delimiter cannot end the block early and an
+    // opening one cannot start a nested comment (Kotlin block comments nest). The `/` is replaced with its
+    // HTML entity, which Dokka renders as `/`. Line comments here because this text names the delimiters.
+    private fun neutraliseKdoc(text: String): String =
+        text.replace("*/", "*&#47;").replace("/*", "&#47;*")
+
+    /**
+     * Kotlin literal for [value]; %S would emit a trimMargin raw string that drops the CR from a CRLF tag.
+     * Escapes match KotlinPoet's single-line %S form (including `$` as `${'$'}`), so a value without a
+     * newline is emitted byte-identically to %S. U+00B7 and U+2662 are escaped because KotlinPoet treats
+     * them as layout markers in %L text.
+     */
     private fun kotlinStringLiteral(value: String): String {
-        val escaped = value
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("$", "\\$")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-        return "\"$escaped\""
+        val sb = StringBuilder("\"")
+        for (c in value) {
+            when {
+                c == '\\' -> sb.append("\\\\")
+                c == '"' -> sb.append("\\\"")
+                c == '$' -> sb.append("\${'\$'}")
+                c == '\n' -> sb.append("\\n")
+                c == '\r' -> sb.append("\\r")
+                c == '\t' -> sb.append("\\t")
+                c == '\b' -> sb.append("\\b")
+                Character.isISOControl(c) -> sb.append("\\u%04x".format(c.code))
+                c == '\u00b7' -> sb.append("\\u00b7")
+                c == '\u2662' -> sb.append("\\u2662")
+                else -> sb.append(c)
+            }
+        }
+        return sb.append('"').toString()
     }
 
     private fun addTransferableSerializerAnnotation(
@@ -1874,5 +1939,11 @@ class KotlinCodeGenerator(
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
         fun toCamelCase(name: String): String = NamingUtils.toCamelCase(name)
+
+        /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
+        private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")
+
+        /** JSON number literal (RFC 8259 grammar). */
+        private val JSON_NUMBER_LITERAL = Regex("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?")
     }
 }

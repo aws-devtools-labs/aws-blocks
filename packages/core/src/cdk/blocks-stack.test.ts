@@ -6,14 +6,15 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
+import { AUDIT_WARNING } from './audit-warning-matcher.js';
 import { BlocksBackend } from './blocks-backend.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksPresets, BlocksStack, Scope } from './index.js';
@@ -26,7 +27,7 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 // resolve to. It is passed to each create() via the internal
 // `defaultComputeFactory` option (see makeStack / makeBackend), exactly as
 // @aws-blocks/blocks injects LambdaCompute.
-class StubLambdaCompute extends Compute {
+class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
@@ -78,6 +79,8 @@ const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
+const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
+const reexportBackendPath = join(__dirname, '__fixtures__', 'reexport-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -272,6 +275,23 @@ describe('assertCdkConditionActive', () => {
 	});
 });
 
+describe('production access-logging audit-gap synth warning (BlocksStack path)', () => {
+	// setupBlocksInfra runs the warning on the scope it is passed. BlocksStack
+	// (index.ts) passes itself, so the annotation lands on the stack node — a
+	// different node than the BlocksBackend construct path. This covers the path a
+	// real create-blocks-app takes (`BlocksStack.create` with a durable posture).
+	// AUDIT_WARNING is the shared matcher (see audit-warning-matcher.ts).
+
+	test('BlocksStack with a durable posture and accessLogging off warns at synth', async () => {
+		const app = new cdk.App();
+
+		// makeStack uses BlocksPresets.production (durable, accessLogging: false).
+		const stack = await makeStack(app, 'AuditWarnStackLevel', sideEffectBackendPath);
+
+		Annotations.fromStack(stack).hasWarning('*', AUDIT_WARNING);
+	});
+});
+
 // `create()` hands the stack's `defaults` to the shared gateway: throttling and
 // access logging on the stage must follow them (sandbox preset ⇒ 200/400).
 describe('shared gateway stage follows the stack defaults (BlocksStack)', () => {
@@ -302,5 +322,80 @@ describe('gateway is not available during the backend import (BlocksStack)', () 
 			makeStack(app, 'GatewayDuringImportStack', gatewayReadingBackendPath),
 			/not fully initialized/,
 		);
+	});
+});
+
+describe('shared gateway routes namespaces by export name (create())', () => {
+	// The fixture exports `api` (default compute) and `shop` — constructed as
+	// 'orders' — on a second compute. The routing table is built from the module
+	// create() imported, so this covers the real wiring for both entry points.
+	before(() => {
+		(globalThis as Record<string, unknown>).__BLOCKS_TEST_MAKE_COMPUTE__ = (parent: ScopeParent, id: string) =>
+			new StubLambdaCompute(parent, id);
+	});
+
+	const assertRoutedByExportName = (stackOfGateway: cdk.Stack, owner: Construct) => {
+		const resources = Template.fromStack(stackOfGateway).toJSON().Resources as Record<
+			string,
+			{ Type: string; Properties: Record<string, unknown> }
+		>;
+		const pathParts = Object.entries(resources)
+			.filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource')
+			.map(([id, r]) => [id, r.Properties.PathPart as string] as const);
+		// Exactly the catch-all tree plus `shop`: routed by export name (not the
+		// constructor name 'orders'), and the default-compute `api` namespace adds
+		// no resource of its own.
+		const parts = pathParts.map(([, part]) => part).sort();
+		assert.deepStrictEqual(parts, ['aws-blocks', 'api', 'shop', '{proxy+}', '{proxy+}', '{proxy+}'].sort());
+
+		const orders = getComputes(owner).find((c) => c.node.id === 'OrdersCompute') as StubLambdaCompute;
+		const ordersFnId = stackOfGateway.getLogicalId(orders.fn.node.defaultChild as cdk.CfnElement);
+		const shopId = pathParts.find(([, part]) => part === 'shop')?.[0];
+		const shopMethod = Object.values(resources).find(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === shopId,
+		);
+		assert.ok(JSON.stringify(shopMethod?.Properties.Integration).includes(ordersFnId), 'shop → the orders function');
+	};
+
+	test('BlocksStack', async () => {
+		const stack = await makeStack(new cdk.App(), 'NamespaceRoutingStack', namespaceRoutingBackendPath);
+		assertRoutedByExportName(stack, stack);
+	});
+
+	test('BlocksBackend', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'NamespaceRoutingParent');
+		const backend = await makeBackend(parent, 'Blocks', namespaceRoutingBackendPath);
+		assertRoutedByExportName(parent, backend);
+	});
+});
+
+describe('a namespace bound to another backend is not routed (multi-backend synth)', () => {
+	// create() re-runs only the top-level backend module per backend; a namespace
+	// from a cached sub-module stays bound to the first backend. A second backend
+	// must serve it from its own catch-all — never route its path to the first
+	// backend's Lambda (that would be a cross-stack reference and a silent misroute).
+	const routedPathParts = (template: Template) =>
+		Object.values(template.findResources('AWS::ApiGateway::Resource')).map((r) => r.Properties.PathPart as string);
+
+	// One app, so a misroute would synthesize silently (CDK wires a cross-stack
+	// Export/Fn::ImportValue) rather than fail.
+	test('two BlocksStacks in one app', async () => {
+		const app = new cdk.App();
+		const first = await makeStack(app, 'ReexportStackOne', reexportBackendPath);
+		const second = await makeStack(app, 'ReexportStackTwo', reexportBackendPath);
+		for (const stack of [first, second]) {
+			const template = Template.fromStack(stack);
+			assert.ok(!routedPathParts(template).includes('reports'), `${stack.stackName}: no route for 'reports'`);
+			assert.ok(!JSON.stringify(template.toJSON()).includes('Fn::ImportValue'), `${stack.stackName}: no cross-stack import`);
+		}
+	});
+
+	// The sub-module is cached for the whole process, so here the namespace is
+	// still bound to the first test's stack — foreign to both backends below.
+	test('two BlocksBackends in one stack', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ReexportParent');
+		await makeBackend(parent, 'BackendOne', reexportBackendPath);
+		await makeBackend(parent, 'BackendTwo', reexportBackendPath);
+		assert.ok(!routedPathParts(Template.fromStack(parent)).includes('reports'), "no route for 'reports'");
 	});
 });

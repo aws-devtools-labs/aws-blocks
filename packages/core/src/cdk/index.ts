@@ -17,11 +17,12 @@ import {
 	assertCdkConditionActive,
 	BlocksBackend,
 	buildSharedGateway,
+	ensureVpcAccessPolicyWhenVpcActive,
 	requireSharedGateway,
 	setupBlocksInfra,
 } from './blocks-backend.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import {
@@ -36,7 +37,7 @@ import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
@@ -55,7 +56,7 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -95,7 +96,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	_defaultCompute?: ComputeBase;
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
@@ -225,7 +226,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(stack);
+		buildSharedGateway(stack, mod);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
@@ -239,12 +240,24 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(stack);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(stack)) compute.finalize();
+
 		// Finalize VPC. A VPC is a derived resource: use the customer's if they
 		// brought one, else lazily create one only if a Building Block genuinely
 		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
 		// services from the managed network without a VPC.
+		//
+		// A container compute needs the shared VPC *at construction* (during the
+		// backend import above), so it may have already derived and initialized it
+		// via getOrCreateVpc + initializeVpc. In that case we skip re-initializing
+		// (isVpcInitialized) but still run finalizeVpc to provision endpoints.
 		if (stack._vpcOptions) {
 			finalizeVpc(stack, stack._vpcOptions);
+		} else if (isVpcInitialized(stack)) {
+			finalizeVpc(stack, { network: getOrCreateVpc(stack) });
 		} else if (anyRequirementNeedsVpc(stack)) {
 			const derived = getOrCreateVpc(stack);
 			const options = { network: derived };
@@ -257,6 +270,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// Grant the shared role ENI permissions when a VPC is active (provided or
+		// derived by a container compute during import) so a serverless compute
+		// placed in it can create ENIs. See helper for the full rationale.
+		ensureVpcAccessPolicyWhenVpcActive(stack);
 
 		// Where a client should send RPC calls (see publicApiUrl): the CloudFront URL
 		// under `cloudfront`, else the gateway's own URL. `deploy.ts` / `sandbox.ts`
@@ -292,7 +310,7 @@ export class Scope extends Construct {
 	 * the customer-facing surface exists.
 	 * @internal
 	 */
-	_compute?: Compute;
+	_compute?: ComputeBase;
 
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -339,7 +357,7 @@ export class Scope extends Construct {
 	 * (test/framework) until the customer-facing surface exists; there is no
 	 * public option to set it yet.
 	 */
-	get compute(): Compute {
+	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
 			const assigned = (current as Scope)._compute;
 			if (assigned) return assigned;
@@ -363,7 +381,7 @@ export class Scope extends Construct {
 	 *
 	 * @internal Not a customer surface; for framework/BB singleton infra only.
 	 */
-	get defaultCompute(): Compute {
+	get defaultCompute(): ComputeBase {
 		const defaultCompute = this.root._defaultCompute;
 		if (!defaultCompute) {
 			throw new Error(

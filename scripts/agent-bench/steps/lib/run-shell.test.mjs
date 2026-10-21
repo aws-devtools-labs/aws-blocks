@@ -1,14 +1,16 @@
 // Regression tests for the agent-bench shell layer (runShell / WorkspaceSandbox in run-shell.ts) and
-// the judge's spec-leak `find`. They don't import the TS directly (the step modules self-execute and
+// the judge's spec-leak `find`. Most don't import the TS directly (the step modules self-execute and
 // there's no TS loader under bare `node --test`), so they pin the platform SEMANTICS the fixes rely
-// on against REAL processes.
+// on against REAL processes. The credential-isolation tests at the end DO load run-shell.ts, in a
+// child `node --import tsx`, so they exercise the real WorkspaceSandbox on both spawn paths.
 
 import assert from 'node:assert/strict';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const EXIT_DRAIN_GRACE_MS = 2000;
 
@@ -335,73 +337,175 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 	});
 });
 
-// ── BENCH_CMD_LOG: the per-command diagnostic log this PR adds ───────────────────────────────
-// Like the rest of this file, we pin the SEMANTICS rather than import the TS: the log line is
-// written by a small opt-in branch in WorkspaceSandbox.executeStreaming (run-shell.ts). We
-// replicate that exact write here so a regression in the shape (wrong field, unsliced output, a
-// throw escaping the best-effort try) fails loudly instead of silently degrading the diagnostic.
-describe('BENCH_CMD_LOG command log', () => {
-	// MUST mirror the append in run-shell.ts executeStreaming: same fields, same 4000-char slice,
-	// same best-effort try/catch (an unwritable path must not throw out of the generator).
-	function writeCmdLog(cmdLogPath, { cwd, command, result }) {
-		if (!cmdLogPath) return;
-		try {
-			appendFileSync(
-				cmdLogPath,
-				`${JSON.stringify({
-					ts: new Date().toISOString(),
-					cwd,
-					command,
-					exitCode: result.exitCode,
-					stdout: result.stdout.slice(0, 4000),
-					stderr: result.stderr.slice(0, 4000),
-				})}\n`,
-			);
-		} catch {
-			/* best-effort: never let command logging break a command */
-		}
-	}
+// ── The real WorkspaceSandbox: shell env, fail-closed spawn, and the BENCH_CMD_LOG writer ────────
+// Loads the REAL run-shell.ts in a child (`node --import tsx`) whose env carries fake job
+// credentials and runs commands through WorkspaceSandbox: on the isolated path (as the agent user)
+// and the local-dev bare path (BENCH_ALLOW_BARE_SHELL=1, CI vars removed), and checks the shell
+// output and the commands.jsonl the sandbox itself writes (no copy of the writer here).
+describe('agent-bench shell runner — credential isolation + command log', () => {
+	const runShellUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'run-shell.ts')).href;
+	const tsxLoader = import.meta.resolve('tsx');
+	// Fakes assembled at runtime so no credential-shaped literal sits in the source.
+	const fakes = {
+		AWS_ACCESS_KEY_ID: `ASIA${'Q'.repeat(16)}`,
+		AWS_SECRET_ACCESS_KEY: `fakeSecret/${'s'.repeat(29)}`,
+		AWS_SESSION_TOKEN: `IQoJb3JpZ2luX2Vj${'t'.repeat(60)}`,
+		AWS_WEB_IDENTITY_TOKEN_FILE: '/tmp/fake-web-identity-token-file',
+		AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://127.0.0.1:9/fake-container-creds',
+		ACTIONS_ID_TOKEN_REQUEST_TOKEN: `fake-oidc-request-${'r'.repeat(30)}`,
+		ACTIONS_ID_TOKEN_REQUEST_URL: 'https://fake-oidc.invalid/token?x=fakeoidcurlvalue',
+		ACTIONS_RUNTIME_TOKEN: `fake-runtime-${'u'.repeat(30)}`,
+		ACTIONS_CACHE_URL: 'https://fake-cache.invalid/cache-url-value',
+		GITHUB_TOKEN: `ghs_${'g'.repeat(36)}`,
+		GH_TOKEN: `ghp_${'h'.repeat(36)}`,
+		NPM_TOKEN: `npm_${'n'.repeat(36)}`,
+		NODE_AUTH_TOKEN: `fake-node-auth-${'a'.repeat(20)}`,
+		SOME_DEPLOY_SECRET: `fake-deploy-secret-${'d'.repeat(20)}`,
+		// Exact-value redaction source for the 4000-char straddle test (no recognizable format).
+		BENCH_STRADDLE_SECRET: `zqStraddle${'k'.repeat(30)}`,
+	};
+	const required = {
+		PLAYWRIGHT_BROWSERS_PATH: '/tmp/fake-pw-browsers',
+		NPM_CONFIG_FETCH_RETRIES: '5',
+		LANG: 'C.UTF-8',
+		AWS_REGION: 'us-east-1',
+		AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+	};
+	const MODES = {
+		// the agent user via sudo+runuser (CI vars kept: isolation is what CI requires)
+		isolated: { isolate: true, env: {} },
+		// local dev opt-in: no CI markers in the env
+		bare: { isolate: false, env: { BENCH_ALLOW_BARE_SHELL: '1', CI: undefined, GITHUB_ACTIONS: undefined } },
+		// the opt-in must be refused under CI
+		bareUnderCi: { isolate: false, env: { BENCH_ALLOW_BARE_SHELL: '1', CI: 'true' } },
+	};
+	const isolatedSkip = {
+		skip: !isolationAvailable() && process.env.GITHUB_ACTIONS !== 'true' ? `no passwordless sudo+runuser for ${BENCH_AGENT_USER}` : false,
+	};
 
-	it('writes one JSON line with the expected shape and 4000-char slice', () => {
-		const dir = mkdtempSync(join(tmpdir(), 'cmdlog-'));
-		const logPath = join(dir, 'commands.jsonl');
+	// Run `commands` through WorkspaceSandbox in a child harness; returns each result ({stdout} or
+	// {error}) plus the commands.jsonl text the sandbox wrote (null when `cmdLog` is overridden).
+	function runInHarness(mode, commands, { cmdLog } = {}) {
+		const dir = mkdtempSync(join(tmpdir(), 'bench-cred-'));
+		chmodSync(dir, 0o777); // reachable by the isolated uid without the workspace ACL grant
+		const logPath = cmdLog ?? join(dir, 'commands.jsonl');
+		const child = `
+			import { WorkspaceSandbox } from ${JSON.stringify(runShellUrl)};
+			const sb = new WorkspaceSandbox(${JSON.stringify(dir)}, 0, ${MODES[mode].isolate});
+			const outs = [];
+			for (const c of ${JSON.stringify(commands)}) {
+				try {
+					for await (const ev of sb.executeStreaming(c, {})) if (ev.type === 'executionResult') outs.push({ stdout: ev.stdout });
+				} catch (err) {
+					outs.push({ error: String(err?.message ?? err) });
+				}
+			}
+			process.stdout.write(JSON.stringify(outs));`;
+		const env = { ...process.env, ...fakes, ...required, BENCH_CMD_LOG: logPath };
+		for (const [k, v] of Object.entries(MODES[mode].env)) {
+			if (v === undefined) delete env[k];
+			else env[k] = v;
+		}
 		try {
-			const bigStdout = 'x'.repeat(5000);
-			writeCmdLog(logPath, {
-				cwd: '/work/bench-app',
-				command: 'npm run dev',
-				result: { exitCode: 0, stdout: bigStdout, stderr: 'warn' },
+			const r = spawnSync(process.execPath, ['--import', tsxLoader, '--input-type=module', '-e', child], {
+				env,
+				encoding: 'utf-8',
+				timeout: 60_000,
 			});
-			const lines = readFileSync(logPath, 'utf-8').split('\n').filter(Boolean);
-			assert.equal(lines.length, 1, 'exactly one JSON line per command');
-			const rec = JSON.parse(lines[0]);
-			assert.deepEqual(
-				Object.keys(rec).sort(),
-				['command', 'cwd', 'exitCode', 'stderr', 'stdout', 'ts'],
-				'record has exactly the expected fields',
-			);
-			assert.equal(rec.cwd, '/work/bench-app');
-			assert.equal(rec.command, 'npm run dev');
-			assert.equal(rec.exitCode, 0);
-			assert.equal(rec.stderr, 'warn');
-			assert.equal(rec.stdout.length, 4000, 'stdout sliced to 4000 chars');
-			assert.ok(!Number.isNaN(Date.parse(rec.ts)), 'ts is an ISO timestamp');
+			assert.equal(r.status, 0, `harness child failed: ${r.stderr}`);
+			let rawLog = null;
+			if (!cmdLog) {
+				try {
+					rawLog = readFileSync(logPath, 'utf-8');
+				} catch {
+					rawLog = '';
+				}
+			}
+			return { outs: JSON.parse(r.stdout), rawLog };
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	}
+	const records = (rawLog) => rawLog.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+	function assertNoFakes(text, where) {
+		for (const [name, value] of Object.entries(fakes)) {
+			assert.equal(text.includes(value), false, `${name} value leaked into ${where}`);
+			assert.equal(new RegExp(`^${name}=`, 'm').test(text), false, `${name} present in ${where}`);
+		}
+	}
+
+	function assertCleanEnv(mode) {
+		const { outs } = runInHarness(mode, ['env; id -un']);
+		const env = outs[0].stdout;
+		assertNoFakes(env, 'the shell env');
+		for (const [name, value] of Object.entries(required)) {
+			assert.match(env, new RegExp(`^${name}=${value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`, 'm'), `${name} must survive`);
+		}
+		for (const name of ['PATH', 'HOME']) assert.match(env, new RegExp(`^${name}=`, 'm'), `${name} must survive`);
+		for (const name of ['GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_PATH', 'RUNNER_TEMP', 'BENCH_CMD_LOG', 'SUDO_COMMAND']) {
+			assert.doesNotMatch(env, new RegExp(`^${name}=`, 'm'), `${name} must not reach the shell`);
+		}
+		return env;
+	}
+
+	it('isolated: runs as the agent user with no credentials or runner plumbing, keeping what builds/tests need', isolatedSkip, () => {
+		const env = assertCleanEnv('isolated');
+		assert.match(env, new RegExp(`^${BENCH_AGENT_USER}$`, 'm'), 'isolated shell must run as the agent user');
+		assert.match(env, new RegExp(`^USER=${BENCH_AGENT_USER}$`, 'm'));
 	});
 
-	it('does not throw when the log path is unwritable', () => {
-		// A directory path is never openable for append — the best-effort catch must swallow it.
+	it('bare (local-dev opt-in, no CI): same credential-free env', () => {
+		assertCleanEnv('bare');
+	});
+
+	it('fails closed: under CI a non-isolated command is refused even with the bare opt-in, and never runs', () => {
+		const { outs, rawLog } = runInHarness('bareUnderCi', ['echo RAN-AS-HARNESS']);
+		assert.match(outs[0].error ?? '', /refusing to run an agent command as the harness uid/);
+		assert.doesNotMatch(rawLog, /RAN-AS-HARNESS/);
+	});
+
+	it('commands.jsonl: one record per command with the expected shape and a 4000-char cut', () => {
+		const { rawLog } = runInHarness('bare', [`node -e "process.stdout.write('x'.repeat(5000)); process.stderr.write('warn')"`]);
+		const [rec] = records(rawLog);
+		assert.deepEqual(Object.keys(rec).sort(), ['command', 'cwd', 'exitCode', 'stderr', 'stdout', 'ts']);
+		assert.equal(rec.exitCode, 0);
+		assert.equal(rec.stdout, 'x'.repeat(4000));
+		assert.equal(rec.stderr, 'warn');
+		assert.ok(!Number.isNaN(Date.parse(rec.ts)));
+	});
+
+	it('commands.jsonl: redacts BEFORE the 4000-char cut — a credential straddling it leaves no prefix (stdout + stderr)', () => {
+		// The command rebuilds the exact secret from two halves, so the command text never holds it whole.
+		const s = fakes.BENCH_STRADDLE_SECRET;
+		const build = `['${s.slice(0, 6)}','${s.slice(6)}'].join('')`;
+		const cmd = `node -e "const s=${build}; process.stdout.write('x'.repeat(3990)+s+'y'.repeat(20)); process.stderr.write('e'.repeat(3992)+s)"`;
+		const { rawLog } = runInHarness('bare', [cmd]);
+		const [rec] = records(rawLog);
+		assert.equal(rec.stdout, `${'x'.repeat(3990)}***REDACTE`);
+		assert.equal(rec.stderr, `${'e'.repeat(3992)}***REDAC`);
+		assert.equal(rawLog.includes(s.slice(0, 7)), false, 'no prefix of the straddling secret may survive the cut');
+	});
+
+	it('commands.jsonl: an `env` entry and a command echoing exact credential values carry no secrets', () => {
+		const echoAll = `echo ${Object.values(fakes).map((v) => `'${v}'`).join(' ')}`;
+		const { rawLog } = runInHarness('bare', ['env', echoAll]);
+		const recs = records(rawLog);
+		assert.equal(recs.length, 2);
+		assert.equal(recs[0].command, 'env');
+		assert.ok(recs[0].stdout.length > 0, 'env output is logged');
+		// The second command's text AND output held every exact value; both are redacted in the log.
+		assert.match(recs[1].command, /REDACTED/);
+		assert.match(recs[1].stdout, /REDACTED/);
+		assertNoFakes(rawLog, 'commands.jsonl');
+	});
+
+	it('commands.jsonl: an unwritable log path never breaks the command', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'cmdlog-'));
 		try {
-			assert.doesNotThrow(() =>
-				writeCmdLog(dir, {
-					cwd: dir,
-					command: 'true',
-					result: { exitCode: 0, stdout: '', stderr: '' },
-				}),
-			);
+			// A directory is never openable for append; the writer's best-effort catch must swallow it.
+			const { outs } = runInHarness('bare', ['echo ok'], { cmdLog: dir });
+			assert.deepEqual(outs, [{ stdout: 'ok\n' }]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

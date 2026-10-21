@@ -1,6 +1,6 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme, StatusMessage, type StatusMessageHandle } from '@aws-blocks/blocks/ui';
 
 injectTheme();
 
@@ -14,15 +14,54 @@ let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;
 // Every rendering path in this file goes through these; never use .innerHTML
 // on user-supplied or server-supplied strings directly.
 
+// One persistent StatusMessage handle per status-only container. Each such
+// container (kv-result, role-result, profile-result, todo-error) mounts an
+// empty idle region once at startup (see bindUi), so every subsequent update
+// mutates a region that is ALREADY in the DOM. That is what makes screen-reader
+// announcements reliable: a `role="status"` region already mounted whose text
+// changes is announced consistently, whereas a region inserted at the same
+// instant its text appears is not.
+const statusHandles = new WeakMap<HTMLElement, StatusMessageHandle>();
+
 function clear(el: HTMLElement) {
+  // Fully empty the container and drop any memoized status handle. `clear()` is
+  // called both to reset a status surface AND by non-status renderers
+  // (renderAttrs/listDevices/getLastCode) that then appendChild their own
+  // content into the same container — so it must leave nothing behind, or a
+  // stale empty `<div class="bb-status">` would linger above that content and a
+  // later showError() would reuse it as a sibling instead of replacing it.
+  statusHandles.delete(el);
   el.replaceChildren();
 }
 
-function showMessage(el: HTMLElement, text: string, cls?: 'success' | 'error') {
-  const span = document.createElement('span');
-  if (cls) span.className = cls;
-  span.textContent = text;
-  el.replaceChildren(span);
+// Render a themed status line (success/error/idle) into `el`, driven by the
+// shared `StatusMessage` primitive — themed `--bb-*` tokens + a polite ARIA live
+// region, consistent with the Blocks UI components.
+//
+// For a status-only container (pre-mounted in bindUi), the handle is still
+// mounted in `el`, so set() mutates the live region in place (e.g. repeated
+// validation errors) — the announce-heavy path where a persistent
+// `role="status"` region keeps screen-reader announcements reliable. If the
+// container was repurposed for other content (a shared surface cleared by a list
+// renderer), the status node is detached and a fresh region is mounted instead.
+//
+// `kind` is required (not defaulted) so an argument-less showMessage(el, text)
+// is a compile error rather than silently implying success-green — a future
+// caller must state the intent. Use showError for the error case, or pass
+// 'idle' for a neutral result that is neither success nor failure.
+function showMessage(el: HTMLElement, text: string, kind: 'success' | 'error' | 'idle') {
+  const existing = statusHandles.get(el);
+  // Reuse the handle only while its element is still mounted in this container.
+  // A container repurposed for other content (via replaceChildren/textContent)
+  // detaches the status element, so re-mount a fresh region rather than calling
+  // set() on a now-orphaned node.
+  if (existing && el.contains(existing.element)) {
+    existing.set(kind, text);
+    return;
+  }
+  const handle = StatusMessage({ kind, text });
+  statusHandles.set(el, handle);
+  el.replaceChildren(handle.element);
 }
 
 function showError(el: HTMLElement, text: string) {
@@ -77,7 +116,10 @@ async function refreshTodos() {
   const todoList = document.getElementById('todo-list');
   const errorDiv = document.getElementById('todo-error');
   if (!todoList) return;
-  if (errorDiv) clear(errorDiv);
+  // todo-error is status-only: reset it to an empty idle region rather than
+  // clear(), so the persistent `role="status"` live region stays mounted and a
+  // subsequent showError() mutates it in place (reliably announced).
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
 
   // Rely on the server to decide "are you signed in?" — `listTodos` goes through
   // `auth.requireAuth` and throws 401 otherwise. The frontend `currentUser`
@@ -109,7 +151,9 @@ async function addTodo() {
   const errorDiv = document.getElementById('todo-error');
   const title = input.value.trim();
   if (!title) return;
-  if (errorDiv) clear(errorDiv);
+  // todo-error is status-only: reset to an empty idle region (keeps the live
+  // region mounted) rather than clear().
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
 
   try {
     await api.createTodo(title, parseInt(prioritySelect.value, 10));
@@ -201,6 +245,20 @@ function bindUi() {
   // Devices
   document.getElementById('devices-refresh-btn')?.addEventListener('click', listDevices);
   document.getElementById('devices-forget-btn')?.addEventListener('click', forgetCurrentDevice);
+
+  // Mount an empty idle live region once for every STATUS-ONLY container, so the
+  // FIRST message into each surface mutates a `role="status"` region that is
+  // already in the DOM (reliably announced) rather than inserting a region with
+  // its text already set. devices-result, profile-attrs and last-code-result are
+  // intentionally excluded: each primarily renders non-status DOM (listDevices,
+  // renderAttrs, the assembled last-code span), so they stay on
+  // clear()/replaceChildren and their occasional error line falls outside the
+  // pre-mounted-region guarantee rather than pointlessly pre-mounting a region
+  // we would immediately clear for the common non-status render.
+  for (const id of ['kv-result', 'role-result', 'profile-result', 'todo-error']) {
+    const el = document.getElementById(id);
+    if (el) showMessage(el, '', 'idle');
+  }
 }
 
 async function refreshLastCode() {
@@ -248,16 +306,27 @@ async function testReadersOnly() {
 async function testSetValue() {
   const key = (document.getElementById('key') as HTMLInputElement).value;
   const value = (document.getElementById('value') as HTMLInputElement).value;
-  await api.setValue(key, value);
-  showMessage(document.getElementById('kv-result')!, `✓ Set ${key} = ${value}`, 'success');
+  const out = document.getElementById('kv-result')!;
+  try {
+    await api.setValue(key, value);
+    showMessage(out, `✓ Set ${key} = ${value}`, 'success');
+  } catch (e: any) {
+    showError(out, e.message);
+  }
 }
 
 async function testGetValue() {
   const key = (document.getElementById('key') as HTMLInputElement).value;
-  const value = await api.getValue(key);
   const out = document.getElementById('kv-result')!;
-  if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
-  else showError(out, '✗ Key not found');
+  try {
+    const value = await api.getValue(key);
+    if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
+    // A missing key is an expected lookup result, not a failure — render it
+    // neutral (idle) rather than in danger-red.
+    else showMessage(out, '∅ Key not found', 'idle');
+  } catch (e: any) {
+    showError(out, e.message);
+  }
 }
 
 // ── Profile ────────────────────────────────────────────────────────────
@@ -305,8 +374,11 @@ async function updateDepartment() {
   const out = document.getElementById('profile-result')!;
   const dept = (document.getElementById('profile-department') as HTMLInputElement).value;
   try {
-    const r = await api.updateDepartment(dept);
-    showMessage(out, `department update: ${JSON.stringify(r)}`, 'success');
+    await api.updateDepartment(dept);
+    // A human-readable confirmation: this success text is announced by the
+    // polite live region, so a serialized object (JSON.stringify(r)) would read
+    // poorly aloud. `dept` is the value the user just entered.
+    showMessage(out, dept ? `Department updated to "${dept}".` : 'Department cleared.', 'success');
     await refreshProfile();
   } catch (e: any) {
     showError(out, e.message);
@@ -324,7 +396,9 @@ async function updateEmail() {
       if (row) row.style.display = 'flex';
       showMessage(out, 'Verification code sent to the new email. Check the one-liner at the top, then confirm below.', 'success');
     } else {
-      showMessage(out, `email update: ${JSON.stringify(r)}`, 'success');
+      // Direct update (no verification step). A human-readable confirmation for
+      // the polite live region rather than a serialized object.
+      showMessage(out, `Email updated to "${email}".`, 'success');
     }
     await refreshProfile();
   } catch (e: any) {
