@@ -269,4 +269,6 @@ While locked, `signIn` throws `AuthBasicErrors.AccountLocked` (`AccountLockedExc
 
 Throttling is **opt-in** — with no `lockout` option, sign-in is unlimited and behaves exactly as before. Counters live in the same TTL-backed store as verification codes and revocation markers, so they self-reap and never grow unbounded.
 
+The counter is a best-effort read-modify-write, not an atomic increment, so highly concurrent failures for the same username (across many Lambda instances) can lose an increment and make the lock trip slightly later than `maxAttempts` suggests. The lockout window is measured from the moment the count first reaches `maxAttempts`, so a lock always holds for the full `lockoutSeconds` once tripped.
+
 > **Local development:** the mock KVStore is in-memory, so lockout counters (like all AuthBasic state) reset when the dev server restarts.

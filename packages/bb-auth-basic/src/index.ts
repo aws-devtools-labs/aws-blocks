@@ -80,9 +80,9 @@ export interface LockoutPolicy {
 	 */
 	windowSeconds?: number;
 	/**
-	 * How long (seconds) the account stays locked once `maxAttempts` is reached.
-	 * The lock self-expires after this window (no manual unlock needed).
-	 * Default: 900 (15 minutes).
+	 * How long (seconds) the account stays locked, measured from the moment
+	 * `maxAttempts` is reached. The lock self-expires after this window (no
+	 * manual unlock needed). Default: 900 (15 minutes).
 	 */
 	lockoutSeconds?: number;
 }
@@ -245,6 +245,21 @@ export class AuthBasic extends Scope implements BlocksAuth {
 					lockoutSeconds: options.lockout.lockoutSeconds ?? 900,
 				}
 			: null;
+		// Surface a misconfigured policy at construction (dev time), not as a
+		// runtime surprise: `maxAttempts` must be a positive integer and both
+		// windows positive, finite numbers (seconds).
+		if (this.lockout) {
+			const { maxAttempts, windowSeconds, lockoutSeconds } = this.lockout;
+			if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+				throw new Error(`AuthBasic: lockout.maxAttempts must be a positive integer, got ${maxAttempts}`);
+			}
+			if (!Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+				throw new Error(`AuthBasic: lockout.windowSeconds must be a positive number, got ${windowSeconds}`);
+			}
+			if (!Number.isFinite(lockoutSeconds) || lockoutSeconds <= 0) {
+				throw new Error(`AuthBasic: lockout.lockoutSeconds must be a positive number, got ${lockoutSeconds}`);
+			}
+		}
 	}
 
 	// ── Secret management ────────────────────────────────────────────────
@@ -615,13 +630,17 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 * Read the current lockout record for a username, or `null` when none exists
 	 * or throttling is disabled. `count` is the running consecutive-failure
 	 * count; `firstFailAt` is the epoch-ms of the oldest failure still inside the
-	 * sliding window.
+	 * sliding window; `lockedAt` is the epoch-ms at which the count first reached
+	 * `maxAttempts` (absent until the lock trips) and is what the lockout window
+	 * is measured from.
 	 */
-	private async readLockout(username: string): Promise<{ count: number; firstFailAt: number } | null> {
+	private async readLockout(
+		username: string,
+	): Promise<{ count: number; firstFailAt: number; lockedAt?: number } | null> {
 		const raw = await this.codes.get(this.lockoutKey(username));
 		if (!raw) return null;
 		try {
-			const parsed = JSON.parse(raw) as { count: number; firstFailAt: number };
+			const parsed = JSON.parse(raw) as { count: number; firstFailAt: number; lockedAt?: number };
 			if (typeof parsed.count !== 'number' || typeof parsed.firstFailAt !== 'number') return null;
 			return parsed;
 		} catch {
@@ -637,15 +656,21 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 * password-dependent timing signal. A no-op when throttling is disabled.
 	 *
 	 * An account is locked when its failure count has reached `maxAttempts` and
-	 * the newest failure is still inside the `lockoutSeconds` window (the counter
-	 * row's TTL also reaps it, but reads don't depend on the reaper).
+	 * the lockout window (measured from `lockedAt`, the moment the threshold was
+	 * reached) has not yet elapsed. The counter row's TTL also reaps it, but
+	 * reads don't depend on the reaper.
 	 */
 	private async assertNotLockedOut(username: string): Promise<void> {
 		if (!this.lockout) return;
 		const record = await this.readLockout(username);
 		if (!record) return;
 		if (record.count < this.lockout.maxAttempts) return;
-		const lockExpiresAt = record.firstFailAt + this.lockout.lockoutSeconds * 1000;
+		// Anchor the lockout window on when the threshold was reached (`lockedAt`),
+		// not on the first failure — otherwise failures spaced across the counting
+		// window would trip a lock that expires almost immediately. Fall back to
+		// `firstFailAt` for a legacy row written before `lockedAt` existed.
+		const lockedAt = record.lockedAt ?? record.firstFailAt;
+		const lockExpiresAt = lockedAt + this.lockout.lockoutSeconds * 1000;
 		if (Date.now() < lockExpiresAt) {
 			throw new ApiError('Too many failed sign-in attempts; try again later', 429, {
 				name: AuthBasicErrors.AccountLocked,
@@ -656,10 +681,13 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	/**
 	 * Record one failed sign-in for `username`, incrementing the running count.
 	 * A failure older than `windowSeconds` starts a fresh window (count resets to
-	 * 1). The counter row's TTL is set to the longer of the counting window and
-	 * the lockout window, so a tripped lock survives long enough to be enforced
-	 * and an untripped counter still self-expires. A no-op when throttling is
-	 * disabled. Best-effort: a write failure is logged, never thrown — a throttle
+	 * 1). When the count reaches `maxAttempts` the failure that trips the lock
+	 * stamps `lockedAt`, which the lockout window is measured from (a later
+	 * failure inside the window preserves the original `lockedAt`). The counter
+	 * row's TTL is set to the longer of the counting window and the lockout
+	 * window, so a tripped lock survives long enough to be enforced and an
+	 * untripped counter still self-expires. A no-op when throttling is disabled.
+	 * Best-effort: a write failure is logged, never thrown — a throttle
 	 * bookkeeping hiccup must not convert a failed sign-in into a 5xx.
 	 */
 	private async recordFailedSignIn(username: string): Promise<void> {
@@ -668,9 +696,15 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const existing = await this.readLockout(username);
 		const windowMs = this.lockout.windowSeconds * 1000;
 		const withinWindow = existing !== null && now - existing.firstFailAt < windowMs;
-		const next = withinWindow
-			? { count: existing.count + 1, firstFailAt: existing.firstFailAt }
+		const next: { count: number; firstFailAt: number; lockedAt?: number } = withinWindow
+			? { count: existing.count + 1, firstFailAt: existing.firstFailAt, lockedAt: existing.lockedAt }
 			: { count: 1, firstFailAt: now };
+		// Stamp the moment the lock trips (count first reaches the threshold) so
+		// the lockout window is measured from the trip, not from the first
+		// failure. Preserve an existing stamp on later failures inside the window.
+		if (next.count >= this.lockout.maxAttempts && next.lockedAt === undefined) {
+			next.lockedAt = now;
+		}
 		// Expire the row after whichever window is longer so a tripped lock is
 		// enforced for its full duration and a counter that never trips still
 		// self-reaps once counting lapses.

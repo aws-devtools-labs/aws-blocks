@@ -415,14 +415,51 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 		const auth = makeAuth({ lockout: { maxAttempts: 2, lockoutSeconds: 1, windowSeconds: 60 } });
 		await auth.signUp('erin', 'password123');
 
-		// Simulate a tripped lock whose firstFailAt is older than lockoutSeconds:
+		// Simulate a tripped lock whose lockedAt is older than lockoutSeconds:
 		// count at threshold but the lock window has already elapsed.
-		const staleFirstFailAt = Date.now() - 5000; // 5s ago, lockoutSeconds=1
-		await codesStore(auth).put('lockout:erin', JSON.stringify({ count: 2, firstFailAt: staleFirstFailAt }));
+		const staleLockedAt = Date.now() - 5000; // 5s ago, lockoutSeconds=1
+		await codesStore(auth).put(
+			'lockout:erin',
+			JSON.stringify({ count: 2, firstFailAt: staleLockedAt, lockedAt: staleLockedAt }),
+		);
 
 		// The stale lock no longer blocks — the correct password signs in.
 		const user = await auth.signIn('erin', 'password123', ctx());
 		assert.strictEqual(user.username, 'erin');
+	});
+
+	test('the lockout window is anchored at the trip, not the first failure', async () => {
+		// windowSeconds large (failures still counted) but lockoutSeconds SHORTER
+		// than the age of the first failure. A lock anchored on firstFailAt would
+		// already be expired at the instant it trips; a lock anchored on lockedAt
+		// (the trip moment) holds for the full lockoutSeconds. This is the exact
+		// quirk the old firstFailAt-anchored code baked in.
+		const auth = makeAuth({ lockout: { maxAttempts: 2, windowSeconds: 600, lockoutSeconds: 60 } });
+		await auth.signUp('grace', 'password123');
+
+		// Seed one old failure 300s ago: inside windowSeconds=600 (so the next
+		// failure increments to the threshold) but far older than lockoutSeconds=60.
+		const oldFailAt = Date.now() - 300_000;
+		await codesStore(auth).put('lockout:grace', JSON.stringify({ count: 1, firstFailAt: oldFailAt }));
+
+		// The second failure trips the lock NOW and stamps lockedAt=now.
+		await assert.rejects(
+			auth.signIn('grace', 'wrong', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
+
+		// Enforcement: the lock holds. A firstFailAt-anchored expiry (oldFailAt +
+		// 60s) is 240s in the PAST — would wrongly let this through. A lockedAt
+		// anchor (now + 60s) correctly rejects.
+		await assert.rejects(
+			auth.signIn('grace', 'password123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.AccountLocked,
+		);
+		const raw = await codesStore(auth).get('lockout:grace');
+		const parsed = JSON.parse(raw!) as { count: number; firstFailAt: number; lockedAt?: number };
+		assert.strictEqual(parsed.count, 2, 'the old failure incremented to the threshold');
+		assert.ok(parsed.lockedAt !== undefined, 'the trip stamped lockedAt');
+		assert.ok(parsed.lockedAt! - oldFailAt > 200_000, 'lockedAt is the trip time, not the first failure');
 	});
 
 	test('a failure older than windowSeconds resets the running count', async () => {
@@ -443,6 +480,21 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 		assert.ok(raw, 'a counter row exists');
 		const parsed = JSON.parse(raw!) as { count: number };
 		assert.strictEqual(parsed.count, 1, 'the stale window was discarded and the count restarted at 1');
+	});
+
+	test('a misconfigured lockout policy throws at construction', () => {
+		// maxAttempts must be a positive integer; windows must be positive.
+		assert.throws(() => makeAuth({ lockout: { maxAttempts: 0 } }), /maxAttempts must be a positive integer/);
+		assert.throws(() => makeAuth({ lockout: { maxAttempts: -1 } }), /maxAttempts must be a positive integer/);
+		assert.throws(() => makeAuth({ lockout: { maxAttempts: 2.5 } }), /maxAttempts must be a positive integer/);
+		assert.throws(() => makeAuth({ lockout: { windowSeconds: 0 } }), /windowSeconds must be a positive number/);
+		assert.throws(
+			() => makeAuth({ lockout: { lockoutSeconds: -5 } }),
+			/lockoutSeconds must be a positive number/,
+		);
+		// A valid policy (and an empty object = defaults) constructs fine.
+		assert.doesNotThrow(() => makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 60, lockoutSeconds: 120 } }));
+		assert.doesNotThrow(() => makeAuth({ lockout: {} }));
 	});
 });
 
