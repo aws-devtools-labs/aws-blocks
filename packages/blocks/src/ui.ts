@@ -12,6 +12,7 @@ export {
 	broadcastAuthChange,
 	injectTheme,
 	onAuthChange,
+	submitAuthAction,
 	THEME_CSS,
 	THEME_STYLE_ID,
 } from '@aws-blocks/auth-common/ui';

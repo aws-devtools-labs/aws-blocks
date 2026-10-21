@@ -1,19 +1,19 @@
 import Foundation
 
 
-public enum DeliveryMedium: String, Codable {
+public nonisolated enum DeliveryMedium: String, Codable {
     case sms = "SMS"
     case email = "EMAIL"
     case phoneNumber = "PHONE_NUMBER"
 }
 
-public struct CodeDeliveryDetails: Codable {
+public nonisolated struct CodeDeliveryDetails: Codable {
     public let attributeName: String
     public let deliveryMedium: DeliveryMedium
     public let destination: String
 }
 
-public struct CognitoUser: Codable {
+public nonisolated struct CognitoUser: Codable {
     public let attributes: [String: String?]
     public let groups: [String]
     public let userId: String

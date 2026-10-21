@@ -27,7 +27,8 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
-import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
+import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
+import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -42,6 +43,7 @@ import {
   wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import { writeFrameworkSink } from './telemetry/framework-sink.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -594,11 +596,21 @@ export class Hosting extends Construct {
    */
   constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
+    // Stack/stage children before Hosting builds anything, so the fronted
+    // backend's role coverage also reaches the singletons and helper stacks it
+    // adds (step 12).
+    const childrenBefore = snapshotForHosting(this);
 
     const root = resolve(props.root);
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
+
+    // Framework resolves here in the synth subprocess; hand it to the parent
+    // orchestrator (which emits telemetry) through the sink file it named. Runs before
+    // the build and output-dir checks below, which can abort synth, so a failed deploy
+    // still reports the framework it was deploying.
+    writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
     if (props.buildCommand) {
@@ -990,6 +1002,18 @@ export class Hosting extends Construct {
         description: 'S3 bucket for framework build caches',
       });
     }
+
+    // ── 12. Role coverage ────────────────────────────────────────
+    // Count every role Hosting created as one of the fronted backend's Blocks
+    // roles — including those in the separate us-east-1 stacks (Lambda@Edge,
+    // CloudFront monitoring) and the cross-region reference providers, which no
+    // aspect on this stack reaches — so the backend's permissions boundary and
+    // IAM report cover them (see cdk/blocks-roles.ts).
+    const boundaryOwner = isBlocksBackendRoot(props.api) ? props.api : findBackendRoot(this);
+    // Duck-typed (`edgeArn`) rather than `instanceof`, which fails across
+    // duplicate aws-cdk-lib copies (hosting's vs core's).
+    const edgeFunctions = [...hosting.computeFunctions.values()].filter((fn) => 'edgeArn' in fn);
+    coverHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
   }
 
   /**

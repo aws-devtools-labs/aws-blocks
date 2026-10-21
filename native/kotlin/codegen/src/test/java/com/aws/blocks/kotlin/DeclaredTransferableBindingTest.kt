@@ -164,7 +164,7 @@ class DeclaredTransferableBindingTest : FunSpec({
                 "${packagesCatalog()},${bindingsCatalog(binding(tag = tag, arity = "0"))}",
             ),
         ).source()
-        src shouldContain """expectedTag = "a\"b\\c\${'$'}d""""
+        src shouldContain "expectedTag = \"a\\\"b\\\\c\${'\$'}d\""
         src shouldNotContain "trimMargin"
     }
 
@@ -479,6 +479,41 @@ class DeclaredTransferableBindingTest : FunSpec({
                 "AWSBLOCKS-NATIVE-003: native package '$IDENTITY' is declared but no binding " +
                     "references it; nothing is imported for it on kotlin.",
             )
+        }
+
+        test("an opt-out naming an undeclared package reports AWSBLOCKS-NATIVE-006") {
+            generate(
+                spec("""{ "type": "string" }""", packagesCatalog()),
+                excluded = setOf(IDENTITY, "com.example.absent"),
+            ).warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-006: excluded native package 'com.example.absent' is not declared by " +
+                    "x-blocks-native-packages; nothing was opted out for it on kotlin.",
+            )
+        }
+
+        test("an opt-out with no catalog at all is still reported") {
+            generate(
+                spec("""{ "type": "string" }"""),
+                excluded = setOf("com.example.absent"),
+            ).warnings.single() shouldContain "AWSBLOCKS-NATIVE-006"
+        }
+
+        test("AWSBLOCKS-NATIVE-006 names every undeclared identity in sorted order") {
+            generate(
+                spec("""{ "type": "string" }""", packagesCatalog()),
+                excluded = setOf("com.example.zeta", "com.example.alpha"),
+            ).warnings.map { it.substringAfter("package '").substringBefore("'") } shouldBe
+                listOf("com.example.alpha", "com.example.zeta", IDENTITY)
+        }
+
+        test("a package named only by a non-transferable binding is declared, not undeclared") {
+            generate(
+                spec(
+                    """{ "type": "string" }""",
+                    "${packagesCatalog()},${bindingsCatalog(binding(kind = "widget"))}",
+                ),
+                excluded = setOf(IDENTITY),
+            ).warnings shouldBe emptyList()
         }
 
         test("a referenced package reports nothing") {

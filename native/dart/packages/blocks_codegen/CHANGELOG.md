@@ -11,6 +11,9 @@
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
   references, since nothing imports it.
+- Warn with `AWSBLOCKS-NATIVE-006` when an opt-out names a package the spec does
+  not declare. A misspelled identity used to opt nothing out in silence,
+  indistinguishable from a working opt-out.
 - Reject a string `pattern` constraint that is not a regular expression. It used
   to reach the generated client unchecked, compile cleanly, and then throw on the
   customer's first call.
@@ -25,6 +28,10 @@
   carrying a dot. Two namespaces that differ only by punctuation, and a segment
   that is not an ASCII Dart identifier, are now errors rather than declarations
   the customer's compiler rejects.
+- Escape schema-controlled string values (field names, descriptions, patterns,
+  enum values, discriminator tags, method names, server URLs, defaults) when
+  emitting generated Dart source, so values containing special characters
+  produce well-formed code and round-trip verbatim.
 - Reject a declared native package named `blocks_runtime`, which would emit two
   directives for the one library every generated client already imports.
 - Reject a binding whose export resolves to a `dart:core` or `dart:async` type

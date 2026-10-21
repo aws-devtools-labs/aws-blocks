@@ -54,7 +54,8 @@ awsBlocks {
     }
 
     // Logical identities from x-blocks-native-packages that keep the
-    // UnknownTransferable fallback instead of a declared type (optional)
+    // UnknownTransferable fallback instead of a declared type (optional).
+    // An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
     excludeNativePackages = setOf("example-iot-native")
 
     // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
