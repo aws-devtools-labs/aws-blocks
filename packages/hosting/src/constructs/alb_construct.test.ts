@@ -198,13 +198,13 @@ describe('albDoor — free-form build', () => {
 });
 
 /** Every listener rule's path patterns, in priority order. */
-const rulePaths = (t: Template): Array<{ priority: number; paths: string[]; header?: string[] }> =>
+const rulePaths = (t: Template): Array<{ priority: number; paths: string[]; header?: unknown[] }> =>
   Object.values(t.findResources('AWS::ElasticLoadBalancingV2::ListenerRule'))
     .map((r) => {
       const conditions = r.Properties.Conditions as Array<{
         Field: string;
         PathPatternConfig?: { Values: string[] };
-        HttpHeaderConfig?: { Values: string[] };
+        HttpHeaderConfig?: { Values: unknown[] };
       }>;
       return {
         priority: r.Properties.Priority as number,
@@ -274,7 +274,7 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
     const rules = rulePaths(t);
     for (const rule of rules) {
       assert.equal(rule.header?.length, 1, `rule ${rule.priority} checks the header`);
-      assert.match(rule.header?.[0] ?? '', /^[0-9a-f]{64}$/);
+      assert.match(JSON.stringify(rule.header?.[0]), /resolve:secretsmanager:/);
     }
     // API: 6 paths, 4 per rule → 2 rules; the redirect; the static route; the catch-all.
     assert.deepEqual(rules.map((r) => r.paths), [
@@ -346,5 +346,41 @@ describe('AlbConstruct — custom domain', () => {
       (lb.Properties.Subnets as Array<{ Ref: string }>).map((s) => s.Ref).sort(),
       privateIds.sort(),
     );
+  });
+});
+
+describe('AlbConstruct — the stacked router\'s origin-verify secret', () => {
+  const locked = (id: string) => {
+    const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-west-2' } });
+    const alb = new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket: new Bucket(stack, 'Assets'), restrictToCloudFront: true });
+    return { stack, alb, t: Template.fromStack(stack) };
+  };
+
+  it('is a generated Secrets Manager secret, referenced (never written) by the rules and the origin header alike', () => {
+    const { stack, alb, t } = locked('Sec1');
+    const secrets = t.findResources('AWS::SecretsManager::Secret');
+    assert.equal(Object.keys(secrets).length, 1);
+    const id = Object.keys(secrets)[0];
+    assert.equal(secrets[id]?.Properties.GenerateSecretString.ExcludePunctuation, true, 'no ALB wildcard characters');
+    const ref = { 'Fn::Join': ['', ['{{resolve:secretsmanager:', { Ref: id }, ':SecretString:::}}']] };
+    assert.deepEqual(stack.resolve(alb.originHandle.customHeaders?.['x-blocks-origin-verify']), ref);
+    for (const rule of rulePaths(t)) assert.deepEqual(rule.header, [ref]);
+    // No value is derivable from the template: no 64-character literal anywhere.
+    assert.doesNotMatch(JSON.stringify(t.toJSON()), /"[0-9a-f]{64}"/);
+  });
+
+  it('two stacks with the same name and path get independent secrets (nothing computed from public inputs)', () => {
+    const a = locked('Same').t.findResources('AWS::SecretsManager::Secret');
+    const b = locked('Same').t.findResources('AWS::SecretsManager::Secret');
+    // The template only asks Secrets Manager to generate a value; each stack's
+    // secret is created (and so generated) on its own.
+    assert.deepEqual(Object.values(a)[0]?.Properties, Object.values(b)[0]?.Properties);
+    assert.equal(Object.values(a)[0]?.Properties.SecretString, undefined, 'no fixed value');
+  });
+
+  it('a public ALB door has no secret', () => {
+    const stack = new Stack(new App(), 'NoSec', { env: { account: '111111111111', region: 'us-west-2' } });
+    new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket: new Bucket(stack, 'Assets') });
+    Template.fromStack(stack).resourceCountIs('AWS::SecretsManager::Secret', 0);
   });
 });

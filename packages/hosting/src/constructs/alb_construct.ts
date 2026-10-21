@@ -28,8 +28,7 @@
  * `RECOMMENDED_TLS` policy) with a port 80 → 443 redirect, Route 53 alias
  * records point the names at the ALB, and the URL is the primary name.
  */
-import { createHash } from 'node:crypto';
-import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
@@ -39,6 +38,7 @@ import { AaaaRecord, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { LoadBalancerTarget } from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
+import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
@@ -170,6 +170,16 @@ export class AlbConstruct extends Construct {
    * to send and, for an internal ALB, the balancer for a VPC origin.
    */
   readonly originHandle: OriginHandle;
+  /**
+   * The origin-verify secret of a router locked to CloudFront
+   * ({@link AlbConstructProps.restrictToCloudFront}): a random value Secrets
+   * Manager generates once. The listener rules and the CloudFront origin both
+   * resolve it at deploy time. To rotate it, put a new value and then update
+   * both the distribution and the listener rules in one deploy — CloudFormation
+   * re-reads a dynamic reference only for a resource it updates, so updating
+   * one without the other makes the edge's requests 403 until both match.
+   */
+  readonly originVerifySecret?: Secret;
 
   constructor(scope: Construct, id: string, props: AlbConstructProps) {
     super(scope, id);
@@ -275,13 +285,21 @@ export class AlbConstruct extends Construct {
     const port = httpsCert ? 443 : 80;
 
     // Locked to a CloudFront door in front (the stacked door's router): a
-    // per-deploy secret the door sends as a header, required by every rule;
-    // without it the default action answers 403. Deterministic per stack and
-    // construct path (like the CloudFront door's origin-verify secret for its
-    // REST origin) so it doesn't churn on every deploy; bump the suffix to rotate.
-    const originSecret = props.restrictToCloudFront
-      ? createHash('sha256').update(Stack.of(this).stackName).update(this.node.path).update('alb-origin-verify-v1').digest('hex')
+    // secret the door sends as a header, required by every rule; without it the
+    // default action answers 403. Generated once by Secrets Manager (random,
+    // not derivable from the stack name or construct path), and referenced —
+    // never written into the template — by both the listener rules and the
+    // CloudFront origin's custom header, as a `{{resolve:secretsmanager:…}}`
+    // dynamic reference. Alphanumeric only: an ALB header condition treats `*`
+    // and `?` as wildcards. It changes only when the secret is rotated (see
+    // `originVerifySecret`).
+    this.originVerifySecret = props.restrictToCloudFront
+      ? new Secret(this, 'OriginVerifySecret', {
+          description: 'The header value the stacked door\'s CloudFront edge sends to its ALB router (x-blocks-origin-verify).',
+          generateSecretString: { passwordLength: 64, excludePunctuation: true, includeSpace: false },
+        })
       : undefined;
+    const originSecret = this.originVerifySecret?.secretValue.unsafeUnwrap();
     const verify = originSecret ? [elbv2.ListenerCondition.httpHeader(ORIGIN_VERIFY_HEADER, [originSecret])] : [];
     const pathsPerRule = MAX_CONDITION_VALUES - verify.length;
 
