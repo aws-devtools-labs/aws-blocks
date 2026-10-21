@@ -530,6 +530,13 @@ jobs:
       - name: E2E Multi-Compute
         run: npm run test:e2e:sandbox:multi-compute
 
+      # The test tears its stack down itself; this catches a cancelled or timed-out
+      # run, which would otherwise leave the stack (and its distribution) behind.
+      - name: Destroy stack (if left behind)
+        if: always()
+        working-directory: test-apps/multi-compute
+        run: npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
+
   e2e-production:
     permissions:
       contents: read

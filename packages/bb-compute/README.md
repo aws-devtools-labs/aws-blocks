@@ -23,7 +23,7 @@ Hand a `Compute` to a workload that supports it:
 ```ts
 new AsyncJob(scope, 'reports', { compute: worker, timeoutSeconds: 1800, handler });
 
-export const reports = new ApiNamespace(scope, 'reports', handler, { compute: api });
+export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* methods */ }), { compute: api });
 ```
 
 | Workload | Option | Compute types |
@@ -74,7 +74,7 @@ type is a compile error.
 Every `ApiNamespace` runs on the app's default compute unless you pass one:
 
 ```ts
-const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 120 });
+const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
 
 export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   async build(month: string) {
@@ -83,10 +83,17 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 }), { compute: reportsCompute });
 ```
 
-- **The client doesn't change.** `reports.build('2026-10')` still calls
-  `POST /aws-blocks/api/reports`; the stack's shared API gateway routes that
-  path to the namespace's compute. It works the same on every `apiFrontDoor`
-  tier and behind `Hosting`, so the API keeps one domain.
+- **The TypeScript client doesn't change.** `reports.build('2026-10')` still
+  calls `POST /aws-blocks/api/reports`; the stack's shared API gateway routes
+  that path to the namespace's compute. It works the same on every
+  `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. Calls
+  to the bare `/aws-blocks/api` endpoint — which today's Swift, Kotlin and Dart
+  clients use — still run on the default compute.
+- **The gateway's limits still apply.** An API call is capped at ~29 seconds
+  whatever the compute's `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
+- **It's placement, not isolation.** Every compute runs the same backend bundle
+  under the app's one execution role, so a separate compute is not a security
+  boundary.
 - **Routing follows the export name** — the name your frontend imports
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.
@@ -108,5 +115,5 @@ infrastructure (size, scaling) have no effect in the mock.
 Assign a `Compute` when a workload needs a runtime other than the app default
 (serverless) — most commonly a long-running or high-memory background job that a
 container can serve but a serverless function cannot, or an API namespace that
-needs more memory, a longer timeout, or isolation from the rest of the API. Omit
-`compute` and the workload uses the app default.
+needs more memory (and CPU) or its own scaling separate from the rest of the API.
+Omit `compute` and the workload uses the app default.

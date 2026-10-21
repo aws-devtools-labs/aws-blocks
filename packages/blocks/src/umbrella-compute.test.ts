@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 /**
  * Exercises the real production wiring: `@aws-blocks/blocks`'s `BlocksStack` /
  * `BlocksBackend` wrappers inject `LambdaCompute` as the default-compute factory
@@ -12,16 +15,13 @@
  * Must run under `--conditions=cdk` so the BB packages resolve their CDK entries
  * (real infra) rather than the default mock stubs.
  */
-import { test, describe, before, after } from 'node:test';
-import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import { ApiNamespace, Compute, type Scope } from '@aws-blocks/blocks';
+import { BlocksBackend, BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
-import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
@@ -412,9 +412,25 @@ describe('ApiNamespace compute option', () => {
 		assert.ok(reportsResource, 'a /aws-blocks/api/reports resource');
 		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'reportsApi'), 'not the constructor name');
 		const method = Object.values(resources).find(
-			(r) => r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === reportsResource[0],
+			(r) =>
+				r.Type === 'AWS::ApiGateway::Method' &&
+				(r.Properties.ResourceId as { Ref?: string }).Ref === reportsResource[0],
 		);
 		assert.ok(JSON.stringify(method?.Properties.Integration).includes(fnId), 'integrates the reports function');
+
+		// Nothing else reaches the reports function: every other method (the default
+		// namespace's catch-alls included) integrates a different function.
+		const otherMethods = Object.values(resources).filter(
+			(r) =>
+				r.Type === 'AWS::ApiGateway::Method' &&
+				(r.Properties.ResourceId as { Ref?: string }).Ref !== reportsResource[0] &&
+				r.Properties.Integration !== undefined,
+		);
+		assert.ok(otherMethods.length > 0, 'the catch-all methods exist');
+		assert.ok(
+			otherMethods.every((m) => !JSON.stringify(m.Properties.Integration).includes(fnId)),
+			'only /aws-blocks/api/reports integrates the reports function',
+		);
 
 		// The compute's options apply, and the same function also runs the AsyncJob.
 		assert.strictEqual(resources[fnId].Properties.MemorySize, 512);

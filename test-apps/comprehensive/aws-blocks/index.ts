@@ -2609,6 +2609,7 @@ function lambdaIdentity() {
   return {
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
     memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    pid: process.pid,
   };
 }
 

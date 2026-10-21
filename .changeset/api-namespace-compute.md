@@ -8,13 +8,12 @@ feat(core): run an API namespace on its own compute
 
 `ApiNamespace` takes an optional fourth argument, `{ compute }`, that runs the
 namespace's methods on a `Compute` instead of the app's default compute — for
-example to give one namespace more memory or a longer timeout, or to keep a slow
-namespace from competing with latency-sensitive ones:
+example to give one namespace more memory (and CPU) or its own scaling:
 
 ```ts
 import { ApiNamespace, Compute } from '@aws-blocks/blocks';
 
-const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 120 });
+const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
 
 export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   async build(month: string) {
@@ -23,9 +22,13 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 }), { compute: reportsCompute });
 ```
 
-- The client is unchanged: it still calls `POST /aws-blocks/api/reports`, and
-  the stack's shared API gateway routes that path to the namespace's compute —
+- The TypeScript client is unchanged: it still calls `POST /aws-blocks/api/reports`,
+  and the stack's shared API gateway routes that path to the namespace's compute —
   on every `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain.
+  Calls to the bare `/aws-blocks/api` endpoint, which today's Swift, Kotlin and
+  Dart clients use, still run on the default compute.
+- API calls stay capped at ~29 seconds by the gateway whatever the compute's
+  `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
 - Routing follows the export name (what the frontend imports), not the second
   `ApiNamespace` argument.
 - One `Compute` can host several namespaces and `AsyncJob`s; they then run in

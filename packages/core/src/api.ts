@@ -61,8 +61,9 @@ import type { ScopeParent } from './common/index.js';
 
 /**
  * Symbol under which an `ApiNamespace` exposes a resolver for the compute that
- * hosts it: a function returning that compute, or `undefined` outside CDK synth
- * (the mock/runtime `Scope` has no `compute`).
+ * hosts it. Outside CDK synth it returns `undefined` for a namespace without its
+ * own `compute` (the mock/runtime `Scope` has no `compute`), else that compute's
+ * inert backing; nothing reads it there.
  *
  * The shared API gateway routes each exported namespace to its compute. It calls
  * the resolver at synth, after the backend module has been imported — not at
@@ -93,21 +94,23 @@ export interface ApiNamespaceOptions {
    * default compute, like every namespace before.
    *
    * Pass a `Compute` block (from `@aws-blocks/blocks`) to give a namespace its
-   * own function — for example more memory or a longer timeout than the rest of
-   * the API, or to keep a slow namespace from competing with latency-sensitive
-   * ones:
+   * own function — for example more memory (and CPU) than the rest of the API,
+   * or its own scaling separate from the other namespaces:
    *
    * ```ts
-   * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 120 });
-   * export const reports = new ApiNamespace(scope, 'reports', handler, { compute: reportsCompute });
+   * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
+   * export const reports = new ApiNamespace(scope, 'reports', (context) => ({ … }), { compute: reportsCompute });
    * ```
    *
-   * The client calls the namespace exactly as before — the shared API gateway
-   * routes `/aws-blocks/api/<export name>` to the namespace's compute, on every
-   * `apiFrontDoor` tier and behind `Hosting`. One compute can host several
-   * namespaces (and `AsyncJob`s). Only a `serverless` compute can serve API
-   * namespaces today. In local dev every namespace still runs in the one dev
-   * server process.
+   * The TypeScript client calls the namespace exactly as before: the shared API
+   * gateway routes `/aws-blocks/api/<export name>` to the namespace's compute, on
+   * every `apiFrontDoor` tier and behind `Hosting`. Calls to the bare
+   * `/aws-blocks/api` endpoint — which today's Swift, Kotlin and Dart clients use
+   * — still run on the default compute. API calls stay capped at ~29 seconds by
+   * the gateway whatever the compute's `maxTimeoutSeconds`; run longer work in an
+   * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). Only a
+   * `serverless` compute can serve API namespaces today. In local dev every
+   * namespace still runs in the one dev server process.
    *
    * Typed structurally — anything whose `resolve()` yields a `serverless`
    * compute, which is what a `Compute` block is — so this entry carries no CDK
@@ -150,11 +153,11 @@ export interface ApiNamespaceOptions {
  * ## Running a namespace on its own compute
  * 
  * Every namespace runs on the app's default compute unless you pass one. Give a
- * namespace its own (for example, more memory or a longer timeout) with the
- * `compute` option — the frontend call doesn't change:
+ * namespace its own (for example, more memory) with the `compute` option — the
+ * frontend call doesn't change:
  * 
  * ```typescript
- * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048 });
+ * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
  * 
  * export const reports = new ApiNamespace(scope, 'reports', (context) => ({
  *   async build(month: string) {

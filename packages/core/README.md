@@ -182,13 +182,13 @@ Under either tier, the URL clients should call is `publicApiUrl` on the stack or
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
-Either tier serves the API at the same path. The typed client (and any manual caller) POSTs JSON-RPC to a per-namespace path:
+Either tier serves the API at the same path. The TypeScript client (and any manual caller that addresses a namespace) POSTs JSON-RPC to a per-namespace path:
 
 ```
 POST /aws-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; only per-namespace paths reach it, so a call to the bare `/aws-blocks/api` (today's Swift, Kotlin and Dart clients) runs on the default compute.
 
 **Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
 

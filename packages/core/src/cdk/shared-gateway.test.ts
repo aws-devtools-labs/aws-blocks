@@ -375,7 +375,7 @@ describe('resolveNamespaceRoutes', () => {
 	});
 
 	test("uses the namespace's own compute resolver, not its scope's compute", () => {
-		// Stands in for the future per-namespace compute option: the namespace
+		// What the `compute` option does, without a real Compute block: the namespace
 		// resolves to a different compute than its scope does, and routing follows
 		// the namespace.
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesOwnResolver');

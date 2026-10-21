@@ -232,7 +232,8 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  * Each namespace's compute is resolved here — after the backend module has been
  * imported — by calling the namespace's own resolver (`API_NAMESPACE_COMPUTE`),
  * so the result doesn't depend on the order computes, assignments and namespaces
- * were created in, and the precedence rule (today: the scope's compute) lives
+ * were created in, and the precedence rule (the namespace's own `compute`, else
+ * its scope's) lives
  * with `ApiNamespace`, not here.
  *
  * Contributes no route — leaving the request to the default compute's catch-all
