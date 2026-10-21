@@ -32,14 +32,14 @@
   },
   "devDependencies": {
     "@opennextjs/aws": "~3.10.4",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^20.19.43",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "typescript": "^5.9.3",
-    "tsx": "^4.23.15",
-    "concurrently": "^8.2.2",
     "aws-cdk-lib": "^2.273.0",
+    "concurrently": "^8.2.2",
     "constructs": "^10.8.1",
-    "@playwright/test": "^1.64.1"
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }
