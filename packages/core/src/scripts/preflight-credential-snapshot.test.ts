@@ -54,7 +54,8 @@ describe('credentials for the metadata reads', () => {
 				body += chunk;
 			});
 			request.on('end', () => {
-				const key = /Credential=([^/]+)\//.exec(request.headers.authorization ?? '')?.[1];
+				// `Credential=<access key>/<date>/...` in the SigV4 header; split, not a regex, so a long header cannot backtrack.
+				const key = (request.headers.authorization ?? '').split('Credential=')[1]?.split('/')[0];
 				if (body.includes('Action=GetCallerIdentity')) {
 					signedWith.push(`sts:${key}`);
 					response.writeHead(200, { 'content-type': 'text/xml' });
@@ -66,7 +67,9 @@ describe('credentials for the metadata reads', () => {
 				} else if (body.includes('Action=GetRole') && body.includes('RoleName=WorkspaceAdminAccess')) {
 					signedWith.push(`iam:${key}`);
 					const trust = encodeURIComponent(
-						JSON.stringify({ Statement: [{ Effect: 'Allow', Principal: { Service: 'account-access.amazonaws.com' } }] }),
+						JSON.stringify({
+							Statement: [{ Effect: 'Allow', Principal: { Service: 'account-access.amazonaws.com' } }],
+						}),
 					);
 					response.writeHead(200, { 'content-type': 'text/xml' });
 					response.end(

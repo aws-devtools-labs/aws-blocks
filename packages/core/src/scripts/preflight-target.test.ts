@@ -171,7 +171,7 @@ describe('deploy/sandbox configured target', () => {
 					assert.ok(stdout.includes(`Deployment target: AWS profile deployment, Region ${expected}`), stdout);
 					assert.match(stdout, /Account name: Fixture project$/m);
 					assert.match(stdout, /Account plan: Paid \(active\)$/m);
-					assert.ok(stdout.includes('https://settings.aws.com/billing'), stdout);
+					assert.match(stdout, /^💳 Spend limit: https:\/\/settings\.aws\.com\/billing \(/m);
 					assert.doesNotMatch(stdout, /123456789012|AKIAFIXTURETARGET/);
 				} finally {
 					await rm(directory, { recursive: true, force: true });
