@@ -617,7 +617,9 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            timeout: 30
+            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
+            # resources), so 30 min left no room for the build, tests and destroy.
+            timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
