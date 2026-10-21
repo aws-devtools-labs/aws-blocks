@@ -19,7 +19,13 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors (canonical source)
 export { SecretErrors } from './errors.js';
-export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
+export type {
+	ExternalSecretRef,
+	SecretOptions,
+	SecretReadOptions,
+	SecretVersion,
+	SecretVersionInfo,
+} from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -140,7 +146,7 @@ type CachedRead = { raw: string | null; fetchedAt: number };
  * const config = await dbConfig.get(); // { host: string; port: number } | null
  * ```
  */
-export class Secret<T = string> extends Scope {
+class SecretImpl<T = string> extends Scope {
 	readonly bbName = BB_NAME;
 	private schema?: StandardSchemaV1<T>;
 	private constructId: string;
@@ -160,6 +166,27 @@ export class Secret<T = string> extends Scope {
 	 */
 	private cacheTtlMs: number;
 
+	/**
+	 * Update the secret value — **present only when the secret was constructed
+	 * with `allowRuntimeWrite: true`**. Otherwise this property is absent from the
+	 * instance (and the public read-only {@link Secret} type omits it), and the
+	 * CDK layer grants the execution role no write permission.
+	 *
+	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
+	 * it, and serializes to JSON before storing. Clears this instance's read
+	 * cache on success.
+	 *
+	 * @param value - The new secret value.
+	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
+	 * @throws {SecretErrors.SecretNotFound} If the underlying Secrets Manager secret does not exist.
+	 *
+	 * @example
+	 * ```typescript
+	 * await stripeKey.put('sk_live_new_value');
+	 * ```
+	 */
+	declare put?: (value: T) => Promise<void>;
+
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
 
@@ -171,6 +198,14 @@ export class Secret<T = string> extends Scope {
 		this.cacheTtlMs =
 			options?.cacheTtlSeconds !== undefined ? Math.max(0, options.cacheTtlSeconds) * 1000 : DEFAULT_CACHE_TTL_MS;
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+
+		// Runtime writes are opt-in and least-privilege: only expose `put()` on the
+		// instance when `allowRuntimeWrite: true`. When absent/false the method is
+		// genuinely not on the object, matching the read-only public type and the
+		// read-only IAM the CDK layer grants (no PutSecretValue).
+		if (options?.allowRuntimeWrite === true) {
+			this.put = (value: T) => this.#put(value);
+		}
 
 		this.client = new SecretsManagerClient({
 			customUserAgent: this.buildUserAgentChain(),
@@ -322,25 +357,10 @@ export class Secret<T = string> extends Scope {
 	}
 
 	/**
-	 * Update the secret value.
-	 *
-	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
-	 * it, and serializes to JSON before storing.
-	 *
-	 * Clears this instance's read cache on success, so a subsequent `get()` in the
-	 * same execution environment reflects the new value (and the demoted
-	 * `'previous'` version) rather than a stale cached read.
-	 *
-	 * @param value - The new secret value.
-	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
-	 * @throws {SecretErrors.SecretNotFound} If the underlying Secrets Manager secret does not exist.
-	 *
-	 * @example
-	 * ```typescript
-	 * await stripeKey.put('sk_live_new_value');
-	 * ```
+	 * Internal write implementation, exposed as the public `put` only when
+	 * `allowRuntimeWrite: true` (see the constructor).
 	 */
-	async put(value: T): Promise<void> {
+	async #put(value: T): Promise<void> {
 		let serialized: string;
 		if (this.schema) {
 			await validateSchema(this.schema, value);
@@ -364,10 +384,37 @@ export class Secret<T = string> extends Scope {
 		// drop them all; the next get() re-fetches and repopulates.
 		this.readCache.clear();
 	}
+}
 
+/**
+ * The public, read-only `Secret` surface: `get()` + `listVersions()`, no `put()`.
+ * This is what you get from `new Secret(scope, id)` (or any construction without
+ * `allowRuntimeWrite: true`). The runtime object has no `put` method either.
+ */
+export type Secret<T = string> = Omit<SecretImpl<T>, 'put'>;
+
+/**
+ * A `Secret` constructed with `allowRuntimeWrite: true`: the read-only surface
+ * plus a non-optional {@link SecretImpl.put}.
+ */
+export type WritableSecret<T = string> = Secret<T> & { put(value: T): Promise<void> };
+
+/**
+ * The `Secret` constructor. Overloaded so the returned type reflects
+ * `allowRuntimeWrite`: `true` yields a {@link WritableSecret} (has `put`),
+ * anything else yields the read-only {@link Secret}.
+ */
+export interface SecretConstructor {
+	new <T = string>(
+		scope: ScopeParent,
+		id: string,
+		options: SecretOptions<T> & { allowRuntimeWrite: true },
+	): WritableSecret<T>;
+	new <T = string>(scope: ScopeParent, id: string, options?: SecretOptions<T>): Secret<T>;
 	/**
 	 * Wrap an existing AWS Secrets Manager secret. `Secret` will not create,
-	 * seed, or delete infrastructure for it — it only reads and writes the value.
+	 * seed, or delete infrastructure for it — it only reads (and, with
+	 * `allowRuntimeWrite: true`, writes) the value.
 	 *
 	 * @param secretArn - The ARN of the existing Secrets Manager secret.
 	 * @returns A reference to pass to the constructor's `secret` option.
@@ -379,10 +426,17 @@ export class Secret<T = string> extends Scope {
 	 * });
 	 * ```
 	 */
-	static fromExisting(secretArn: string): ExternalSecretRef {
-		return { __brand: 'ExternalSecretRef' as const, secretArn };
-	}
+	fromExisting(secretArn: string): ExternalSecretRef;
 }
+
+function fromExisting(secretArn: string): ExternalSecretRef {
+	return { __brand: 'ExternalSecretRef' as const, secretArn };
+}
+
+// Bind the overloaded constructor interface to the implementation (framework
+// plumbing: a class cannot narrow its own constructor return type per-overload).
+Object.assign(SecretImpl, { fromExisting });
+export const Secret = SecretImpl as unknown as SecretConstructor;
 
 /**
  * The config-registry / environment key the CDK layer uses to pass a Secret's

@@ -83,13 +83,13 @@ const auth = new AuthBasic(scope, id, options?)
 
 | Method | Returns | Description |
 |---|---|---|
-| `requireAuth(context)` | `Promise<AuthBasicUser>` | Require auth. Throws 401 (`SessionExpiredException`) if not signed in. |
+| `requireAuth(context)` | `Promise<AuthBasicUser>` | Require auth. Throws 401 — `SessionRevokedException` if the session was revoked (signed out), else `SessionExpiredException` if absent/expired. |
 | `checkAuth(context)` | `Promise<boolean>` | Check if signed in. |
 | `getCurrentUser(context)` | `Promise<AuthBasicUser \| null>` | Get current user or null. |
 | `signUp(username, password)` | `Promise<void>` | Register a new user. If `codeDelivery` is set, user is unconfirmed until code is verified. |
 | `confirmSignUp(username, code)` | `Promise<void>` | Confirm signup with verification code. Only when `codeDelivery` is set. |
 | `signIn(username, password, context)` | `Promise<AuthBasicUser>` | Authenticate and set session cookie. Rejects unconfirmed users. |
-| `signOut(context)` | `Promise<void>` | Clear session cookie. |
+| `signOut(context)` | `Promise<void>` | Revoke the presented session server-side (a replayed cookie is rejected) and clear the session cookie. The local cookie is always cleared; if the server-side revocation write fails it throws `SignOutIncompleteException` (503) so the caller can retry. |
 | `resetPassword(username)` | `Promise<void>` | Send a password reset code. Only when `codeDelivery` is set. |
 | `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. |
 | `createApi()` | `ApiNamespace` | Create the state machine API for the Authenticator component. |
@@ -104,7 +104,7 @@ const auth = new AuthBasic(scope, id, options?)
 |---|---|---|
 | `signUp(username, password)` | `(username: string, password: string) => Promise<{ username: string }>` | `{ username }`. Also sets the session cookie immediately when `codeDelivery` is **not** configured. |
 | `signIn(username, password)` | `(username: string, password: string) => Promise<{ username: string }>` | `{ username }`. Sets the session cookie. |
-| `signOut()` | `() => Promise<{ success: true }>` | `{ success: true }`. Clears the session cookie. |
+| `signOut()` | `() => Promise<{ success: true }>` | `{ success: true }`. Revokes the presented session server-side and clears the session cookie. |
 | `getCurrentUser()` | `() => Promise<AuthBasicUser \| null>` | The signed-in user, or `null`. |
 
 ### Options
@@ -160,7 +160,9 @@ try {
 | `AuthBasicErrors.UserAlreadyExists` | `UserAlreadyExistsException` | Duplicate username on sign-up |
 | `AuthBasicErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't meet policy |
 | `AuthBasicErrors.SessionExpired` | `SessionExpiredException` | `requireAuth` with no/expired session |
+| `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token that was revoked at sign-out (still unexpired, but invalidated) |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
+| `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | `signOut` cleared the local cookie but the server-side revocation write failed (e.g. a DynamoDB throttle); status 503 — retry to revoke the token |
 
 ### Branching on the `setAuthState` client path
 
@@ -234,3 +236,9 @@ const auth = new AuthBasic(app, 'auth', { crossDomain: true });
 ```
 
 On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS).
+
+### Revocation: read cost and consistency
+
+Server-side sign-out revocation (see `signOut`) adds **one DynamoDB `GetItem` per authenticated request** — `checkAuth`, `getCurrentUser`, `requireAuth`, and the `getAuthState` call that runs on page load each check the token's `jti` against a revocation list. On an auth-gated, high-traffic app this roughly doubles read volume to the underlying table versus pure stateless JWT validation. Tokens issued before revocation shipped (no `jti`) skip the read and simply expire within `sessionDuration`.
+
+The revocation read is an eventually-consistent `GetItem` (no `ConsistentRead`), so revocation is **near-immediate, not instantaneous**: for a sub-second window after `signOut`, a token replayed against a different Lambda instance may still authenticate before the revocation marker propagates. A signed-out token stops working everywhere within that propagation window, and always expires at its own `exp` regardless.

@@ -160,7 +160,7 @@ describe('finalizeVpc — endpoint provisioning', () => {
 		// VPC CIDR. We assert the rule is present (arrayWith) rather than the exact
 		// array, since CDK may add its own paired rule for the endpoint association.
 		const sgs = template.findResources('AWS::EC2::SecurityGroup', {
-			Properties: { GroupDescription: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only' },
+			Properties: { GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only' },
 		});
 		assert.equal(Object.keys(sgs).length, 1, 'exactly one dedicated endpoint SG');
 		const sg = Object.values(sgs)[0] as {
@@ -324,6 +324,23 @@ describe('lazy VPC derivation', () => {
 		const a = getOrCreateVpc(scope);
 		const b = getOrCreateVpc(scope);
 		assert.equal(a, b, 'lazy VPC is a per-stack singleton');
+	});
+
+	it('initializeVpc stamps source: a customer VPC is "provided", a derived one is "derived"', () => {
+		// Customer path (default): the context is tagged provided, so a stateful BB
+		// (Database) will join it.
+		const provided = stackWith(() => {});
+		const providedCtx = initializeVpc(provided.scope, {
+			network: new ec2.Vpc(provided.scope, 'CustomerVpc', { maxAzs: 2 }),
+		});
+		assert.equal(providedCtx.source, 'provided', 'customer-provided VPC defaults to source=provided');
+
+		// Derived path (what a container does): explicitly tagged derived, so a
+		// stateful BB must NOT auto-join it (data-loss guard).
+		const derived = stackWith(() => {});
+		const derivedVpc = getOrCreateVpc(derived.scope);
+		const derivedCtx = initializeVpc(derived.scope, { network: derivedVpc }, 'derived');
+		assert.equal(derivedCtx.source, 'derived', 'container-derived VPC is tagged source=derived');
 	});
 
 	it('a derived VPC + finalizeVpc provisions endpoints for a requiresVpc app', () => {

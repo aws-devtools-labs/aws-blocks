@@ -31,6 +31,6 @@ AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behav
 exactly as before.
 
 The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
-`0.2.8`, `@electric-sql/pglite-pgvector` `0.0.9`) to match the exact-pinned
-`@electric-sql/pglite` `0.5.8` they peer-depend on. A caret range let a newer extension
+`0.2.11`, `@electric-sql/pglite-pgvector` `0.0.12`) to match the exact-pinned
+`@electric-sql/pglite` `0.5.11` they peer-depend on. A caret range let a newer extension
 release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.

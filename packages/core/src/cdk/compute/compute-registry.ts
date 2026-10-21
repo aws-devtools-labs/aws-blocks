@@ -3,7 +3,7 @@
 
 import type { Construct } from 'constructs';
 import { getBlocksRoot } from '../root-registry.js';
-import type { Compute } from './compute.js';
+import type { ComputeBase } from './compute.js';
 
 const REGISTRY_KEY = Symbol.for('BLOCKS_COMPUTE_REGISTRY');
 
@@ -14,8 +14,8 @@ const REGISTRY_KEY = Symbol.for('BLOCKS_COMPUTE_REGISTRY');
  * backends share one `cdk.Stack`. Mirrors the config registry
  * (`config-registry.ts`), which scopes its state the same way.
  */
-function getRegistry(root: Construct): Compute[] {
-	let list = (root as any)[REGISTRY_KEY] as Compute[] | undefined;
+function getRegistry(root: Construct): ComputeBase[] {
+	let list = (root as any)[REGISTRY_KEY] as ComputeBase[] | undefined;
 	if (!list) {
 		list = [];
 		(root as any)[REGISTRY_KEY] = list;
@@ -31,7 +31,7 @@ function getRegistry(root: Construct): Compute[] {
  *
  * @param compute - The compute to register (used to locate its backend root).
  */
-export function registerCompute(compute: Compute): void {
+export function registerCompute(compute: ComputeBase): void {
 	getRegistry(getBlocksRoot(compute)).push(compute);
 }
 
@@ -41,6 +41,6 @@ export function registerCompute(compute: Compute): void {
  *
  * @param scope - Any construct in the backend (used to locate the backend root).
  */
-export function getComputes(scope: Construct): readonly Compute[] {
+export function getComputes(scope: Construct): readonly ComputeBase[] {
 	return getRegistry(getBlocksRoot(scope));
 }

@@ -27,7 +27,7 @@ final class HybridArmTests: XCTestCase {
         let parser = OpenRPCParser()
         let rpcModel = try parser.parse(data: data)
         let codegenModel = CodegenModelBuilder().build(from: rpcModel)
-        return SwiftCodeGenerator().generate(from: codegenModel)
+        return try SwiftCodeGenerator().generate(from: codegenModel)
     }
 
     func testRealSetAuthStateSpecParsesWithoutError() throws {

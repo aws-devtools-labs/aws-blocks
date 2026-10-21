@@ -9,7 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import type { ApiFrontDoorTier } from '../common/index.js';
@@ -26,7 +26,7 @@ import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
@@ -99,6 +99,57 @@ export interface CoreBlocksBackendProps extends BlocksBackendProps {
 }
 
 /**
+ * Emit a synth-time warning when the stack is deployed with a durable removal
+ * policy but API Gateway access logging is off — so the tradeoff is visible at
+ * `cdk synth` rather than discovered as a missing audit trail later.
+ *
+ * `accessLogging` is deliberately off by default in BOTH presets (see the
+ * {@link BlocksDefaults.accessLogging} field doc): enabling it provisions the
+ * account/region-level API Gateway CloudWatch Logs role, an AWS-side singleton a
+ * second Blocks stack can repoint on deploy or break on teardown. We must NOT
+ * flip that default, but a durable deployment silently having no request-level
+ * audit trail is worth surfacing.
+ *
+ * The gap is detected from the resolved defaults rather than by identity to a
+ * preset object (which any per-field override would break): the trigger is a
+ * durable removal policy (any removal policy other than DESTROY) with access
+ * logging off. Keying on durability alone also covers postures the old RETAIN +
+ * deletion-protection check missed — a durable stack that turns deletion
+ * protection off (`{ ...BlocksPresets.production, deletionProtection: false }`),
+ * and the SNAPSHOT and RETAIN_ON_UPDATE_OR_DELETE removal policies. The sandbox
+ * posture (DESTROY) and any explicit `accessLogging: true` override are correctly
+ * excluded; any other falsy `accessLogging` still warns, so a plain-JS caller
+ * who omits the field gets both the default-off behavior AND this warning (the
+ * truthiness check matches how consumer blocks read `defaults.accessLogging`).
+ * Warning only — never throws — and fires at most once per
+ * BlocksStack/BlocksBackend (so multiple backends in one stack each warn for
+ * their own posture).
+ *
+ * To silence it deliberately, acknowledge the warning on the stack or backend
+ * returned by `create()` after it resolves — see the message for the exact call.
+ */
+function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDefaults): void {
+	const isDurableAuditGap = defaults.removalPolicy !== cdk.RemovalPolicy.DESTROY && !defaults.accessLogging;
+	if (!isDurableAuditGap) return;
+
+	cdk.Annotations.of(scope).addWarningV2(
+		'blocks:apigateway:access-logging-disabled',
+		'This deployment has a durable removal policy (its stateful resources are not destroyed on ' +
+			'teardown) but API Gateway access logging is disabled, so it has no request-level audit ' +
+			'trail. It is off by default because enabling it provisions the account/region-level API ' +
+			'Gateway CloudWatch Logs role — an AWS-side singleton that a second Blocks stack in the same ' +
+			'account+region can repoint on deploy or leave broken on teardown (see the `accessLogging` ' +
+			'field docs on the backend `defaults`). Once you have confirmed a single Blocks stack owns ' +
+			"that role in the region, opt in by setting `accessLogging: true` in this backend's " +
+			'`defaults`; opting in also enables S3 server access logging for any FileBucket, each of ' +
+			'which then gets its own log bucket. If leaving it off is deliberate (for example a ' +
+			'multi-stack deployment where another stack owns access logging), acknowledge this warning ' +
+			"by calling `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:access-logging-disabled')` " +
+			'on the stack or backend returned by `create()`.',
+	);
+}
+
+/**
  * Shared infra setup — provisions the stack-level resources that are NOT owned
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
@@ -114,6 +165,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
 		);
 	}
+
+	// Surface the audit-trail tradeoff at synth when running a durable posture
+	// with access logging off. Non-fatal: warning only.
+	warnIfDurableWithoutAccessLogging(scope, props.defaults);
 
 	// ── Shared execution role ───────────────────────────────────────────────
 	// A single IAM role that every Building Block grants to. Provisioned here so
@@ -208,7 +263,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
 /** What {@link buildSharedGateway} reads and writes on a `BlocksStack` / `BlocksBackend`. @internal */
 export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
-	readonly _defaultCompute?: Compute;
+	readonly _defaultCompute?: ComputeBase;
 	readonly defaults: BlocksDefaults;
 	_sharedGateway?: SharedGateway;
 }
@@ -272,6 +327,29 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 }
 
 /**
+ * Attach the Lambda VPC-access managed policy (`AWSLambdaVPCAccessExecutionRole`,
+ * ENI management) to the shared execution role when a VPC is active on `root` —
+ * provided OR derived. The role is built eagerly in {@link setupBlocksInfra} and
+ * only gets this policy there when `defaults.vpc` is set; but a container compute
+ * can *derive* a VPC during the backend import, and a `LambdaCompute` then
+ * auto-places its function in that VPC. Without this the serverless function
+ * would land in the VPC with no ENI permissions and fail at ENI creation / cold
+ * start — order-dependently. Called from both `BlocksStack` and `BlocksBackend`
+ * finalize. Idempotent: CDK dedupes a repeat managed policy, so it's a no-op on
+ * the provided-VPC path (where the policy was already attached eagerly).
+ *
+ * @internal
+ */
+export function ensureVpcAccessPolicyWhenVpcActive(root: { executionRole: iam.IRole }): void {
+	if (!isVpcInitialized(root as never)) return;
+	if (root.executionRole instanceof iam.Role) {
+		root.executionRole.addManagedPolicy(
+			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
+		);
+	}
+}
+
+/**
  * Standalone CDK construct that provisions the Blocks backend: a single Lambda
  * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
  *
@@ -301,7 +379,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	/** Infrastructure defaults for Building Blocks created under this backend. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	_defaultCompute?: ComputeBase;
 	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
 	_sharedGateway?: SharedGateway;
 	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
@@ -478,10 +556,21 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(backend);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(backend)) compute.finalize();
+
 		// Finalize VPC. Derived resource: use the customer's if provided, else
 		// lazily create one only if a Building Block requires it.
+		//
+		// A container compute may have already derived + initialized the shared VPC
+		// during the backend import (it needs the VPC at construction), so skip
+		// re-initializing when that happened but still run finalizeVpc for endpoints.
 		if (backend._vpcOptions) {
 			finalizeVpc(backend, backend._vpcOptions);
+		} else if (isVpcInitialized(backend)) {
+			finalizeVpc(backend, { network: getOrCreateVpc(backend) });
 		} else if (anyRequirementNeedsVpc(backend)) {
 			const derived = getOrCreateVpc(backend);
 			const options = { network: derived };
@@ -494,6 +583,11 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 					'bring your own. See packages/blocks/VPC.md.',
 			);
 		}
+
+		// A LambdaCompute auto-places its function in whatever VPC is initialized on
+		// the backend — including one a container sibling *derived* during the import.
+		// Ensure the shared role carries ENI permissions in that case (see helper).
+		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		return backend;
 	}
