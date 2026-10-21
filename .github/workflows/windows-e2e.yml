@@ -59,10 +59,10 @@ jobs:
         run: npm run publish:local
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          # Not a PR run, so always E2E account 1 (see .github/actions/e2e-slot).
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
 
       - name: Scaffold template and run user commands
         run: node scripts/ci/windows-template-e2e.mjs

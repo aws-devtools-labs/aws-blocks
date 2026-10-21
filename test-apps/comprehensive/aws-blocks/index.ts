@@ -139,6 +139,15 @@ const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
   crossDomain: true,
 });
 
+// AuthBasic sign-in throttling (#766). A dedicated pool with a tight lockout
+// policy so the e2e trips the lock in a couple of attempts and self-expires
+// fast — kept separate from the shared `auth` pool so the lock never bleeds
+// into the other sign-in tests. No codeDelivery → signUp confirms immediately.
+const authThrottle = new AuthBasic(scope, 'auth-throttle', {
+  passwordPolicy: { minLength: 6 },
+  lockout: { maxAttempts: 2, windowSeconds: 60, lockoutSeconds: 60 },
+});
+
 // AuthCognito - username/password + MFA + groups (mock in local dev).
 // Tests confirm users via the verification-code flow (see auth-cognito.test.ts).
 // `mfa: 'off'` keeps the general suite simple — MFA-specific tests use the
@@ -1108,6 +1117,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async authRequired() {
     const user = await auth.requireAuth(context);
     return { user: { username: user.username } };
+  },
+
+  // Throttle pool (#766): sign-up + sign-in against the lockout-enabled
+  // `authThrottle` instance, so the e2e can trip and observe the lock.
+  async authThrottleSignUp(username: string, password: string) {
+    await authThrottle.signUp(username, password);
+    return { success: true };
+  },
+
+  async authThrottleSignIn(username: string, password: string) {
+    const user = await authThrottle.signIn(username, password, context);
+    return { userId: user.userId, username: user.username };
   },
 
   async authResetPassword(username: string) {
