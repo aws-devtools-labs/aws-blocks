@@ -32,7 +32,12 @@ Open http://localhost:3000 after `npm run dev`.
 - **KVStore** — a `getValue` / `setValue` pair gated by `requireAuth`, with
   keys namespaced per user.
 - **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
-  `deleteCookie`) on a single fixed-name `HttpOnly; Secure; SameSite=Lax` cookie.
+  `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
+  also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
+- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob** — upload/download
+  (paths scoped per user), `setFlag`, the API-key rotation methods,
+  `sendWelcome` and `runGreetingJob` all call `requireAuth`; `getFlag` and
+  `jobRan` stay public.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.

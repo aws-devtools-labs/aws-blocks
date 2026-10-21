@@ -48,6 +48,14 @@ test.before(async () => {
   throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
+// The installed cookie jar carries the session cookie across calls, so after
+// this resolves every API call runs as the new user.
+const signUp = async (username: string) => {
+  const result = await authApi.setAuthState({ action: 'signUp', username, password: 'Password1!' });
+  assert.strictEqual(result.state, 'signedIn', `signUp: ${result.error ?? ''}`);
+};
+const uniqueSuffix = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 test.after(() => {
   if (server?.pid) {
     try {
@@ -73,30 +81,58 @@ test('greet returns message and timestamp', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('KV Store - rejects signed-out callers', async () => {
+test('Protected methods reject signed-out callers', async () => {
   await authApi.setAuthState({ action: 'signOut' });
   await assert.rejects(api.getValue('test-key'), { status: 401 });
   await assert.rejects(api.setValue('test-key', 'test-value'), { status: 401 });
+  await assert.rejects(api.getUploadSlot('uploads/x.txt', 'text/plain'), { status: 401 });
+  await assert.rejects(api.getFileHandle('uploads/x.txt'), { status: 401 });
+  await assert.rejects(api.setFlag('on'), { status: 401 });
+  await assert.rejects(api.rotateApiKey('key-x'), { status: 401 });
+  await assert.rejects(api.getApiKey(), { status: 401 });
+  await assert.rejects(api.getPreviousApiKey(), { status: 401 });
+  await assert.rejects(api.apiKeyVersionCount(), { status: 401 });
+  await assert.rejects(api.sendWelcome('user@example.com'), { status: 401 });
+  await assert.rejects(api.runGreetingJob('signed-out'), { status: 401 });
 });
 
 test('KV Store - set and get (signed in, keys isolated per user)', async () => {
-  // The installed cookie jar carries the session cookie across calls.
-  const signUp = (username: string) =>
-    authApi.setAuthState({ action: 'signUp', username, password: 'Password1!' });
-  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const suffix = uniqueSuffix();
 
-  const alice = await signUp(`alice-${suffix}`);
-  assert.strictEqual(alice.state, 'signedIn', `signUp: ${alice.error ?? ''}`);
+  await signUp(`alice-${suffix}`);
   const setResult = await api.setValue('test-key', 'test-value');
   assert.strictEqual(setResult.success, true);
   assert.strictEqual(await api.getValue('test-key'), 'test-value');
 
   // A different user sees their own namespace, not alice's value.
-  const bob = await signUp(`bob-${suffix}`);
-  assert.strictEqual(bob.state, 'signedIn', `signUp: ${bob.error ?? ''}`);
+  await signUp(`bob-${suffix}`);
   assert.strictEqual(await api.getValue('test-key'), null);
 
   await authApi.setAuthState({ action: 'signOut' });
+});
+
+test('KV Store - a ":" in the username cannot reach another user\'s keys', async () => {
+  const alice = `alice-${uniqueSuffix()}`;
+
+  await signUp(alice);
+  await api.setValue('notes:secret', 'alice-value');
+
+  // `${alice}:notes` + `secret` must not map onto `${alice}` + `notes:secret`.
+  await signUp(`${alice}:notes`);
+  assert.strictEqual(await api.getValue('secret'), null);
+
+  await authApi.setAuthState({ action: 'signOut' });
+});
+
+// ─── Cookies ────────────────────────────────────────────────────────────────
+// Runs the real setCookie/getCookie/deleteCookie: a value with `;` or CR/LF
+// must be encoded, so it round-trips instead of adding cookie attributes.
+test('Cookie - a hostile value round-trips without adding attributes', async () => {
+  const value = 'x; Domain=evil.example\r\nSet-Cookie: admin=1';
+  await api.setCookie(value);
+  assert.strictEqual(await api.getCookie(), value);
+  await api.deleteCookie();
+  assert.strictEqual(await api.getCookie(), null);
 });
 
 // ─── FileBucket ─────────────────────────────────────────────────────────────
@@ -105,6 +141,7 @@ test('KV Store - set and get (signed in, keys isolated per user)', async () => {
 // server (no AWS). We upload bytes, then download them back and assert they
 // round-trip unchanged.
 test('FileBucket - upload then download round-trips', async (t) => {
+  await signUp(`files-${uniqueSuffix()}`);
   const path = 'uploads/greeting.txt';
   const contentType = 'text/plain';
   const payload = 'hello from the file bucket';
@@ -129,6 +166,7 @@ test('FileBucket - upload then download round-trips', async (t) => {
 // ─── AppSetting ───────────────────────────────────────────────────────────────
 // A runtime config value backed by SSM Parameter Store (local file in dev).
 test('AppSetting - set and get a flag', async () => {
+  await signUp(`flag-${uniqueSuffix()}`);
   const setResult = await api.setFlag('on');
   assert.strictEqual(setResult.success, true);
 
@@ -142,6 +180,7 @@ test('AppSetting - set and get a flag', async () => {
 // until the next rotation (history is capped at current + previous, not time-aged).
 // We set, rotate, then assert current + previous + that two versions are labeled.
 test('Secret - rotate keeps the previous value readable', async () => {
+  await signUp(`secret-${uniqueSuffix()}`);
   await api.rotateApiKey('key-v1');
   await api.rotateApiKey('key-v2');
 
@@ -172,6 +211,7 @@ test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
 // Background processing. The handler runs locally (no SQS/Lambda); we submit a
 // job, wait for completion, and confirm the handler's side effect landed.
 test('AsyncJob - submit, complete, and observe the effect', async () => {
+  await signUp(`job-${uniqueSuffix()}`);
   const name = `e2e-${Date.now().toString(36)}`;
 
   const result = await api.runGreetingJob(name);
@@ -188,6 +228,7 @@ test('AsyncJob - submit, complete, and observe the effect', async () => {
 // read-back method, matching the AWS runtime), so asserting capture would mean
 // reaching into mock-internal storage and breaking mock/AWS parity.
 test('EmailClient - send returns a message id', async () => {
+  await signUp(`email-${uniqueSuffix()}`);
   const { messageId } = await api.sendWelcome('user@example.com');
   assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
 });

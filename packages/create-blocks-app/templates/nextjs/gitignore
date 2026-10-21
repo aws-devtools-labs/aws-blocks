@@ -14,12 +14,16 @@ cdk.out/
 
 # Secrets and key material — never commit
 .env
+# Also ignores .env.<mode> (e.g. .env.production). If you commit non-secret
+# per-mode defaults, un-ignore them here, e.g. !.env.production
 .env.*
 !.env.example
 *.pem
 *.key
 *.p12
+# A `credentials` file at any depth; a `credentials/` directory (app code) is not ignored
 credentials
+!credentials/
 .aws/
 
 # IDE

@@ -8,19 +8,29 @@ import assert from 'node:assert';
  * it, so they can't overwrite the auth session cookie), and the value is
  * URI-encoded so CR/LF can't split the response (header injection) and `;`
  * can't append cookie attributes (e.g. `Domain=`). We mirror the header builder
- * here so the unit test runs without a browser or dev server;
- * templates-security-defaults.test.ts checks the template itself keeps these
- * attributes.
+ * here as fast documentation of the encoding; it is a copy, so it can't catch a
+ * regression in the template. The demo's own test/e2e.test.ts runs the real
+ * methods with a hostile value, and templates-security-defaults.test.ts checks
+ * the template keeps these attributes.
  */
 const DEMO_COOKIE = 'blocks-demo';
-const DEMO_COOKIE_ATTRS = 'HttpOnly; Secure; SameSite=Lax';
+const DEMO_COOKIE_ATTRS = 'HttpOnly; SameSite=Lax';
 
-function buildSetCookie(value: string): string {
-  return `${DEMO_COOKIE}=${encodeURIComponent(value)}; Max-Age=3600; ${DEMO_COOKIE_ATTRS}`;
+/** `Secure` everywhere except plain-HTTP localhost, like the auth cookie. */
+function demoCookieAttrs(headers: Headers): string {
+  const origin = headers.get('origin') ?? headers.get('host') ?? '';
+  const isLoopback = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/.test(origin);
+  return isLoopback ? DEMO_COOKIE_ATTRS : `${DEMO_COOKIE_ATTRS}; Secure`;
 }
 
-function buildDeleteCookie(): string {
-  return `${DEMO_COOKIE}=; Max-Age=0; ${DEMO_COOKIE_ATTRS}`;
+const PROD = new Headers({ origin: 'https://app.example.com' });
+
+function buildSetCookie(value: string, headers: Headers = PROD): string {
+  return `${DEMO_COOKIE}=${encodeURIComponent(value)}; Max-Age=3600; ${demoCookieAttrs(headers)}`;
+}
+
+function buildDeleteCookie(headers: Headers = PROD): string {
+  return `${DEMO_COOKIE}=; Max-Age=0; ${demoCookieAttrs(headers)}`;
 }
 
 function readCookie(cookieHeader: string): string | null {
@@ -36,14 +46,24 @@ function readCookie(cookieHeader: string): string | null {
 test('setCookie - builds a fixed-name HttpOnly SameSite=Lax header for clean input', () => {
   assert.strictEqual(
     buildSetCookie('abc123'),
-    'blocks-demo=abc123; Max-Age=3600; HttpOnly; Secure; SameSite=Lax'
+    'blocks-demo=abc123; Max-Age=3600; HttpOnly; SameSite=Lax; Secure'
   );
+});
+
+test('setCookie - omits Secure only on plain-HTTP localhost', () => {
+  for (const origin of ['http://localhost:3000', 'http://127.0.0.1:5173', 'http://[::1]:3000']) {
+    assert.doesNotMatch(buildSetCookie('v', new Headers({ origin })), /Secure/, origin);
+  }
+  assert.doesNotMatch(buildSetCookie('v', new Headers({ host: 'localhost:3000' })), /Secure/);
+  for (const origin of ['https://app.example.com', 'http://localhost.evil.example', 'http://evil.example/localhost']) {
+    assert.match(buildSetCookie('v', new Headers({ origin })), /; Secure$/, origin);
+  }
 });
 
 test('deleteCookie - builds a valid expiry Set-Cookie header', () => {
   assert.strictEqual(
     buildDeleteCookie(),
-    'blocks-demo=; Max-Age=0; HttpOnly; Secure; SameSite=Lax'
+    'blocks-demo=; Max-Age=0; HttpOnly; SameSite=Lax; Secure'
   );
 });
 

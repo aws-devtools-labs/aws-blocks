@@ -10,7 +10,29 @@ import { z } from 'zod';
  * cookie attributes.
  */
 const DEMO_COOKIE = 'blocks-demo';
-const DEMO_COOKIE_ATTRS = 'HttpOnly; Secure; SameSite=Lax';
+const DEMO_COOKIE_ATTRS = 'HttpOnly; SameSite=Lax';
+
+/**
+ * Cookie attributes for a request. Follows the same rule as the auth cookie
+ * (`@aws-blocks/auth-common`): `Secure` everywhere except plain-HTTP localhost,
+ * where the dev server can't serve HTTPS and some browsers drop `Secure` cookies.
+ */
+function demoCookieAttrs(headers: Headers): string {
+  const origin = headers.get('origin') ?? headers.get('host') ?? '';
+  const isLoopback = /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/.test(origin);
+  return isLoopback ? DEMO_COOKIE_ATTRS : `${DEMO_COOKIE_ATTRS}; Secure`;
+}
+
+/**
+ * Store key for a user's KV entry. The `user:` prefix keeps user keys apart
+ * from app-level keys (e.g. `job-ran:` below), and encoding the username stops
+ * a `:` in it from shifting the user/key boundary (`alice:notes` + `secret`
+ * must not reach `alice` + `notes:secret`).
+ */
+const userKey = (username: string, key: string) => `user:${encodeURIComponent(username)}:${key}`;
+
+/** FileBucket path under the signed-in user's own prefix (`/` in a username is encoded). */
+const userPath = (username: string, path: string) => `users/${encodeURIComponent(username)}/${path}`;
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -95,55 +117,66 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // ── Protected (requireAuth) — keys are namespaced per user ────────────
   async getValue(key: string) {
     const user = await auth.requireAuth(context);
-    return await store.get(`${user.username}:${key}`);
+    return await store.get(userKey(user.username, key));
   },
   
   async setValue(key: string, value: string) {
     const user = await auth.requireAuth(context);
-    await store.put(`${user.username}:${key}`, value);
+    await store.put(userKey(user.username, key), value);
     return { success: true };
   },
 
-  // ── Public — FileBucket upload/download demo ─────────────────────────
+  // ── Protected (requireAuth) — FileBucket upload/download demo ────────
   // Return Transferable handles the client middleware hydrates into
   // live `.upload(body)` / `.download()` objects, so the browser transfers
   // bytes directly to/from storage without managing presigned URLs by hand.
+  // Paths are scoped to the signed-in user, so one user can't read or
+  // overwrite another user's files.
   async getUploadSlot(path: string, contentType: string) {
-    return files.createUploadHandle(path, { contentType });
+    const user = await auth.requireAuth(context);
+    return files.createUploadHandle(userPath(user.username, path), { contentType });
   },
 
   async getFileHandle(path: string) {
-    return files.getFileHandle(path);
+    const user = await auth.requireAuth(context);
+    return files.getFileHandle(userPath(user.username, path));
   },
 
-  // ── Public — AppSetting (runtime config) demo ────────────────────────
+  // ── Public read / protected write — AppSetting (runtime config) demo ──
+  // The flag is app-wide: anyone may read it, only a signed-in user may change it.
+  // In a real app, restrict setFlag further (an admin role) or set it out-of-band.
   async getFlag() {
     return await featureFlag.get();
   },
 
   async setFlag(value: string) {
+    await auth.requireAuth(context);
     await featureFlag.put(value);
     return { success: true };
   },
 
-  // ── Public — Secret (credential with rotation history) demo ──────────
+  // ── Protected (requireAuth) — Secret (credential with rotation history) demo ─
   // In a real app a secret is set out-of-band (console/CLI), never returned to
   // the browser. This demo exposes it only to show rotation history: after
   // rotating, the previous value stays readable until the next rotation.
   async rotateApiKey(value: string) {
+    await auth.requireAuth(context);
     await apiKey.put(value);
     return { success: true };
   },
 
   async getApiKey() {
+    await auth.requireAuth(context);
     return await apiKey.get();
   },
 
   async getPreviousApiKey() {
+    await auth.requireAuth(context);
     return await apiKey.get({ version: 'previous' });
   },
 
   async apiKeyVersionCount() {
+    await auth.requireAuth(context);
     return (await apiKey.listVersions()).length;
   },
 
@@ -155,10 +188,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return results.map((r) => ({ text: r.text, score: r.score, source: r.source }));
   },
 
-  // ── Public — AsyncJob (background processing) demo ───────────────────
+  // ── Protected submit / public read — AsyncJob (background processing) demo ─
   // Submit a job and wait for it to complete. The handler writes a marker
-  // into the store; `jobRan` confirms the effect landed.
+  // into the store; `jobRan` confirms the effect landed. Submitting is gated
+  // because each call queues work and writes a store item.
   async runGreetingJob(name: string) {
+    await auth.requireAuth(context);
     const { jobId } = await greetingJob.submit({ name });
     const status = await greetingJob.waitUntilComplete(jobId, { timeoutMs: 10000 });
     return { jobId, state: status.state };
@@ -168,8 +203,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return (await store.get(`job-ran:${name}`)) === 'done';
   },
 
-  // ── Public — EmailClient (transactional email) demo ──────────────────
+  // ── Protected (requireAuth) — EmailClient (transactional email) demo ─
   async sendWelcome(to: string) {
+    await auth.requireAuth(context);
     const result = await email.send({
       to,
       subject: 'Welcome',
@@ -182,7 +218,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async setCookie(value: string) {
     context.response.headers.set(
       'set-cookie',
-      `${DEMO_COOKIE}=${encodeURIComponent(value)}; Max-Age=3600; ${DEMO_COOKIE_ATTRS}`,
+      `${DEMO_COOKIE}=${encodeURIComponent(value)}; Max-Age=3600; ${demoCookieAttrs(context.request.headers)}`,
     );
     return { success: true };
   },
@@ -199,7 +235,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   
   async deleteCookie() {
-    context.response.headers.set('set-cookie', `${DEMO_COOKIE}=; Max-Age=0; ${DEMO_COOKIE_ATTRS}`);
+    context.response.headers.set('set-cookie', `${DEMO_COOKIE}=; Max-Age=0; ${demoCookieAttrs(context.request.headers)}`);
     return { success: true };
   },
 
