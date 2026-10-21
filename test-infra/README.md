@@ -136,9 +136,11 @@ account, so every account's role trusts only `e2e`.
 E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
 ```
 
-Store each account's `RoleArn` as `AWS_ROLE_ARN_<n>` in the `e2e` environment
-and as a Dependabot secret (Dependabot runs only get Dependabot secrets), where
-`<n>` is the account's number in the pool (`aws-blocks+github-e2e-<n>@amazon.com`).
+Add each account's `RoleArn` to the `AWS_ROLE_ARNS` secret, a JSON array in
+pool order (account 1, the `aws-blocks+github-e2e-1@amazon.com` account,
+first). Set it in the `e2e` environment and as a Dependabot secret (Dependabot
+runs only get Dependabot secrets), and update the account count in
+`.github/actions/e2e-slot` to match.
 Each account also needs the Supabase test secret, the SES sender and the quota
 increases that the first account has.
 
