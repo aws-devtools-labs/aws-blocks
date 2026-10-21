@@ -87,7 +87,7 @@
     "unctx": "^2.5.0"
   },
   "dependencies": {
-    "@aws-blocks/hosting": "*",
+    "@aws-blocks/hosting": "^0.4.1",
     "@aws-blocks/pipeline": "*",
     "@aws-sdk/client-cloudformation": "^3.1153.0",
     "@aws-sdk/client-cloudfront": "^3.1153.0",
