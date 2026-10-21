@@ -18,14 +18,14 @@ import type { ScopeParent } from '../common/index.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { forEachBlocksRole } from './blocks-roles.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksStack } from './index.js';
 
 // Same inline default-compute stub as blocks-backend.test.ts: core's tests can't
 // depend on @aws-blocks/bb-lambda-compute, so a Compute owning a NodejsFunction
 // that runs AS the shared execution role stands in for LambdaCompute.
-class StubLambdaCompute extends Compute {
+class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
 	readonly logGroup: cdk.aws_logs.LogGroup;
 
