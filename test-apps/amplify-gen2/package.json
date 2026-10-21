@@ -20,7 +20,7 @@
     "@types/node": "^20.19.43",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
-    "@vitejs/plugin-react": "^4.7.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "aws-cdk-lib": "^2.273.0",
     "constructs": "^10.8.1",
     "esbuild": "^0.28.2",
@@ -28,7 +28,7 @@
     "react-dom": "^18.3.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "^6.4.4"
+    "vite": "^8.3.4"
   },
   "dependencies": {
     "aws-amplify": "^6.22.2",
