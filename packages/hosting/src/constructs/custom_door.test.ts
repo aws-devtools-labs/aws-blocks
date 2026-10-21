@@ -85,6 +85,25 @@ describe('buildFrontDoor — the url is required', () => {
 	});
 });
 
+describe('buildFrontDoor — the url is a bare origin', () => {
+	it('drops the trailing slash a door returns (the browser Origin has none, so CORS would reject it)', () => {
+		const { stack, input } = setup();
+		const door = defineFrontDoor({ service: 'slash', build: () => ({ url: 'https://app.example.com/' }) });
+		const { result } = buildFrontDoor(stack, door, input, { wiringCheck: false });
+		assert.equal(result.url, 'https://app.example.com');
+		assert.equal(result.originHandle.domainName, 'app.example.com');
+	});
+
+	it('drops it after a token too, and leaves a url without one unchanged', () => {
+		const { stack, input } = setup();
+		const token = new Bucket(stack, 'Tok').bucketDomainName;
+		const withSlash = defineFrontDoor({ service: 'tok', build: () => ({ url: `https://${token}//` }) });
+		assert.equal(buildFrontDoor(stack, withSlash, input, { wiringCheck: false }).result.url, `https://${token}`);
+		const bare = defineFrontDoor({ service: 'bare', build: () => ({ url: `https://${token}` }) });
+		assert.equal(buildFrontDoor(stack, bare, input, { wiringCheck: false }).result.url, `https://${token}`);
+	});
+});
+
 describe('buildFrontDoor — originHandle', () => {
 	it('is derived from the url (host + scheme) when the door omits it', () => {
 		const { stack, input } = setup();

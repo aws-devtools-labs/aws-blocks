@@ -293,7 +293,7 @@ export class ApiGatewayRestConstruct extends Construct {
 					new AaaaRecord(this, `DomainAAAA${i}`, { zone: hostedZone, recordName: name, target });
 				}
 			});
-			this.url = `https://${names[0]}/`;
+			this.url = `https://${names[0]}`;
 		}
 
 		new CfnOutput(this, 'ApiGatewayRestUrl', {

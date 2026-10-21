@@ -8,7 +8,10 @@
  * {@link buildFrontDoor} calls the door's `build` once, then:
  *   1. requires a public `url` (a missing or empty `url` fails synth with
  *      `MissingFrontDoorUrlError` — never a deploy with no address);
- *   2. derives the `originHandle` from that `url` when the door didn't return one;
+ *   2. normalizes the `url` to a bare origin — no trailing slash, since it
+ *      becomes the trusted public origin and the CORS hosting origin, which a
+ *      browser's `Origin` header (no slash) must equal — and derives the
+ *      `originHandle` from it when the door didn't return one;
  *   3. for a bring-your-own door, runs the WIRING CHECK: from what the `cf.*`
  *      helpers recorded, the static assets must be reachable
  *      (`ServeStaticAsset`) and, when the app has an API, at least one of its
@@ -86,11 +89,24 @@ export function buildFrontDoor<TInput extends DoorInput, TResult extends FrontDo
     });
   }
   if (options.wiringCheck !== false) checkWiring(scope, door.service, input, wiring);
+  const url = bareOrigin(result.url);
   return {
-    result: { ...result, originHandle: result.originHandle ?? originHandleFromUrl(result.url) },
+    result: { ...result, url, originHandle: result.originHandle ?? originHandleFromUrl(url) },
     wiring,
   };
 }
+
+/**
+ * The url without its trailing slash(es): `https://app.example.com/` and the
+ * browser's `Origin: https://app.example.com` must compare equal. A trailing
+ * slash written after a token (`https://${domain}/`) is literal text in the
+ * string, so it is removed too.
+ */
+const bareOrigin = (url: string): string => {
+  let end = url.length;
+  while (end > 0 && url.charAt(end - 1) === '/') end--;
+  return url.substring(0, end);
+};
 
 /**
  * The wiring check (see the module doc).

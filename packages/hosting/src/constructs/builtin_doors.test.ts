@@ -263,7 +263,9 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
 
     it('builds with a custom domain mapped to the stage (the URL is the domain root)', () => {
       const { hosting } = synth(spaManifest(), { kind: 'apiGateway', api: 'rest', backendApiUrl: API_URL }, { domain: DOMAIN });
-      assert.equal(hosting.distributionUrl, 'https://app.example.com/');
+      // A bare origin: the browser's Origin header has no trailing slash, and the
+      // URL becomes BLOCKS_PUBLIC_ORIGIN and the CORS hosting origin.
+      assert.equal(hosting.distributionUrl, 'https://app.example.com');
     });
   });
 });
