@@ -21,7 +21,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { CfnOutput, RemovalPolicy, Size } from 'aws-cdk-lib';
+import { CfnOutput, RemovalPolicy, type Size } from 'aws-cdk-lib';
 import { AnyPrincipal, Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
