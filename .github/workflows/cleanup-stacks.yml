@@ -18,22 +18,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One cleanup leg per E2E account (count from .github/actions/e2e-slot), plus
+  # publish. publish still holds stacks from runs before the move, and the agent
+  # bench deploys there until #878 merges. Drop publish only after #878 has
+  # merged and the publish leg has reported zero candidates (stacks, REST APIs,
+  # IAM roles) for several scheduled runs in a row.
+  legs:
+    runs-on: ubuntu-latest
+    outputs:
+      accounts: ${{ steps.e2e-slot.outputs.accounts }}
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions/e2e-slot
+          persist-credentials: false
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
+      - id: legs
+        env:
+          ACCOUNTS: ${{ steps.e2e-slot.outputs.accounts }}
+        run: |
+          matrix=$(jq -cn --argjson n "$ACCOUNTS" \
+            '[range($n) | {name: "e2e account \(. + 1)", environment: "e2e", index: .}] + [{name: "publish", environment: "publish"}]')
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   cleanup:
-    name: Delete Stale Stacks (${{ matrix.environment }})
+    name: Delete Stale Stacks (${{ matrix.name }})
+    needs: legs
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # e2e is the dedicated E2E account; publish still holds stacks from runs
-    # before the move, and the agent bench deploys there until #878 merges.
-    # Drop publish only after #878 has merged and the publish leg has reported
-    # zero candidates (stacks, REST APIs, IAM roles) for several scheduled runs
-    # in a row.
     strategy:
       fail-fast: false
       matrix:
-        environment: [e2e, publish]
+        include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
-      - name: Configure AWS credentials
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.environment == 'e2e'
+        with:
+          sparse-checkout: .github/actions/e2e-aws-credentials
+          persist-credentials: false
+
+      - name: Configure AWS credentials (E2E account)
+        if: matrix.environment == 'e2e'
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ matrix.index }}
+          # Fails the leg if AWS_ROLE_ARNS and the pool size have drifted apart.
+          accounts: ${{ needs.legs.outputs.accounts }}
+
+      - name: Configure AWS credentials (publish)
+        if: matrix.environment == 'publish'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
