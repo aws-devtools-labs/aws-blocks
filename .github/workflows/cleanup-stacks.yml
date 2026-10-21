@@ -323,6 +323,12 @@ jobs:
           echo "- Skipped (not e2e): $SKIPPED_NOT_E2E" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (< 2h old): $SKIPPED_TOO_NEW" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TRIGGER_FAILED" -gt 0 ]; then
+            # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
+            # prefix the CI role can't delete) never self-heals, and every such
+            # stack keeps holding its REST API against the account quota.
+            echo "::warning::$TRIGGER_FAILED delete-stack call(s) failed — see the log for the stacks and errors"
+          fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
@@ -473,6 +479,12 @@ jobs:
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TRIGGER_FAILED" -gt 0 ]; then
+            # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
+            # prefix the CI role can't delete) never self-heals, and every such
+            # stack keeps holding its REST API against the account quota.
+            echo "::warning::$TRIGGER_FAILED delete-stack call(s) failed — see the log for the stacks and errors"
+          fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
@@ -539,8 +551,14 @@ jobs:
           OWNED_IDS=$(echo "$OWNED_IDS" | sed '/^$/d' | sort -u)
 
           # All custom REST APIs with id, name and creation epoch.
-          APIS=$(aws apigateway get-rest-apis \
-            --query "items[].[id,name,createdDate]" --output text 2>/dev/null || echo "")
+          # Surface a failed listing instead of reading it as "no APIs": a silent
+          # failure here hid both the orphan sweep and the EDGE-quota warning
+          # below while the account filled up.
+          if ! APIS=$(aws apigateway get-rest-apis \
+            --query "items[].[id,name,createdDate]" --output text 2>/tmp/get-rest-apis.err); then
+            echo "::warning::apigateway get-rest-apis failed, orphaned REST APIs were not swept: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
+            APIS=""
+          fi
 
           # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
           # enough to be clearly abandoned (>6h), and (c) are owned by NO live stack
@@ -651,9 +669,12 @@ jobs:
           done <<< "$APIS"
 
           # Report current headroom against the 120-EDGE cap so quota pressure is visible.
-          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/dev/null || echo "?")
+          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/tmp/get-rest-apis.err || echo "?")
           EDGE=$(aws apigateway get-rest-apis \
-            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>/dev/null || echo "?")
+            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>>/tmp/get-rest-apis.err || echo "?")
+          if [ "$EDGE" = "?" ]; then
+            echo "::warning::could not count REST APIs, so the EDGE-quota check is blind: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
+          fi
 
           echo ""
           echo "## API Gateway REST API Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
