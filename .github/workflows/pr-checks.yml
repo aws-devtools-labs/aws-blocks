@@ -141,6 +141,32 @@ jobs:
           echo "❌ This PR changes @aws-blocks/blocks packaged content (e.g. synced docs from sibling READMEs) vs the base branch, but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to a changeset."
           exit 1
 
+  # Mirrors the Release job's install (publish-packages.yml): no dependency
+  # install scripts, then build. Release only runs on main after the Version
+  # Packages PR merges, so without this a dependency that needs its install
+  # script to build would pass every PR check and block the next release.
+  release-install-check:
+    name: Release Install Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
   build-and-test-local:
     name: Build, Unit Tests, E2E Local
     runs-on: ubuntu-latest
@@ -729,7 +755,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -737,6 +763,11 @@ jobs:
         run: |
           if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
             echo "blocks-integrity failed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.release-install-check.result }}" != "success" ]]; then
+            echo "release-install-check failed"
             exit 1
           fi
 
