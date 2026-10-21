@@ -107,6 +107,42 @@ describe('cloudFrontEdgeDoor — edge → router hop follows the router listener
   }
 });
 
+describe('cloudFrontEdgeDoor — an HTTPS router at its own domain', () => {
+  for (const internal of [false, true]) {
+    it(`${internal ? 'internal (VPC origin)' : 'public'}: the edge connects to the domain the certificate covers, over HTTPS`, () => {
+      const stack = new Stack(new App(), `Tls${internal}`, { env: { account: '111111111111', region: 'us-west-2' } });
+      const bucket = new Bucket(stack, 'Assets');
+      const certificate = Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-west-2:111111111111:certificate/test');
+      const alb = new AlbConstruct(stack, 'Router', {
+        plan,
+        bucket,
+        vpc: new Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 }),
+        internal,
+        certificate,
+        domain: { names: ['router.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z1' },
+        restrictToCloudFront: true,
+      });
+      assert.equal(alb.originHandle.protocol, 'https');
+      const input = buildDoorInput({
+        plan,
+        bucket,
+        staticDir: '.',
+        api: { url: 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' },
+      });
+      buildFrontDoor(stack, cloudFrontEdgeDoor, { ...input, upstream: { service: 'alb', url: alb.url, originHandle: alb.originHandle } }, { wiringCheck: false });
+      const t = Template.fromStack(stack);
+      assert.equal(listenerPort(t), 443);
+      const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
+      const origins = dist?.Properties.DistributionConfig.Origins as Array<{ DomainName: unknown; S3OriginConfig?: unknown }>;
+      assert.ok(origins.some((o) => o.DomainName === 'router.example.com'), JSON.stringify(origins.map((o) => o.DomainName)));
+      if (internal) {
+        const vpcOrigin = Object.values(t.findResources('AWS::CloudFront::VpcOrigin'))[0];
+        assert.equal(vpcOrigin?.Properties.VpcOriginEndpointConfig.OriginProtocolPolicy, 'https-only');
+      }
+    });
+  }
+});
+
 // ── What the edge builds, from the app ─────────────────────────────────────
 
 type Behavior = {

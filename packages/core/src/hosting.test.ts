@@ -3159,17 +3159,28 @@ describe('Hosting', () => {
         .filter((p) => sgIds.includes((p.GroupId as { 'Fn::GetAtt': [string, string] })?.['Fn::GetAtt']?.[0]));
       return [...inline, ...standalone];
     };
-    const secretOf = (t: Template): string => {
+    const secretOf = (t: Template): unknown => {
       const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
       const origins = dist.Properties.DistributionConfig.Origins as Array<{
-        OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }>;
+        OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: unknown }>;
       }>;
       const header = origins.flatMap((o) => o.OriginCustomHeaders ?? []).find((h) => h.HeaderName === ORIGIN_VERIFY);
       assert.ok(header, 'the edge sends the origin-verify header to the ALB');
-      assert.match(header.HeaderValue, /^[0-9a-f]{64}$/, 'a 256-bit hex secret');
+      // A dynamic reference to a generated secret — never a value in the template.
+      const secrets = t.findResources('AWS::SecretsManager::Secret');
+      const ids = Object.keys(secrets);
+      assert.strictEqual(ids.length, 1, 'one generated origin-verify secret');
+      assert.deepStrictEqual(secrets[ids[0]].Properties.GenerateSecretString, {
+        ExcludePunctuation: true,
+        IncludeSpace: false,
+        PasswordLength: 64,
+      });
+      assert.deepStrictEqual(header.HeaderValue, {
+        'Fn::Join': ['', ['{{resolve:secretsmanager:', { Ref: ids[0] }, ':SecretString:::}}']],
+      });
       return header.HeaderValue;
     };
-    const assertListenerRequiresSecret = (t: Template, secret: string) => {
+    const assertListenerRequiresSecret = (t: Template, secret: unknown) => {
       const listeners = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::Listener'));
       assert.strictEqual(listeners.length, 1);
       assert.deepStrictEqual(listeners[0].Properties.DefaultActions, [
@@ -3248,6 +3259,81 @@ describe('Hosting', () => {
         assert.match(JSON.stringify(rule.SourceSecurityGroupId), new RegExp(lookup[0]));
       }
       assertListenerRequiresSecret(t, secretOf(t));
+    });
+
+    it('a router certificate and domain: the edge reaches the router over HTTPS :443 at that name', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'StackedTls', { env: { account: '111111111111', region: 'us-east-1' } });
+      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+        stack,
+        'RouterCert',
+        'arn:aws:acm:us-east-1:111111111111:certificate/r',
+      );
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: {
+          kind: 'stacked',
+          edge: 'cloudfront',
+          router: 'alb',
+          certificate,
+          features: { router: { domain: { domainName: 'router.example.com', hostedZone: 'example.com', hostedZoneId: 'Z1' } } },
+        },
+      });
+      const t = Template.fromStack(stack);
+      const listeners = Object.values(t.findResources('AWS::ElasticLoadBalancingV2::Listener'));
+      assert.strictEqual(listeners.length, 1, 'no :80 redirect on a router only the edge reaches');
+      assert.strictEqual(listeners[0].Properties.Port, 443);
+      assert.strictEqual(listeners[0].Properties.Protocol, 'HTTPS');
+      const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
+      const router = (dist.Properties.DistributionConfig.Origins as Array<{
+        DomainName: unknown;
+        CustomOriginConfig?: { OriginProtocolPolicy: string };
+      }>).find((o) => o.CustomOriginConfig);
+      assert.strictEqual(router?.CustomOriginConfig?.OriginProtocolPolicy, 'https-only');
+      assert.strictEqual(router?.DomainName, 'router.example.com');
+      t.hasResourceProperties('AWS::Route53::RecordSet', { Name: 'router.example.com.', Type: 'A' });
+      assert.strictEqual(
+        Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedRouterPlainHttp')).length,
+        0,
+      );
+      // The router isn't the app's address: the edge is.
+      const outputs = t.findOutputs('*');
+      const hostingUrl = Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1]?.Value;
+      assert.match(JSON.stringify(hostingUrl), /https:\/\//);
+      assert.doesNotMatch(JSON.stringify(hostingUrl), /router\.example\.com/);
+    });
+
+    it('without a certificate the hop is HTTP :80; an internet-facing router warns, an internal one does not', () => {
+      const warns = (internal: boolean) => {
+        createSpaBuildOutput(tmpDir);
+        const stack = new Stack(new App(), `StackedHttp${internal}`, { env: { account: '111111111111', region: 'us-east-1' } });
+        new Hosting(stack, 'Hosting', {
+          root: tmpDir,
+          api: MOCK_API,
+          frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', internal },
+        });
+        const listener = Object.values(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::Listener'))[0];
+        assert.strictEqual(listener?.Properties.Port, 80);
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('StackedRouterPlainHttp')).length;
+      };
+      assert.strictEqual(warns(false), 1);
+      assert.strictEqual(warns(true), 0);
+    });
+
+    it('a router certificate without a router domain fails synth', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'StackedCertNoDomain', { env: { account: '111111111111', region: 'us-east-1' } });
+      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(stack, 'C', 'arn:aws:acm:us-east-1:111111111111:certificate/r');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb', certificate },
+          }),
+        (e: Error) => e.name === 'StackedRouterCertificateNeedsDomainError',
+      );
     });
 
     it('the standalone ALB door stays public by design (open listener, plain forward)', () => {

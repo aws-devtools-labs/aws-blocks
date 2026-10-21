@@ -121,8 +121,8 @@ const stackedNegatives: StackedDoorFeatures[] = [
   { edge: { logging: { enabled: true } } },
   // @ts-expect-error — the router has no CSP header.
   { router: { contentSecurityPolicy: "default-src 'self'" } },
-  // @ts-expect-error — the router has no custom domain: the edge is the public address.
-  { router: { domain } },
+  // @ts-expect-error — the router's domain has no www redirect.
+  { router: { domain: { ...domain, wwwRedirect: 'toApex' } } },
 ];
 // @ts-expect-error — 'none' takes no settings: there is no object form.
 const noneWithFeatures: HostingFrontDoor = { kind: 'none', features: {} };

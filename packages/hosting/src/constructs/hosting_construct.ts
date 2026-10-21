@@ -737,6 +737,7 @@ export class HostingConstruct extends Construct {
     assertRestDoorAddressable(props.frontDoor, f.domain);
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -1853,7 +1854,7 @@ export class HostingConstruct extends Construct {
         service = s3WebsiteDoor.service;
       } else if (fd?.kind === 'alb' || fd?.kind === 'stackedRouter') {
         this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, backendApiPaths);
-        const certificate = fd.kind === 'alb' ? fd.certificate : undefined;
+        const certificate = fd.certificate;
         built = buildFrontDoor(
           this,
           albDoor,
@@ -1954,7 +1955,8 @@ export class HostingConstruct extends Construct {
       }
       // A door served over plain HTTP with an API: sign-in, cookies and every
       // RPC travel in cleartext between the browser and the door.
-      if (built.url.startsWith('http://') && props.backendApi) {
+      // (The stacked door's router isn't the public address: the core warns about its hop.)
+      if (built.url.startsWith('http://') && props.backendApi && !stackedRouter) {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:PlainHttpFrontDoor',
           `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
@@ -2550,8 +2552,11 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
   });
   const cdnWebAclArn = cdn?.webAclArn;
   if (cdnWebAclArn !== undefined) {
-    const explicitWaf = typeof props.frontDoor === 'object' ? props.frontDoor?.features : undefined;
-    if (explicitWaf && 'waf' in explicitWaf && explicitWaf.waf?.webAclArn !== undefined) {
+    const explicit = typeof props.frontDoor === 'object' ? props.frontDoor?.features : undefined;
+    const waf: unknown = explicit && 'waf' in explicit ? explicit.waf : undefined;
+    const explicitArn =
+      waf && typeof waf === 'object' && 'webAclArn' in waf && typeof waf.webAclArn === 'string' ? waf.webAclArn : undefined;
+    if (explicitArn !== undefined) {
       throw new HostingError('FrontDoorSettingConflictError', {
         message: '`cdn.webAclArn` and `frontDoor.features.waf.webAclArn` are both set. They are the same setting.',
         resolution: 'Keep `frontDoor.features.waf.webAclArn` and remove `cdn.webAclArn` (deprecated).',
@@ -2679,6 +2684,30 @@ const assertComputeReachableByDoor = (
 };
 
 /**
+ * Fail synth when the app has middleware (Next.js `middleware.ts`, built as a
+ * Lambda\@Edge function) and the door isn't CloudFront: only the CloudFront
+ * door runs it (on viewer requests). Behind any other door the app would
+ * deploy with its middleware — often its auth gate or redirects — silently
+ * skipped.
+ *
+ * @param manifest the deploy manifest.
+ * @param kind the resolved door kind.
+ * @param label the door as the app wrote it, for the message. @default kind
+ * @throws HostingError('MiddlewareNeedsCloudFrontDoorError') for middleware behind a door other than CloudFront.
+ */
+const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string, label: string = kind): void => {
+  if (!manifest.middleware || kind === 'cloudfront') return;
+  throw new HostingError('MiddlewareNeedsCloudFrontDoorError', {
+    message:
+      `The app has middleware (Next.js \`middleware.ts\`), which only the CloudFront door runs; the '${label}' front ` +
+      'door would deploy the app with its middleware never running — and with it any route gating or redirects it does.',
+    resolution:
+      "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or move the middleware's logic into the pages " +
+      'or route handlers before choosing another door.',
+  });
+};
+
+/**
  * Fail synth for an API Gateway REST door with no custom domain (see the call
  * site). Making the stage the app's base path automatically is not possible:
  * each framework bakes its base path into the build from its own config, and
@@ -2714,7 +2743,8 @@ const assertAlbCertificateHasDomain = (
   frontDoor: HostingConstructProps['frontDoor'],
   domain: HostingConstructProps['domain'],
 ): void => {
-  if (typeof frontDoor !== 'object' || frontDoor === null || frontDoor.kind !== 'alb' || !frontDoor.certificate) return;
+  if (typeof frontDoor !== 'object' || frontDoor === null) return;
+  if ((frontDoor.kind !== 'alb' && frontDoor.kind !== 'stackedRouter') || !frontDoor.certificate) return;
   if (domain) return;
   throw new HostingError('AlbCertificateNeedsDomainError', {
     message:

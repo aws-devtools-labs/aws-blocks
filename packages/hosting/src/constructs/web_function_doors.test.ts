@@ -106,3 +106,47 @@ describe("compute.type 'web-function' × every front door", () => {
     });
   }
 });
+
+describe('HostingConstruct — middleware runs only behind the CloudFront door', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-mw-'));
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), '<html></html>');
+    fs.mkdirSync(path.join(tmpDir, 'mw'));
+    fs.writeFileSync(path.join(tmpDir, 'mw', 'index.mjs'), 'export const handler = async (e) => e;');
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const manifest = (): DeployManifest => ({
+    version: 1,
+    buildId: 'mw1',
+    compute: {},
+    staticAssets: { directory: tmpDir, spaFallback: true },
+    routes: [{ pattern: '/*', target: 'static' }],
+    middleware: { bundle: path.join(tmpDir, 'mw'), handler: 'index.handler', matchers: ['/*'] },
+  });
+  const synth = (frontDoor: HostingConstructProps['frontDoor']) =>
+    new HostingConstruct(new Stack(new App(), 'Mw', { env: { account: '111111111111', region: 'us-east-1' } }), 'Hosting', {
+      manifest: manifest(),
+      frontDoor,
+      skipRegionValidation: true,
+    });
+
+  for (const [label, frontDoor] of [
+    ['alb', { kind: 'alb' }],
+    ['apiGateway', { kind: 'apiGateway' }],
+    ['stacked', { kind: 'stackedRouter' }],
+    ['none', 'none'],
+  ] as const) {
+    it(`${label}: fails synth with MiddlewareNeedsCloudFrontDoorError`, () => {
+      assert.throws(
+        () => synth(frontDoor),
+        (e: Error) => e.name === 'MiddlewareNeedsCloudFrontDoorError' && e.message.includes(`'${label}'`),
+      );
+    });
+  }
+
+  it('CloudFront: builds (the middleware runs at the edge)', () => {
+    assert.doesNotThrow(() => synth(undefined));
+  });
+});

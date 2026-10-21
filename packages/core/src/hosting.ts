@@ -594,13 +594,27 @@ export interface CloudFrontOverRouterFrontDoor {
    * Internal (private) ALB vs internet-facing. Default: internet-facing.
    *
    * Either way, the ALB admits only the CloudFront edge: every listener rule
-   * requires a per-deploy origin-verify header the edge sends (anything else
-   * gets a 403). An internet-facing ALB's security group admits only the
-   * CloudFront origin-facing managed prefix list; an internal ALB is reached
-   * through a CloudFront VPC origin, and its security group admits only that
-   * VPC origin's service security group.
+   * requires an origin-verify header the edge sends (a random value Secrets
+   * Manager generates once per stack; anything else gets a 403). An
+   * internet-facing ALB's security group admits only the CloudFront
+   * origin-facing managed prefix list; an internal ALB is reached through a
+   * CloudFront VPC origin, and its security group admits only that VPC
+   * origin's service security group.
    */
   internal?: boolean;
+  /**
+   * A regional ACM certificate for the router, so the edge → router hop is
+   * HTTPS on port 443. It must cover `features.router.domain` (required with
+   * it): the name the edge connects to, which Route 53 alias records point at
+   * the ALB. (`features.router.domain` with a hosted zone and no certificate
+   * gets a DNS-validated one.)
+   *
+   * Without either, the hop is plain HTTP on port 80 — unencrypted. Through a
+   * VPC origin (`internal: true`) it stays on the AWS network; to an
+   * internet-facing ALB it reaches the ALB's public addresses, and synth warns
+   * (`@aws-blocks/hosting:StackedRouterPlainHttp`).
+   */
+  certificate?: import('aws-cdk-lib/aws-certificatemanager').ICertificate;
   /**
    * The settings the app asks each layer for: the CloudFront `edge` (a
    * CLOUDFRONT-scoped web ACL, the CSP header) and the ALB `router` (a REGIONAL
@@ -976,6 +990,7 @@ export class Hosting extends Construct {
             kind: 'stackedRouter',
             vpc: cfOverRouter.vpc,
             internal: cfOverRouter.internal,
+            certificate: cfOverRouter.certificate,
             ...(cfOverRouter.features?.router ? { features: cfOverRouter.features.router } : {}),
           }
         : toL3FrontDoor(nonStacked(props.frontDoor), l3Settings),
@@ -1008,6 +1023,15 @@ export class Hosting extends Construct {
       // dynamic routes through the router. The app is served same-origin from
       // the edge's domain.
       const edge = this.addCloudFrontOverAlb(hosting, props);
+      if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal) {
+        cdk.Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:StackedRouterPlainHttp',
+          "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, sign-in, " +
+            'the origin-verify header) cross to the ALB\'s public addresses unencrypted. Give the router a ' +
+            '`certificate` and `features.router.domain` for HTTPS :443, or use `internal: true` (a VPC origin, on the ' +
+            'AWS network).',
+        );
+      }
       publicUrl = edge.url;
       publicDistribution = edge.distribution;
       stackedEdge = edge;
@@ -1262,7 +1286,8 @@ export class Hosting extends Construct {
    * dynamic routes through the ALB router, which admits only the edge. The
    * edge has the viewer TLS, the cache, the security headers and a BYO edge
    * web ACL; there is no custom domain or skew protection on it yet. The
-   * edge → router hop is HTTP; the viewer hop is HTTPS.
+   * viewer hop is HTTPS; the edge → router hop is HTTPS :443 when the router
+   * has a certificate and domain, else plain HTTP :80.
    *
    * @returns the CloudFront distribution, its public URL (the app's origin),
    *   and the static function that carries the build id (its cutover).
@@ -1273,9 +1298,9 @@ export class Hosting extends Construct {
   ): { distribution: Distribution; url: string; staticFunction?: cdk.aws_cloudfront.Function } {
     // The L3 built the full ALB router as its front door. The edge is a
     // free-form door (`cloudFrontEdgeDoor`) built from the same DoorInput, with
-    // the ALB as its `upstream`: CloudFront's single origin is that ALB, and the
-    // internal edge → ALB hop is always HTTP. Its internal extras are the CSP for
-    // its security headers and the app's BYO CLOUDFRONT-scoped web ACL.
+    // the ALB as its `upstream`: the router behaviors' origin is that ALB, over
+    // the router listener's protocol. Its internal extras are the CSP for its
+    // security headers and the app's BYO CLOUDFRONT-scoped web ACL.
     if (!hosting.loadBalancerDnsName) {
       throw new Error('Composed CF → ALB door: the ALB router was not provisioned by the hosting construct.');
     }
@@ -1290,9 +1315,11 @@ export class Hosting extends Construct {
         upstream: {
           service: hosting.frontDoor.service,
           url: hosting.frontDoor.url,
-          // The ALB's DNS name over HTTP, the origin-verify header it requires,
-          // and — internal — the balancer to reach through a VPC origin.
-          originHandle: { ...hosting.frontDoor.originHandle, protocol: 'http' },
+          // The router's name and protocol (HTTPS at its domain with a
+          // certificate, else HTTP at the ALB's DNS name), the origin-verify
+          // header it requires, and — internal — the balancer to reach through
+          // a VPC origin.
+          originHandle: hosting.frontDoor.originHandle,
         },
         contentSecurityPolicy: edge?.contentSecurityPolicy,
         webAclArn: edge?.waf?.webAclArn,
@@ -1546,7 +1573,7 @@ function toL3FrontDoor(frontDoor: HostingFrontDoor<HostingDomain> | null | undef
 }
 
 /** The options the stacked door takes besides `kind`. */
-const STACKED_OPTION_KEYS = new Set(['kind', 'edge', 'router', 'vpc', 'internal', 'features']);
+const STACKED_OPTION_KEYS = new Set(['kind', 'edge', 'router', 'vpc', 'internal', 'certificate', 'features']);
 /** The keys of the stacked door's `features.edge`. */
 const STACKED_EDGE_KEYS = new Set(['waf', 'contentSecurityPolicy']);
 
@@ -1571,7 +1598,7 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
     if (raw[key] !== undefined && !STACKED_OPTION_KEYS.has(key)) {
       throw option(
         `\`frontDoor.${key}\` is not an option of the 'stacked' front door.`,
-        'Remove it. The stacked door takes: frontDoor.edge, frontDoor.router, frontDoor.vpc, frontDoor.internal, and `frontDoor.features`.',
+        'Remove it. The stacked door takes: frontDoor.edge, frontDoor.router, frontDoor.vpc, frontDoor.internal, frontDoor.certificate, and `frontDoor.features`.',
       );
     }
   }
@@ -1583,6 +1610,16 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
   }
   if (raw.internal !== undefined && typeof raw.internal !== 'boolean') {
     throw option(`\`frontDoor.internal\` must be true or false (got ${JSON.stringify(raw.internal)}).`, 'Pass a boolean.');
+  }
+  if (door.certificate && !door.features?.router?.domain) {
+    throw new HostingError('StackedRouterCertificateNeedsDomainError', {
+      message:
+        "The 'stacked' front door's router `certificate` has no domain to serve: a certificate can't cover the ALB's " +
+        "own `*.elb.amazonaws.com` name, so the edge connects to the router at a name of yours.",
+      resolution:
+        'Add `frontDoor.features.router.domain` (`domainName` the certificate covers, plus `hostedZone` / `hostedZoneId` ' +
+        'for the DNS records), or remove `certificate` to keep the edge → router hop on HTTP.',
+    });
   }
   const features: unknown = door.features;
   if (features === undefined) return;
@@ -1627,13 +1664,6 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
   }
   const router = layers.router;
   if (router !== undefined) {
-    const routerSettings: Record<string, unknown> = router !== null && typeof router === 'object' ? { ...router } : {};
-    if (routerSettings.domain !== undefined) {
-      throw new HostingError('UnsupportedFrontDoorSettingError', {
-        message: "`frontDoor.features.router.domain` is not supported by the 'stacked' front door: the edge is the public address.",
-        resolution: 'Remove it.',
-      });
-    }
     resolveFrontDoorFeatures(
       { kind: 'alb', features: door.features?.router },
       {},

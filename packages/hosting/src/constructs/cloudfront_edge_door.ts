@@ -8,8 +8,11 @@
  * A thin distribution whose single default behavior forwards EVERYTHING to the
  * door it sits in front of — the ALB router, handed over as `input.upstream`:
  * CloudFront's one origin is the router, and the router routes to the rest of
- * the infra. The internal edge → router hop is HTTP; the viewer hop is HTTPS at
- * the edge.
+ * the infra. The viewer hop is HTTPS at the edge. The edge → router hop
+ * follows the router: HTTPS :443 when it has a certificate (and a domain the
+ * certificate covers), else plain HTTP :80 — unencrypted, on the AWS network
+ * through a VPC origin (internal router), to the ALB's public addresses
+ * otherwise.
  *
  * Except the static routes: the edge serves those itself, straight from the
  * private assets bucket (origin access control, the `cf` helpers' S3 origin
@@ -116,6 +119,8 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
       ? VpcOrigin.withApplicationLoadBalancer(handle.privateLoadBalancer, {
           protocolPolicy,
           customHeaders,
+          // Over HTTPS, the name the router's certificate covers (not the ALB's own).
+          ...(https ? { domainName: handle.domainName } : {}),
         })
       : new HttpOrigin(handle.domainName, {
           protocolPolicy,

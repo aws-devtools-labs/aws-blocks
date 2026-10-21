@@ -227,8 +227,14 @@ export type StackedDoorFeatures = {
     /** `Content-Security-Policy` header value for the edge's security-headers policy. */
     contentSecurityPolicy?: string;
   };
-  /** The ALB router behind the edge: the {@link AlbDoorFeatures}, without a custom domain (the edge is the public address). */
-  router?: Omit<AlbDoorFeatures, 'domain'>;
+  /**
+   * The ALB router behind the edge: the {@link AlbDoorFeatures}. Its `domain`
+   * is not the app's address (the edge is): it is the name the edge connects
+   * to over HTTPS — the router's certificate (the stacked door's
+   * `certificate`, else a DNS-validated one) covers it, and Route 53 alias
+   * records point it at the ALB. Without one, the edge → router hop is HTTP.
+   */
+  router?: AlbDoorFeatures;
 };
 
 // ── The door options ────────────────────────────────────────────────────────
@@ -284,8 +290,10 @@ export type StackedRouterDoorOptions = {
   vpc?: IVpc;
   /** Internal (private) ALB, reached through a CloudFront VPC origin. */
   internal?: boolean;
-  /** The router's settings. */
-  features?: Omit<AlbDoorFeatures, 'domain'>;
+  /** The router's certificate (HTTPS :443 from the edge); needs `features.domain`. */
+  certificate?: ICertificate;
+  /** The router's settings (its `domain` is the name the edge connects to). */
+  features?: AlbDoorFeatures;
 };
 
 /** An Amazon API Gateway door (regional, no CDN, no VPC). */
@@ -438,7 +446,7 @@ const DOOR_OPTION_KEYS: Readonly<Record<FrontDoorKind | 'stackedRouter', readonl
   alb: ['vpc', 'internal', 'certificate'],
   apiGateway: ['api', 'certificate'],
   custom: ['door', 'wiringCheck'],
-  stackedRouter: ['vpc', 'internal'],
+  stackedRouter: ['vpc', 'internal', 'certificate'],
 };
 
 /** The keys each object-shaped setting takes inside `frontDoor.features` (unknown keys fail synth). */
