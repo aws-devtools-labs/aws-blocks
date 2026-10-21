@@ -392,12 +392,14 @@ public struct SwiftCodeGenerator {
             if let discVal = variant.discriminatorValue {
                 let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
+                let encodedTag = swiftStringLiteral(discVal)
+                let discKey = escapedSwiftName(discriminator.fieldName)
                 if !hasPayload {
                     lines.append("\(indent)        case .\(camelCase(variant.name)):")
-                    lines.append("\(indent)            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                 } else {
                     lines.append("\(indent)        case .\(camelCase(variant.name))(let params):")
-                    lines.append("\(indent)            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                     lines.append("\(indent)            try params.encode(to: encoder)")
                 }
             }
