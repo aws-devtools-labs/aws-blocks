@@ -26,6 +26,10 @@ updates:
       interval: monthly
     open-pull-requests-limit: 10
     ignore:
+      # nuxt 4.5 pulls lightningcss (MPL-2.0) via Vite 8; keep it below 4.5
+      # until that license is cleared (see test-apps/hosting-ssr-nuxt).
+      - dependency-name: "nuxt"
+        versions: [">=4.5.0"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/node"
