@@ -22,7 +22,7 @@ export function multiComputeTests(
       const onIsolated = await getIsolatedApi().whereAmI();
 
       if (ENV === 'local') {
-        assert.deepStrictEqual(onIsolated, onDefault, 'local dev runs every namespace in one process');
+        assert.strictEqual(onIsolated.pid, onDefault.pid, 'local dev runs every namespace in one process');
         return;
       }
       assert.ok(onDefault.functionName && onIsolated.functionName, 'both calls ran on Lambda');

@@ -9,6 +9,9 @@
   "exports": {
     ".": {
       "types": "./index.ts",
+      "browser": "./client.js",
+      "react-server": "./client.js",
+      "import": "./client.js",
       "default": "./index.ts"
     }
   }

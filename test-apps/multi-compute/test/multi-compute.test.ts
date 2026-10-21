@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,7 +31,7 @@ type RpcReply = { result?: unknown; error?: { code?: number; message?: string; d
 
 let apiUrl: string;
 
-/** POST a JSON-RPC call to a per-namespace path, the way the typed client does. */
+/** A raw JSON-RPC call to a per-namespace path (for requests the typed client never sends). */
 async function rpc(pathNamespace: string, method: string): Promise<RpcReply> {
   const res = await fetch(`${apiUrl}/${pathNamespace}`, {
     method: 'POST',
@@ -41,7 +42,9 @@ async function rpc(pathNamespace: string, method: string): Promise<RpcReply> {
   return (await res.json()) as RpcReply;
 }
 
-const whereAmI = async (namespace: string) => (await rpc(namespace, `${namespace}.whereAmI`)).result as WhereAmI;
+/** The real typed client, pointed at the front door — what a customer's frontend runs. */
+const whereAmI = (namespace: string) =>
+  ApiNamespaceClient<{ whereAmI(): Promise<WhereAmI> }>(namespace, { url: apiUrl }).whereAmI();
 
 /**
  * A new distribution reports CREATE_COMPLETE before its domain resolves at the
@@ -105,7 +108,8 @@ test('Multi-compute behind the managed CloudFront front door', async (t) => {
   });
 
   await t.test('a path naming a different namespace than the body is rejected', async () => {
-    // `/reports` reaches the reports compute; the body asks for `api.whereAmI`.
+    // The path names `reports`, the body asks for `api.whereAmI`: neither is run.
+    // (That `/reports` reaches the reports compute is proven by the previous test.)
     const reply = await rpc('reports', 'api.whereAmI');
     assert.strictEqual(reply.error?.code, -32600);
     assert.strictEqual(reply.error?.data?.name, 'InvalidRequest');
