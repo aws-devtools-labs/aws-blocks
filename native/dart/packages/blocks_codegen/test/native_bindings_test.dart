@@ -806,6 +806,96 @@ void main() {
     });
   });
 
+  group('opted-out package that matches nothing', () {
+    CodegenModel buildOptingOut(Set<String> optedOut, String spec) =>
+        CodegenModelBuilder(
+          optedOutPackages: optedOut,
+        ).build(const OpenRpcParser().parse(spec));
+
+    test('AWSBLOCKS-NATIVE-006 names the identity, and the binding stays '
+        'applied', () {
+      final model = buildOptingOut(const {
+        'example-iot-nativ',
+      }, _specJson(extras: _catalogs()));
+
+      expect(
+        model.warnings,
+        contains(
+          "AWSBLOCKS-NATIVE-006: opted-out package 'example-iot-nativ' is not "
+          'declared by x-blocks-native-packages; nothing was opted out for it '
+          'on dart.',
+        ),
+      );
+      expect(_generate(model), contains('Future<DeviceLink> '));
+    });
+
+    test('an opt-out with no catalog at all is still reported', () {
+      final model = buildOptingOut(const {
+        'example-iot-native',
+      }, _specJson(resultSchema: const {'type': 'string'}));
+
+      expect(model.warnings.single, contains('AWSBLOCKS-NATIVE-006'));
+    });
+
+    test('a package offered on no Dart platform is not flagged', () {
+      final model = buildOptingOut(
+        const {'example-iot-native'},
+        _specJson(
+          extras: _catalogs(
+            platforms: const {
+              'swift': {
+                'package': {
+                  'identity': 'example-iot-native',
+                  'product': 'ExampleIotNative',
+                  'module': 'ExampleIotNative',
+                },
+              },
+            },
+          ),
+        ),
+      );
+
+      expect(model.warnings.where((w) => w.contains('NATIVE-006')), isEmpty);
+    });
+
+    test('AWSBLOCKS-NATIVE-006 names every undeclared identity in sorted '
+        'order', () {
+      final model = buildOptingOut(
+        const {'zz-native', 'aa-native'},
+        _specJson(
+          extras: _catalogs(
+            packages: {
+              'example-iot-native': {
+                'platforms': {'dart': _dartPackage()},
+              },
+              'unused-native': {
+                'platforms': {'dart': _dartPackage(name: 'unused_native')},
+              },
+            },
+          ),
+        ),
+      );
+
+      expect(model.warnings.map((w) => w.split("'")[1]), [
+        'aa-native',
+        'zz-native',
+        'unused-native',
+      ]);
+    });
+
+    test('an opted-out identity containing a newline cannot forge a second '
+        'line', () {
+      final model = buildOptingOut({
+        "benign' is not declared by x-blocks-native-packages; nothing was "
+            'opted out for it on dart.\nAWSBLOCKS-NATIVE-001: forged',
+      }, _specJson(extras: _catalogs()));
+      final forged = model.warnings.singleWhere((w) => w.contains('benign'));
+
+      expect(forged, isNot(contains('\n')));
+      expect(forged, contains(r'\nAWSBLOCKS-NATIVE-001: forged'));
+    });
+  });
+
   group('the generated header cannot carry a declaration', () {
     test('info.title and info.version are escaped to one comment line', () {
       final output = _generate(

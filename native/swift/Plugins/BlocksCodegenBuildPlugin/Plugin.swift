@@ -8,6 +8,8 @@
 import PackagePlugin
 import Foundation
 
+let blocksCodegenConfigName = "blocks.codegen.json"
+
 /// A build plugin that automatically generates typed Swift models and API methods
 /// from a Blocks spec file (`blocks.spec.json`) at build time.
 ///
@@ -27,6 +29,12 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
             return []
         }
 
+        let configDir = specFile.url.deletingLastPathComponent()
+        let configFile = sourceTarget.sourceFiles.first { file in
+            file.url.lastPathComponent == blocksCodegenConfigName
+                && file.url.deletingLastPathComponent() == configDir
+        }
+
         let generatorTool = try context.tool(named: "swift-code-generator")
         let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
 
@@ -37,8 +45,9 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
             .buildCommand(
                 displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
                 executable: generatorTool.url,
-                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)],
-                inputFiles: [specFile.url],
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+                    + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },
+                inputFiles: [specFile.url] + [configFile?.url].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]
@@ -58,6 +67,12 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
             return []
         }
 
+        let configDir = specFile.url.deletingLastPathComponent()
+        let configFile = target.inputFiles.first { file in
+            file.url.lastPathComponent == blocksCodegenConfigName
+                && file.url.deletingLastPathComponent() == configDir
+        }
+
         let generatorTool = try context.tool(named: "swift-code-generator")
         let outputDir = context.pluginWorkDirectoryURL.appendingPathComponent("Generated")
 
@@ -68,8 +83,9 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
             .buildCommand(
                 displayName: "Generate Blocks API from \(specFile.url.lastPathComponent)",
                 executable: generatorTool.url,
-                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)],
-                inputFiles: [specFile.url],
+                arguments: [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+                    + [configFile?.url.path(percentEncoded: false)].compactMap { $0 },
+                inputFiles: [specFile.url] + [configFile?.url].compactMap { $0 },
                 outputFiles: [modelsOutput, apiOutput]
             )
         ]

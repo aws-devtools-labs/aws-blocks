@@ -13,6 +13,14 @@ struct OpenRPCSpec: Decodable {
     let methods: [Method]
     let components: Components?
     let servers: [Server]?
+    let nativePackages: NativePackagesCatalog?
+    let nativeBindings: NativeBindingsCatalog?
+
+    enum CodingKeys: String, CodingKey {
+        case methods, components, servers
+        case nativePackages = "x-blocks-native-packages"
+        case nativeBindings = "x-blocks-native-bindings"
+    }
 
     struct Server: Decodable {
         let name: String
@@ -41,15 +49,61 @@ struct OpenRPCSpec: Decodable {
     }
 }
 
+// MARK: - Native Catalogs
+
+/// Only `module` is emitted; `identity` and `product` are required so an incomplete
+/// `swift` entry is rejected rather than resolving on `module` alone.
+struct SwiftNativePackage: Decodable {
+    let identity: String
+    let product: String
+    let module: String
+}
+
+struct SwiftPlatformEntry: Decodable {
+    let package: SwiftNativePackage
+}
+
+struct NativePackagePlatforms: Decodable {
+    let swift: SwiftPlatformEntry?
+}
+
+struct NativePackageEntry: Decodable {
+    let platforms: NativePackagePlatforms?
+}
+
+struct NativePackagesCatalog: Decodable {
+    let schemaVersion: Int
+    let packages: [String: NativePackageEntry]?
+}
+
+struct NativeBinding: Decodable {
+    let id: String
+    let kind: String
+    let tag: String
+    let package: String
+    let export: String
+    let abi: String
+    /// An absent arity resolves to 0.
+    let genericArity: Int?
+}
+
+struct NativeBindingsCatalog: Decodable {
+    let schemaVersion: Int
+    let bindings: [NativeBinding]?
+}
+
 // MARK: - Codegen Errors
 
 enum CodegenError: Error, CustomStringConvertible {
     case unsupportedSchema(String)
+    case invalidNativeCatalog(String)
 
     var description: String {
         switch self {
         case .unsupportedSchema(let detail):
             return "Unsupported schema: \(detail)"
+        case .invalidNativeCatalog(let detail):
+            return "Invalid native binding metadata: \(detail)"
         }
     }
 }
