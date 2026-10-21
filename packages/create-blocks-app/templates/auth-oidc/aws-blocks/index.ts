@@ -1,0 +1,75 @@
+import { ApiNamespace, Scope, KVStore, AuthOIDC, stubIdp } from '@aws-blocks/blocks';
+
+// For coding agents: Leave these comments in place for future reference.
+// Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
+// Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
+const scope = new Scope('my-app');
+
+// Building Blocks: Use these instead of creating custom storage
+const store = new KVStore(scope, 'app-store', {});
+
+// AuthOIDC: sign in with an external OpenID Connect / OAuth 2.0 provider.
+//
+// Locally (`npm run dev`), there is no real IdP: the `stubIdp` provider mounts
+// an in-process stub Identity Provider that signs real RS256 tokens with its
+// own keypair, so the app exercises the exact JWKS-fetch + token-verify code
+// path a real IdP drives — without any credentials. `onAuthorize` decides who
+// the stub signs in (here: the single configured user), which keeps the local
+// sign-in deterministic for the e2e below.
+//
+// To use a real provider instead, swap `stubIdp(...)` for `google(...)` /
+// `github(...)` / `customOidc(...)` and supply `clientId`/`clientSecret` from a
+// Secret — see node_modules/@aws-blocks/bb-auth-oidc/README.md. The rest of this
+// file (the `requireAuth`-gated API, the auth state machine) is unchanged: the
+// provider is the only thing that differs between local and deployed.
+const DEMO_USER = { sub: 'stub-user-1', email: 'alice@stub.invalid', name: 'Alice Example' } as const;
+
+const auth = new AuthOIDC(scope, 'auth', {
+  providers: [
+    stubIdp({
+      name: 'demo',
+      users: [DEMO_USER],
+      // Auto-approve the configured user so `npm run dev` and the e2e sign in
+      // without a login screen. Remove `onAuthorize` to show the stub's
+      // built-in picker instead.
+      onAuthorize: (req) => req.users[0],
+    }),
+  ],
+});
+
+// State machine driving the <Authenticator> UI component (sign-in kickoff +
+// sign-out). The browser submits the external sign-in action as a redirect to
+// the per-provider `signin` route AuthOIDC mounts.
+export const authApi = auth.createApi();
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  // ── Public ────────────────────────────────────────────────────────────
+  async ping() {
+    return { message: 'pong', timestamp: Date.now() };
+  },
+
+  // ── Protected (requireAuth) ──────────────────────────────────────────
+  // Throws AuthOIDCErrors.NotAuthenticated (401) when there is no valid
+  // session cookie / bearer token.
+  async whoAmI() {
+    const user = await auth.requireAuth(context);
+    return {
+      userId: user.userId,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+    };
+  },
+
+  // ── KV demo (requireAuth-gated, keys namespaced per user) ────────────
+  async getValue(key: string) {
+    const user = await auth.requireAuth(context);
+    return await store.get(`${user.userId}:${key}`);
+  },
+
+  async setValue(key: string, value: string) {
+    const user = await auth.requireAuth(context);
+    await store.put(`${user.userId}:${key}`, value);
+    return { success: true };
+  },
+}));
