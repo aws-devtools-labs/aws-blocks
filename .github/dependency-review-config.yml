@@ -43,6 +43,28 @@ allow_licenses:
 allow_dependencies_licenses:
   - "pkg:pub/flutter_secure_storage"
 
+  # sharp's prebuilt libvips binaries (LGPL-3.0-or-later). They reach the
+  # lockfile only through the hosting test apps (next in test-apps/hosting-ssr,
+  # astro in test-apps/hosting-ssr-astro*); no published package depends on
+  # them, and libvips is dynamically linked, not copied into our code.
+  # Without these entries, every sharp version bump fails the check.
+  # Same exception as aws-amplify/amplify-js:
+  # https://github.com/aws-amplify/amplify-js/blob/main/.github/dependency-review/dependency-review-config.yml
+  - "pkg:npm/%40img/sharp-libvips-darwin-arm64"
+  - "pkg:npm/%40img/sharp-libvips-darwin-x64"
+  - "pkg:npm/%40img/sharp-libvips-linux-arm"
+  - "pkg:npm/%40img/sharp-libvips-linux-arm64"
+  - "pkg:npm/%40img/sharp-libvips-linux-ppc64"
+  - "pkg:npm/%40img/sharp-libvips-linux-riscv64"
+  - "pkg:npm/%40img/sharp-libvips-linux-s390x"
+  - "pkg:npm/%40img/sharp-libvips-linux-x64"
+  - "pkg:npm/%40img/sharp-libvips-linuxmusl-arm64"
+  - "pkg:npm/%40img/sharp-libvips-linuxmusl-x64"
+  - "pkg:npm/%40img/sharp-wasm32"
+  - "pkg:npm/%40img/sharp-win32-arm64"
+  - "pkg:npm/%40img/sharp-win32-ia32"
+  - "pkg:npm/%40img/sharp-win32-x64"
+
 # Advisory IDs skipped during the vulnerability check. Add a one-line reason
 # per entry (or per contiguous group) explaining why it's exempt and when to
 # drop it — keep it short.

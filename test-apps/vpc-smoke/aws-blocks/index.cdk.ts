@@ -36,7 +36,7 @@ const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 if (!vpcId) {
   throw new Error(
     'Missing VPC ID. Set the VPC_TEST_VPC_ID env var or pass -c vpcId=vpc-xxx.\n' +
-    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy',
+    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy BlocksTestVpc',
   );
 }
 

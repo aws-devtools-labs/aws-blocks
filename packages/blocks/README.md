@@ -161,10 +161,11 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
-| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
+| bb-async-job | Background job processing backed by SQS, run on Lambda or a container. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
 | bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
 | bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
 | bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
