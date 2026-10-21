@@ -8,7 +8,7 @@
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
 # Dependabot opens:
-#   - Version-update PRs run monthly.
+#   - Version-update PRs run weekly.
 #   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
@@ -23,7 +23,7 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
     open-pull-requests-limit: 10
     ignore:
       - dependency-name: "typescript"
