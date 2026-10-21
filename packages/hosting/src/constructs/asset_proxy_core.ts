@@ -28,7 +28,13 @@
  *      any other S3 failure → 500, with the app's server-error page (each page
  *      is read once per Lambda instance — the prefix is fixed per build);
  *   6. every matching header rule is applied to a successful (non-error,
- *      non-redirect) response, as a CloudFront viewer-response function is.
+ *      non-redirect) response, as a CloudFront viewer-response function is;
+ *   7. every response carries the baseline security headers the CloudFront
+ *      door's policy adds (`Strict-Transport-Security: max-age=31536000`,
+ *      `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
+ *      `Referrer-Policy: strict-origin-when-cross-origin`); an app header rule
+ *      of the same name wins. (Responses a door routes straight to the server
+ *      or the backend don't pass the proxy.)
  *
  * It reads only the current build's prefix: a tab opened before a deploy that
  * lazily loads a chunk of the previous build gets a 404 (the CloudFront door's
@@ -198,6 +204,21 @@ function plainResponse(statusCode, text) {
   return { statusCode, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text, isBase64Encoded: false };
 }
 
+// Baseline security headers on every response (an app header rule wins).
+const SECURITY_HEADERS = {
+  'strict-transport-security': 'max-age=31536000',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'SAMEORIGIN',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+};
+function secure(res) {
+  const headers = {};
+  for (const name in SECURITY_HEADERS) headers[name] = SECURITY_HEADERS[name];
+  for (const name in res.headers) headers[name] = res.headers[name];
+  res.headers = headers;
+  return res;
+}
+
 // The error pages, read once per Lambda instance (the prefix is fixed per build).
 const ERROR_PAGES = {};
 async function errorResponse(statusCode) {
@@ -219,6 +240,10 @@ async function errorResponse(statusCode) {
 }
 
 async function blocksServe(requestUri, requestHeaders) {
+  return secure(await serveUri(requestUri, requestHeaders));
+}
+
+async function serveUri(requestUri, requestHeaders) {
   const redirect = blocksRedirect(requestUri);
   if (redirect) {
     return { statusCode: redirect.statusCode, headers: { location: redirect.location }, body: '', isBase64Encoded: false };

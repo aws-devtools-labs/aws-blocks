@@ -349,3 +349,26 @@ for (const [label, generate, event] of variants) {
     });
   });
 }
+
+for (const [label, generate, event] of variants) {
+  describe(`${label} asset proxy — baseline security headers`, () => {
+    it('every response carries them (a file, a redirect, a 404); an app header rule of the same name wins', async () => {
+      const proxy = loadHandler(
+        generate({
+          spaFallback: false,
+          redirects: [{ source: '/old', destination: '/new', statusCode: 301 }],
+          headers: [{ pattern: '/assets/*', headers: { 'X-Frame-Options': 'DENY' } }],
+        }),
+        PATH_OBJECTS,
+      );
+      for (const uri of ['/robots.txt', '/old', '/missing.css']) {
+        const res = await proxy(event(uri));
+        assert.equal(res.headers['strict-transport-security'], 'max-age=31536000', uri);
+        assert.equal(res.headers['x-content-type-options'], 'nosniff', uri);
+        assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN', uri);
+        assert.equal(res.headers['referrer-policy'], 'strict-origin-when-cross-origin', uri);
+      }
+      assert.equal((await proxy(event('/assets/big-abc.js'))).headers['x-frame-options'], 'DENY');
+    });
+  });
+}
