@@ -150,12 +150,11 @@ function isManagedRole(response: unknown): boolean {
 	}
 	const statements = field(policy, 'Statement');
 	return (Array.isArray(statements) ? statements : [statements]).some((statement) => {
-		// The service principal may be a string or a list.
+		// The service principal may be a string or a list; each entry must equal the service exactly.
 		const service = field(field(statement, 'Principal'), 'Service');
 		return (
 			field(statement, 'Effect') === 'Allow' &&
-			(service === MANAGED_ROLE_TRUSTED_SERVICE ||
-				(Array.isArray(service) && service.includes(MANAGED_ROLE_TRUSTED_SERVICE)))
+			(Array.isArray(service) ? service : [service]).some((value) => value === MANAGED_ROLE_TRUSTED_SERVICE)
 		);
 	});
 }
