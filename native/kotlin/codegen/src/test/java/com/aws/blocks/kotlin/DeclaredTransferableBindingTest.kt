@@ -164,7 +164,7 @@ class DeclaredTransferableBindingTest : FunSpec({
                 "${packagesCatalog()},${bindingsCatalog(binding(tag = tag, arity = "0"))}",
             ),
         ).source()
-        src shouldContain """expectedTag = "a\"b\\c\${'$'}d""""
+        src shouldContain "expectedTag = \"a\\\"b\\\\c\${'\$'}d\""
         src shouldNotContain "trimMargin"
     }
 
