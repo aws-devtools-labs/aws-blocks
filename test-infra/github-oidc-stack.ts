@@ -9,24 +9,23 @@
  * test stacks.
  *
  * Only jobs in this repo's `e2e` GitHub environment can assume the role.
- * Deployed by hand, once per account (not by CI), with credentials for that
- * account:
- *
- *   E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
- *
- * Then set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e`
- * environment (and as a Dependabot secret).
+ * Deployed by hand from `github-oidc-app.ts` (see README), not by CI. This file
+ * only builds the stack, so the trust policy can be unit tested.
  *
  * Resources:
- * - GitHub OIDC identity provider
- * - `blocks-github-e2e` role with the permissions the E2E suites use
+ * - GitHub OIDC identity provider (or an existing one, by ARN)
+ * - `blocks-github-e2e` role with the permissions the E2E suites and
+ *   cleanup-stacks.yml use
  */
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
-const GITHUB_REPO = 'aws-devtools-labs/aws-blocks';
-const GITHUB_ENVIRONMENT = 'e2e';
+export const GITHUB_REPO = 'aws-devtools-labs/aws-blocks';
+export const GITHUB_ENVIRONMENT = 'e2e';
+// Every E2E workflow and cleanup-stacks.yml run in us-east-1. Pinned so the
+// region-scoped ARNs below can't follow the operator's profile elsewhere.
+export const E2E_REGION = 'us-east-1';
 // Default `cdk bootstrap` qualifier.
 const CDK_QUALIFIER = 'hnb659fds';
 // Stack/bucket name prefixes the E2E suites deploy and cleanup-stacks.yml
@@ -39,156 +38,207 @@ const E2E_PREFIXES = [
   'blocks-test-',
   'my-app-',
 ];
+// Amplify Gen 2 sandbox stacks (amplify-interop suite). cleanup-stacks.yml
+// empties their buckets before deleting them.
+const AMPLIFY_SANDBOX_PREFIXES = ['amplify-amplifygen2-', 'amplify-amplifyinteroptest-'];
 
-// Refuse to synthesize unless the caller names the E2E account and the active
-// credentials match it, so the role can't land in another account by mistake.
-const expectedAccount = process.env.E2E_ACCOUNT_ID;
-if (!expectedAccount) {
-  throw new Error('Set E2E_ACCOUNT_ID to the dedicated E2E account ID.');
-}
-if (process.env.CDK_DEFAULT_ACCOUNT !== expectedAccount) {
-  throw new Error(
-    `Credentials are for account ${process.env.CDK_DEFAULT_ACCOUNT}, expected E2E account ${expectedAccount}. Refusing to deploy.`,
-  );
+export interface GithubE2eOidcStackProps {
+  account: string;
+  // Reuse the account's existing GitHub OIDC provider instead of creating one
+  // (it is a per-account singleton).
+  oidcProviderArn?: string;
 }
 
-const app = new cdk.App();
-
-const stack = new cdk.Stack(app, 'BlocksGithubE2eOidc', {
-  description: 'GitHub Actions OIDC role for AWS Blocks E2E tests. Deploy only into the dedicated E2E account.',
-  env: {
-    account: expectedAccount,
-    region: process.env.CDK_DEFAULT_REGION,
-  },
-});
-
-const { account, region } = stack;
-
-// ── OIDC provider ───────────────────────────────────────────────────────────
-
-// Native AWS::IAM::OIDCProvider (no custom-resource Lambda). No thumbprints:
-// IAM validates GitHub's endpoint against its trusted CA library.
-const provider = new iam.OidcProviderNative(stack, 'GithubOidcProvider', {
-  url: 'https://token.actions.githubusercontent.com',
-  clientIds: ['sts.amazonaws.com'],
-});
-
-// ── Role ────────────────────────────────────────────────────────────────────
-
-const role = new iam.Role(stack, 'GithubE2eRole', {
-  roleName: 'blocks-github-e2e',
-  description: `Assumed by ${GITHUB_REPO} jobs in the "${GITHUB_ENVIRONMENT}" GitHub environment`,
-  maxSessionDuration: cdk.Duration.hours(2),
-  assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
-    StringEquals: {
-      'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-      'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${GITHUB_ENVIRONMENT}`,
+export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStackProps): cdk.Stack {
+  const stack = new cdk.Stack(scope, 'BlocksGithubE2eOidc', {
+    description: 'GitHub Actions OIDC role for AWS Blocks E2E tests. Deploy only into the dedicated E2E account.',
+    env: {
+      account: props.account,
+      region: E2E_REGION,
     },
-  }),
-  managedPolicies: [
-    iam.ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationReadOnlyAccess'),
-    // Amplify Gen 2 sandboxes in the amplify-interop suite.
-    iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmplifyBackendDeployFullAccess'),
-  ],
-});
+  });
 
-// CDK deploys go through the bootstrap roles.
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'CdkBootstrapRoles',
-    actions: ['sts:AssumeRole'],
-    resources: ['cfn-exec', 'deploy', 'file-publishing', 'image-publishing', 'lookup'].map(
-      (r) => `arn:aws:iam::${account}:role/cdk-${CDK_QUALIFIER}-${r}-role-${account}-${region}`,
-    ),
-  }),
-);
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'CdkAssetsBucket',
-    actions: ['s3:GetBucketLocation', 's3:GetObject', 's3:ListBucket', 's3:PutObject'],
-    resources: [
-      `arn:aws:s3:::cdk-${CDK_QUALIFIER}-assets-${account}-${region}`,
-      `arn:aws:s3:::cdk-${CDK_QUALIFIER}-assets-${account}-${region}/*`,
+  const { account, region } = stack;
+
+  // ── OIDC provider ───────────────────────────────────────────────────────────
+
+  // Native AWS::IAM::OIDCProvider (no custom-resource Lambda). No thumbprints:
+  // IAM validates GitHub's endpoint against its trusted CA library.
+  const provider = props.oidcProviderArn
+    ? iam.OidcProviderNative.fromOidcProviderArn(stack, 'GithubOidcProvider', props.oidcProviderArn)
+    : new iam.OidcProviderNative(stack, 'GithubOidcProvider', {
+        url: 'https://token.actions.githubusercontent.com',
+        clientIds: ['sts.amazonaws.com'],
+      });
+
+  // ── Role ────────────────────────────────────────────────────────────────────
+
+  const role = new iam.Role(stack, 'GithubE2eRole', {
+    roleName: 'blocks-github-e2e',
+    description: `Assumed by ${GITHUB_REPO} jobs in the "${GITHUB_ENVIRONMENT}" GitHub environment`,
+    maxSessionDuration: cdk.Duration.hours(2),
+    assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
+      StringEquals: {
+        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+        'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${GITHUB_ENVIRONMENT}`,
+      },
+    }),
+    managedPolicies: [
+      iam.ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationReadOnlyAccess'),
+      // Amplify Gen 2 sandboxes in the amplify-interop suite.
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmplifyBackendDeployFullAccess'),
     ],
-  }),
-);
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'CdkBootstrapSsm',
-    actions: ['ssm:GetParameter'],
-    resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/*`],
-  }),
-);
+  });
 
-// Direct stack management and cleanup of E2E stacks and their buckets.
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'E2eCloudFormation',
-    actions: [
-      'cloudformation:CreateChangeSet',
-      'cloudformation:CreateStack',
-      'cloudformation:DeleteChangeSet',
-      'cloudformation:DeleteStack',
-      'cloudformation:DescribeChangeSet',
-      'cloudformation:DescribeStackEvents',
-      'cloudformation:DescribeStackResources',
-      'cloudformation:DescribeStacks',
-      'cloudformation:ExecuteChangeSet',
-      'cloudformation:GetTemplate',
-      'cloudformation:GetTemplateSummary',
-      'cloudformation:ListStackResources',
-      'cloudformation:UpdateStack',
-    ],
-    resources: E2E_PREFIXES.map((p) => `arn:aws:cloudformation:${region}:${account}:stack/${p}*/*`),
-  }),
-);
-// ListStacks has no resource-level scoping; '*' is the only valid resource.
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'E2eListStacks',
-    actions: ['cloudformation:ListStacks'],
-    resources: ['*'],
-  }),
-);
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'E2eBucketCleanup',
-    actions: [
-      's3:DeleteObject',
-      's3:DeleteObjectVersion',
-      's3:GetObject',
-      's3:GetObjectVersion',
-      's3:ListBucket',
-      's3:ListBucketVersions',
-    ],
-    resources: E2E_PREFIXES.flatMap((p) => [`arn:aws:s3:::${p}*`, `arn:aws:s3:::${p}*/*`]),
-  }),
-);
+  // CDK deploys go through the bootstrap roles. Not cfn-exec: only
+  // CloudFormation assumes it (deploy-role passes it).
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CdkBootstrapRoles',
+      actions: ['sts:AssumeRole'],
+      resources: ['deploy', 'file-publishing', 'image-publishing', 'lookup'].map(
+        (r) => `arn:aws:iam::${account}:role/cdk-${CDK_QUALIFIER}-${r}-role-${account}-${region}`,
+      ),
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CdkAssetsBucket',
+      actions: ['s3:GetBucketLocation', 's3:GetObject', 's3:ListBucket', 's3:PutObject'],
+      resources: [
+        `arn:aws:s3:::cdk-${CDK_QUALIFIER}-assets-${account}-${region}`,
+        `arn:aws:s3:::cdk-${CDK_QUALIFIER}-assets-${account}-${region}/*`,
+      ],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CdkBootstrapSsm',
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:${region}:${account}:parameter/cdk-bootstrap/${CDK_QUALIFIER}/*`],
+    }),
+  );
 
-// Test harness calls against the deployed test apps.
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'CognitoE2eAdmin',
-    actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser', 'cognito-idp:AdminSetUserPassword'],
-    resources: [`arn:aws:cognito-idp:${region}:${account}:userpool/*`],
-  }),
-);
-role.addToPolicy(
-  new iam.PolicyStatement({
-    sid: 'ReadSupabaseE2ESecret',
-    actions: ['secretsmanager:GetSecretValue'],
-    resources: [`arn:aws:secretsmanager:${region}:${account}:secret:blocks/supabase-e2e-*`],
-  }),
-);
+  // Direct stack management and cleanup of E2E stacks and their buckets.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'E2eCloudFormation',
+      actions: [
+        'cloudformation:CreateChangeSet',
+        'cloudformation:CreateStack',
+        'cloudformation:DeleteChangeSet',
+        'cloudformation:DeleteStack',
+        'cloudformation:DescribeChangeSet',
+        'cloudformation:DescribeStackEvents',
+        'cloudformation:DescribeStackResources',
+        'cloudformation:DescribeStacks',
+        'cloudformation:ExecuteChangeSet',
+        'cloudformation:GetTemplate',
+        'cloudformation:GetTemplateSummary',
+        'cloudformation:ListStackResources',
+        'cloudformation:UpdateStack',
+      ],
+      resources: E2E_PREFIXES.map((p) => `arn:aws:cloudformation:${region}:${account}:stack/${p}*/*`),
+    }),
+  );
+  // ListStacks has no resource-level scoping; '*' is the only valid resource.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'E2eListStacks',
+      actions: ['cloudformation:ListStacks'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'E2eBucketCleanup',
+      actions: [
+        's3:DeleteObject',
+        's3:DeleteObjectVersion',
+        's3:GetObject',
+        's3:GetObjectVersion',
+        's3:ListBucket',
+        's3:ListBucketVersions',
+      ],
+      resources: [...E2E_PREFIXES, ...AMPLIFY_SANDBOX_PREFIXES].flatMap((p) => [
+        `arn:aws:s3:::${p}*`,
+        `arn:aws:s3:::${p}*/*`,
+      ]),
+    }),
+  );
 
-// ── Outputs ─────────────────────────────────────────────────────────────────
+  // cleanup-stacks.yml sweeps that keep account quotas in check: orphaned REST
+  // APIs (120 EDGE APIs), API Gateway CloudWatch roles (3000 roles) and
+  // CloudFront response headers policies. Its calls swallow errors, so a missing
+  // grant here shows up as an empty sweep, not a failed job.
+  // These list calls have no resource-level scoping; '*' is the only valid resource.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupList',
+      actions: ['cloudfront:ListResponseHeadersPolicies', 'ec2:DescribeRegions', 'iam:ListRoles'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupRestApis',
+      actions: ['apigateway:GET', 'apigateway:DELETE'],
+      resources: [`arn:aws:apigateway:${region}::/restapis`, `arn:aws:apigateway:${region}::/restapis/*`],
+    }),
+  );
+  // The CloudWatch role sweep reads the API Gateway account setting in every region.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupApiGatewayAccount',
+      actions: ['apigateway:GET'],
+      resources: ['arn:aws:apigateway:*::/account'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupApiGatewayCloudWatchRoles',
+      actions: ['iam:DeleteRole', 'iam:DetachRolePolicy', 'iam:ListAttachedRolePolicies', 'iam:ListRolePolicies'],
+      resources: E2E_PREFIXES.map((p) => `arn:aws:iam::${account}:role/${p}*`),
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupResponseHeadersPolicies',
+      actions: ['cloudfront:DeleteResponseHeadersPolicy', 'cloudfront:GetResponseHeadersPolicy'],
+      resources: [`arn:aws:cloudfront::${account}:response-headers-policy/*`],
+    }),
+  );
 
-new cdk.CfnOutput(stack, 'RoleArn', {
-  value: role.roleArn,
-  description: 'Set as the AWS_ROLE_ARN secret of the e2e GitHub environment (and as a Dependabot secret).',
-});
+  // Test harness calls against the deployed test apps.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CognitoE2eAdmin',
+      actions: [
+        'cognito-idp:AdminAddUserToGroup',
+        'cognito-idp:AdminCreateUser',
+        'cognito-idp:AdminDeleteUser',
+        'cognito-idp:AdminSetUserPassword',
+      ],
+      resources: [`arn:aws:cognito-idp:${region}:${account}:userpool/*`],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'ReadSupabaseE2ESecret',
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:${region}:${account}:secret:blocks/supabase-e2e-*`],
+    }),
+  );
 
-cdk.Tags.of(stack).add('blocks:purpose', 'github-e2e-oidc');
-cdk.Tags.of(stack).add('blocks:do-not-delete', 'true');
+  // ── Outputs ─────────────────────────────────────────────────────────────────
 
-app.synth();
+  new cdk.CfnOutput(stack, 'RoleArn', {
+    value: role.roleArn,
+    description: 'Set as the AWS_ROLE_ARN secret of the e2e GitHub environment (and as a Dependabot secret).',
+  });
+
+  cdk.Tags.of(stack).add('blocks:purpose', 'github-e2e-oidc');
+  cdk.Tags.of(stack).add('blocks:do-not-delete', 'true');
+
+  return stack;
+}

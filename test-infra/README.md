@@ -69,20 +69,49 @@ This stack creates, in that account:
 
 | Resource | Purpose |
 |----------|---------|
-| GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials |
-| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, Cognito admin calls, Supabase test secret |
+| GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials (skipped if `GITHUB_OIDC_PROVIDER_ARN` is set) |
+| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies), Cognito admin calls, Supabase test secret |
 
-It is deployed **by hand, once per account**, not by CI:
+The stack is pinned to `us-east-1`, the region every E2E workflow and
+`cleanup-stacks.yml` use. It is deployed **by hand, once per account**, not by
+CI:
 
 ```bash
 cd test-infra
-npx cdk bootstrap        # once per account/region
+npx cdk bootstrap aws://<e2e-account-id>/us-east-1   # once per account
 E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
 ```
 
-The stack refuses to synthesize unless `E2E_ACCOUNT_ID` is set and matches the
-account of the active credentials.
+The app (`github-oidc-app.ts`) refuses to synthesize unless `E2E_ACCOUNT_ID` is
+set and matches the account of the active credentials.
+
+An IAM OIDC provider is a per-account singleton for its URL. If the account
+already has one for `token.actions.githubusercontent.com`, pass its ARN so the
+stack reuses it instead of failing with `EntityAlreadyExists`:
+
+```bash
+E2E_ACCOUNT_ID=<e2e-account-id> \
+GITHUB_OIDC_PROVIDER_ARN=arn:aws:iam::<e2e-account-id>:oidc-provider/token.actions.githubusercontent.com \
+  npm run deploy:oidc
+```
 
 Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
 environment and as a Dependabot secret. Deploy this stack only into the
 dedicated E2E account.
+
+## Security: the role is admin-equivalent in the E2E account
+
+The role deploys through the CDK bootstrap `deploy-role`, which hands
+CloudFormation the `cfn-exec` role. A default `cdk bootstrap` gives `cfn-exec`
+`AdministratorAccess`, so any job that can assume `blocks-github-e2e` can deploy
+a stack that does anything in the account, including changing this role's
+trust policy or creating IAM users with access keys. Such changes outlive the
+PR that made them, and redeploying this stack only restores the trust policy.
+
+The scoped statements in `github-oidc-stack.ts` limit what the role does
+directly. They are not a security boundary. The containment is the account
+itself: keep it free of anything except E2E test stacks, and don't trust it
+with credentials or data from other accounts.
+
+`npm test` checks that the trust policy stays pinned to this repo's `e2e`
+environment with `StringEquals` and no wildcards.
