@@ -44,11 +44,42 @@ describe('S3WebsiteConstruct — static/SPA', () => {
     });
   });
 
-  it('publishes the static dir without pruning and EXCLUDES the .blocks-sandbox placeholder (real config wins)', () => {
+  it('publishes the static dir, pruning what the build no longer ships, and EXCLUDES the .blocks-sandbox placeholder', () => {
     // The build ships a placeholder .blocks-sandbox/config.json; the real config
-    // is written by the separate BlocksConfigDeployment. The website deploy must
-    // not upload the placeholder or prune the real config.
-    t.hasResourceProperties('Custom::CDKBucketDeployment', { Prune: false, Exclude: ['.blocks-sandbox/*'] });
+    // is written by the separate BlocksConfigDeployment. An excluded key is
+    // outside the deployment's filter, so prune never deletes the real config.
+    t.hasResourceProperties('Custom::CDKBucketDeployment', {
+      Prune: true,
+      Exclude: Match.arrayWith(['.blocks-sandbox/*', '*.html', '**/*.html']),
+    });
+    for (const d of Object.values(t.findResources('Custom::CDKBucketDeployment'))) {
+      assert.equal(d.Properties.Prune, true);
+    }
+  });
+
+  it('serves HTML always revalidated, hashed assets immutable, the rest revalidated', () => {
+    const s = new Stack(new App(), 'Tiers', { env: { account: '111111111111', region: 'us-west-2' } });
+    new S3WebsiteConstruct(s, 'Site', { plan: spaPlan, staticDir, immutablePaths: ['assets/*'] });
+    const deployments = Object.values(Template.fromStack(s).findResources('Custom::CDKBucketDeployment'));
+    const byInclude = (glob: string) => deployments.find((d) => (d.Properties.Include ?? []).includes(glob));
+    assert.deepEqual(byInclude('*.html')?.Properties.SystemMetadata, { 'cache-control': 'no-cache, no-store, must-revalidate' });
+    assert.deepEqual(byInclude('assets/*')?.Properties.SystemMetadata, { 'cache-control': 'public, max-age=31536000, immutable' });
+    const rest = deployments.find((d) => !d.Properties.Include);
+    assert.deepEqual(rest?.Properties.SystemMetadata, { 'cache-control': 'public, max-age=0, must-revalidate' });
+  });
+
+  it("a multi-page site's error document is its 404.html when it ships one, else index.html", () => {
+    const mpa: HostingPlan = { ...spaPlan, policies: { ...spaPlan.policies, spaFallback: false } };
+    const errorDocOf = (dir: string) => {
+      const s = new Stack(new App(), 'Err', { env: { account: '111111111111', region: 'us-west-2' } });
+      new S3WebsiteConstruct(s, 'Site', { plan: mpa, staticDir: dir });
+      return Object.values(Template.fromStack(s).findResources('AWS::S3::Bucket'))[0]?.Properties.WebsiteConfiguration.ErrorDocument;
+    };
+    assert.equal(errorDocOf(staticDir), 'index.html');
+    const with404 = mkdtempSync(join(tmpdir(), 's3site404-'));
+    writeFileSync(join(with404, 'index.html'), '<!doctype html>');
+    writeFileSync(join(with404, '404.html'), '<!doctype html>');
+    assert.equal(errorDocOf(with404), '404.html');
   });
 });
 

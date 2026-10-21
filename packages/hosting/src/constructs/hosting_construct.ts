@@ -1830,7 +1830,26 @@ export class HostingConstruct extends Construct {
         // door refuses an app with a server (a website bucket can't run one).
         // ('none' maps to the internal `s3-website` door.)
         this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName);
-        built = buildFrontDoor(this, s3WebsiteDoor, { ...this.doorInput, plan }, { wiringCheck: false }).result;
+        built = buildFrontDoor(
+          this,
+          s3WebsiteDoor,
+          {
+            ...this.doorInput,
+            plan,
+            // The website bucket gets the same cache tiers and upload sizing as
+            // the private uploads below (which `'none'` doesn't need: section 12
+            // is skipped for a door that serves its own public bucket).
+            upload: {
+              immutablePaths: manifest.staticAssets.immutablePaths,
+              cacheControl: manifest.staticAssets.cacheControl,
+              deploymentSizing: {
+                memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
+                ephemeralStorageSize: Size.mebibytes(props.storage?.deployment?.ephemeralStorageMiB ?? 1024),
+              },
+            },
+          },
+          { wiringCheck: false },
+        ).result;
         service = s3WebsiteDoor.service;
       } else if (fd?.kind === 'alb' || fd?.kind === 'stackedRouter') {
         this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, backendApiPaths);
@@ -2117,177 +2136,181 @@ export class HostingConstruct extends Construct {
     // across every deployment. Without reuse, each deployment re-stages
     // the directory — a 100 MB `dist/` × 7 deployments = 700 MB of
     // transient asset uploads + Lambda asset hashes on every cdk synth.
-    const immutablePaths = manifest.staticAssets.immutablePaths;
-    const noCachePaths = manifest.staticAssets.noCachePaths;
-    const mutableCacheControl =
-      manifest.staticAssets.cacheControl ?? 'public, s-maxage=31536000, max-age=0, must-revalidate';
-    const htmlCacheControl = 'no-cache, no-store, must-revalidate';
-    const htmlGlobs = ['*.html', '**/*.html'];
-    const staticSource = Source.asset(manifest.staticAssets.directory);
-    // Track the asset deployments so the per-extension font Content-
-    // Type deployments can declare an explicit `addDependency` —
-    // without this, CDK is free to reorder them and a font deployment
-    // that runs BEFORE the matching asset deployment is silently
-    // overwritten with `binary/octet-stream` from the next pass. We
-    // observed this on a live deploy where the font deployment ran 1
-    // minute before the asset deployment that overwrote it.
-    const assetDeployments: BucketDeployment[] = [];
+    // A door that serves its own public bucket (`'none'`: the S3 website) has
+    // published the build there; nothing reads the private copy.
+    if (!this.websiteBucket) {
+      const immutablePaths = manifest.staticAssets.immutablePaths;
+      const noCachePaths = manifest.staticAssets.noCachePaths;
+      const mutableCacheControl =
+        manifest.staticAssets.cacheControl ?? 'public, s-maxage=31536000, max-age=0, must-revalidate';
+      const htmlCacheControl = 'no-cache, no-store, must-revalidate';
+      const htmlGlobs = ['*.html', '**/*.html'];
+      const staticSource = Source.asset(manifest.staticAssets.directory);
+      // Track the asset deployments so the per-extension font Content-
+      // Type deployments can declare an explicit `addDependency` —
+      // without this, CDK is free to reorder them and a font deployment
+      // that runs BEFORE the matching asset deployment is silently
+      // overwritten with `binary/octet-stream` from the next pass. We
+      // observed this on a live deploy where the font deployment ran 1
+      // minute before the asset deployment that overwrote it.
+      const assetDeployments: BucketDeployment[] = [];
 
-    // Sizing for the asset-upload Lambda (CDK's BucketDeployment custom
-    // resource). CDK defaults to 128 MB memory + 512 MiB /tmp, which a large
-    // static site overruns — the deploy then fails opaquely in CloudFormation
-    // (OOM / "no space left on device") with no hint it was a sizing issue.
-    // Raise the defaults to 1024/1024; allow an override for extreme builds.
-    const deploymentSizing = {
-      memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
-      ephemeralStorageSize: Size.mebibytes(props.storage?.deployment?.ephemeralStorageMiB ?? 1024),
-    };
+      // Sizing for the asset-upload Lambda (CDK's BucketDeployment custom
+      // resource). CDK defaults to 128 MB memory + 512 MiB /tmp, which a large
+      // static site overruns — the deploy then fails opaquely in CloudFormation
+      // (OOM / "no space left on device") with no hint it was a sizing issue.
+      // Raise the defaults to 1024/1024; allow an override for extreme builds.
+      const deploymentSizing = {
+        memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
+        ephemeralStorageSize: Size.mebibytes(props.storage?.deployment?.ephemeralStorageMiB ?? 1024),
+      };
 
-    // Deploy no-cache paths (e.g. config.json) — always revalidate.
-    if (noCachePaths && noCachePaths.length > 0) {
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentNoCache', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: ['*'],
-          include: noCachePaths,
-          cacheControl: [CacheControl.fromString(htmlCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-    }
-
-    if (immutablePaths && immutablePaths.length > 0) {
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentImmutable', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: ['*'],
-          include: immutablePaths,
-          cacheControl: [CacheControl.fromString('public, max-age=31536000, immutable')],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentHtml', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: ['*'],
-          include: htmlGlobs,
-          cacheControl: [CacheControl.fromString(htmlCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentMutable', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: [...immutablePaths, ...htmlGlobs, ...(noCachePaths ?? [])],
-          cacheControl: [CacheControl.fromString(mutableCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-    } else {
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentHtml', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: ['*'],
-          include: htmlGlobs,
-          cacheControl: [CacheControl.fromString(htmlCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-      assetDeployments.push(
-        new BucketDeployment(this, 'AssetDeploymentOther', {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: [...htmlGlobs, ...(noCachePaths ?? [])],
-          cacheControl: [CacheControl.fromString(mutableCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        }),
-      );
-    }
-    buildAssetDeployments.push(...assetDeployments);
-
-    // ---- 12b. Font Content-Type pass ----
-    // S3's `binary/octet-stream` default for font extensions makes
-    // browsers reject fonts under CORS. We re-deploy *only* font
-    // files with `contentType` set explicitly so the right MIME wires
-    // through to the viewer. One BucketDeployment per extension —
-    // each is a CDK custom resource. Failure here would leave fonts
-    // with the wrong Content-Type, but the default monitoring
-    // construct (P3.1, opt-in) alarms on Lambda errors so silent
-    // failures surface in CloudWatch.
-    //
-    // We reuse the same `staticSource` Source.asset declared above —
-    // CDK dedups the staged asset zip across all BucketDeployments
-    // via content hash, so the directory is staged exactly once even
-    // with N font extensions present.
-    //
-    // Cache-Control: this pass re-uploads the font objects (a
-    // BucketDeployment always rewrites content + metadata), so it would
-    // CLOBBER whatever Cache-Control the earlier asset deployments set —
-    // leaving hashed fonts under `immutablePaths` with NO directive at
-    // all (browser heuristic caching). We can't perfectly re-tier per
-    // file: a single BucketDeployment applies one Cache-Control to every
-    // match, and its include globs are additive (OR), so "woff2 files
-    // that are ALSO under an immutable path" isn't expressible.
-    //
-    // So we set the MUTABLE tier here, which is the safe universal
-    // choice:
-    //   - non-hashed fonts (`public/fonts/…`): mutable is exactly right
-    //     (they must stay bustable across deploys).
-    //   - hashed fonts (`_next/static/media/…`): CloudFront still edge-
-    //     caches for 1y via `s-maxage`; the browser just revalidates
-    //     (cheap 304). Strictly better than the no-header state this
-    //     pass previously left them in.
-    const FONT_TYPES: Array<[string, string]> = [
-      ['.woff2', 'font/woff2'],
-      ['.woff', 'font/woff'],
-      ['.ttf', 'font/ttf'],
-      ['.otf', 'font/otf'],
-      ['.eot', 'application/vnd.ms-fontobject'],
-    ];
-    const fontExtensionsPresent = detectFontExtensions(
-      manifest.staticAssets.directory,
-      FONT_TYPES.map(([ext]) => ext),
-    );
-    for (const [ext, mime] of FONT_TYPES) {
-      if (!fontExtensionsPresent.has(ext)) continue;
-      const fontDeployment = new BucketDeployment(this, `FontTypeDeployment${ext.replace('.', '')}`, {
-        sources: [staticSource],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        exclude: ['*'],
-        include: [`*${ext}`],
-        contentType: mime,
-        cacheControl: [CacheControl.fromString(mutableCacheControl)],
-        prune: false,
-        ...deploymentSizing,
-      });
-      // Force ordering: the font deployment must run AFTER the asset
-      // deployments that ship the same files with the wrong default
-      // Content-Type. Without this dependency, CDK is free to schedule
-      // the font deployment first; the subsequent asset deployment
-      // then re-uploads the font with `binary/octet-stream` and
-      // silently undoes the fix.
-      for (const dep of assetDeployments) {
-        fontDeployment.node.addDependency(dep);
+      // Deploy no-cache paths (e.g. config.json) — always revalidate.
+      if (noCachePaths && noCachePaths.length > 0) {
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentNoCache', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: ['*'],
+            include: noCachePaths,
+            cacheControl: [CacheControl.fromString(htmlCacheControl)],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
       }
-      buildAssetDeployments.push(fontDeployment);
+
+      if (immutablePaths && immutablePaths.length > 0) {
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentImmutable', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: ['*'],
+            include: immutablePaths,
+            cacheControl: [CacheControl.fromString('public, max-age=31536000, immutable')],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentHtml', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: ['*'],
+            include: htmlGlobs,
+            cacheControl: [CacheControl.fromString(htmlCacheControl)],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentMutable', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: [...immutablePaths, ...htmlGlobs, ...(noCachePaths ?? [])],
+            cacheControl: [CacheControl.fromString(mutableCacheControl)],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
+      } else {
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentHtml', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: ['*'],
+            include: htmlGlobs,
+            cacheControl: [CacheControl.fromString(htmlCacheControl)],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
+        assetDeployments.push(
+          new BucketDeployment(this, 'AssetDeploymentOther', {
+            sources: [staticSource],
+            destinationBucket: this.bucket,
+            destinationKeyPrefix: `builds/${buildId}/`,
+            exclude: [...htmlGlobs, ...(noCachePaths ?? [])],
+            cacheControl: [CacheControl.fromString(mutableCacheControl)],
+            prune: false,
+            ...deploymentSizing,
+          }),
+        );
+      }
+      buildAssetDeployments.push(...assetDeployments);
+
+      // ---- 12b. Font Content-Type pass ----
+      // S3's `binary/octet-stream` default for font extensions makes
+      // browsers reject fonts under CORS. We re-deploy *only* font
+      // files with `contentType` set explicitly so the right MIME wires
+      // through to the viewer. One BucketDeployment per extension —
+      // each is a CDK custom resource. Failure here would leave fonts
+      // with the wrong Content-Type, but the default monitoring
+      // construct (P3.1, opt-in) alarms on Lambda errors so silent
+      // failures surface in CloudWatch.
+      //
+      // We reuse the same `staticSource` Source.asset declared above —
+      // CDK dedups the staged asset zip across all BucketDeployments
+      // via content hash, so the directory is staged exactly once even
+      // with N font extensions present.
+      //
+      // Cache-Control: this pass re-uploads the font objects (a
+      // BucketDeployment always rewrites content + metadata), so it would
+      // CLOBBER whatever Cache-Control the earlier asset deployments set —
+      // leaving hashed fonts under `immutablePaths` with NO directive at
+      // all (browser heuristic caching). We can't perfectly re-tier per
+      // file: a single BucketDeployment applies one Cache-Control to every
+      // match, and its include globs are additive (OR), so "woff2 files
+      // that are ALSO under an immutable path" isn't expressible.
+      //
+      // So we set the MUTABLE tier here, which is the safe universal
+      // choice:
+      //   - non-hashed fonts (`public/fonts/…`): mutable is exactly right
+      //     (they must stay bustable across deploys).
+      //   - hashed fonts (`_next/static/media/…`): CloudFront still edge-
+      //     caches for 1y via `s-maxage`; the browser just revalidates
+      //     (cheap 304). Strictly better than the no-header state this
+      //     pass previously left them in.
+      const FONT_TYPES: Array<[string, string]> = [
+        ['.woff2', 'font/woff2'],
+        ['.woff', 'font/woff'],
+        ['.ttf', 'font/ttf'],
+        ['.otf', 'font/otf'],
+        ['.eot', 'application/vnd.ms-fontobject'],
+      ];
+      const fontExtensionsPresent = detectFontExtensions(
+        manifest.staticAssets.directory,
+        FONT_TYPES.map(([ext]) => ext),
+      );
+      for (const [ext, mime] of FONT_TYPES) {
+        if (!fontExtensionsPresent.has(ext)) continue;
+        const fontDeployment = new BucketDeployment(this, `FontTypeDeployment${ext.replace('.', '')}`, {
+          sources: [staticSource],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          exclude: ['*'],
+          include: [`*${ext}`],
+          contentType: mime,
+          cacheControl: [CacheControl.fromString(mutableCacheControl)],
+          prune: false,
+          ...deploymentSizing,
+        });
+        // Force ordering: the font deployment must run AFTER the asset
+        // deployments that ship the same files with the wrong default
+        // Content-Type. Without this dependency, CDK is free to schedule
+        // the font deployment first; the subsequent asset deployment
+        // then re-uploads the font with `binary/octet-stream` and
+        // silently undoes the fix.
+        for (const dep of assetDeployments) {
+          fontDeployment.node.addDependency(dep);
+        }
+        buildAssetDeployments.push(fontDeployment);
+      }
     }
 
     // ---- 12c. Gate the build-id cutover on the asset uploads ----

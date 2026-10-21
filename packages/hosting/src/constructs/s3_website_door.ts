@@ -18,12 +18,14 @@ import { Fn } from 'aws-cdk-lib';
 import { HostingError } from '../hosting_error.js';
 import type { HostingPlan } from '../plan/types.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
-import { S3WebsiteConstruct } from './s3_website_construct.js';
+import { S3WebsiteConstruct, type S3WebsiteConstructProps } from './s3_website_construct.js';
 
-/** The S3-website door's input: the {@link DoorInput} plus the internal-only route plan. */
+/** The S3-website door's input: the {@link DoorInput} plus the internal-only route plan and upload settings. */
 export type S3WebsiteDoorInput = DoorInput & {
   /** The route plan (SPA fallback decides the error document). Internal to the built-in door. */
   plan: HostingPlan;
+  /** The upload's cache tiers and sizing (see {@link S3WebsiteConstructProps}). */
+  upload?: Pick<S3WebsiteConstructProps, 'immutablePaths' | 'cacheControl' | 'deploymentSizing'>;
 };
 
 /** The built-in S3 static-website door. */
@@ -51,6 +53,7 @@ export const s3WebsiteDoor = defineFrontDoor<S3WebsiteDoorInput, FrontDoorResult
     const site = new S3WebsiteConstruct(scope, 'S3Website', {
       plan: input.plan,
       staticDir: input.origins.assets.sourceDir,
+      ...input.upload,
     });
     return {
       url: site.url,

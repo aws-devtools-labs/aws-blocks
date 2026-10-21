@@ -8,17 +8,23 @@
  * website bucket and deploys the built static dir to it. That means:
  *   - **no HTTPS** (S3 website endpoints are HTTP-only — front with a CDN for TLS),
  *   - **public bucket** (website hosting requires public read),
- *   - **no atomic build-id cutover** (deploy overwrites the root).
+ *   - **no atomic build-id cutover** (deploy overwrites the root, and prunes
+ *     what the build no longer ships, so a file removed from the build stops
+ *     being downloadable),
+ *   - the same three Cache-Control tiers as the private uploads: hashed assets
+ *     immutable, HTML always revalidated, everything else revalidated.
  *
  * SPA fallback uses the website error document → `index.html` (served with a
  * 404 status, which client-side routers tolerate). `s3WebsiteDoor` (behind
  * `frontDoor: 'none'`) builds this construct and rejects an app with a server,
  * which a website bucket cannot run.
  */
-import { CfnOutput, RemovalPolicy } from 'aws-cdk-lib';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { CfnOutput, RemovalPolicy, Size } from 'aws-cdk-lib';
 import { AnyPrincipal, Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
-import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
+import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import type { HostingPlan } from '../plan/types.js';
 
@@ -26,6 +32,12 @@ export type S3WebsiteConstructProps = {
   plan: HostingPlan;
   /** The built static assets directory (manifest.staticAssets.directory) to publish. */
   staticDir: string;
+  /** Content-hashed asset globs (`manifest.staticAssets.immutablePaths`), served `immutable`. */
+  immutablePaths?: readonly string[];
+  /** Cache-Control of the other non-HTML files. @default 'public, max-age=0, must-revalidate' */
+  cacheControl?: string;
+  /** Memory and `/tmp` of the upload Lambda (CDK's 128 MB default overruns a large site). */
+  deploymentSizing?: { memoryLimit: number; ephemeralStorageSize: Size };
 };
 
 export class S3WebsiteConstruct extends Construct {
@@ -37,8 +49,10 @@ export class S3WebsiteConstruct extends Construct {
     const { plan, staticDir } = props;
 
     // SPA → error doc is index.html (client router handles deep links); a
-    // multi-page static site uses 404.html when present, else index.html.
-    const errorDoc = plan.policies.spaFallback ? 'index.html' : '404.html';
+    // multi-page static site uses its 404.html when the build ships one, else
+    // index.html (an absent error document would be S3's own error page).
+    const errorDoc =
+      plan.policies.spaFallback || !fs.existsSync(path.join(staticDir, '404.html')) ? 'index.html' : '404.html';
 
     this.bucket = new Bucket(this, 'WebsiteBucket', {
       websiteIndexDocument: 'index.html',
@@ -76,16 +90,41 @@ export class S3WebsiteConstruct extends Construct {
     // `.blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
     // (with the absolute cross-origin `apiUrl` this door needs) is written to the
     // same key by the separate `BlocksConfigDeployment`. Uploading the placeholder
-    // here — plus `prune` — races/ clobbers that real config, leaving the SPA with
-    // no `apiUrl` (it then falls back to a relative `/aws-blocks/api`, which the
-    // S3 website 405s). Excluding the prefix and not pruning lets the config
-    // deployment solely own `.blocks-sandbox/config.json`, deterministically.
-    new BucketDeployment(this, 'WebsiteDeployment', {
-      sources: [Source.asset(staticDir)],
+    // here races/clobbers that real config, leaving the SPA with no `apiUrl` (it
+    // then falls back to a relative `/aws-blocks/api`, which the S3 website
+    // 405s). An excluded key is outside a deployment's filter on both sides, so
+    // pruning never touches it: the config deployment solely owns it.
+    //
+    // Each tier PRUNES within its own filter, so a file the build no longer
+    // ships (a `*.map`, a stray `.env`) stops being public at the next deploy.
+    const source = Source.asset(staticDir);
+    const html = ['*.html', '**/*.html'];
+    const immutable = [...(props.immutablePaths ?? [])];
+    const base = {
+      sources: [source],
       destinationBucket: this.bucket,
-      exclude: ['.blocks-sandbox/*'],
-      prune: false,
+      prune: true,
+      ...(props.deploymentSizing ?? {}),
+    };
+    new BucketDeployment(this, 'WebsiteDeployment', {
+      ...base,
+      exclude: ['.blocks-sandbox/*', ...html, ...immutable],
+      cacheControl: [CacheControl.fromString(props.cacheControl ?? 'public, max-age=0, must-revalidate')],
     });
+    new BucketDeployment(this, 'WebsiteHtmlDeployment', {
+      ...base,
+      exclude: ['*'],
+      include: html,
+      cacheControl: [CacheControl.fromString('no-cache, no-store, must-revalidate')],
+    });
+    if (immutable.length > 0) {
+      new BucketDeployment(this, 'WebsiteImmutableDeployment', {
+        ...base,
+        exclude: ['*'],
+        include: immutable,
+        cacheControl: [CacheControl.fromString('public, max-age=31536000, immutable')],
+      });
+    }
 
     this.url = this.bucket.bucketWebsiteUrl; // http://<bucket>.s3-website-<region>.amazonaws.com
     new CfnOutput(this, 'WebsiteUrl', { value: this.url, description: 'S3 static-website front-door URL (HTTP only)' });

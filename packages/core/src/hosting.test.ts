@@ -2381,6 +2381,25 @@ describe('Hosting', () => {
       });
     });
 
+    it('publishes the resolved config.json to the website bucket root (.blocks-sandbox), and the build only there', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'NoneConfigStack', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: 'none' });
+      const t = Template.fromStack(stack);
+      const buckets = t.findResources('AWS::S3::Bucket');
+      const website = Object.keys(buckets).find((id) => buckets[id].Properties.WebsiteConfiguration);
+      assert.ok(website, 'a website bucket');
+      const deployments = Object.entries(t.findResources('Custom::CDKBucketDeployment'));
+      const config = deployments.find(([id]) => id.includes('BlocksConfigDeployment'));
+      assert.ok(config);
+      assert.deepStrictEqual(config[1].Properties.DestinationBucketName, { Ref: website });
+      assert.strictEqual(config[1].Properties.DestinationBucketKeyPrefix, '.blocks-sandbox');
+      // The build is uploaded to the website bucket only: nothing reads a private copy.
+      for (const [id, d] of deployments) {
+        assert.deepStrictEqual(d.Properties.DestinationBucketName, { Ref: website }, `${id} writes to the website bucket`);
+      }
+    });
+
     it('SSR app → hard-fails at synth (no front door can run a server)', () => {
       createNextjsBuildOutput(tmpDir);
       const app = new App();
