@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import {
 	resolveCookieSecurity,
 	buildCookieSecurityAttrs,
+	isInsecurePublicOrigin,
 	isLoopbackRequest,
 	type CookieSecurityInput,
 } from './cookies.js';
@@ -50,12 +51,50 @@ describe('resolveCookieSecurity', () => {
 		);
 	});
 
-	test('cross-domain over HTTP front door → still None; Secure (genuinely unusable, not papered over)', () => {
-		// `SameSite=None` mandates `Secure`, so a cross-domain cookie cannot work
-		// behind a TLS-less door — the flag must NOT drop Secure here.
+	test('cross-domain behind an HTTP page (frontDoor: none) → None; Secure; Partitioned, as on HTTPS', () => {
+		// The cross-domain cookie is set by the API's own (HTTPS) response, not by
+		// the HTTP page: the page's scheme must not drop `Partitioned`, which
+		// browsers that block third-party cookies require.
 		assert.deepStrictEqual(
 			resolveCookieSecurity({ crossDomain: true, isLocalhost: false, plainHttpOrigin: true }),
-			{ sameSite: 'None', secure: true, partitioned: false },
+			{ sameSite: 'None', secure: true, partitioned: true },
+		);
+	});
+
+	test('an explicit HTTPS front door (plainHttpOrigin: false) keeps Secure', () => {
+		assert.deepStrictEqual(
+			resolveCookieSecurity({ crossDomain: false, isLocalhost: false, plainHttpOrigin: false }),
+			{ sameSite: 'Lax', secure: true, partitioned: false },
+		);
+	});
+});
+
+// ─── isInsecurePublicOrigin ──────────────────────────────────────────────────
+
+describe('isInsecurePublicOrigin', () => {
+	const withOrigin = (value: string | undefined, run: () => void) => {
+		const previous = process.env.BLOCKS_PUBLIC_ORIGIN;
+		if (value === undefined) delete process.env.BLOCKS_PUBLIC_ORIGIN;
+		else process.env.BLOCKS_PUBLIC_ORIGIN = value;
+		try {
+			run();
+		} finally {
+			if (previous === undefined) delete process.env.BLOCKS_PUBLIC_ORIGIN;
+			else process.env.BLOCKS_PUBLIC_ORIGIN = previous;
+		}
+	};
+
+	test('unset → false (assume HTTPS, keep Secure)', () => {
+		withOrigin(undefined, () => assert.strictEqual(isInsecurePublicOrigin(), false));
+	});
+
+	test('an https:// front door → false', () => {
+		withOrigin('https://d123.cloudfront.net', () => assert.strictEqual(isInsecurePublicOrigin(), false));
+	});
+
+	test('an http:// front door (TLS-less ALB, S3 website) → true', () => {
+		withOrigin('http://blocks-hosti-abc.us-west-2.elb.amazonaws.com', () =>
+			assert.strictEqual(isInsecurePublicOrigin(), true),
 		);
 	});
 });
