@@ -37,6 +37,6 @@ exports.handler = async (event) => {
   // both — the response shape below ({statusCode, headers, isBase64Encoded, body})
   // is valid for a v1 and a v2 proxy integration alike.
   const uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';
-  return blocksServe(uri);
+  return blocksServe(uri, event.headers);
 };
 `;

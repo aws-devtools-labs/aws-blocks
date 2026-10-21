@@ -67,12 +67,23 @@ describe('cf.redirects', () => {
     assert.equal(go('/other').uri, '/other', 'no match: the request passes through');
   });
 
+  it('a spliced root-relative target keeps one leading slash (no protocol-relative Location off-site)', () => {
+    const stack = newStack();
+    cf.redirects(stack, [{ source: '/old/*', destination: '/*', statusCode: 301 }]);
+    const handler = loadHandler(functionCode(stack));
+    const go = (uri: string) => (handler({ request: { uri, headers: {} } }) as { headers: { location: { value: string } } }).headers.location.value;
+    assert.equal(go('/old//evil.example'), '/evil.example');
+    assert.equal(go('/old/\\\\evil.example'), '/evil.example');
+    assert.equal(go('/old/docs/a'), '/docs/a');
+  });
+
   it('ships the same matcher and redirect loop as the built-in CloudFront door', () => {
     const stack = newStack();
     cf.redirects(stack, [{ source: '/a', destination: '/b', statusCode: 301 }]);
     const code = functionCode(stack);
     assert.ok(code.includes(CF_MATCH_HELPERS));
-    assert.ok(code.includes(redirectRowsJs('REDIRECTS', '  ')));
+    // The same loop, plus the same-site guard on a spliced target.
+    assert.ok(code.includes(redirectRowsJs('REDIRECTS', '  ', { sameSite: true })));
     assert.ok(generateKvsRouterRequestCode().includes(CF_MATCH_HELPERS));
     assert.ok(generateKvsRouterRequestCode().includes(redirectRowsJs('drows', '    ')));
   });

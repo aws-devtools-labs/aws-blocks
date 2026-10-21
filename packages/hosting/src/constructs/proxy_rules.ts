@@ -70,7 +70,7 @@ ${STATIC_RESOLVE_JS}
 var BLOCKS_REDIRECTS = ${redirects};
 var BLOCKS_HEADER_RULES = ${headers};
 function blocksRedirectResponse(uri) {
-${redirectRowsJs('BLOCKS_REDIRECTS', '  ')}
+${redirectRowsJs('BLOCKS_REDIRECTS', '  ', { sameSite: true })}
   return null;
 }
 function blocksRedirect(uri) {

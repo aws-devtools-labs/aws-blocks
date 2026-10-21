@@ -10,6 +10,7 @@
  * asset over the limit (`@aws-blocks/hosting:AssetExceedsProxyLimit`).
  */
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -30,10 +31,16 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
     fs.writeFileSync(path.join(tmpDir, 'index.html'), '<html></html>');
     fs.mkdirSync(path.join(tmpDir, 'assets'));
     fs.mkdirSync(path.join(tmpDir, 'downloads'));
+    // Random bytes don't compress, so the gzip the proxy applies doesn't shrink these.
     // 700 KB → 933 KB of base64: under the ALB's 1 MB.
-    fs.writeFileSync(path.join(tmpDir, 'assets', 'small.js'), Buffer.alloc(700 * 1024, 1));
+    fs.writeFileSync(path.join(tmpDir, 'assets', 'small.js'), randomBytes(700 * 1024));
     // 800 KB → 1.07 MB of base64: over the ALB's 1 MB, under API Gateway's 6 MB.
-    fs.writeFileSync(path.join(tmpDir, 'assets', 'vendor.js'), Buffer.alloc(800 * 1024, 1));
+    fs.writeFileSync(path.join(tmpDir, 'assets', 'vendor.js'), randomBytes(800 * 1024));
+    // 2 MB of ordinary (compressible) JavaScript: over 1 MB raw, a few KB gzipped,
+    // which is how the proxy serves it to a browser.
+    fs.writeFileSync(path.join(tmpDir, 'assets', 'bundle.js'), 'export const a = 1;\n'.repeat(100_000));
+    // The same size of an image, which is never compressed.
+    fs.writeFileSync(path.join(tmpDir, 'assets', 'hero.png'), Buffer.alloc(2 * 1024 * 1024, 1));
     // 5 MB → 6.7 MB of base64: over both.
     fs.writeFileSync(path.join(tmpDir, 'downloads', 'manual.pdf'), Buffer.alloc(5 * 1024 * 1024, 1));
     bundleDir = path.join(tmpDir, 'server');
@@ -76,6 +83,13 @@ describe('a build asset too large for the Lambda asset proxy is reported at synt
     assert.match(found[0], /\/downloads\/manual\.pdf/);
     assert.doesNotMatch(found[0], /small\.js/);
     assert.match(found[0], /1 MB/);
+  });
+
+  it('measures a compressible file gzipped (as the proxy serves it), a binary one as is', () => {
+    const found = warnings(spa(), { kind: 'alb' });
+    assert.equal(found.length, 1);
+    assert.doesNotMatch(found[0], /bundle\.js/);
+    assert.match(found[0], /\/assets\/hero\.png/);
   });
 
   it('API Gateway: uses its own (Lambda 6 MB) limit', () => {

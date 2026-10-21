@@ -45,10 +45,10 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  * @param opts.errorPages    the app's error pages (`404.html` / `500.html` keys under the build prefix)
  */
 export const generateAlbAssetProxyCode = (opts: AssetProxyOptions): string => `${assetProxyCoreJs(opts)}
-const STATUS_TEXT = { 200: 'OK', 301: 'Moved Permanently', 302: 'Found', 307: 'Temporary Redirect', 308: 'Permanent Redirect', 404: 'Not Found', 500: 'Internal Server Error' };
+const STATUS_TEXT = { 200: 'OK', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect', 400: 'Bad Request', 404: 'Not Found', 500: 'Internal Server Error' };
 
 exports.handler = async (event) => {
-  const res = await blocksServe(event.path || '/');
+  const res = await blocksServe(event.path || '/', event.headers);
   return {
     statusCode: res.statusCode,
     statusDescription: res.statusCode + ' ' + (STATUS_TEXT[res.statusCode] || ''),
