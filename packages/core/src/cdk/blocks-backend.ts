@@ -22,8 +22,11 @@ import {
 } from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
+import { attachIamReport } from './iam-report.js';
+import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
-import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
@@ -198,6 +201,21 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 		],
 	});
 
+	// ── Permissions boundary + IAM report ─────────────────────────────────
+	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
+	// aspect, so roles blocks add later are covered too), then apply the opt-in
+	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
+	// templates unchanged. The report lists what the shared role accumulated; it is
+	// written at synth (after every block has granted) beside the template.
+	coverBlocksRoot(scope);
+	applyBlocksPermissionsBoundary(scope);
+	const owningStack = cdk.Stack.of(scope);
+	attachIamReport(
+		scope,
+		executionRole,
+		cdk.Stack.isStack(scope) ? owningStack.artifactId : `${owningStack.artifactId}.${scope.node.id}`,
+	);
+
 	// ── Resource Groups ───────────────────────────────────────────────────
 	let rootStack = cdk.Stack.of(scope);
 	while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
@@ -274,10 +292,12 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * entry points' `create()` so they can't drift.
  *
  * Call once, after the backend module has imported and every compute exists.
- * The gateway fronts the default compute's function (its `apiHandler()`) and is
- * built in the default compute's construct scope, so its logical IDs match the
- * per-compute gateway it replaced — existing deployments keep their REST API and
- * `execute-api` URL. The default compute is always a Lambda compute today, so
+ * The gateway's catch-all resources front the default compute's function (its
+ * `apiHandler()`), and every other compute's namespaces are routed to that
+ * compute's function — by export name, read from `backendModule` (see
+ * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
+ * its logical IDs match the per-compute gateway it replaced — existing
+ * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
  *
  * Also schedules the API front door now that its origin exists. That decision is
@@ -287,20 +307,21 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
  * clients call the gateway directly.
  *
+ * @param backendModule the imported backend module (`backendCDKPath`) — the
+ *   exports the typed client calls and the runtime dispatches against
  * @internal
  */
-export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
+export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: object): SharedGateway {
 	const defaultCompute = owner._defaultCompute;
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
 	}
-	const defaultApiHandler = defaultCompute.apiHandler();
-	if (!defaultApiHandler) {
-		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-	}
+	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		handler: defaultApiHandler,
+		// Keyed by export name, resolved from the imported backend module.
+		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner)),
+		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
 	});
@@ -515,6 +536,9 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		// Stack-level children before this backend exists, so the boundary can also
+		// cap the per-stack CDK singletons its blocks add (see the end of create()).
+		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));
 		const backend = new BlocksBackend(scope, id, props);
 		// Create the default compute before importing the backend: it owns the
 		// Lambda function (the shared gateway's target), and a block reading
@@ -543,7 +567,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(backend);
+		buildSharedGateway(backend, mod);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
@@ -588,6 +612,10 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// the backend — including one a container sibling *derived* during the import.
 		// Ensure the shared role carries ENI permissions in that case (see helper).
 		ensureVpcAccessPolicyWhenVpcActive(backend);
+
+		// Last, so every role a block or finalizer hoisted to stack scope exists.
+		coverStackLevelAdditions(backend, stackChildrenBefore);
+		warnOnMixedBoundaries(backend);
 
 		return backend;
 	}

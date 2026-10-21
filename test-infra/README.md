@@ -85,3 +85,49 @@ smoke app's stack.
 
 Both stacks are tagged with `blocks:do-not-delete=true`. Deleting either will
 break the corresponding smoke tests in CI until redeployed.
+
+# GitHub OIDC role for E2E (`github-oidc-stack.ts`)
+
+PR E2E jobs, including Dependabot PRs, run third-party code with AWS
+credentials. They therefore run in a **dedicated E2E account** that holds only
+test stacks.
+
+This stack creates, in that account:
+
+| Resource | Purpose |
+|----------|---------|
+| GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials (skipped if `GITHUB_OIDC_PROVIDER_ARN` is set) |
+| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies), Cognito admin calls, Supabase test secret |
+
+The stack is pinned to `us-east-1`, the region every E2E workflow and
+`cleanup-stacks.yml` use. It is deployed **by hand, once per account**, not by
+CI:
+
+```bash
+cd test-infra
+npx cdk bootstrap aws://<e2e-account-id>/us-east-1   # once per account
+E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
+```
+
+The app (`github-oidc-app.ts`) refuses to synthesize unless `E2E_ACCOUNT_ID` is
+set and matches the account of the active credentials.
+
+An IAM OIDC provider is a per-account singleton for its URL. If the account
+already has one for `token.actions.githubusercontent.com`, pass its ARN so the
+stack reuses it instead of failing with `EntityAlreadyExists`:
+
+```bash
+E2E_ACCOUNT_ID=<e2e-account-id> \
+GITHUB_OIDC_PROVIDER_ARN=arn:aws:iam::<e2e-account-id>:oidc-provider/token.actions.githubusercontent.com \
+  npm run deploy:oidc
+```
+
+Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
+environment and as a Dependabot secret. Deploy this stack only into the
+dedicated E2E account.
+
+CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep this
+account limited to E2E test stacks.
+
+`npm test` checks that the trust policy stays pinned to this repo's `e2e`
+environment with `StringEquals` and no wildcards.

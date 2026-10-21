@@ -364,7 +364,7 @@ jobs:
     # wall / Destroy could be skipped → leaked stacks). Stop-gap until
     # deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -507,7 +507,7 @@ jobs:
     # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
     # Stop-gap until deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -608,7 +608,7 @@ jobs:
     # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
     # Swift iOS sandbox job and the non-sandbox Kotlin job above.
     timeout-minutes: ${{ matrix.timeout }}
-    environment: publish
+    environment: e2e
     strategy:
       fail-fast: false
       matrix:
@@ -617,7 +617,9 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            timeout: 30
+            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
+            # resources), so 30 min left no room for the build, tests and destroy.
+            timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
