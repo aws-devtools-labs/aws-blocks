@@ -84,6 +84,16 @@ The boundary, outermost first:
    every agent, analysis and upload step, and only if step 4c succeeded (so
    after every agent process has been killed), never on a cancelled run. The
    `summary` job holds the full role but runs no agent code.
+
+   The role is `blocks-github-bench` in E2E account 1
+   ([`test-infra/github-oidc-stack.ts`](../../test-infra/github-oidc-stack.ts)):
+   Bedrock model invocation plus `s3:GetObject`/`s3:PutObject` on `bench/*` in
+   the bench bucket, nothing else. Both jobs run in the `agent-bench` GitHub
+   environment, and the role trusts only that environment's OIDC `sub`, so a
+   token minted in a bench job can assume this role and no other (the E2E
+   role, `blocks-github-e2e`, trusts only the `e2e` environment). That trust
+   policy, not the role's permissions, is the outer bound on what the job's
+   OIDC token can reach.
 3. **A separate uid for all agent code, fail closed** (`steps/lib/isolation.mjs`).
    The harness processes keep the job env: the builder/judge model calls run in
    the harness (Strands `BedrockModel`) and the analysis calls run the `aws` CLI
