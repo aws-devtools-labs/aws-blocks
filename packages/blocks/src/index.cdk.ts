@@ -74,6 +74,7 @@ export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
