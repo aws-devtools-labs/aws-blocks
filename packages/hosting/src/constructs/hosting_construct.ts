@@ -32,7 +32,7 @@ import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
-import { type ITopic } from 'aws-cdk-lib/aws-sns';
+import type { ITopic } from 'aws-cdk-lib/aws-sns';
 import type {
   EmailSubscription,
   UrlSubscription,
@@ -55,6 +55,10 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
+import type {
+  AccessLogFormat,
+  AccessLogPartitioning,
+} from './access_logging.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -131,6 +135,10 @@ export type HostingConstructProps = {
    * Skips region validation for WAF WebACL (must be us-east-1 for CloudFront),
    * ACM certificates (must be us-east-1 for CloudFront), and Lambda Web Adapter
    * compatibility checks. Useful for testing.
+   *
+   * Also skips the CloudFront standard logging v2 delivery-source Region check
+   * (`logging.version: 'v2'` must deploy to us-east-1), so a v2 stack outside
+   * us-east-1 synthesizes cleanly and then fails at deploy.
    */
   skipRegionValidation?: boolean;
 
@@ -304,6 +312,17 @@ export type HostingConstructProps = {
   logging?: {
     enabled: boolean;
     retentionDays?: number;
+    /**
+     * CloudFront logging pipeline: `'v1'` (default, legacy standard logging) or
+     * `'v2'` (standard logging v2 via the CloudWatch Logs delivery pipeline —
+     * ACL-free bucket, partitioned S3 layout, selectable format). See the
+     * public `HostingProps.logging` docs for trade-offs. @default 'v1'
+     */
+    version?: 'v1' | 'v2';
+    /** (v2 only) S3 key layout for delivered logs. @default 'date' */
+    partitioning?: AccessLogPartitioning;
+    /** (v2 only) Delivered log record format. @default 'w3c' */
+    format?: AccessLogFormat;
   };
   /**
    * Custom environment variables for all compute functions. A value may be:
@@ -533,6 +552,7 @@ export class HostingConstruct extends Construct {
     const storage = new StorageConstruct(this, 'Storage', {
       retainOnDelete: props.storage?.retainOnDelete,
       accessLogging: props.logging?.enabled ?? true,
+      accessLogVersion: props.logging?.version,
       encryption: props.storage?.encryption,
       encryptionKey: props.storage?.encryptionKey,
       buildRetentionDays: props.storage?.buildRetentionDays,
@@ -1232,6 +1252,10 @@ export class HostingConstruct extends Construct {
       domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
       wwwRedirect: props.domain?.wwwRedirect,
       accessLogBucket: storage.accessLogBucket,
+      accessLogVersion: props.logging?.version,
+      accessLogPartitioning: props.logging?.partitioning,
+      accessLogFormat: props.logging?.format,
+      skipLoggingRegionValidation: props.skipRegionValidation,
       priceClass: props.cdn?.priceClass,
       geoRestriction: props.cdn?.geoRestriction,
       skewProtection: props.skewProtection ?? { enabled: true },

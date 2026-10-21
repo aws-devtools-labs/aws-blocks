@@ -18,6 +18,11 @@ import type { ScopeParent } from '../common/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+function writeTelemetryConfig(dir: string, enabled: boolean): void {
+  mkdirSync(join(dir, '.blocks'), { recursive: true });
+  writeFileSync(join(dir, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled } }));
+}
+
 interface DisableValueCase {
   value: string | null;
   expected: boolean;
@@ -118,6 +123,112 @@ describe('telemetry/consent', () => {
     process.chdir(tmp);
     assert.strictEqual(isTelemetryEnabled(), true);
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe('global × project precedence (shared case table)', () => {
+    interface PrecedenceCase {
+      name: string;
+      global: boolean | null;
+      project: boolean | null;
+      expected: boolean;
+    }
+
+    const { cases }: { cases: PrecedenceCase[] } = JSON.parse(
+      readFileSync(new URL('../../src/telemetry/consent-precedence-cases.test.json', import.meta.url), 'utf-8'),
+    );
+
+    it('pins the shared case table contents', () => {
+      assert.deepStrictEqual(
+        cases.map((c) => [c.name, c.global, c.project, c.expected]),
+        [
+          ['no config either side', null, null, true],
+          ['project enables, no global', null, true, true],
+          ['project disables, no global', null, false, false],
+          ['global enables, no project', true, null, true],
+          ['both enable', true, true, true],
+          ['project disables over a global enable', true, false, false],
+          ['global disables, no project', false, null, false],
+          ['project cannot re-enable a global disable', false, true, false],
+          ['both disable', false, false, false],
+        ],
+      );
+    });
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-home-'));
+        const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-proj-'));
+        if (testCase.global !== null) writeTelemetryConfig(home, testCase.global);
+        if (testCase.project !== null) writeTelemetryConfig(project, testCase.project);
+
+        const consentUrl = new URL('./consent.js', import.meta.url).href;
+        const result = spawnSync(process.execPath, ['--input-type=module', '-e', CONSENT_CHILD, consentUrl], {
+          encoding: 'utf-8',
+          cwd: project,
+          timeout: 30_000,
+          env: { HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: '', CI: '', PATH: process.env.PATH ?? '' },
+        });
+
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(result.stdout, String(testCase.expected));
+
+        rmSync(home, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+      });
+    }
+
+    const EMIT_CHILD = `
+    const [moduleUrl] = process.argv.slice(1);
+    const { buildAndSendEvent } = await import(moduleUrl);
+    buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
+    `;
+
+    async function countHttpRequests(options: { global?: boolean; project?: boolean }): Promise<number> {
+      let hits = 0;
+      const server: Server = await new Promise((resolve) => {
+        const s = createServer((req, res) => {
+          req.on('data', () => {});
+          req.on('end', () => { hits++; res.writeHead(200); res.end(); });
+        });
+        s.listen(0, '127.0.0.1', () => resolve(s));
+      });
+
+      const { port } = server.address() as { port: number };
+      const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-home-'));
+      const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-proj-'));
+      if (options.global !== undefined) writeTelemetryConfig(home, options.global);
+      if (options.project !== undefined) writeTelemetryConfig(project, options.project);
+
+      const clientUrl = new URL('./client.js', import.meta.url).href;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', EMIT_CHILD, clientUrl], {
+        encoding: 'utf-8',
+        cwd: project,
+        timeout: 30_000,
+        env: {
+          HOME: home,
+          USERPROFILE: home,
+          AWS_BLOCKS_DISABLE_TELEMETRY: '',
+          CI: '',
+          PATH: process.env.PATH ?? '',
+          BLOCKS_TELEMETRY_ENDPOINT: `http://127.0.0.1:${port}/collect`,
+        },
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+
+      await new Promise((r) => setTimeout(r, 1_000));
+      server.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+      return hits;
+    }
+
+    it('sends an HTTP request when only the project config enables (positive control)', async () => {
+      assert.strictEqual(await countHttpRequests({ project: true }), 1);
+    });
+
+    it('sends no HTTP request when the global config disables and the project config enables', async () => {
+      assert.strictEqual(await countHttpRequests({ global: false, project: true }), 0);
+    });
   });
 
   it('returns true in CI when project config explicitly enables telemetry', () => {
