@@ -26,7 +26,7 @@ import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
-import { createSharedGateway, type SharedGateway } from './shared-gateway.js';
+import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
@@ -292,10 +292,12 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * entry points' `create()` so they can't drift.
  *
  * Call once, after the backend module has imported and every compute exists.
- * The gateway fronts the default compute's function (its `apiHandler()`) and is
- * built in the default compute's construct scope, so its logical IDs match the
- * per-compute gateway it replaced — existing deployments keep their REST API and
- * `execute-api` URL. The default compute is always a Lambda compute today, so
+ * The gateway's catch-all resources front the default compute's function (its
+ * `apiHandler()`), and every other compute's namespaces are routed to that
+ * compute's function — by export name, read from `backendModule` (see
+ * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
+ * its logical IDs match the per-compute gateway it replaced — existing
+ * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
  * `apiHandler()` is defined; a worker-only default fails with a clear error.
  *
  * Also schedules the API front door now that its origin exists. That decision is
@@ -305,20 +307,21 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * which is then built as a `REGIONAL` endpoint; `apigateway` (the default) ⇒
  * clients call the gateway directly.
  *
+ * @param backendModule the imported backend module (`backendCDKPath`) — the
+ *   exports the typed client calls and the runtime dispatches against
  * @internal
  */
-export function buildSharedGateway(owner: SharedGatewayOwner): SharedGateway {
+export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: object): SharedGateway {
 	const defaultCompute = owner._defaultCompute;
 	if (!defaultCompute) {
 		throw new Error('Default compute not initialized — create() must build it before the shared gateway.');
 	}
-	const defaultApiHandler = defaultCompute.apiHandler();
-	if (!defaultApiHandler) {
-		throw new Error('Default compute exposes no apiHandler() — the shared API gateway needs an HTTP front door.');
-	}
+	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		handler: defaultApiHandler,
+		// Keyed by export name, resolved from the imported backend module.
+		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner)),
+		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
 	});
@@ -564,7 +567,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
-		buildSharedGateway(backend);
+		buildSharedGateway(backend, mod);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));

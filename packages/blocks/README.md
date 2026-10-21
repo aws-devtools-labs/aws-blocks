@@ -56,7 +56,7 @@ await api.setValue('greeting', 'hello');
 const value = await api.getValue('greeting'); // typed: string | null
 ```
 
-That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC over a single endpoint) is handled for you and is intentionally invisible.
+That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC under `/aws-blocks/api`) is handled for you and is intentionally invisible.
 
 ## Adding auth and data
 
@@ -235,7 +235,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
 - **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
-- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC to a single `POST /aws-blocks/api`; use the typed import instead.
+- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations
 
@@ -281,4 +281,4 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 - **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
-- **Wire protocol & debugging:** the client is JSON-RPC 2.0 over a single endpoint — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+- **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
