@@ -45,6 +45,7 @@ describe('AWS runtime string schemas', () => {
 				const secret = new Secret(new Scope('app'), 'validated-key', {
 					secret: Secret.fromExisting(TEST_ARN),
 					schema: z.string().min(1),
+					allowRuntimeWrite: true,
 				});
 				await secret.put(value);
 				assert.strictEqual(await secret.get(), value);

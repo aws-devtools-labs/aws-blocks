@@ -602,6 +602,7 @@ const validatedStringSecret = new Secret(scope, 'secret-validated-string', {
   schema: z.string().min(1),
   removalPolicy: 'destroy',
   cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
 });
 
 // Typed JSON secret with schema validation (e.g. a set of related credentials).

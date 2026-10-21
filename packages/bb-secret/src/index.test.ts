@@ -209,7 +209,7 @@ describe('Secret (mock)', () => {
 	describe('string schemas', () => {
 		for (const value of ['hello', '123', 'true', 'null', '"quoted"', '{"key":"value"}', '[1]', '']) {
 			test(`round-trips ${JSON.stringify(value)} without interpreting it as JSON`, async () => {
-				const secret = new Secret(freshScope(), 'validated-key', { schema: z.string() });
+				const secret = writable(freshScope(), 'validated-key', { schema: z.string() });
 				await secret.put(value);
 				assert.strictEqual(await secret.get(), value);
 				const reopened = new Secret(freshScope(), 'validated-key', { schema: z.string() });
@@ -218,7 +218,7 @@ describe('Secret (mock)', () => {
 		}
 
 		test('reads string values through current, previous, and explicit version selectors', async () => {
-			const secret = new Secret(freshScope(), 'validated-key', { schema: z.string().min(1) });
+			const secret = writable(freshScope(), 'validated-key', { schema: z.string().min(1) });
 			await secret.put('first');
 			await secret.put('"second"');
 			assert.strictEqual(await secret.get({ version: 'current' }), '"second"');
@@ -229,7 +229,7 @@ describe('Secret (mock)', () => {
 		});
 
 		test('preserves asynchronous schema transformations on read', async () => {
-			const secret = new Secret(freshScope(), 'validated-key', {
+			const secret = writable(freshScope(), 'validated-key', {
 				schema: z.string().transform(async (value) => value.toUpperCase()),
 			});
 			await secret.put('hello');
@@ -237,7 +237,7 @@ describe('Secret (mock)', () => {
 		});
 
 		test('still decodes a legacy JSON string when the schema expects an object', async () => {
-			await new Secret(freshScope(), 'legacy-json').put('{"host":"db.internal","port":5432}');
+			await writable(freshScope(), 'legacy-json').put('{"host":"db.internal","port":5432}');
 			const secret = new Secret(freshScope(), 'legacy-json', {
 				schema: z.object({ host: z.string(), port: z.number() }),
 			});
