@@ -13,7 +13,7 @@ import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 
-type Upstream = { status: number; headers: Record<string, string | string[]>; body: string };
+type Upstream = { status: number; headers: Record<string, string | string[]>; body: string | Buffer; error?: Error };
 type Seen = { method?: string; path?: string; headers?: Record<string, string>; body?: string };
 type AlbResponse = {
   statusCode: number;
@@ -33,6 +33,10 @@ const load = (code: string, upstream: Upstream, seen: Seen) => {
       req.write = (b) => chunks.push(Buffer.from(b));
       req.end = () => {
         seen.body = Buffer.concat(chunks).toString('utf8');
+        if (upstream.error) {
+          req.emit('error', upstream.error);
+          return;
+        }
         const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
         res.statusCode = upstream.status;
         res.statusMessage = 'OK';
@@ -55,15 +59,29 @@ const load = (code: string, upstream: Upstream, seen: Seen) => {
   return mod.exports.handler;
 };
 
-const event = (path: string) => ({
+const event = (
+  path: string,
+  over: {
+    query?: Record<string, string[]>;
+    headers?: Record<string, string[]>;
+  } = {},
+) => ({
   requestContext: { elb: { targetGroupArn: 'arn:aws:elasticloadbalancing:us-west-2:111111111111:targetgroup/x/y' } },
   httpMethod: 'POST',
   path,
-  multiValueQueryStringParameters: { a: ['1'] },
-  multiValueHeaders: { 'content-type': ['application/json'], host: ['alb.example.com'], cookie: ['s=1'] },
+  multiValueQueryStringParameters: over.query ?? { a: ['1'] },
+  multiValueHeaders: over.headers ?? {
+    'content-type': ['application/json'],
+    host: ['alb.example.com'],
+    cookie: ['s=1'],
+  },
   body: Buffer.from('{"x":1}').toString('base64'),
   isBase64Encoded: true,
 });
+
+/** The body the ALB returns to the viewer, decoded from either encoding. */
+const bodyOf = (res: AlbResponse): string =>
+  res.isBase64Encoded ? Buffer.from(res.body, 'base64').toString('utf8') : res.body;
 
 const HEADER_RULES: Array<{ pattern: string; headers: Record<string, string> }> = [
   { pattern: '/aws-blocks/*', headers: { 'X-Api-Rule': 'api' } },
@@ -109,5 +127,126 @@ describe('ALB API forwarder', () => {
     const res = await handler(event('/aws-blocks/api'));
     assert.equal(res.statusCode, 401);
     assert.equal(res.multiValueHeaders['x-api-rule'], undefined);
+  });
+
+  it('forwards query values exactly as the ALB delivered them (still percent-encoded), never encoding them twice', async () => {
+    const seen: Seen = {};
+    const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
+    await handler(
+      event('/aws-blocks/auth/callback', {
+        query: { q: ['a%20b'], state: ['eyJ4IjoxfQ%3D%3D'], next: ['%2Fhome'], plus: ['a+b'], 'a%5Bb%5D': ['1', '2'] },
+      }),
+    );
+    assert.equal(
+      seen.path,
+      '/prod/aws-blocks/auth/callback?q=a%20b&state=eyJ4IjoxfQ%3D%3D&next=%2Fhome&plus=a+b&a%5Bb%5D=1&a%5Bb%5D=2',
+    );
+  });
+
+  it("joins several Cookie header fields with '; ' (the cookie separator), other headers with ', '", async () => {
+    const seen: Seen = {};
+    const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
+    await handler(
+      event('/aws-blocks/api', {
+        headers: { cookie: ['seen=1', 'session=abc'], accept: ['text/html', 'application/json'] },
+      }),
+    );
+    assert.equal(seen.headers?.cookie, 'seen=1; session=abc');
+    assert.equal(seen.headers?.accept, 'text/html, application/json');
+  });
+
+  it('strips the origin-verify secret and client forwarding headers, and keeps the client chain and trace id', async () => {
+    const seen: Seen = {};
+    const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
+    await handler(
+      event('/aws-blocks/api', {
+        headers: {
+          'X-Blocks-Origin-Verify': ['secret'],
+          'x-forwarded-host': ['localhost:3000'],
+          'x-forwarded-port': ['80'],
+          'x-forwarded-proto': ['http'],
+          'x-forwarded-for': ['203.0.113.7, 198.51.100.2'],
+          'x-amzn-trace-id': ['Root=1-abc'],
+          connection: ['keep-alive'],
+          'content-type': ['application/json'],
+        },
+      }),
+    );
+    const sent = Object.fromEntries(Object.entries(seen.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+    assert.equal(sent['x-blocks-origin-verify'], undefined);
+    assert.equal(sent['x-forwarded-host'], undefined);
+    assert.equal(sent['x-forwarded-port'], undefined);
+    assert.equal(sent['x-forwarded-proto'], undefined);
+    assert.equal(sent.connection, undefined);
+    assert.equal(sent['x-forwarded-for'], '203.0.113.7, 198.51.100.2');
+    assert.equal(sent['x-amzn-trace-id'], 'Root=1-abc');
+    assert.equal(sent['content-type'], 'application/json');
+  });
+
+  it('drops hop-by-hop response headers', async () => {
+    const handler = load(
+      generateAlbApiProxyCode(),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked', connection: 'close', 'keep-alive': 'x' },
+        body: '{}',
+      },
+      {},
+    );
+    const res = await handler(event('/aws-blocks/api'));
+    assert.equal(res.multiValueHeaders['transfer-encoding'], undefined);
+    assert.equal(res.multiValueHeaders.connection, undefined);
+    assert.equal(res.multiValueHeaders['keep-alive'], undefined);
+    assert.deepEqual(res.multiValueHeaders['content-type'], ['application/json']);
+  });
+
+  it('answers a fixed 502 when the backend is unreachable, without echoing the upstream error', async () => {
+    const handler = load(
+      generateAlbApiProxyCode(),
+      {
+        status: 0,
+        headers: {},
+        body: '',
+        error: new Error('getaddrinfo ENOTFOUND abc.execute-api.us-west-2.amazonaws.com'),
+      },
+      {},
+    );
+    const errors: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+      const res = await handler(event('/aws-blocks/api'));
+      assert.equal(res.statusCode, 502);
+      assert.equal(bodyOf(res), '{"error":"Bad Gateway"}');
+      assert.ok(!bodyOf(res).includes('execute-api'));
+      assert.equal(errors.length, 1, 'the upstream error is logged for the operator');
+    } finally {
+      console.error = original;
+    }
+  });
+
+  it('returns a text response as UTF-8 (no base64 inflation against the 1 MB ALB cap) and a binary one as base64', async () => {
+    const json = '{"name":"caf\u00e9"}';
+    const text = load(
+      generateAlbApiProxyCode(),
+      { status: 200, headers: { 'content-type': 'application/json; charset=utf-8' }, body: json },
+      {},
+    );
+    const t = await text(event('/aws-blocks/api'));
+    assert.equal(t.isBase64Encoded, false);
+    assert.equal(t.body, json);
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe]);
+    const binary = load(generateAlbApiProxyCode(), { status: 200, headers: { 'content-type': 'image/png' }, body: png }, {});
+    const b = await binary(event('/aws-blocks/files/x.png'));
+    assert.equal(b.isBase64Encoded, true);
+    assert.deepEqual(Buffer.from(b.body, 'base64'), png);
+
+    // A text type whose bytes are not valid UTF-8 stays base64 so nothing is lost.
+    const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9]);
+    const odd = load(generateAlbApiProxyCode(), { status: 200, headers: { 'content-type': 'text/plain' }, body: latin1 }, {});
+    const o = await odd(event('/aws-blocks/api'));
+    assert.equal(o.isBase64Encoded, true);
+    assert.deepEqual(Buffer.from(o.body, 'base64'), latin1);
   });
 });
