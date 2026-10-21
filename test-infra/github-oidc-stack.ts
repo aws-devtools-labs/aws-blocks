@@ -234,7 +234,7 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
 
   new cdk.CfnOutput(stack, 'RoleArn', {
     value: role.roleArn,
-    description: 'Set as the AWS_ROLE_ARN secret of the e2e GitHub environment (and as a Dependabot secret).',
+    description: 'Add to the AWS_ROLE_ARNS secret of the e2e GitHub environment (and the Dependabot secret of the same name).',
   });
 
   cdk.Tags.of(stack).add('blocks:purpose', 'github-e2e-oidc');

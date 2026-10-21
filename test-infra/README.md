@@ -89,10 +89,10 @@ break the corresponding smoke tests in CI until redeployed.
 # GitHub OIDC role for E2E (`github-oidc-stack.ts`)
 
 PR E2E jobs, including Dependabot PRs, run third-party code with AWS
-credentials. They therefore run in a **dedicated E2E account** that holds only
+credentials. They therefore run in **dedicated E2E accounts** that hold only
 test stacks.
 
-This stack creates, in that account:
+This stack creates, in each of them:
 
 | Resource | Purpose |
 |----------|---------|
@@ -122,30 +122,52 @@ GITHUB_OIDC_PROVIDER_ARN=arn:aws:iam::<e2e-account-id>:oidc-provider/token.actio
   npm run deploy:oidc
 ```
 
-Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
-environment and as a Dependabot secret. Deploy this stack only into the
-dedicated E2E account.
+Add the `RoleArn` output to the `AWS_ROLE_ARNS` secret (see below). Deploy this
+stack only into dedicated E2E accounts.
 
 ### More E2E accounts
 
-PR E2E jobs can be spread over a pool of E2E accounts. All of them sit behind
-the same `e2e` GitHub environment: deploy this stack unchanged into each
-account, so every account's role trusts only `e2e`.
+PR E2E jobs are spread over a pool of E2E accounts, all behind the same `e2e`
+GitHub environment. `.github/actions/e2e-slot` maps each PR to one account (PR
+number mod the number of accounts); runs without a PR use account 1. Every pool
+account runs this stack unchanged, so every account's role has the same
+permissions and trusts the same `e2e` environment. The pool spreads quota; it
+does not separate the accounts from each other, so give every pool account the
+same account-level guardrails.
 
-```bash
-E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
-```
+To add an account:
 
-Add each account's `RoleArn` to the `AWS_ROLE_ARNS` secret, a JSON array in
-pool order (account 1, the `aws-blocks+github-e2e-1@amazon.com` account,
-first). Set it in the `e2e` environment and as a Dependabot secret (Dependabot
-runs only get Dependabot secrets), and update the account count in
-`.github/actions/e2e-slot` to match.
-Each account also needs the Supabase test secret, the SES sender and the quota
-increases that the first account has.
+1. With credentials for the new account, bootstrap CDK and deploy this stack:
 
-CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep this
-account limited to E2E test stacks.
+   ```bash
+   cd test-infra
+   npx cdk bootstrap aws://<e2e-account-id>/us-east-1
+   E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
+   ```
+
+2. Create the `blocks/supabase-e2e` secret in `us-east-1` with the same value
+   as in account 1. The role can only read `blocks/supabase-e2e-*` in that
+   region.
+3. Verify the `E2E_FROM_EMAIL` address as an SES identity in `us-east-1`.
+4. Request the same quota increases as the other accounts, in `us-east-1`:
+   VPCs per Region (20), Internet gateways per Region (20), Cognito rate of
+   UserRead requests (240) and IAM roles per account (3000, which
+   `cleanup-stacks.yml` warns against). Edge-optimized REST APIs stay at 120;
+   that limit can't be raised, which is why the pool exists.
+5. Append the new `RoleArn` to the `AWS_ROLE_ARNS` secret, a JSON array in pool
+   order (account 1 first). Set it in the `e2e` environment and as a Dependabot
+   secret (Dependabot runs only get Dependabot secrets).
+6. Raise `E2E_ACCOUNTS` in `.github/actions/e2e-slot`. `cleanup-stacks.yml`
+   builds one cleanup leg per account from that count, and its legs fail if
+   `AWS_ROLE_ARNS` has a different length.
+
+Changing the count moves most open PRs to a different account. Their old
+stacks stay behind, and the cleanup leg of the old account removes them. Before
+you take an account out of the pool, empty it: once the count no longer
+includes it, no cleanup leg sweeps it.
+
+CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep every
+pool account limited to E2E test stacks.
 
 `npm test` checks that the trust policy stays pinned to this repo's `e2e`
 environment with `StringEquals` and no wildcards.
