@@ -1456,66 +1456,6 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
 };
 
 /**
- * Next.js major-version initial-release dates (YYYY-MM-DD). The Next.js team
- * supports each major for **2 years from its release date**, and
- * `@opennextjs/aws` enforces that policy at build time: on an out-of-window
- * major it prints `Next.js version X is not supported by the Next.js team` and
- * **exits 1** unless invoked with `--dangerously-use-unsupported-next-version`.
- *
- * This table is copied **verbatim** from OpenNext's own `NEXT_RELEASE_DATES`
- * (`@opennextjs/aws/dist/build/helper.js`) so {@link isNextWithinOpenNextSupportWindow}
- * reaches the *same verdict OpenNext will* before we spawn the build — letting
- * us pass the override flag proactively instead of hard-failing a user's deploy
- * the day a major ages out. Because it mirrors OpenNext's source rather than an
- * independent guess, the two agree by construction for every major listed here.
- *
- * **Keep it in sync** when a new `@opennextjs/aws` adds a major (re-copy from its
- * `NEXT_RELEASE_DATES`); a major we don't have a date for is treated as outside
- * the window (fail-safe: we pass the flag and let OpenNext's own, authoritative
- * check make the final call), so a missed sync defers rather than misbehaves.
- *
- * Source: https://nextjs.org/support-policy#supported-versions
- */
-const NEXT_MAJOR_RELEASE_DATES: Record<number, string> = {
-  12: '2021-10-26',
-  13: '2022-10-26',
-  14: '2023-10-26',
-  15: '2024-10-21',
-  16: '2025-10-21',
-};
-
-/**
- * Whether `nextVersion` is still inside the 2-years-from-release support
- * window that `@opennextjs/aws` enforces — i.e. whether OpenNext will build it
- * *without* `--dangerously-use-unsupported-next-version`.
- *
- * Mirrors OpenNext's `isNextVersionSupported`: take the major, look up its
- * release date, add two years, and compare against now. A major we don't have a
- * date for (newer than this table, or unparseable) returns `false` so the
- * caller passes the override and defers to OpenNext's own check rather than
- * blocking on our possibly-stale table.
- *
- * @internal
- */
-export const isNextWithinOpenNextSupportWindow = (
-  nextVersion: string,
-  now: Date = new Date(),
-): boolean => {
-  if (!semver.valid(nextVersion)) return false;
-  const major = semver.major(nextVersion);
-  const releaseDateStr = NEXT_MAJOR_RELEASE_DATES[major];
-  if (!releaseDateStr) return false;
-  // The release date parses as UTC midnight (`new Date('2024-10-21')` →
-  // 2024-10-21T00:00:00Z), so add the 2 years with the UTC accessors too —
-  // the local-time `setFullYear`/`getFullYear` would shift the window end by
-  // the host's UTC offset and could flip the verdict near the boundary on a
-  // host east/west of UTC.
-  const supportEndDate = new Date(releaseDateStr);
-  supportEndDate.setUTCFullYear(supportEndDate.getUTCFullYear() + 2);
-  return now <= supportEndDate;
-};
-
-/**
  * Patch the OpenNext image-optimization bundle for the Next.js 16
  * image-optimizer signature change.
  *
@@ -1918,26 +1858,24 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   if (configPath) args.push('--config-path', configPath);
 
   // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
-  // the Next.js team's 2-year support window: it prints
-  // `Next.js version X is not supported by the Next.js team` and exits 1
-  // unless given `--dangerously-use-unsupported-next-version`. That window is
-  // a wall-clock deadline, so a deploy that worked yesterday starts
-  // hard-failing the day the major expires — with no code change on the user's
-  // side. We'd rather let the deploy proceed (the app still runs fine; the
-  // policy is about upstream security patches) than break it on a date, so
-  // when the installed Next is outside the window we pass the override
-  // ourselves and surface the same warning OpenNext would. Best-effort: if we
-  // can't read the Next version we omit the flag and let OpenNext's own,
-  // authoritative check decide.
-  const nextVersion = detectNextVersion(projectDir);
-  if (nextVersion && !isNextWithinOpenNextSupportWindow(nextVersion)) {
-    args.push('--dangerously-use-unsupported-next-version');
-    process.stderr.write(
-      `\u{26A0}\u{FE0F}  Next.js ${nextVersion} is past the Next.js team's 2-year support window, which @opennextjs/aws would otherwise reject. ` +
-        `Building with --dangerously-use-unsupported-next-version so the deploy proceeds. ` +
-        `This Next major may have unpatched upstream security fixes — upgrade to a supported Next.js major when you can. See https://nextjs.org/support-policy\n`,
-    );
-  }
+  // the Next.js team's 2-year support window: `checkNextVersionSupport` prints
+  // `Next.js version X is not supported by the Next.js team` and calls
+  // `process.exit(1)` unless `--dangerously-use-unsupported-next-version` is
+  // set. That window is a wall-clock deadline, so a deploy that worked
+  // yesterday starts hard-failing the day the major expires — with no change
+  // on the user's side. We'd rather let the deploy proceed (the app still runs
+  // fine; the policy is about upstream security patches) than break it on a
+  // date.
+  //
+  // We pass the flag UNCONDITIONALLY rather than mirror OpenNext's release-date
+  // table and decide ourselves (which we'd have to keep in sync). It is inert
+  // on a supported version — OpenNext only reads the flag inside its
+  // `if (!isSupported)` branch, so a supported build ignores it entirely — and
+  // on an unsupported version it downgrades OpenNext's `exit(1)` to a
+  // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
+  // own `isNextVersionSupported` stays the single source of truth for the
+  // supported/unsupported decision, and its warning is the one the user sees.
+  args.push('--dangerously-use-unsupported-next-version');
 
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,

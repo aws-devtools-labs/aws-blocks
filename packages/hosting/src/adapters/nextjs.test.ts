@@ -6,7 +6,6 @@ import * as os from 'os';
 import { spawn } from './spawn.js';
 import {
   hasExistingMiddlewareManifest,
-  isNextWithinOpenNextSupportWindow,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
   patchImageOptimizerForNext16,
@@ -1973,86 +1972,27 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       `should not warn when @opennextjs/aws is absent; stderr was: ${stderrChunks.join('')}`,
     );
   });
-});
 
-void describe('isNextWithinOpenNextSupportWindow', () => {
-  // The 2-year window is measured from each Next major's release date
-  // (mirrors @opennextjs/aws's own NEXT_RELEASE_DATES): Next 15 released
-  // 2024-10-21, so its OpenNext support window ends 2026-10-21.
-
-  void it('returns true while a major is inside its 2-year window', () => {
-    // One day before Next 15 ages out.
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '15.5.28',
-        new Date('2026-10-20T12:00:00Z'),
-      ),
-      true,
-    );
-  });
-
-  void it('returns false once a major is past its window (the CI failure)', () => {
-    // 2026-10-21 08:25 UTC is past the 2026-10-21T00:00:00Z end instant —
-    // exactly when the Hosting E2E lane started hard-failing on Next 15.5.28.
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '15.5.28',
-        new Date('2026-10-21T08:25:00Z'),
-      ),
-      false,
-    );
-  });
-
-  void it('treats the end instant itself as still supported (<=)', () => {
-    // Matches OpenNext's `now <= supportEndDate`: the boundary is inclusive.
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '15.0.0',
-        new Date('2026-10-21T00:00:00Z'),
-      ),
-      true,
-    );
-  });
-
-  void it('returns true for a freshly-released major (Next 16)', () => {
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '16.0.0',
-        new Date('2026-10-21T08:25:00Z'),
-      ),
-      true,
-    );
-  });
-
-  void it('returns false for a major with no known release date (fail-safe to override)', () => {
-    // An unknown/newer major we have no date for is treated as outside the
-    // window so the caller passes --dangerously-use-unsupported-next-version
-    // and defers to OpenNext's own authoritative check.
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '17.0.0',
-        new Date('2026-10-21T08:25:00Z'),
-      ),
-      false,
-    );
-  });
-
-  void it('returns false for a long-expired major (Next 13)', () => {
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow(
-        '13.4.0',
-        new Date('2026-10-21T08:25:00Z'),
-      ),
-      false,
-    );
-  });
-
-  void it('returns false for an unparseable version string (direct-caller contract)', () => {
-    // The production caller gates on detectNextVersion (semver.valid) first,
-    // but a direct caller might not — the guard keeps the documented contract.
-    assert.strictEqual(
-      isNextWithinOpenNextSupportWindow('not-a-version', new Date('2026-10-21T08:25:00Z')),
-      false,
+  void it('always passes --dangerously-use-unsupported-next-version to the OpenNext build', () => {
+    // We pass the flag unconditionally: it is inert on a supported Next
+    // (OpenNext reads it only inside its `if (!isSupported)` branch) and
+    // prevents the hard exit(1) once a major ages out — so the deploy never
+    // breaks on a calendar date, and OpenNext's own check stays the source of
+    // truth for the supported/unsupported decision.
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = syncMock.mock.calls
+      .map((c) => c.arguments[1])
+      .find(
+        (a): a is string[] => Array.isArray(a) && a[0] === '@opennextjs/aws',
+      );
+    assert.ok(buildArgs, 'expected an `npx @opennextjs/aws build` spawn');
+    assert.ok(
+      buildArgs.includes('--dangerously-use-unsupported-next-version'),
+      `build args should carry the override flag; got: ${JSON.stringify(buildArgs)}`,
     );
   });
 });
