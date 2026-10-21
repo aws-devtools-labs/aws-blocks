@@ -62,13 +62,6 @@ export interface ComputeProvider<K extends ComputeType = ComputeType> {
  */
 export abstract class ComputeBase extends Scope implements ComputeProvider {
 	/**
-	 * API namespaces assigned to run on this compute — recorded so request
-	 * routing can map a namespace to the compute that hosts it. Currently
-	 * unpopulated (no compute assignment surface yet).
-	 */
-	readonly namespaces: string[] = [];
-
-	/**
 	 * The compute type — `'serverless'` (per-invocation function) or `'container'`
 	 * (long-running task). Set by the concrete subclass and read by delivery logic
 	 * that branches on the runtime model (e.g. AsyncJob wires a native SQS event
@@ -113,9 +106,11 @@ export abstract class ComputeBase extends Scope implements ComputeProvider {
 
 	constructor(id: string, options?: ScopeOptions) {
 		super(id, options);
-		// Self-register on the owning stack so finalize steps (tracing, routing,
+		// Self-register on the owning stack so finalize steps (config, tracing,
 		// dashboards) can enumerate every compute without a separate discovery
-		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated.
+		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated —
+		// routing uses it to ignore computes another backend owns (see
+		// resolveNamespaceRoutes).
 		registerCompute(this);
 	}
 

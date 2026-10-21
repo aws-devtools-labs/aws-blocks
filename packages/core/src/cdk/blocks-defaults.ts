@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RemovalPolicy } from 'aws-cdk-lib';
+import type { IManagedPolicy } from 'aws-cdk-lib/aws-iam';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
@@ -131,6 +132,71 @@ export interface BlocksDefaults {
 	 * to derive one on demand even when this is unset.
 	 */
 	vpc?: BlocksVpcOptions;
+
+	/**
+	 * An IAM **permissions boundary** attached to every IAM role AWS Blocks
+	 * creates for this stack/backend — the shared execution role every handler
+	 * runs as, block-owned helper roles (migration, Bedrock, scheduler, …), the
+	 * CDK custom-resource / `BucketDeployment` / log-retention roles a block
+	 * causes, and `Hosting`'s roles (including Lambda@Edge roles in the
+	 * `us-east-1` edge stack).
+	 *
+	 * A boundary is a **ceiling, never a grant**: a role's effective permissions
+	 * are the intersection of its own policies and the boundary. Blocks still
+	 * grants each role what it needs; anything the boundary doesn't allow is
+	 * denied at runtime (`AccessDenied`), however it was granted.
+	 *
+	 * Use it when the deploy is governed centrally — e.g. a platform that lets
+	 * many teams (or AI coding agents) ship apps through one pipeline can require,
+	 * via an `iam:PermissionsBoundary` condition on its CloudFormation execution
+	 * role, that every role an app creates carries the platform's boundary. That
+	 * only works if **every** role carries it, which this option provides. Leave it
+	 * unset otherwise: it is unset in both {@link BlocksPresets}, and unset leaves
+	 * synthesized templates unchanged.
+	 *
+	 * Accepted forms:
+	 * - a customer-managed policy **name** (`'app-boundary'`), resolved in the
+	 *   deploying account and partition;
+	 * - a full policy **ARN** (`'arn:aws:iam::123456789012:policy/platform/app-boundary'`),
+	 *   required when the policy has a path;
+	 * - an `iam.IManagedPolicy`.
+	 * Anything else fails synth with an actionable error.
+	 *
+	 * **Scope.** On a `BlocksStack` it applies to every role in the stack. On an
+	 * embedded `BlocksBackend` it applies to the backend's subtree plus the
+	 * stack-level CDK singleton roles its blocks add; roles your own stack
+	 * already had are not touched. Stacks Blocks doesn't create are out of scope
+	 * — apply a boundary to those yourself with
+	 * `iam.PermissionsBoundary.of(stack).apply(policy)`.
+	 *
+	 * **Interaction with CDK's `@aws-cdk/core:permissionsBoundary` context.**
+	 * The context applies a boundary to every role in every stack of the app.
+	 * When both are set, this option wins for the roles AWS Blocks creates (the
+	 * context still applies everywhere else), and synth emits a warning. Either
+	 * one alone bounds every Blocks role.
+	 *
+	 * **One policy for many apps.** A platform can share a single boundary policy
+	 * across every app in an account by writing it with policy variables, e.g.
+	 * `arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*`, and tagging each
+	 * app's stack with its `app` name. The policy (by name, ARN or
+	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
+	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
+	 * so a pipeline can check both. See the core README section "Running many apps
+	 * in one AWS account".
+	 *
+	 * It caps the blast radius of the shared role; it doesn't split it — every
+	 * Blocks handler still runs as the same role, under the same boundary.
+	 *
+	 * @example Cap every Blocks role with a platform-owned boundary policy
+	 * ```ts
+	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' },
+	 * });
+	 * ```
+	 */
+	permissionsBoundary?: string | IManagedPolicy;
 }
 
 /**

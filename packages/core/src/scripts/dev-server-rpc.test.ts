@@ -194,6 +194,82 @@ createServer((request, response) => {
     assert.strictEqual(payload.expected?.path, '/aws-blocks/api');
   });
 
+  it('serves the per-namespace RPC path and points a wrong-method hint at it', async () => {
+    const port = await getAvailablePort();
+    tempDir = join(tmpdir(), `dev-ns-test-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(join(tempDir, 'backend.ts'), `
+export const testApi = {
+  ping: async () => 'pong',
+};
+`);
+    writeFileSync(join(tempDir, 'preload.mjs'), `
+if (!process.loadEnvFile) {
+  process.loadEnvFile = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+}
+`);
+    writeFileSync(join(tempDir, 'run-dev.ts'), `
+import { startDevServer } from '${join(__dirname, 'dev-server.js').replace(/\\/g, '/')}';
+startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')}', port: ${port} });
+`);
+
+    const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
+    devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
+      cwd: tempDir,
+      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    devProcess.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+    devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
+
+    // The typed client POSTs to /aws-blocks/api/{namespace}.
+    const nsUrl = `http://127.0.0.1:${port}/aws-blocks/api/testApi`;
+    const deadline = Date.now() + 15_000;
+    let response: Response | undefined;
+    let lastError: unknown;
+    while (!response && Date.now() < deadline) {
+      try {
+        response = await fetch(nsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'testApi.ping', params: [], id: 7 }),
+        });
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    assert.ok(response, `Dev server did not respond: ${String(lastError)}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert.strictEqual(response.status, 200);
+    const payload = await response.json() as { result?: unknown; id?: unknown };
+    assert.strictEqual(payload.result, 'pong');
+    assert.strictEqual(payload.id, 7);
+
+    // A path that names a different namespace than the body is rejected — the
+    // same check the Lambda handler applies, so local dev can't drift from it.
+    const mismatch = await fetch(nsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'otherApi.ping', params: [], id: 8 }),
+    });
+    assert.strictEqual(mismatch.status, 200);
+    const mismatchBody = await mismatch.json() as { error?: { code?: number; data?: { name?: string } }; id?: unknown };
+    assert.strictEqual(mismatchBody.error?.code, -32600);
+    assert.strictEqual(mismatchBody.error?.data?.name, 'InvalidRequest');
+    assert.strictEqual(mismatchBody.id, 8);
+
+    // A GET on that path gets the usage hint pointing at the path itself.
+    const hint = await fetch(nsUrl, { method: 'GET' });
+    assert.strictEqual(hint.status, 404);
+    const hintBody = await hint.json() as { expected?: { method?: string; path?: string } };
+    assert.strictEqual(hintBody.expected?.method, 'POST');
+    assert.strictEqual(hintBody.expected?.path, '/aws-blocks/api/testApi');
+  });
+
   it('sanitizes an uncaught RawRoute exception to a generic 500 while preserving a handler-set header', async () => {
     const port = await getAvailablePort();
     // A RawRoute whose handler sets a CORS header on ctx.response and THEN throws
