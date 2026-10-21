@@ -47,7 +47,7 @@ describe('credentials for the metadata reads', () => {
 	beforeEach(async () => {
 		directory = await mkdtemp(join(tmpdir(), 'blocks-credential-snapshot-'));
 		signedWith = [];
-		// Stands in for STS, Account and Free Tier, and records the access key of each request.
+		// Stands in for STS, Account, Free Tier and IAM, and records the access key of each request.
 		server = createServer((request, response) => {
 			let body = '';
 			request.on('data', (chunk) => {
@@ -55,13 +55,26 @@ describe('credentials for the metadata reads', () => {
 			});
 			request.on('end', () => {
 				const key = /Credential=([^/]+)\//.exec(request.headers.authorization ?? '')?.[1];
-				if (body.includes('GetCallerIdentity')) {
+				if (body.includes('Action=GetCallerIdentity')) {
 					signedWith.push(`sts:${key}`);
 					response.writeHead(200, { 'content-type': 'text/xml' });
 					response.end(
 						'<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult>' +
-							'<Arn>arn:aws:iam::123456789012:user/x</Arn><UserId>X</UserId><Account>123456789012</Account>' +
+							'<Arn>arn:aws:sts::123456789012:assumed-role/WorkspaceAdminAccess/x</Arn><UserId>X</UserId><Account>123456789012</Account>' +
 							'</GetCallerIdentityResult><ResponseMetadata><RequestId>1</RequestId></ResponseMetadata></GetCallerIdentityResponse>',
+					);
+				} else if (body.includes('Action=GetRole') && body.includes('RoleName=WorkspaceAdminAccess')) {
+					signedWith.push(`iam:${key}`);
+					const trust = encodeURIComponent(
+						JSON.stringify({ Statement: [{ Effect: 'Allow', Principal: { Service: 'account-access.amazonaws.com' } }] }),
+					);
+					response.writeHead(200, { 'content-type': 'text/xml' });
+					response.end(
+						'<GetRoleResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><GetRoleResult><Role>' +
+							'<Path>/managed/</Path><RoleName>WorkspaceAdminAccess</RoleName><RoleId>AROAX</RoleId>' +
+							'<Arn>arn:aws:iam::123456789012:role/managed/WorkspaceAdminAccess</Arn><CreateDate>2026-01-01T00:00:00Z</CreateDate>' +
+							`<AssumeRolePolicyDocument>${trust}</AssumeRolePolicyDocument></Role></GetRoleResult>` +
+							'<ResponseMetadata><RequestId>2</RequestId></ResponseMetadata></GetRoleResponse>',
 					);
 				} else if (request.url?.includes('getAccountInformation')) {
 					signedWith.push(`account:${key}`);
@@ -116,6 +129,7 @@ await assertAwsCredentials({ command: 'deploy', projectRoot: process.cwd() });`,
 					AWS_ENDPOINT_URL_STS: url,
 					AWS_ENDPOINT_URL_ACCOUNT: url,
 					AWS_ENDPOINT_URL_FREETIER: url,
+					AWS_ENDPOINT_URL_IAM: url,
 					...variables,
 				},
 			},
@@ -136,9 +150,15 @@ await assertAwsCredentials({ command: 'deploy', projectRoot: process.cwd() });`,
 			const { stdout } = await runPreflight({ AWS_PROFILE: 'rotating' });
 			assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started} ms`);
 			assert.equal((await readFile(calls, 'utf8')).length, 1, 'the credential process ran once');
-			assert.deepEqual(signedWith.sort(), ['account:AKIDFIRSTKEY', 'freetier:AKIDFIRSTKEY', 'sts:AKIDFIRSTKEY']);
+			assert.deepEqual(signedWith.sort(), [
+				'account:AKIDFIRSTKEY',
+				'freetier:AKIDFIRSTKEY',
+				'iam:AKIDFIRSTKEY',
+				'sts:AKIDFIRSTKEY',
+			]);
 			assert.match(stdout, /Account name: Snapshot project$/m);
 			assert.match(stdout, /Account plan: Free \(active\)$/m);
+			assert.match(stdout, /Spend limit: https:\/\/settings\.aws\.com\/billing/);
 		});
 	}
 
@@ -158,6 +178,7 @@ await assertAwsCredentials({ command: 'deploy', projectRoot: process.cwd() });`,
 		assert.deepEqual(signedWith.sort(), [
 			'account:AKIDENVIRONMENTB',
 			'freetier:AKIDENVIRONMENTB',
+			'iam:AKIDENVIRONMENTB',
 			'sts:AKIDENVIRONMENTB',
 		]);
 		assert.match(stdout, /Deployment target: access keys in AWS_ACCESS_KEY_ID \(used instead of AWS_PROFILE\)/);

@@ -37,9 +37,10 @@ import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentT
  * credentials that CDK deploys with (a profile, environment access keys or
  * workload credentials) and the configured Region. With verified credentials it
  * also reads the account name and the AWS account plan, which are optional: any
- * failure only makes them unavailable. It then links to the AWS Settings billing
- * page, and asks the user to check that the project selected there is the deployment
- * target. The Region is the configured one, not discovered.
+ * failure only makes them unavailable. When the caller's role is the AWS-managed
+ * role of the new AWS sign-up experience, it then links to the AWS Settings billing page, where those
+ * accounts set their spend limit, and asks the user to check that the project
+ * selected there is the deployment target. The Region is the configured one, not discovered.
  *
  * CDK deploys with access keys from the environment before `AWS_PROFILE`; only a
  * `profile` in `cdk.json` or `~/.cdk.json` overrides them. SDK clients do the
@@ -54,14 +55,21 @@ import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentT
  *
  * `environmentKeys` are the access keys from the environment when CDK deploys
  * with them; the probe then verifies those instead of running the credential chain.
- * The probe may resolve to the credentials it verified. Only then are the account
- * name and plan read, with those same credentials.
+ * The probe may resolve to the credentials it verified and the caller ARN. Only
+ * then are the account name, plan and role read, with those same credentials.
  */
 export type CredentialProbe = (
 	region: string,
 	profile?: string,
 	environmentKeys?: AwsCredentialIdentity,
-) => Promise<AwsCredentialIdentity | undefined>;
+) => Promise<VerifiedCredentials | undefined>;
+
+/** What a {@link CredentialProbe} verified. */
+export interface VerifiedCredentials {
+	credentials: AwsCredentialIdentity;
+	/** The caller ARN from STS GetCallerIdentity. Used only to find the caller's role; never printed. */
+	callerArn?: string;
+}
 
 /**
  * Default probe: STS GetCallerIdentity via the SDK's standard credential chain
@@ -73,12 +81,12 @@ export type CredentialProbe = (
  * bad network can't make this hang *longer* than the synth it's replacing.
  *
  * Resolves to the credentials that the request was signed with, so that the
- * metadata reads use the same identity. The default credential chain runs once,
- * as a client for this profile and Region would run it, and the request is signed
- * with that snapshot. Reading a client's credential provider a second time is not
- * a cache hit: the SDK refreshes credentials that expire within five minutes,
- * which can run `credential_process` or an MFA prompt again and return another
- * identity.
+ * metadata reads use the same identity, and to the caller ARN. The default
+ * credential chain runs once, as a client for this profile and Region would run
+ * it, and the request is signed with that snapshot. Reading a client's credential
+ * provider a second time is not a cache hit: the SDK refreshes credentials that
+ * expire within five minutes, which can run `credential_process` or an MFA prompt
+ * again and return another identity.
  */
 const stsProbe: CredentialProbe = async (region, profile, environmentKeys) => {
 	const { STSClient, GetCallerIdentityCommand } = await import('@aws-sdk/client-sts');
@@ -99,8 +107,8 @@ const stsProbe: CredentialProbe = async (region, profile, environmentKeys) => {
 	}
 	const client = new STSClient({ ...config, credentials });
 	try {
-		await client.send(new GetCallerIdentityCommand({}));
-		return credentials;
+		const { Arn } = await client.send(new GetCallerIdentityCommand({}));
+		return { credentials, callerArn: Arn };
 	} finally {
 		client.destroy();
 	}
@@ -131,7 +139,7 @@ const PROJECTS_URL = 'https://settings.aws.com/projects';
 /** A Region code; any other value prints quoted, so that it cannot write terminal control sequences. */
 const REGION_CODE = /^[a-z0-9-]+$/;
 
-const NO_METADATA: AccountMetadata = { accountName: null, plan: null };
+const NO_METADATA: AccountMetadata = { accountName: null, plan: null, managedRole: false };
 
 /** How the summary names the deploy credentials, and the profile that the `aws login` advice is for. */
 interface CredentialsLabel {
@@ -160,9 +168,11 @@ async function credentialsLabel(
 }
 
 /**
- * The deployment target, then the optional metadata and the spend-limit guidance
- * unless `metadata` is `null`. The Region is the configured one; nothing here
- * claims that it is the Region of the user's project.
+ * The deployment target, then the optional metadata unless `metadata` is `null`.
+ * The spend-limit guidance follows only for the AWS-managed sign-in role: AWS
+ * Settings manages spend limits for those accounts, not for other accounts. The
+ * Region is the configured one; nothing here claims that it is the Region of the
+ * user's project.
  */
 function targetSummary(credentials: CredentialsLabel, region: string | null, metadata: AccountMetadata | null): string {
 	const regionLabel = region ? (REGION_CODE.test(region) ? region : JSON.stringify(region)) : 'not set';
@@ -172,7 +182,9 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
 		target,
 		`   Account name: ${metadata.accountName ?? 'not available'}`,
 		`   Account plan: ${metadata.plan ?? 'not available'}`,
-		`💳 Spend limit: ${BILLING_URL} (check that the project selected there matches this target)`,
+		...(metadata.managedRole
+			? [`💳 Spend limit: ${BILLING_URL} (check that the project selected there matches this target)`]
+			: []),
 	].join('\n');
 }
 
@@ -187,11 +199,12 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  * version is checked only after a credential failure, so it never blocks valid
  * credentials.
  *
- * When the deploy continues, the check prints the deployment target and the AWS
- * Settings billing link. When the probe returns the credentials it verified, the
- * check first reads the optional account name and plan with them, within a
- * short timeout. Those reads never throw or block the deploy. With
- * `accountDetails: false` it prints only the deployment target.
+ * When the deploy continues, the check prints the deployment target. When the
+ * probe returns the credentials it verified, the check first reads the optional
+ * account name, plan and caller role with them, within a short timeout, and adds
+ * the AWS Settings billing link for the AWS-managed sign-in role. Those reads
+ * never throw or block the deploy. With `accountDetails: false` it prints only
+ * the deployment target.
  *
  * @throws {Error} With actionable guidance when the probe reports a credential error,
  * or when the CDK configuration cannot be read.
@@ -230,9 +243,9 @@ export async function assertAwsCredentials({
 		return;
 	}
 
-	let credentials: AwsCredentialIdentity | undefined;
+	let verified: VerifiedCredentials | undefined;
 	try {
-		credentials = await probe(region, profile, environmentKeys);
+		verified = await probe(region, profile, environmentKeys);
 	} catch (error) {
 		// The label is the error name, a Node.js error code, or a known network error
 		// name found in a credential provider's message; never message text, which for
@@ -281,9 +294,9 @@ export async function assertAwsCredentials({
 		console.log(targetSummary(target, region, null));
 		return;
 	}
-	const metadata = credentials
+	const metadata = verified
 		? await readAccountMetadata(
-				{ region, profile, credentials },
+				{ region, profile, credentials: verified.credentials, callerArn: verified.callerArn },
 				{ clients: metadataClients, timeoutMs: metadataTimeoutMs },
 			)
 		: NO_METADATA;

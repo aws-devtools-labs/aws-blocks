@@ -12,6 +12,7 @@ import {
 	type AssertAwsCredentialsOptions,
 	assertAwsCredentials,
 	type CredentialProbe,
+	type VerifiedCredentials,
 } from './preflight-credentials.js';
 
 const BILLING_URL = 'https://settings.aws.com/billing';
@@ -19,6 +20,8 @@ const VERIFY_PROJECT = '(check that the project selected there matches this targ
 /** The spend-limit guidance is one line, so that it adds little to every run. */
 const BILLING_LINE = `💳 Spend limit: ${BILLING_URL} ${VERIFY_PROJECT}`;
 const CREDENTIALS: AwsCredentialIdentity = { accessKeyId: 'AKIAEXAMPLEFIXTURE', secretAccessKey: 'fixture-secret' };
+const CALLER_ARN = 'arn:aws:sts::123456789012:assumed-role/WorkspaceAdminAccess/747824f8-session';
+const VERIFIED: VerifiedCredentials = { credentials: CREDENTIALS, callerArn: CALLER_ARN };
 
 function namedError(name: string, message = 'raw sdk detail arn:aws:iam::123456789012:user/alice'): Error {
 	const err = new Error(message);
@@ -28,9 +31,25 @@ function namedError(name: string, message = 'raw sdk detail arn:aws:iam::1234567
 
 type Response = () => Promise<unknown>;
 
+/** A GetRole response; IAM returns the trust policy URL-encoded. */
+function role(path: string, principal: unknown, effect = 'Allow'): Response {
+	const policy = { Version: '2012-10-17', Statement: [{ Effect: effect, Principal: principal, Action: 'sts:AssumeRole' }] };
+	return async () => ({
+		Role: { RoleName: 'WorkspaceAdminAccess', Path: path, AssumeRolePolicyDocument: encodeURIComponent(JSON.stringify(policy)) },
+	});
+}
+
+/** The AWS-managed role that `aws login` uses in an account from the new sign-up experience. */
+const MANAGED = role('/managed/', { Service: 'account-access.amazonaws.com' });
+
 /** A fake for the metadata clients that records how it was used. */
-function fakeClients(account: Response, plan: Response) {
-	const state = { targets: [] as AccountMetadataTarget[], destroyed: 0, signals: [] as AbortSignal[] };
+function fakeClients(account: Response, plan: Response, callerRole: Response = MANAGED) {
+	const state = {
+		targets: [] as AccountMetadataTarget[],
+		destroyed: 0,
+		signals: [] as AbortSignal[],
+		roleNames: [] as string[],
+	};
 	const factory: AccountMetadataClientFactory = async (target) => {
 		state.targets.push(target);
 		return {
@@ -41,6 +60,11 @@ function fakeClients(account: Response, plan: Response) {
 			getAccountPlanState: (signal) => {
 				state.signals.push(signal);
 				return plan();
+			},
+			getRole: (roleName, signal) => {
+				state.roleNames.push(roleName);
+				state.signals.push(signal);
+				return callerRole();
 			},
 			destroy: () => {
 				state.destroyed++;
@@ -92,7 +116,7 @@ describe('deployment target summary', () => {
 				command: 'deploy',
 				env,
 				projectRoot: directory,
-				probe: async () => CREDENTIALS,
+				probe: async () => VERIFIED,
 				...options,
 			});
 			return {
@@ -124,13 +148,13 @@ describe('deployment target summary', () => {
 		const probed: [string, string | undefined][] = [];
 		const probe: CredentialProbe = async (region, profile) => {
 			probed.push([region, profile]);
-			return CREDENTIALS;
+			return VERIFIED;
 		};
 		const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
 		const { log } = await run({ probe, metadataClients: factory });
 		assert.deepStrictEqual(probed, [['us-gov-west-1', 'from-cdk']]);
 		assert.deepStrictEqual(state.targets, [
-			{ region: 'us-gov-west-1', profile: 'from-cdk', credentials: CREDENTIALS },
+			{ region: 'us-gov-west-1', profile: 'from-cdk', credentials: CREDENTIALS, callerArn: CALLER_ARN },
 		]);
 		assert.match(log, /AWS profile from-cdk, Region us-gov-west-1/);
 	});
@@ -205,13 +229,13 @@ describe('deployment target summary', () => {
 	}
 
 	it('stops waiting for metadata at the timeout, cancels the requests and closes the clients', async () => {
-		const { factory, state } = fakeClients(NEVER, NEVER);
+		const { factory, state } = fakeClients(NEVER, NEVER, NEVER);
 		const { log, elapsed } = await run({ metadataClients: factory, metadataTimeoutMs: 50 });
 		assert.ok(elapsed < 1000, `took ${elapsed} ms`);
 		assert.match(log, /Account name: not available$/m);
 		assert.match(log, /Account plan: not available$/m);
-		assert.ok(log.includes(BILLING_URL), log);
-		assert.strictEqual(state.signals.length, 2);
+		assert.ok(!log.includes(BILLING_URL), log);
+		assert.strictEqual(state.signals.length, 3);
 		assert.ok(state.signals.every((signal) => signal.aborted));
 		assert.strictEqual(state.destroyed, 1);
 	});
@@ -231,7 +255,7 @@ describe('deployment target summary', () => {
 			},
 		});
 		assert.match(log, /Account name: not available$/m);
-		assert.ok(log.includes(BILLING_URL), log);
+		assert.ok(!log.includes(BILLING_URL), log);
 	});
 
 	it('closes the clients when a request throws synchronously', async () => {
@@ -262,20 +286,60 @@ describe('deployment target summary', () => {
 		assert.doesNotMatch(log, /87\.5|USD|credit/i);
 	});
 
-	it('offers the billing guidance without reading metadata when the probe returns no credentials', async () => {
+	it('reads the role that the caller assumed, by name, and offers the billing guidance for the managed role', async () => {
+		const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
+		const { log } = await run({ metadataClients: factory });
+		assert.deepStrictEqual(state.roleNames, ['WorkspaceAdminAccess']);
+		assert.ok(log.split('\n').includes(BILLING_LINE), log);
+	});
+
+	for (const { name, callerRole, linked } of [
+		{ name: 'a managed role trusted through a list of services', callerRole: role('/managed/', { Service: ['ec2.amazonaws.com', 'account-access.amazonaws.com'] }), linked: true },
+		{ name: 'a role outside /managed/', callerRole: role('/', { Service: 'account-access.amazonaws.com' }), linked: false },
+		{ name: 'a /managed/ role trusted by another service', callerRole: role('/managed/', { Service: 'ec2.amazonaws.com' }), linked: false },
+		{ name: 'a /managed/ role trusted by an account', callerRole: role('/managed/', { AWS: 'arn:aws:iam::123456789012:root' }), linked: false },
+		{ name: 'a managed role trust that denies', callerRole: role('/managed/', { Service: 'account-access.amazonaws.com' }, 'Deny'), linked: false },
+		{ name: 'a denied GetRole', callerRole: () => Promise.reject(namedError('AccessDenied')), linked: false },
+		{ name: 'a trust policy that is not URL-encoded JSON', callerRole: async () => ({ Role: { Path: '/managed/', AssumeRolePolicyDocument: '%E0%A4%A' } }), linked: false },
+		{ name: 'a response without a role', callerRole: async () => ({}), linked: false },
+	]) {
+		it(`${linked ? 'offers' : 'offers no'} billing guidance for ${name}`, async () => {
+			const { factory } = fakeClients(NAMED, FREE_ACTIVE, callerRole);
+			const { log, warn } = await run({ metadataClients: factory });
+			assert.strictEqual(log.includes(BILLING_URL), linked, log);
+			assert.match(log, /Account name: Starter project$/m);
+			assert.strictEqual(warn, '');
+		});
+	}
+
+	for (const [name, callerArn] of [
+		['an IAM user', 'arn:aws:iam::123456789012:user/alice'],
+		['the root user', 'arn:aws:iam::123456789012:root'],
+		['no caller ARN', undefined],
+	] as const) {
+		it(`reads no role and offers no billing guidance for ${name}`, async () => {
+			const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
+			const { log } = await run({ probe: async () => ({ credentials: CREDENTIALS, callerArn }), metadataClients: factory });
+			assert.deepStrictEqual(state.roleNames, []);
+			assert.ok(!log.includes(BILLING_URL), log);
+			assert.match(log, /Account plan: Free \(active\)$/m);
+		});
+	}
+
+	it('reads no metadata and offers no billing guidance when the probe returns no credentials', async () => {
 		const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
 		const { log } = await run({ probe: async () => undefined, metadataClients: factory });
 		assert.strictEqual(state.targets.length, 0);
 		assert.match(log, /Deployment target: AWS profile starter, Region eu-north-1/);
 		assert.match(log, /Account name: not available$/m);
-		assert.ok(log.includes(BILLING_URL) && log.includes(VERIFY_PROJECT), log);
+		assert.ok(!log.includes(BILLING_URL), log);
 	});
 
 	for (const [name, error] of [
 		['network', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })],
 		['inconclusive', namedError('ThrottlingException')],
 	] as const) {
-		it(`prints the target and billing guidance, without metadata, after a ${name} probe result`, async () => {
+		it(`prints the target without metadata or billing guidance after a ${name} probe result`, async () => {
 			const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
 			const { log } = await run({
 				probe: async () => {
@@ -285,7 +349,7 @@ describe('deployment target summary', () => {
 			});
 			assert.strictEqual(state.targets.length, 0);
 			assert.match(log, /Deployment target: AWS profile starter, Region eu-north-1/);
-			assert.ok(log.includes(BILLING_URL), log);
+			assert.ok(!log.includes(BILLING_URL), log);
 		});
 	}
 
@@ -321,13 +385,15 @@ describe('deployment target summary', () => {
 		const probed: unknown[] = [];
 		const probe: CredentialProbe = async (region, profile, keys) => {
 			probed.push([region, profile, keys]);
-			return keys;
+			return keys && { credentials: keys };
 		};
 		const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);
 		const { log } = await run({ probe, metadataClients: factory });
 		const keys = { accessKeyId: 'AKIAENVIRONMENT', secretAccessKey: 'secret', sessionToken: 'token' };
 		assert.deepStrictEqual(probed, [['eu-north-1', undefined, keys]]);
-		assert.deepStrictEqual(state.targets, [{ region: 'eu-north-1', profile: undefined, credentials: keys }]);
+		assert.deepStrictEqual(state.targets, [
+			{ region: 'eu-north-1', profile: undefined, credentials: keys, callerArn: undefined },
+		]);
 		assert.match(
 			log,
 			/Deployment target: access keys in AWS_ACCESS_KEY_ID \(used instead of AWS_PROFILE\), Region eu-north-1/,
@@ -340,7 +406,7 @@ describe('deployment target summary', () => {
 		const probed: unknown[] = [];
 		const probe: CredentialProbe = async (_region, _profile, keys) => {
 			probed.push(keys);
-			return keys;
+			return keys && { credentials: keys };
 		};
 		env.AWS_ACCESS_KEY_ID = 'AKIAENVIRONMENT';
 		env.AWS_SECRET_ACCESS_KEY = 'secret';
@@ -370,7 +436,7 @@ describe('deployment target summary', () => {
 		const probed: unknown[] = [];
 		const probe: CredentialProbe = async (region, profile, keys) => {
 			probed.push([region, profile, keys]);
-			return CREDENTIALS;
+			return VERIFIED;
 		};
 		const { log } = await run({ probe, metadataClients: fakeClients(NAMED, FREE_ACTIVE).factory });
 		assert.deepStrictEqual(probed, [['eu-north-1', 'from-cdk', undefined]]);
@@ -440,7 +506,7 @@ describe('deployment target summary', () => {
 		const { log, warn } = await run({
 			probe: async (region) => {
 				probed.push(region);
-				return CREDENTIALS;
+				return VERIFIED;
 			},
 			metadataClients: factory,
 		});
@@ -453,7 +519,7 @@ describe('deployment target summary', () => {
 		assert.ok(warn.includes('https://settings.aws.com/projects'), warn);
 		assert.doesNotMatch(warn, /123456789012/);
 		assert.match(log, /Deployment target: AWS profile starter, Region not set/);
-		assert.ok(log.includes(BILLING_URL), log);
+		assert.ok(!log.includes(BILLING_URL), log);
 	});
 
 	it('prints a placeholder in the Region command for a profile that a shell could misread', async () => {

@@ -33,10 +33,11 @@ const { STSClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sd
 const { SSMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-ssm'))});
 const { AccountClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-account'))});
 const { FreeTierClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-freetier'))});
+const { IAMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-iam'))});
 mock.method(STSClient.prototype, 'send', async function () {
   assert.equal(this.config.profile, explicitProfile);
   seen.push(['sts', await this.config.region()]);
-  return { $metadata: {} };
+  return { Arn: 'arn:aws:sts::123456789012:assumed-role/WorkspaceAdminAccess/fixture', $metadata: {} };
 });
 mock.method(SSMClient.prototype, 'send', async function (command) {
   assert.equal(command.constructor.name, 'GetParameterCommand');
@@ -46,9 +47,11 @@ mock.method(SSMClient.prototype, 'send', async function (command) {
 });
 // The metadata reads must reuse the credentials that STS resolved, for the same profile and Region.
 const destroyed = [];
+const managedTrust = { Statement: [{ Effect: 'Allow', Principal: { Service: 'account-access.amazonaws.com' } }] };
 for (const [name, Client, response] of [
   ['account', AccountClient, { AccountId: '123456789012', AccountName: 'Fixture project' }],
   ['freetier', FreeTierClient, { accountPlanType: 'PAID', accountPlanStatus: 'ACTIVE' }],
+  ['iam', IAMClient, { Role: { Path: '/managed/', AssumeRolePolicyDocument: encodeURIComponent(JSON.stringify(managedTrust)) } }],
 ]) {
   mock.method(Client.prototype, 'send', async function () {
     assert.equal(this.config.profile, explicitProfile);
@@ -104,9 +107,9 @@ const run = command === 'deploy'
   : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', deployOnly: true }));
 await assert.rejects(run, (error) => error === stop);
 assert.deepEqual(seen[0], ['sts', expectedRegion]);
-assert.deepEqual(seen.slice(1, 3).sort(), [['account', expectedRegion], ['freetier', expectedRegion]]);
-assert.deepEqual(seen.slice(3), [['ssm', expectedRegion], ['cdk']]);
-assert.deepEqual(destroyed.sort(), ['account', 'freetier']);
+assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);
+assert.deepEqual(seen.slice(4), [['ssm', expectedRegion], ['cdk']]);
+assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 `;
 }
 
