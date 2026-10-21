@@ -189,11 +189,12 @@ describe('getCorsPatterns — channel separation', () => {
     assert.strictEqual(isOriginAllowed('http://blocks-hosti-abcdef-123xus-west-2.elb.amazonaws.com'), false);
   });
 
-  it('matches the regex channel case-insensitively too', () => {
+  it("leaves the user's regex channel (CORS_ALLOWED_ORIGINS) case-sensitive, as released", () => {
     process.env.CORS_ALLOWED_ORIGINS = 'https://App\\.Example\\.com';
     _resetCorsPatterns();
 
-    assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+    assert.strictEqual(isOriginAllowed('https://app.example.com'), false);
+    assert.strictEqual(isOriginAllowed('https://App.Example.com'), true);
   });
 });
 
