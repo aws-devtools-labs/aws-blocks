@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -105,6 +105,13 @@ const CODE_TTL = 600; // 10 minutes
 const BCRYPT_COST = 12;
 
 /**
+ * Value stored under a `revoked:<jti>` key to mark a session as revoked. Only
+ * this exact marker counts as revoked (`isRevoked` asserts it), so a future
+ * writer under the shared `codes` store can't accidentally widen the contract.
+ */
+const REVOKED_MARKER = '1';
+
+/**
  * Simple username/password authentication composed from KVStore.
  *
  * ## Use Cases
@@ -165,7 +172,12 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });
-		this.codes = new KVStore(this, 'codes');
+		// `ttl: true` lets DynamoDB physically reap expired entries. The store
+		// holds short-lived verification codes and sign-out revocation markers
+		// (both written with `expiresAt`), so reaping keeps it from growing with
+		// dead rows. Reads filter expired items regardless, so correctness does
+		// not depend on the reaper — this is storage hygiene.
+		this.codes = new KVStore(this, 'codes', { ttl: true });
 		this.sessionDuration = options?.sessionDuration ?? 86400;
 		this.passwordPolicy = options?.passwordPolicy ?? {};
 		this.codeDelivery = options?.codeDelivery;
@@ -185,7 +197,12 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const code = String(crypto.randomInt(100000, 1000000));
 		const secret = await this.getSecret();
 		const hmac = crypto.createHmac('sha256', secret).update(`${purpose}:${username}:${code}`).digest('hex');
-		await this.codes.put(`${purpose}:${username}`, JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000 }));
+		// Reap abandoned sign-up/reset codes via the store's TTL: the DynamoDB row
+		// self-expires at the code's own expiry, so unused codes don't pile up.
+		const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL;
+		await this.codes.put(`${purpose}:${username}`, JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000 }), {
+			expiresAt,
+		});
 		return code;
 	}
 
@@ -309,10 +326,29 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	}
 
 	/**
-	 * End the current session and clear the session cookie.
+	 * End the current session: revoke the presented token server-side (so it is
+	 * rejected even if the cookie is replayed) and clear the session cookie.
+	 *
+	 * Revocation records the token's `jti` in the `codes` store under a
+	 * `revoked:` prefix, with an expiry equal to the token's own `exp` — so the
+	 * entry self-expires exactly when the token would have, and the revocation
+	 * list never grows unbounded. A request with no valid cookie just clears
+	 * (nothing to revoke).
+	 *
+	 * The local cookie is ALWAYS cleared (in `finally`), so sign-out on this
+	 * device never leaves the user stuck signed in — even if the server-side
+	 * revocation write fails. If that write does fail (e.g. a DynamoDB throttle),
+	 * this throws a stable `SignOutIncompleteException` (503) so the caller can
+	 * surface or retry: the token was NOT revoked, so a replayed copy keeps
+	 * authenticating until `exp`. The raw SDK error is logged, never thrown — it
+	 * would leak `$metadata`/ARNs to the client otherwise.
 	 */
 	async signOut(context: BlocksContext): Promise<void> {
-		this.clearCookie(context);
+		try {
+			await this.revokeCurrentToken(context);
+		} finally {
+			this.clearCookie(context);
+		}
 	}
 
 	/**
@@ -351,7 +387,14 @@ export class AuthBasic extends Scope implements BlocksAuth {
 
 	private async setCookie(context: BlocksContext, username: string): Promise<void> {
 		const secret = await this.getSecret();
-		const token = jwt.sign({ username }, secret, { expiresIn: this.sessionDuration, issuer: `bb-auth-basic:${this.fullId}`, subject: username });
+		// `jwtid` stamps a unique `jti` claim on the token so sign-out can revoke
+		// this specific session server-side (see `signOut` / `isRevoked`).
+		const token = jwt.sign({ username }, secret, {
+			expiresIn: this.sessionDuration,
+			issuer: `bb-auth-basic:${this.fullId}`,
+			subject: username,
+			jwtid: crypto.randomUUID(),
+		});
 		const cookieName = `auth_${this.fullId}`;
 		const security = buildCookieSecurityAttrs({
 			crossDomain: this.crossDomain,
@@ -372,28 +415,131 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		context.response.headers.set('Set-Cookie', `${cookieName}=; Max-Age=0; Path=/; ${security}`);
 	}
 
-	private async getUserFromCookie(context: BlocksContext): Promise<AuthBasicUser | null> {
+	/**
+	 * Parse and verify the session token from the request cookie, returning its
+	 * payload or `null` when the cookie is absent, malformed, expired, or forged.
+	 * This is the single place the cookie name, HS256 algorithm, and issuer are
+	 * spelled out, so `resolveSession` and `revokeCurrentToken` share one
+	 * parse/verify definition instead of each recomputing it.
+	 *
+	 * A verified token with no `exp` is rejected (treated as absent): a token
+	 * this BB issues always carries `exp`, and a token that never naturally
+	 * expires could outlive its own revocation marker (the marker self-expires
+	 * at the token's `exp`), so a replay could re-authenticate after the marker
+	 * is reaped. Requiring `exp` keeps every token's revocation bounded.
+	 */
+	private async parseSessionToken(
+		context: BlocksContext,
+	): Promise<{ username: string; jti?: string; exp: number } | null> {
 		const secret = await this.getSecret();
 		const cookieName = `auth_${this.fullId}`;
 		const cookies = context.request.headers.get('cookie') || '';
 		const match = cookies.match(new RegExp(`${cookieName}=([^;]+)`));
 		if (!match) return null;
 		try {
-			const payload = jwt.verify(match[1], secret, { algorithms: ['HS256'], issuer: `bb-auth-basic:${this.fullId}` }) as { username: string };
-			const record = await this.getUserRecord(payload.username);
-			if (!record || record.unconfirmed) return null;
-			return this.toAuthBasicUser(payload.username, record);
+			const payload = jwt.verify(match[1], secret, {
+				algorithms: ['HS256'],
+				issuer: `bb-auth-basic:${this.fullId}`,
+			}) as { username: string; jti?: string; exp?: number };
+			if (typeof payload.exp !== 'number') return null;
+			return { username: payload.username, jti: payload.jti, exp: payload.exp };
 		} catch {
 			return null;
 		}
 	}
 
+	/**
+	 * Resolve the session from the request cookie in ONE pass, returning both the
+	 * user (or null) and, when null, WHY — so `requireAuth` can pick the right
+	 * error name without a second `jwt.verify` + revocation-list read. `revoked`
+	 * means a valid, unexpired token whose `jti` was revoked at sign-out;
+	 * `absent` covers no cookie, a malformed/expired token, or an unknown user.
+	 */
+	private async resolveSession(
+		context: BlocksContext,
+	): Promise<{ user: AuthBasicUser } | { user: null; reason: 'absent' | 'revoked' }> {
+		const payload = await this.parseSessionToken(context);
+		if (!payload) return { user: null, reason: 'absent' };
+		// The revocation check and the user-record lookup don't depend on each
+		// other, so run them concurrently — an authenticated request stays at a
+		// single round trip rather than two sequential reads.
+		const [revoked, record] = await Promise.all([
+			payload.jti ? this.isRevoked(payload.jti) : false,
+			this.getUserRecord(payload.username),
+		]);
+		// A token whose jti was revoked at sign-out is rejected even though it
+		// is still cryptographically valid and unexpired.
+		if (revoked) return { user: null, reason: 'revoked' };
+		if (!record || record.unconfirmed) return { user: null, reason: 'absent' };
+		return { user: this.toAuthBasicUser(payload.username, record) };
+	}
+
+	private async getUserFromCookie(context: BlocksContext): Promise<AuthBasicUser | null> {
+		return (await this.resolveSession(context)).user;
+	}
+
+	// ── Session revocation ───────────────────────────────────────────────
+
+	/** Revocation-list key for a token id. Stored in the shared `codes` store. */
+	private revokedKey(jti: string): string {
+		return `revoked:${jti}`;
+	}
+
+	/**
+	 * Record the currently-presented token's `jti` on the revocation list until
+	 * the token's own expiry. A no-op when the cookie is missing, malformed, or
+	 * carries no `jti` (there is nothing to revoke).
+	 */
+	private async revokeCurrentToken(context: BlocksContext): Promise<void> {
+		// A missing/malformed/expired/forged cookie is a benign "nothing to
+		// revoke" (parseSessionToken returns null). This is kept separate from the
+		// revocation write below, so an infrastructure failure of that write is
+		// never mistaken for it.
+		const payload = await this.parseSessionToken(context);
+		if (!payload?.jti) return;
+
+		// Expire the revocation entry exactly when the token would have expired
+		// (`exp` is Unix epoch seconds), so the list self-trims and never grows
+		// unbounded. `parseSessionToken` guarantees `exp` is present (an exp-less
+		// token is rejected there), so the marker can never outlive the token.
+		const expiresAt = payload.exp;
+
+		// The write is the security-relevant step: if it fails (e.g. a DynamoDB
+		// throttle/5xx), the token was NOT revoked and a replayed copy keeps
+		// authenticating until `exp`. Throw a STABLE branded error rather than the
+		// raw SDK error (which carries $metadata/ARNs and would leak to the client
+		// via the state-machine catch) — the caller can surface or retry.
+		try {
+			await this.codes.put(this.revokedKey(payload.jti), REVOKED_MARKER, { expiresAt });
+		} catch (e) {
+			this.log.error('AuthBasic: failed to record session revocation on sign-out', { error: e });
+			throw new ApiError('Sign-out could not be completed; please retry', 503, {
+				name: AuthBasicErrors.SignOutIncomplete,
+			});
+		}
+	}
+
+	/**
+	 * True when a token id is on the revocation list (and not yet expired off it).
+	 * Asserts the stored marker value so a future `revoked:`-prefixed writer with
+	 * a different value can't silently widen what counts as revoked — only the
+	 * literal `REVOKED_MARKER` written by `revokeCurrentToken` is honored.
+	 */
+	private async isRevoked(jti: string): Promise<boolean> {
+		return (await this.codes.get(this.revokedKey(jti))) === REVOKED_MARKER;
+	}
+
 	// ── BlocksAuth interface ────────────────────────────────────────────────
 
 	async requireAuth(context: BlocksContext): Promise<AuthBasicUser> {
-		const user = await this.getUserFromCookie(context);
-		if (!user) throw new ApiError('Authentication required', 401, { name: AuthBasicErrors.SessionExpired });
-		return user;
+		const session = await this.resolveSession(context);
+		if (!session.user) {
+			// One pass already told us WHY: a revoked (signed-out) session reports
+			// SessionRevoked; an absent or aged-out one reports SessionExpired.
+			const name = session.reason === 'revoked' ? AuthBasicErrors.SessionRevoked : AuthBasicErrors.SessionExpired;
+			throw new ApiError('Authentication required', 401, { name });
+		}
+		return session.user;
 	}
 
 	async checkAuth(context: BlocksContext): Promise<boolean> {
@@ -455,10 +601,19 @@ export class AuthBasic extends Scope implements BlocksAuth {
 							return { ...this.signedOutState(), error: `Unknown action: ${(input as any).action}` };
 					}
 				} catch (e: any) {
-					const currentUser = await this.getUserFromCookie(context);
+					// A signOut always clears the cookie (via its finally), so the
+					// session is gone even when the revocation write failed — report
+					// signed-out rather than the still-valid request cookie's signedIn.
+					const currentUser = input.action === 'signOut' ? null : await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
+					// Surface the message only for a wire-safe error (an ApiError, or a
+					// BB error branded via blocksError) — a raw SDK/driver error's
+					// message can carry $metadata/ARNs, so it gets a generic message,
+					// never echoed. The name crosses the wire only when it is an
+					// intentional, non-default BB error constant.
+					const errorMessage = isWireSafeError(e) ? e.message : 'An unexpected error occurred';
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
-					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
+					return { ...base, error: errorMessage, ...(errorName ? { errorName } : {}) };
 				}
 			},
 		}));

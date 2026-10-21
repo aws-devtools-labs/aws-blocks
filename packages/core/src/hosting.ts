@@ -42,6 +42,7 @@ import {
   wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import { writeFrameworkSink } from './telemetry/framework-sink.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -599,6 +600,12 @@ export class Hosting extends Construct {
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
+
+    // Framework resolves here in the synth subprocess; hand it to the parent
+    // orchestrator (which emits telemetry) through the sink file it named. Runs before
+    // the build and output-dir checks below, which can abort synth, so a failed deploy
+    // still reports the framework it was deploying.
+    writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
     if (props.buildCommand) {

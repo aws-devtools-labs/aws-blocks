@@ -111,7 +111,10 @@ public struct CodegenModelBuilder {
         return CodegenModel(
             apiNamespaces: apiNamespaces,
             typeDefinitions: typeDefinitions,
-            servers: servers
+            servers: servers,
+            declaredTransferableBindings: rpcModel.declaredTransferableBindings,
+            unboundTransferableCauses: rpcModel.unboundTransferableCauses,
+            nativeCatalogWarnings: rpcModel.nativeCatalogWarnings
         )
     }
 
