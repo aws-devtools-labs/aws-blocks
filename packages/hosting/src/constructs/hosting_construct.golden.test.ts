@@ -13,7 +13,13 @@
  * (e.g. a changed bucket name) is caught by `cdk diff` in the deploy step; this
  * guard targets the logical-ID-drift class specifically.
  *
- * Regenerate intentionally (after a REVIEWED change) with `UPDATE_GOLDEN=1`.
+ * It also pins the WHOLE template of each (`*.template.json`), normalized only
+ * for content hashes (asset hashes change with any bundled file), so a byte
+ * change in a default resource — the KVS router function's code, a
+ * distribution property — fails here too, not only a logical-ID change.
+ *
+ * Regenerate intentionally (after a REVIEWED change, or an aws-cdk-lib bump
+ * that changes its own resources) with `UPDATE_GOLDEN=1`.
  */
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -35,6 +41,26 @@ const resourceMap = (stack: Stack): Record<string, string> => {
   const map: Record<string, string> = {};
   for (const [id, r] of Object.entries(resources)) map[id] = r.Type;
   return map;
+};
+
+/** The whole template, with content hashes (asset hashes, hashed construct suffixes of assets) normalized. */
+const normalizedTemplate = (stack: Stack): string =>
+  `${JSON.stringify(Template.fromStack(stack).toJSON(), null, 2).replace(/[a-f0-9]{64}/g, '<hash>')}\n`;
+
+const checkTemplateGolden = (name: string, stack: Stack) => {
+  const file = path.join(GOLDEN_DIR, `${name}.template.json`);
+  const serialized = normalizedTemplate(stack);
+  if (process.env.UPDATE_GOLDEN === '1') {
+    fs.mkdirSync(GOLDEN_DIR, { recursive: true });
+    fs.writeFileSync(file, serialized);
+    return;
+  }
+  assert.ok(fs.existsSync(file), `Missing golden ${file} — run with UPDATE_GOLDEN=1 to create it.`);
+  assert.equal(
+    serialized,
+    fs.readFileSync(file, 'utf8'),
+    `Default CloudFront template changed for '${name}'. If intentional and REVIEWED, regenerate with UPDATE_GOLDEN=1.`,
+  );
 };
 
 const checkGolden = (name: string, map: Record<string, string>) => {
@@ -73,6 +99,7 @@ void describe('HostingConstruct — golden (default CloudFront) resource map', (
     };
     new HostingConstruct(stack, 'Hosting', { manifest });
     checkGolden('spa-cloudfront', resourceMap(stack));
+    checkTemplateGolden('spa-cloudfront', stack);
   });
 
   void it('SSR default (CloudFront → S3 + server) resource map is unchanged', () => {
@@ -94,5 +121,6 @@ void describe('HostingConstruct — golden (default CloudFront) resource map', (
     };
     new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
     checkGolden('ssr-cloudfront', resourceMap(stack));
+    checkTemplateGolden('ssr-cloudfront', stack);
   });
 });

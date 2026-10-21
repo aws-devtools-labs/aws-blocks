@@ -61,7 +61,7 @@ const baselineInput = (scope: Construct): DoorInput => {
       assets,
       api: {
         kind: 'api',
-        url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks',
+        url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api',
         host: 'abc123.execute-api.us-east-1.amazonaws.com',
         stagePath: '/prod',
         paths: [BLOCKS_API_SUBTREE],

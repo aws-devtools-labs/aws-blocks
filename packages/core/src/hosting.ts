@@ -165,7 +165,7 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
  * instance but kept structural so Hosting doesn't depend on the concrete class.
  */
 export interface BlocksStackApi {
-  /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
+  /** Fully-qualified API Gateway URL of the RPC endpoint (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks/api`). */
   readonly apiUrl: string;
   /**
    * Claim the API front-door role for this `Hosting` distribution, suppressing
@@ -1100,7 +1100,10 @@ export class Hosting extends Construct {
               // BEFORE the cache lookup, so the real edge cache key lives under
               // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
               // matches that key and is a no-op for config.json. Invalidate the
-              // post-rewrite key too.
+              // post-rewrite key too. (The primary guard against staleness is
+              // step 5a's no-cache placeholder; this is defense-in-depth so a
+              // post-deploy invalidation actually clears any edge entry at its
+              // real key.)
               distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
             }
           : {}),
@@ -1140,8 +1143,8 @@ export class Hosting extends Construct {
     //    Traffic only flows after the stack is COMPLETE, so the Lambda always
     //    sees the full config (including these values) on its first cold start.
     //
-    //    Both values come from `hosting.distributionUrl` (custom-domain-aware:
-    //    `https://<customDomain>` when configured, else the CloudFront default)
+    //    Both values are `publicUrl`: the front door's URL (custom-domain-aware:
+    //    `https://<customDomain>` when configured), or the stacked door's edge,
     //    so a custom-domain deploy gets the right public origin and CORS allow.
     if (props.api) {
       // Register the origin config against the backend this distribution FRONTS —

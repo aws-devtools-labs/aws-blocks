@@ -209,6 +209,27 @@ describe('apiGatewayDoor — free-form build', () => {
     const res = buildApiGw(stack, staticPlan);
     assert.ok(res.url);
     assert.equal(res.originHandle?.protocol, 'https');
+    // The host of `https://<id>.execute-api…` (index 1 of a split on '://').
+    const apiId = Object.keys(Template.fromStack(stack).findResources('AWS::ApiGatewayV2::Api'))[0];
+    assert.deepEqual(stack.resolve(res.originHandle?.domainName), {
+      'Fn::Select': [1, { 'Fn::Split': ['://', { 'Fn::GetAtt': [apiId, 'ApiEndpoint'] }] }],
+    });
+  });
+  it('the REST door: the origin handle is the custom domain (index 2 of https://host/…)', () => {
+    const stack = new Stack(new App(), 'S4', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const input = buildDoorInput({ plan: staticPlan, bucket, staticDir: '.' });
+    const res = buildFrontDoor(
+      stack,
+      apiGatewayDoor,
+      {
+        ...input,
+        apiType: 'rest',
+        apiGateway: { plan: staticPlan, bucket, domain: { names: ['app.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z1' } },
+      },
+      { wiringCheck: false },
+    ).result;
+    assert.equal(stack.resolve(res.originHandle.domainName), 'app.example.com');
   });
   it('builds with no feature check: a streaming-SSR plan builds (served buffered)', () => {
     const app = new App();

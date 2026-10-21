@@ -229,20 +229,36 @@ export type BuildRouteTableInput = {
  * encoding.
  */
 export const buildRouteTable = (input: BuildRouteTableInput): RouteEntry[] => {
-  const { manifest, hasServer, hasImage, imagePrefix, basePath } = input;
+  const { manifest, hasImage, imagePrefix, basePath } = input;
   const edgeTargets = input.edgeTargets ?? new Set<string>();
   const isrActive = input.isrActive === true;
 
+  // IMPORTANT — patterns are kept basePath-RELATIVE through coalescing, then
+  // basePath is prepended ONCE afterwards. Coalescing groups routes by parent
+  // directory and a non-root parent (`parent.length > 0`) of one kind collapses
+  // to `parent/*`. If basePath were prepended FIRST, root-level routes like
+  // `/_next/*`, `/blocks-logo.png`, `/BUILD_ID` (parent `''`, never coalesced)
+  // would instead become `/app/_next/*`, `/app/blocks-logo.png` (parent `/app`)
+  // and collapse into a single `/app/*` STATIC wildcard — which shadows EVERY
+  // dynamic SSR route under basePath (`/app/api/echo` → S3 → 404). Coalescing
+  // relative keeps the root parent at `''` so the behavior is identical to the
+  // no-basePath case, just shifted under the prefix.
   const rows: [string, TerseRouteKind][] = [];
   for (const route of manifest.routes) {
     if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
-    // Lambda@Edge route functions get a dedicated CloudFront behavior; exclude.
+    // Lambda@Edge route functions get a dedicated CloudFront behavior that
+    // takes precedence over the default behavior — exclude them from the route
+    // table so the router never (mis)classifies them as default-server compute.
     if (edgeTargets.has(route.target)) continue;
-    // basePath-RELATIVE pattern (prefix applied once, after coalescing).
+    // basePath-RELATIVE pattern (no prefix yet — see note above).
     const rel = normalizePattern(route.pattern);
     const isStatic = route.target === 'static' || route.target === 's3';
-    // Image-opt when it targets the image origin (Next `image-optimization`) OR
-    // matches the configured IPX prefix (Nuxt `/_ipx/*`). Gate on `hasImage`.
+    // A route is image-opt when it targets the image origin (Next emits
+    // target 'image-optimization' for `/_next/image*`) OR when it matches the
+    // configured IPX prefix (Nuxt's `/_ipx/*`). Gate only on `hasImage` (the
+    // origin must exist) — NOT on `imagePrefix`, which Next never sets.
+    // Compare against the RELATIVE image prefix (imagePrefix is itself stored
+    // basePath-relative), matching the relative `rel` pattern above.
     const isImage =
       hasImage &&
       (route.target === 'image-optimization' ||

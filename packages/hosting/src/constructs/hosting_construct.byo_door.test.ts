@@ -18,7 +18,7 @@ import { cf } from './cf_helpers.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
-const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks';
+const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
 
 describe('HostingConstruct — bring-your-own front door', () => {
   let tmpDir: string;

@@ -8,7 +8,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
-import { _setSynthExistsChecker, cf, type DoorInput, defineFrontDoor, type RouteBehavior } from '@aws-blocks/hosting/constructs';
+import {
+  _setSynthExistsChecker,
+  _setSynthSecretFetcher,
+  cf,
+  type DoorInput,
+  defineFrontDoor,
+  type RouteBehavior,
+} from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
@@ -30,7 +37,7 @@ import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } 
 // ================================================================
 
 const MOCK_API: BlocksStackApi = {
-  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks',
+  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api',
 };
 
 /** Helper: create a minimal SPA build output (dist/ with index.html). */
@@ -2387,7 +2394,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: 'none' });
       const t = Template.fromStack(stack);
       const buckets = t.findResources('AWS::S3::Bucket');
-      const website = Object.keys(buckets).find((id) => buckets[id].Properties.WebsiteConfiguration);
+      const website = Object.keys(buckets).find((id) => buckets[id].Properties?.WebsiteConfiguration);
       assert.ok(website, 'a website bucket');
       const deployments = Object.entries(t.findResources('Custom::CDKBucketDeployment'));
       const config = deployments.find(([id]) => id.includes('BlocksConfigDeployment'));
@@ -3354,6 +3361,34 @@ describe('Hosting — frontDoor.features', () => {
     assert.deepEqual(Template.fromStack(migrated).toJSON(), Template.fromStack(aliased).toJSON());
   });
 
+  it('an SSR app: the released cache-key, TTL, geo and quota props equal the same settings in frontDoor.features', () => {
+    createNextjsBuildOutput(tmpDir);
+    const settings = {
+      cacheKeyCookies: ['sid'],
+      cacheKeyHeaders: ['authorization'],
+      ssrDefaultTtl: cdk.Duration.seconds(5),
+      geoRestriction: { type: 'whitelist' as const, countries: ['US'] },
+      quotas: { cacheBehaviors: 30 },
+    };
+    const customAdapter = (projectDir: string) => ({ ...createNextjsFixtureAdapter(tmpDir)(projectDir), buildId: 'feat-ssr-eq' });
+    const aliased = newStack('FeatSsrEq');
+    new Hosting(aliased, 'Hosting', { root: tmpDir, api: MOCK_API, customAdapter, ...settings });
+    const migrated = newStack('FeatSsrEq');
+    new Hosting(migrated, 'Hosting', { root: tmpDir, api: MOCK_API, customAdapter, frontDoor: { features: settings } });
+    const json = Template.fromStack(aliased).toJSON();
+    assert.deepEqual(Template.fromStack(migrated).toJSON(), json);
+    // The header alias took effect: `authorization` is in the SSR cache key.
+    assert.match(JSON.stringify(json), /"authorization"/);
+    // And the quota reaches the L3 either way: a budget below what an SSR
+    // distribution needs fails synth, through the alias and through features.
+    for (const props of [{ quotas: { cacheBehaviors: 1 } }, { frontDoor: { features: { quotas: { cacheBehaviors: 1 } } } }]) {
+      assert.throws(
+        () => new Hosting(newStack('FeatSsrQuota'), 'Hosting', { root: tmpDir, api: MOCK_API, customAdapter, ...props }),
+        (e: Error) => e.name === 'TooManyCacheBehaviorsError',
+      );
+    }
+  });
+
   it('ALB: features (and a supported alias) reach the router', () => {
     const stack = newStack('FeatAlb');
     new Hosting(stack, 'Hosting', {
@@ -3479,6 +3514,35 @@ describe('Hosting — frontDoor.features', () => {
         }),
       /requires async resolution/,
     );
+  });
+
+  it('Hosting.create() resolves a config() domain in frontDoor.features (CloudFront aliases; the ALB door\'s URL)', async () => {
+    _setSynthSecretFetcher(async () => 'app.example.com');
+    try {
+      const cfStack = newStack('FeatDomainCreateCf');
+      await Hosting.create(cfStack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { features: { domain: { domainName: config('DOMAIN_PROD'), hostedZone: 'example.com', hostedZoneId: 'Z1' } } },
+      });
+      Template.fromStack(cfStack).hasResourceProperties('AWS::CloudFront::Distribution', {
+        DistributionConfig: Match.objectLike({ Aliases: ['app.example.com'] }),
+      });
+      const albStack = newStack('FeatDomainCreateAlb');
+      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+        albStack,
+        'Cert',
+        'arn:aws:acm:us-east-1:111111111111:certificate/c',
+      );
+      const alb = await Hosting.create(albStack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: { kind: 'alb', certificate, features: { domain: { domainName: config('DOMAIN_PROD') } } },
+      });
+      assert.strictEqual(alb.url, 'https://app.example.com');
+    } finally {
+      _setSynthSecretFetcher(null);
+    }
   });
 });
 

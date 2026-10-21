@@ -1,0 +1,2428 @@
+{
+  "Resources": {
+    "HostingStorageHostingBucket8A6503F0": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 30,
+              "Id": "DeleteOldBuilds",
+              "Prefix": "builds/",
+              "Status": "Enabled",
+              "TagFilters": [
+                {
+                  "Key": "aws-blocks:build-state",
+                  "Value": "superseded"
+                }
+              ]
+            },
+            {
+              "Id": "ExpireNoncurrentVersions",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              },
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          },
+          {
+            "Key": "aws-cdk:cr-owned:builds/golden-ssr/:196c7a47",
+            "Value": "true"
+          },
+          {
+            "Key": "aws-cdk:cr-owned:builds/golden-ssr/:8d461905",
+            "Value": "true"
+          },
+          {
+            "Key": "aws-cdk:cr-owned:builds/golden-ssr/:e05fd99a",
+            "Value": "true"
+          }
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageHostingBucketPolicy38862C88": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:PutBucketPolicy",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "s3:GetObject",
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        {
+                          "Ref": "AWS::Partition"
+                        },
+                        ":cloudfront::",
+                        {
+                          "Ref": "AWS::AccountId"
+                        },
+                        ":distribution/",
+                        {
+                          "Ref": "HostingCdnHostingDistribution22864627"
+                        }
+                      ]
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "HostingStorageHostingBucket8A6503F0",
+                        "Arn"
+                      ]
+                    },
+                    "/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:GetObject",
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:aws:cloudfront::",
+                        {
+                          "Ref": "AWS::AccountId"
+                        },
+                        ":distribution/",
+                        {
+                          "Ref": "HostingCdnHostingDistribution22864627"
+                        }
+                      ]
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "HostingStorageHostingBucket8A6503F0",
+                        "Arn"
+                      ]
+                    },
+                    "/*"
+                  ]
+                ]
+              }
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:aws:cloudfront::",
+                        {
+                          "Ref": "AWS::AccountId"
+                        },
+                        ":distribution/",
+                        {
+                          "Ref": "HostingCdnHostingDistribution22864627"
+                        }
+                      ]
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HostingStorageHostingBucket8A6503F0",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HostingStorageHostingBucketAutoDeleteObjectsCustomResourceD60AA129": {
+      "Type": "Custom::S3AutoDeleteObjects",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        },
+        "BucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageHostingBucketPolicy38862C88"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageAccessLogBucketC56D2077": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 90,
+              "Id": "ExpireAccessLogs",
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerPreferred"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          }
+        ]
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageAccessLogBucketPolicy76E5AE12": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "HostingStorageAccessLogBucketC56D2077"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageAccessLogBucketC56D2077",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageAccessLogBucketC56D2077",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:PutBucketPolicy",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageAccessLogBucketC56D2077",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageAccessLogBucketC56D2077",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HostingStorageAccessLogBucketAutoDeleteObjectsCustomResource6C2D41E9": {
+      "Type": "Custom::S3AutoDeleteObjects",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        },
+        "BucketName": {
+          "Ref": "HostingStorageAccessLogBucketC56D2077"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageAccessLogBucketPolicy76E5AE12"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingComputedefaultFunctionRole851C77D3": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "HostingComputedefaultFunctionLogGroup17DE1884": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "RetentionInDays": 30
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingComputedefaultFunction8544222D": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": [
+          "x86_64"
+        ],
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "OPEN_NEXT_ORIGIN": "{}"
+          }
+        },
+        "Handler": "index.handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"
+          }
+        },
+        "MemorySize": 1024,
+        "Role": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunctionRole851C77D3",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 30
+      },
+      "DependsOn": [
+        "HostingComputedefaultFunctionRole851C77D3"
+      ]
+    },
+    "HostingCdnSsrRestApi1DBCCCDD": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Properties": {
+        "BinaryMediaTypes": [
+          "*/*"
+        ],
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ]
+        },
+        "Name": "SsrRestApi",
+        "Policy": {
+          "Statement": [
+            {
+              "Action": "execute-api:Invoke",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": "execute-api:/*"
+            },
+            {
+              "Action": "execute-api:Invoke",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:Referer": "<hash>"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": "execute-api:/*"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "Properties": {
+        "Description": "Automatically created by the RestApi construct",
+        "RestApiId": {
+          "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+        }
+      },
+      "DependsOn": [
+        "HostingCdnSsrRestApiproxyANYC0E7415D",
+        "HostingCdnSsrRestApiproxyFC2BD138",
+        "HostingCdnSsrRestApiANYF12B6E5D"
+      ],
+      "Metadata": {
+        "aws:cdk:do-not-refactor": true
+      }
+    },
+    "HostingCdnSsrRestApiDeploymentStageprod01338099": {
+      "Type": "AWS::ApiGateway::Stage",
+      "Properties": {
+        "DeploymentId": {
+          "Ref": "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda"
+        },
+        "RestApiId": {
+          "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+        },
+        "StageName": "prod"
+      }
+    },
+    "HostingCdnSsrRestApiANYApiPermissionTestStackHostingCdnSsrRestApi42F95459ANYF9A31CB9": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+              },
+              "/",
+              {
+                "Ref": "HostingCdnSsrRestApiDeploymentStageprod01338099"
+              },
+              "/*/"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingCdnSsrRestApiANYApiPermissionTestTestStackHostingCdnSsrRestApi42F95459ANY86C901A3": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+              },
+              "/test-invoke-stage/*/"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingCdnSsrRestApiANYF12B6E5D": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "ANY",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "ResponseTransferMode": "STREAM",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2021-11-15/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "HostingComputedefaultFunction8544222D",
+                    "Arn"
+                  ]
+                },
+                "/response-streaming-invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Fn::GetAtt": [
+            "HostingCdnSsrRestApi1DBCCCDD",
+            "RootResourceId"
+          ]
+        },
+        "RestApiId": {
+          "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+        }
+      }
+    },
+    "HostingCdnSsrRestApiproxyFC2BD138": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "HostingCdnSsrRestApi1DBCCCDD",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "{proxy+}",
+        "RestApiId": {
+          "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+        }
+      }
+    },
+    "HostingCdnSsrRestApiproxyANYApiPermissionTestStackHostingCdnSsrRestApi42F95459ANYproxy770FC1EB": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+              },
+              "/",
+              {
+                "Ref": "HostingCdnSsrRestApiDeploymentStageprod01338099"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingCdnSsrRestApiproxyANYApiPermissionTestTestStackHostingCdnSsrRestApi42F95459ANYproxy8618190D": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+              },
+              "/test-invoke-stage/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingCdnSsrRestApiproxyANYC0E7415D": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "AuthorizationType": "NONE",
+        "HttpMethod": "ANY",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "ResponseTransferMode": "STREAM",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2021-11-15/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "HostingComputedefaultFunction8544222D",
+                    "Arn"
+                  ]
+                },
+                "/response-streaming-invocations"
+              ]
+            ]
+          }
+        },
+        "ResourceId": {
+          "Ref": "HostingCdnSsrRestApiproxyFC2BD138"
+        },
+        "RestApiId": {
+          "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+        }
+      }
+    },
+    "HostingCdnSsrCachePolicy93ED7509": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Comment": "SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers",
+          "DefaultTTL": 0,
+          "MaxTTL": 31536000,
+          "MinTTL": 0,
+          "Name": {
+            "Fn::Join": [
+              "",
+              [
+                "TestStackHostingCdnSsrCachePolicy1C55608C-",
+                {
+                  "Ref": "AWS::Region"
+                }
+              ]
+            ]
+          },
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": {
+              "CookieBehavior": "whitelist",
+              "Cookies": [
+                "__prerender_bypass",
+                "__next_preview_data"
+              ]
+            },
+            "EnableAcceptEncodingBrotli": true,
+            "EnableAcceptEncodingGzip": true,
+            "HeadersConfig": {
+              "HeaderBehavior": "whitelist",
+              "Headers": [
+                "rsc",
+                "next-router-prefetch",
+                "next-router-state-tree",
+                "next-router-segment-prefetch",
+                "next-action"
+              ]
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "allExcept",
+              "QueryStrings": [
+                "_rsc"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "HostingCdnRouteStore1582DEF2": {
+      "Type": "AWS::CloudFront::KeyValueStore",
+      "Properties": {
+        "Comment": "Edge route table for TestStack/Hosting/Cdn",
+        "Name": "TestStackHostingCdnRouteStoreE3633A65"
+      }
+    },
+    "HostingCdnKvsRouterRequest39C4CF8E": {
+      "Type": "AWS::CloudFront::Function",
+      "Properties": {
+        "AutoPublish": true,
+        "FunctionCode": "import cf from 'cloudfront';\nvar KVS = cf.kvs();\nasync function getJson(key, dflt) {\n  try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }\n}\nfunction matchPattern(uri, pattern) {\n  // Fast path: no wildcard → exact match.\n  if (pattern.indexOf('*') === -1) {\n    return uri === pattern ? { tail: '' } : null;\n  }\n  // Fast path: single trailing '*' → prefix match, capturing the tail (used to\n  // splice into wildcard redirect destinations).\n  if (pattern.indexOf('*') === pattern.length - 1 && pattern.lastIndexOf('*') === pattern.length - 1) {\n    var prefix = pattern.substring(0, pattern.length - 1);\n    if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };\n    return null;\n  }\n  // Glob with '*' anywhere: a non-trailing '*' matches one segment (no '/'),\n  // a trailing '*' matches the rest. Literal scan (no dynamic RegExp).\n  return globMatch(uri, pattern);\n}\nfunction globMatch(uri, pattern) {\n  var ui = 0, pi = 0;\n  while (pi < pattern.length) {\n    var pc = pattern.charAt(pi);\n    if (pc === '*') {\n      var isTrailing = pi === pattern.length - 1;\n      pi++;\n      if (isTrailing) { return { tail: uri.substring(ui) }; }\n      var nextLit = pattern.charAt(pi);\n      while (ui < uri.length && uri.charAt(ui) !== nextLit && uri.charAt(ui) !== '/') { ui++; }\n      if (ui >= uri.length || uri.charAt(ui) !== nextLit) { return null; }\n    } else {\n      if (ui >= uri.length || uri.charAt(ui) !== pc) { return null; }\n      ui++; pi++;\n    }\n  }\n  return ui === uri.length ? { tail: '' } : null;\n}\nfunction stripBasePath(uri, bp) {\n  // Consistent boundary guard: strip ONLY an exact basePath or a 'bp/' prefix,\n  // so '/myapp-extra' is NOT treated as under '/myapp'. Empty result → '/'.\n  if (!bp) { return uri; }\n  if (uri === bp) { return '/'; }\n  if (uri.indexOf(bp + '/') === 0) {\n    var stripped = uri.substring(bp.length);\n    return stripped.length === 0 ? '/' : stripped;\n  }\n  return uri;\n}\nfunction buildQueryString(request) {\n  return request.querystring && Object.keys(request.querystring).length > 0\n    ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')\n    : '';\n}\nfunction stripCred(request, meta) {\n  var ck = meta.ck; if (ck) for (var i = 0; i < ck.length; i++) delete request.cookies[ck[i]];\n  var hh = meta.hh; if (hh) for (var j = 0; j < hh.length; j++) delete request.headers[hh[j]];\n}\nasync function handler(event) {\n  var request = event.request;\n  var uri = request.uri;\n  var meta = await getJson('meta', null);\n  if (!meta) { return request; }\n\n  // 0. Already-prefixed asset fetches (CloudFront custom-error responses\n  // re-request /builds/<id>/<page> through this same behavior). Send straight\n  // to S3 with no re-prefix / no redirect / no rewrite.\n  if (uri.indexOf('/builds/') === 0) {\n    stripCred(request, meta);\n    cf.selectRequestOriginById(meta.oS3);\n    return request;\n  }\n\n  // 0b. www <-> apex canonical 301 (runs before everything else).\n  if (meta.ww) {\n    var host = request.headers.host && request.headers.host.value;\n    var qs = buildQueryString(request);\n    if (meta.ww === 'toApex' && host && host.indexOf('www.') === 0) {\n      return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: 'https://' + host.substring(4) + uri + qs } } };\n    }\n    if (meta.ww === 'toWww' && host && host.indexOf('www.') !== 0) {\n      return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: 'https://www.' + host + uri + qs } } };\n    }\n  }\n\n  // 1. redirects (chunked, first match wins)\n  for (var di = 0; di < meta.dc; di++) {\n    var drows = await getJson('d' + di, []);\n    for (var j = 0; j < drows.length; j++) {\n      var m = matchPattern(uri, drows[j][0]);\n      if (m) {\n        var dest = drows[j][1];\n        // Splice the captured tail into a wildcard destination. Guard on the\n        // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact\n        // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')\n        // yields tail '' , and a truthiness guard would skip the splice and leak\n        // the literal '*' into Location (-> '/new/*'). Always strip the trailing\n        // '*' and append the tail (empty string included).\n        if (dest.charAt(dest.length - 1) === '*') {\n          dest = dest.substring(0, dest.length - 1) + (m.tail || '');\n        }\n        return { statusCode: drows[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };\n      }\n    }\n  }\n\n  var bp = meta.bp;\n\n  // 2. assetPrefix strip — MUST run BEFORE the basePath 308 below.\n  //\n  // Next.js does NOT prefix assetPrefix with basePath: with basePath='/app' and\n  // assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*\n  // (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with\n  // basePath. So we strip the assetPrefix and, when a basePath is also set,\n  // RE-MAP the asset into the basePath form (/cdn-static/_next/* ->\n  // /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)\n  // basePath asset already has, so it matches the basePath-prefixed route table,\n  // the basePath 308 below does NOT fire (it is now under basePath), and the\n  // static branch (4c) strips basePath back off before the build-id rewrite.\n  //\n  // Ordering matters: if the basePath 308 ran first it would see /cdn-static/...\n  // (not under /app) and 308 to /app/cdn-static/... -> 404 -> the browser\n  // rejects the HTML 404 as a non-executable script (the reported bug).\n  if (meta.aP && (uri === meta.aP || uri.indexOf(meta.aP + '/') === 0)) {\n    uri = uri.substring(meta.aP.length);\n    if (uri.length === 0) { uri = '/'; }\n    if (bp && uri !== bp && uri.indexOf(bp + '/') !== 0) {\n      uri = uri === '/' ? bp + '/' : bp + uri;\n    }\n  }\n\n  // 2b. basePath canonical 308. MUST preserve the query string — e.g.\n  // /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query\n  // hits the image optimizer with no url param -> 400 \"url parameter is\n  // required\" (and any ?ms=/?tag= API param is likewise lost). Mirror the www\n  // 301 above and append the rebuilt query string.\n  if (bp) {\n    if (uri !== bp && uri.indexOf(bp + '/') !== 0) {\n      var target = uri === '/' ? bp + '/' : bp + uri;\n      return { statusCode: 308, statusDescription: 'Permanent Redirect', headers: { location: { value: target + buildQueryString(request) } } };\n    }\n  }\n\n  // 3. origin selection: scan route table for first match. Also try the\n  // trailing-slash-normalized form so a route stored as exact '/about' still\n  // matches a '/about/' request (the old per-behavior model emitted derived\n  // bare-path behaviors for this; here we normalize at match time). Without\n  // this, '/about/' would miss → default to the SSR origin on compute deploys,\n  // re-rendering a page that should be served statically from S3.\n  var altUri = (uri.length > 1 && uri.charAt(uri.length - 1) === '/')\n    ? uri.substring(0, uri.length - 1)\n    : null;\n  var kind = null;\n  for (var ri = 0; ri < meta.rc && kind === null; ri++) {\n    var rrows = await getJson('r' + ri, []);\n    for (var k = 0; k < rrows.length; k++) {\n      if (matchPattern(uri, rrows[k][0]) || (altUri !== null && matchPattern(altUri, rrows[k][0]))) {\n        kind = rrows[k][1]; break;\n      }\n    }\n  }\n  // Default: server if present, else static (S3).\n  if (kind === null) { kind = meta.srv ? 'c' : 's'; }\n\n  // static/image routes share a cache key: drop credential cache-key entries.\n  if (kind !== 'c') { stripCred(request, meta); }\n\n  // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).\n  // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source\n  // path relative to its OWN base (e.g. IPX baseURL '/_ipx'), so a deployed\n  // basePath like '/myapp' must be removed first — otherwise the optimizer\n  // sees '/myapp/_ipx/...' , fails to match its prefix, and 404s. (Mirrors the\n  // basePath strip the static branch already does.)\n  if (kind === 'i') {\n    uri = stripBasePath(uri, bp);\n    request.uri = uri;\n    cf.selectRequestOriginById(meta.oImg);\n    return request;\n  }\n  // 4b. compute/server origin — keep URI, set x-forwarded-host, select server.\n  if (kind === 'c') {\n    cf.selectRequestOriginById(meta.oSrv);\n    var host = request.headers.host ? request.headers.host.value : undefined;\n    if (host) { request.headers['x-forwarded-host'] = { value: host }; }\n    return request;\n  }\n  // 4c. static origin (S3): basePath strip → directory-index/SPA → build-id\n  // prefix. (assetPrefix was already stripped up front in step 2b.)\n  cf.selectRequestOriginById(meta.oS3);\n  uri = stripBasePath(uri, bp);\n  // resolve build-id from skew cookie (__dpl) if valid, else metadata default.\n  // Only honor the cookie when skew protection is enabled — a stale __dpl from\n  // a previously-enabled deploy must not pin a visitor to a deleted build.\n  var buildId = meta.b;\n  if (meta.sk) {\n    var cookie = request.cookies['__dpl'];\n    if (cookie) { var v = cookie.value; if (/^[a-zA-Z0-9-]{1,64}$/.test(v)) { buildId = v; } }\n  }\n  if (meta.spa) {\n    var seg = uri.substring(uri.lastIndexOf('/') + 1);\n    if (seg.indexOf('.') === -1 && uri.indexOf('/.well-known/') !== 0) { uri = '/index.html'; }\n  } else {\n    if (uri.charAt(uri.length - 1) === '/') {\n      uri = uri + 'index.html';\n    } else {\n      var seg2 = uri.substring(uri.lastIndexOf('/') + 1);\n      if (seg2.indexOf('.') === -1) { uri = uri + '/index.html'; }\n    }\n  }\n  // HTML always resolves from the current build; assets honor __dpl (see #245 in JSDoc).\n  if (uri.slice(-5) === '.html') { buildId = meta.b; }\n  request.uri = '/builds/' + buildId + uri;\n  return request;\n}",
+        "FunctionConfig": {
+          "Comment": "KVS edge router: origin selection + build-id rewrite",
+          "KeyValueStoreAssociations": [
+            {
+              "KeyValueStoreARN": {
+                "Fn::GetAtt": [
+                  "HostingCdnRouteStore1582DEF2",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "Name": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              "TestStackHostingKvsRouterRequest4D234EE5"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingCdnKvsRouterResponse140A39DC": {
+      "Type": "AWS::CloudFront::Function",
+      "Properties": {
+        "AutoPublish": true,
+        "FunctionCode": "import cf from 'cloudfront';\nvar KVS = cf.kvs();\nasync function getJson(key, dflt) {\n  try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }\n}\nfunction matchPattern(uri, pattern) {\n  // Fast path: no wildcard → exact match.\n  if (pattern.indexOf('*') === -1) {\n    return uri === pattern ? { tail: '' } : null;\n  }\n  // Fast path: single trailing '*' → prefix match, capturing the tail (used to\n  // splice into wildcard redirect destinations).\n  if (pattern.indexOf('*') === pattern.length - 1 && pattern.lastIndexOf('*') === pattern.length - 1) {\n    var prefix = pattern.substring(0, pattern.length - 1);\n    if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };\n    return null;\n  }\n  // Glob with '*' anywhere: a non-trailing '*' matches one segment (no '/'),\n  // a trailing '*' matches the rest. Literal scan (no dynamic RegExp).\n  return globMatch(uri, pattern);\n}\nfunction globMatch(uri, pattern) {\n  var ui = 0, pi = 0;\n  while (pi < pattern.length) {\n    var pc = pattern.charAt(pi);\n    if (pc === '*') {\n      var isTrailing = pi === pattern.length - 1;\n      pi++;\n      if (isTrailing) { return { tail: uri.substring(ui) }; }\n      var nextLit = pattern.charAt(pi);\n      while (ui < uri.length && uri.charAt(ui) !== nextLit && uri.charAt(ui) !== '/') { ui++; }\n      if (ui >= uri.length || uri.charAt(ui) !== nextLit) { return null; }\n    } else {\n      if (ui >= uri.length || uri.charAt(ui) !== pc) { return null; }\n      ui++; pi++;\n    }\n  }\n  return ui === uri.length ? { tail: '' } : null;\n}\nfunction stripBasePath(uri, bp) {\n  // Consistent boundary guard: strip ONLY an exact basePath or a 'bp/' prefix,\n  // so '/myapp-extra' is NOT treated as under '/myapp'. Empty result → '/'.\n  if (!bp) { return uri; }\n  if (uri === bp) { return '/'; }\n  if (uri.indexOf(bp + '/') === 0) {\n    var stripped = uri.substring(bp.length);\n    return stripped.length === 0 ? '/' : stripped;\n  }\n  return uri;\n}\nasync function handler(event) {\n  var request = event.request;\n  var response = event.response;\n  var uri = request.uri;\n  var meta = await getJson('meta', null);\n  if (!meta) { return response; }\n\n  // per-pattern headers\n  for (var hi = 0; hi < meta.hc; hi++) {\n    var hrows = await getJson('h' + hi, []);\n    for (var j = 0; j < hrows.length; j++) {\n      if (matchPattern(uri, hrows[j][0])) {\n        var hdrs = hrows[j][1];\n        for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }\n      }\n    }\n  }\n\n  // skew-protection cookie (status-gated, HTML only)\n  if (response.statusCode < 400) {\n    var ct = response.headers['content-type'] ? response.headers['content-type'].value : '';\n    if (ct.indexOf('text/html') >= 0) {\n      response.cookies['__dpl'] = { value: meta.b, attributes: 'Path=/; SameSite=Lax; Max-Age=86400' };\n    }\n  }\n  return response;\n}",
+        "FunctionConfig": {
+          "Comment": "KVS edge router: per-pattern headers + skew cookie",
+          "KeyValueStoreAssociations": [
+            {
+              "KeyValueStoreARN": {
+                "Fn::GetAtt": [
+                  "HostingCdnRouteStore1582DEF2",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "Name": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              "TestStackHostingvsRouterResponseD49F62DD"
+            ]
+          ]
+        }
+      },
+      "DependsOn": [
+        "HostingCdnKvsRouterRequest39C4CF8E"
+      ]
+    },
+    "HostingCdnRouteStoreKeysFnServiceRoleC62C774E": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "HostingCdnRouteStoreKeysFnServiceRoleDefaultPolicyFAF065B8": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "cloudfront-keyvaluestore:DescribeKeyValueStore",
+                "cloudfront-keyvaluestore:UpdateKeys"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HostingCdnRouteStore1582DEF2",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "s3:ListBucket",
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "builds/*"
+                  ]
+                }
+              },
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HostingStorageHostingBucket8A6503F0",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "s3:PutObjectTagging",
+                "s3:DeleteObjectTagging"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "HostingStorageHostingBucket8A6503F0",
+                        "Arn"
+                      ]
+                    },
+                    "/builds/*"
+                  ]
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HostingCdnRouteStoreKeysFnServiceRoleDefaultPolicyFAF065B8",
+        "Roles": [
+          {
+            "Ref": "HostingCdnRouteStoreKeysFnServiceRoleC62C774E"
+          }
+        ]
+      }
+    },
+    "HostingCdnRouteStoreKeysFnF087098D": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Handler": "kv_keys_handler_bundle.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "HostingCdnRouteStoreKeysFnServiceRoleC62C774E",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 300
+      },
+      "DependsOn": [
+        "HostingCdnRouteStoreKeysFnServiceRoleDefaultPolicyFAF065B8",
+        "HostingCdnRouteStoreKeysFnServiceRoleC62C774E"
+      ]
+    },
+    "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleC34BFE6B": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleDefaultPolicy0A9AD11E": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingCdnRouteStoreKeysFnF087098D",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingCdnRouteStoreKeysFnF087098D",
+                          "Arn"
+                        ]
+                      },
+                      ":*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": "lambda:GetFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HostingCdnRouteStoreKeysFnF087098D",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleDefaultPolicy0A9AD11E",
+        "Roles": [
+          {
+            "Ref": "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleC34BFE6B"
+          }
+        ]
+      }
+    },
+    "HostingCdnRouteStoreKeysProviderframeworkonEvent19308C36": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "AWS CDK resource provider framework - onEvent (TestStack/Hosting/Cdn/RouteStoreKeys/Provider)",
+        "Environment": {
+          "Variables": {
+            "USER_ON_EVENT_FUNCTION_ARN": {
+              "Fn::GetAtt": [
+                "HostingCdnRouteStoreKeysFnF087098D",
+                "Arn"
+              ]
+            }
+          }
+        },
+        "Handler": "framework.onEvent",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "FATAL",
+          "LogFormat": "JSON"
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleC34BFE6B",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900
+      },
+      "DependsOn": [
+        "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleDefaultPolicy0A9AD11E",
+        "HostingCdnRouteStoreKeysProviderframeworkonEventServiceRoleC34BFE6B"
+      ]
+    },
+    "HostingCdnRouteStoreKeysB95A94D0": {
+      "Type": "AWS::CloudFormation::CustomResource",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "HostingCdnRouteStoreKeysProviderframeworkonEvent19308C36",
+            "Arn"
+          ]
+        },
+        "KvsArn": {
+          "Fn::GetAtt": [
+            "HostingCdnRouteStore1582DEF2",
+            "Arn"
+          ]
+        },
+        "BucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "Entries": "{\"r0\":\"[[\\\"/_next/static/*\\\",\\\"s\\\"]]\",\"meta\":\"{\\\"b\\\":\\\"golden-ssr\\\",\\\"bp\\\":\\\"\\\",\\\"spa\\\":0,\\\"img\\\":\\\"\\\",\\\"srv\\\":1,\\\"aP\\\":\\\"\\\",\\\"ww\\\":\\\"\\\",\\\"sk\\\":1,\\\"oS3\\\":\\\"blocks-s3\\\",\\\"oSrv\\\":\\\"blocks-server\\\",\\\"oImg\\\":\\\"blocks-image\\\",\\\"rc\\\":1,\\\"dc\\\":0,\\\"hc\\\":0}\"}"
+      },
+      "DependsOn": [
+        "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9",
+        "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3",
+        "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6",
+        "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C",
+        "HostingErrorPageDeploymentAwsCliLayer6AEE16FB",
+        "HostingErrorPageDeploymentCustomResource9CA2DBEB"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingCdnForwardAllOriginRequestPolicyF52D0C9C": {
+      "Type": "AWS::CloudFront::OriginRequestPolicy",
+      "Properties": {
+        "OriginRequestPolicyConfig": {
+          "Comment": "KVS router: forward all viewer data (except Host) to the selected origin",
+          "CookiesConfig": {
+            "CookieBehavior": "all"
+          },
+          "HeadersConfig": {
+            "HeaderBehavior": "allExcept",
+            "Headers": [
+              "host"
+            ]
+          },
+          "Name": "TestStackHostingCdnForwardAllOriginRequestPolicy7AAA0302",
+          "QueryStringsConfig": {
+            "QueryStringBehavior": "all"
+          }
+        }
+      }
+    },
+    "HostingCdnSentinelGuard40BBB772": {
+      "Type": "AWS::CloudFront::Function",
+      "Properties": {
+        "AutoPublish": true,
+        "FunctionCode": "function handler(event) {\n  return {\n    statusCode: 403,\n    statusDescription: 'Forbidden',\n    headers: { 'content-type': { value: 'text/plain' } },\n    body: 'Forbidden'\n  };\n}",
+        "FunctionConfig": {
+          "Comment": "KVS edge router: 403 direct hits to origin-binding sentinels",
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "Name": {
+          "Fn::Join": [
+            "",
+            [
+              {
+                "Ref": "AWS::Region"
+              },
+              "TestStackHostingCdnSentinelGuardB700FE24"
+            ]
+          ]
+        }
+      },
+      "DependsOn": [
+        "HostingCdnKvsRouterResponse140A39DC"
+      ]
+    },
+    "HostingCdnHostingDistributionOrigin1S3OriginAccessControl9E811808": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": "TestStackHostingCdnHostingDiOrigin1S3OriginAccessControlEDEFFB0C",
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageAccessLogBucketAutoDeleteObjectsCustomResource6C2D41E9"
+      ]
+    },
+    "HostingCdnHostingDistribution22864627": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "CacheBehaviors": [
+            {
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE"
+              ],
+              "CachePolicyId": {
+                "Ref": "HostingCdnSsrCachePolicy93ED7509"
+              },
+              "Compress": true,
+              "FunctionAssociations": [
+                {
+                  "EventType": "viewer-request",
+                  "FunctionARN": {
+                    "Fn::GetAtt": [
+                      "HostingCdnSentinelGuard40BBB772",
+                      "FunctionARN"
+                    ]
+                  }
+                }
+              ],
+              "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+              "PathPattern": "/__blocks_origin_server/*",
+              "ResponseHeadersPolicyId": "67f7725c-6f97-4210-82d7-5512b31e9d03",
+              "TargetOriginId": "blocks-server",
+              "ViewerProtocolPolicy": "redirect-to-https"
+            }
+          ],
+          "CustomErrorResponses": [
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 500,
+              "ResponseCode": 500,
+              "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 10,
+              "ErrorCode": 502,
+              "ResponseCode": 502,
+              "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 10,
+              "ErrorCode": 503,
+              "ResponseCode": 503,
+              "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 10,
+              "ErrorCode": 504,
+              "ResponseCode": 504,
+              "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "PATCH",
+              "POST",
+              "DELETE"
+            ],
+            "CachePolicyId": {
+              "Ref": "HostingCdnSsrCachePolicy93ED7509"
+            },
+            "Compress": true,
+            "FunctionAssociations": [
+              {
+                "EventType": "viewer-request",
+                "FunctionARN": {
+                  "Fn::GetAtt": [
+                    "HostingCdnKvsRouterRequest39C4CF8E",
+                    "FunctionARN"
+                  ]
+                }
+              },
+              {
+                "EventType": "viewer-response",
+                "FunctionARN": {
+                  "Fn::GetAtt": [
+                    "HostingCdnKvsRouterResponse140A39DC",
+                    "FunctionARN"
+                  ]
+                }
+              }
+            ],
+            "OriginRequestPolicyId": {
+              "Ref": "HostingCdnForwardAllOriginRequestPolicyF52D0C9C"
+            },
+            "ResponseHeadersPolicyId": "67f7725c-6f97-4210-82d7-5512b31e9d03",
+            "TargetOriginId": "blocks-s3",
+            "ViewerProtocolPolicy": "redirect-to-https"
+          },
+          "Enabled": true,
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Logging": {
+            "Bucket": {
+              "Fn::GetAtt": [
+                "HostingStorageAccessLogBucketC56D2077",
+                "RegionalDomainName"
+              ]
+            }
+          },
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "HostingStorageHostingBucket8A6503F0",
+                  "RegionalDomainName"
+                ]
+              },
+              "Id": "blocks-s3",
+              "OriginAccessControlId": {
+                "Fn::GetAtt": [
+                  "HostingCdnHostingDistributionOrigin1S3OriginAccessControl9E811808",
+                  "Id"
+                ]
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
+            },
+            {
+              "CustomOriginConfig": {
+                "OriginProtocolPolicy": "https-only",
+                "OriginSSLProtocols": [
+                  "TLSv1.2"
+                ]
+              },
+              "DomainName": {
+                "Fn::Select": [
+                  2,
+                  {
+                    "Fn::Split": [
+                      "/",
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "https://",
+                            {
+                              "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+                            },
+                            ".execute-api.",
+                            {
+                              "Ref": "AWS::Region"
+                            },
+                            ".",
+                            {
+                              "Ref": "AWS::URLSuffix"
+                            },
+                            "/",
+                            {
+                              "Ref": "HostingCdnSsrRestApiDeploymentStageprod01338099"
+                            },
+                            "/"
+                          ]
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "Id": "blocks-server",
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "Referer",
+                  "HeaderValue": "<hash>"
+                }
+              ],
+              "OriginPath": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "/",
+                    {
+                      "Ref": "HostingCdnSsrRestApiDeploymentStageprod01338099"
+                    }
+                  ]
+                ]
+              }
+            }
+          ],
+          "PriceClass": "PriceClass_100"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageAccessLogBucketAutoDeleteObjectsCustomResource6C2D41E9"
+      ]
+    },
+    "HostingCdnDeployInvalidation7E5C279F": {
+      "Type": "Custom::AWS",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd22872D164C4C",
+            "Arn"
+          ]
+        },
+        "Create": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"service\":\"CloudFront\",\"action\":\"createInvalidation\",\"parameters\":{\"DistributionId\":\"",
+              {
+                "Ref": "HostingCdnHostingDistribution22864627"
+              },
+              "\",\"InvalidationBatch\":{\"CallerReference\":\"blocks-golden-ssr\",\"Paths\":{\"Quantity\":1,\"Items\":[\"/*\"]}}},\"physicalResourceId\":{\"id\":\"invalidation-golden-ssr\"}}"
+            ]
+          ]
+        },
+        "Update": {
+          "Fn::Join": [
+            "",
+            [
+              "{\"service\":\"CloudFront\",\"action\":\"createInvalidation\",\"parameters\":{\"DistributionId\":\"",
+              {
+                "Ref": "HostingCdnHostingDistribution22864627"
+              },
+              "\",\"InvalidationBatch\":{\"CallerReference\":\"blocks-golden-ssr\",\"Paths\":{\"Quantity\":1,\"Items\":[\"/*\"]}}},\"physicalResourceId\":{\"id\":\"invalidation-golden-ssr\"}}"
+            ]
+          ]
+        },
+        "InstallLatestAwsSdk": false
+      },
+      "DependsOn": [
+        "HostingCdnDeployInvalidationCustomResourcePolicyD03C1129",
+        "HostingCdnRouteStoreKeysB95A94D0"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingCdnDeployInvalidationCustomResourcePolicyD03C1129": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "cloudfront:CreateInvalidation",
+              "Effect": "Allow",
+              "Resource": "*"
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HostingCdnDeployInvalidationCustomResourcePolicyD03C1129",
+        "Roles": [
+          {
+            "Ref": "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2"
+          }
+        ]
+      },
+      "DependsOn": [
+        "HostingCdnRouteStoreKeysB95A94D0"
+      ]
+    },
+    "HostingMonitoringAlarmTopicKeyD593D9B9": {
+      "Type": "AWS::KMS::Key",
+      "Properties": {
+        "Description": "Encrypts CloudWatch alarm notifications published to the hosting alarm topic.",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Statement": [
+            {
+              "Action": "kms:*",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":iam::",
+                      {
+                        "Ref": "AWS::AccountId"
+                      },
+                      ":root"
+                    ]
+                  ]
+                }
+              },
+              "Resource": "*"
+            },
+            {
+              "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey*"
+              ],
+              "Condition": {
+                "StringEqualsIfExists": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Resource": "*",
+              "Sid": "AllowCloudWatchAlarmsToPublishToEncryptedTopic"
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingMonitoringAlarmTopicE4448342": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "KmsMasterKeyId": {
+          "Fn::GetAtt": [
+            "HostingMonitoringAlarmTopicKeyD593D9B9",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "HostingMonitoringCloudFront5xxRate4B464E2B": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "HostingMonitoringAlarmTopicE4448342"
+          }
+        ],
+        "AlarmDescription": "CloudFront is returning 5xx for >=5% of requests over 5 minutes.",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "DistributionId",
+            "Value": {
+              "Ref": "HostingCdnHostingDistribution22864627"
+            }
+          },
+          {
+            "Name": "Region",
+            "Value": "Global"
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "5xxErrorRate",
+        "Namespace": "AWS/CloudFront",
+        "Period": 300,
+        "Statistic": "Average",
+        "Threshold": 5,
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "HostingMonitoringSsrLambdaErrors6A11C3C6": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "HostingMonitoringAlarmTopicE4448342"
+          }
+        ],
+        "AlarmDescription": "SSR Lambda error rate >= 1% of invocations over 5 minutes.",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "EvaluationPeriods": 1,
+        "Metrics": [
+          {
+            "Expression": "(errors / invocations) * 100",
+            "Id": "expr_1",
+            "Label": "SSR Lambda error rate (%)",
+            "ReturnData": true
+          },
+          {
+            "Id": "errors",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "FunctionName",
+                    "Value": {
+                      "Ref": "HostingComputedefaultFunction8544222D"
+                    }
+                  }
+                ],
+                "MetricName": "Errors",
+                "Namespace": "AWS/Lambda"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          },
+          {
+            "Id": "invocations",
+            "MetricStat": {
+              "Metric": {
+                "Dimensions": [
+                  {
+                    "Name": "FunctionName",
+                    "Value": {
+                      "Ref": "HostingComputedefaultFunction8544222D"
+                    }
+                  }
+                ],
+                "MetricName": "Invocations",
+                "Namespace": "AWS/Lambda"
+              },
+              "Period": 300,
+              "Stat": "Sum"
+            },
+            "ReturnData": false
+          }
+        ],
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "HostingMonitoringSsrLambdaThrottlesCDA1B5DA": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmActions": [
+          {
+            "Ref": "HostingMonitoringAlarmTopicE4448342"
+          }
+        ],
+        "AlarmDescription": "SSR Lambda is being throttled — concurrency cap reached.",
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "HostingComputedefaultFunction8544222D"
+            }
+          }
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Throttles",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Threshold": 1,
+        "TreatMissingData": "notBreaching"
+      }
+    },
+    "HostingErrorPageDeploymentAwsCliLayer6AEE16FB": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Properties": {
+        "Content": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "/opt/awscli/aws"
+      }
+    },
+    "HostingErrorPageDeploymentCustomResource9CA2DBEB": {
+      "Type": "Custom::CDKBucketDeployment",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536",
+            "Arn"
+          ]
+        },
+        "SourceBucketNames": [
+          {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          }
+        ],
+        "SourceObjectKeys": [
+          "<hash>.zip"
+        ],
+        "SourceMarkers": [
+          {}
+        ],
+        "DestinationBucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "DestinationBucketKeyPrefix": "builds/golden-ssr/",
+        "WaitForDistributionInvalidation": true,
+        "Prune": false,
+        "OutputObjectKeys": true
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Properties": {
+        "Content": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "/opt/awscli/aws"
+      }
+    },
+    "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3": {
+      "Type": "Custom::CDKBucketDeployment",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19",
+            "Arn"
+          ]
+        },
+        "SourceBucketNames": [
+          {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          }
+        ],
+        "SourceObjectKeys": [
+          "<hash>.zip"
+        ],
+        "DestinationBucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "DestinationBucketKeyPrefix": "builds/golden-ssr/",
+        "WaitForDistributionInvalidation": true,
+        "Prune": false,
+        "Exclude": [
+          "*"
+        ],
+        "Include": [
+          "*.html",
+          "**/*.html"
+        ],
+        "SystemMetadata": {
+          "cache-control": "no-cache, no-store, must-revalidate"
+        },
+        "OutputObjectKeys": true
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Properties": {
+        "Content": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "/opt/awscli/aws"
+      }
+    },
+    "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C": {
+      "Type": "Custom::CDKBucketDeployment",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19",
+            "Arn"
+          ]
+        },
+        "SourceBucketNames": [
+          {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          }
+        ],
+        "SourceObjectKeys": [
+          "<hash>.zip"
+        ],
+        "DestinationBucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "DestinationBucketKeyPrefix": "builds/golden-ssr/",
+        "WaitForDistributionInvalidation": true,
+        "Prune": false,
+        "Exclude": [
+          "*.html",
+          "**/*.html"
+        ],
+        "SystemMetadata": {
+          "cache-control": "public, s-maxage=31536000, max-age=0, must-revalidate"
+        },
+        "OutputObjectKeys": true
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          }
+        ]
+      }
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Timeout": 900,
+        "MemorySize": 128,
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "HostingStorageHostingBucket8A6503F0"
+              },
+              " S3 bucket."
+            ]
+          ]
+        }
+      },
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092"
+      ]
+    },
+    "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "AWS679f53fac002430cb0da5b7982bd22872D164C4C": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 120
+      },
+      "DependsOn": [
+        "AWS679f53fac002430cb0da5b7982bd2287ServiceRoleC1EA0FF2"
+      ]
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF",
+        "Roles": [
+          {
+            "Ref": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265"
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "AWS_CA_BUNDLE": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+          }
+        },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Ref": "HostingErrorPageDeploymentAwsCliLayer6AEE16FB"
+          }
+        ],
+        "MemorySize": 1024,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.13",
+        "Timeout": 900
+      },
+      "DependsOn": [
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF",
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265"
+      ]
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C",
+        "Roles": [
+          {
+            "Ref": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947"
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "<hash>.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "AWS_CA_BUNDLE": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+          }
+        },
+        "EphemeralStorage": {
+          "Size": 1024
+        },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Ref": "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9"
+          }
+        ],
+        "MemorySize": 1024,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.13",
+        "Timeout": 900
+      },
+      "DependsOn": [
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C",
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947"
+      ]
+    }
+  },
+  "Outputs": {
+    "HostingCdnSsrRestApiEndpoint572031D8": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "HostingCdnSsrRestApi1DBCCCDD"
+            },
+            ".execute-api.",
+            {
+              "Ref": "AWS::Region"
+            },
+            ".",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/",
+            {
+              "Ref": "HostingCdnSsrRestApiDeploymentStageprod01338099"
+            },
+            "/"
+          ]
+        ]
+      }
+    },
+    "HostingCdnDistributionUrl8DC4CC87": {
+      "Description": "URL for the hosted site",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Fn::GetAtt": [
+                "HostingCdnHostingDistribution22864627",
+                "DomainName"
+              ]
+            }
+          ]
+        ]
+      }
+    },
+    "HostingMonitoringTopicArnDC2214AD": {
+      "Description": "SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.",
+      "Value": {
+        "Ref": "HostingMonitoringAlarmTopicE4448342"
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Type": "AWS::SSM::Parameter::Value<String>",
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}

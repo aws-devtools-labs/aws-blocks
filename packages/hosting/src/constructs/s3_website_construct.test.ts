@@ -98,6 +98,12 @@ describe('s3WebsiteDoor — free-form build', () => {
     const res = buildSite(stack, spaPlan);
     assert.ok(res.url);
     assert.equal(res.originHandle.protocol, 'http');
+    // The host of `http://<bucket>.s3-website…` (index 1 of a split on '://').
+    const buckets = Template.fromStack(stack).findResources('AWS::S3::Bucket');
+    const website = Object.keys(buckets).find((id) => buckets[id].Properties?.WebsiteConfiguration);
+    assert.deepEqual(stack.resolve(res.originHandle.domainName), {
+      'Fn::Select': [1, { 'Fn::Split': ['://', { 'Fn::GetAtt': [website, 'WebsiteURL'] }] }],
+    });
     assert.ok(res.publicBucket, 'exposes the public website bucket');
   });
   it('rejects an SSR plan (a website bucket cannot run a server)', () => {

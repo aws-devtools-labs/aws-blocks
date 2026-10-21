@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { Distribution, PriceClass } from 'aws-cdk-lib/aws-cloudfront';
+import { Distribution, PriceClass, ResponseHeadersPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { DeployManifest } from '../manifest/types.js';
 import { cf } from './cf_helpers.js';
@@ -19,6 +19,8 @@ import { FRONT_DOOR_SETTINGS, resolveFrontDoorFeatures } from './front_door_opti
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
 const WEB_ACL = 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/byo/1';
+/** One more cache-key cookie than the default quota leaves for the app. */
+const NINE_COOKIES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
 const REGIONAL_ACL = 'arn:aws:wafv2:us-west-2:111111111111:regional/webacl/byo/1';
 
 describe('HostingConstruct — frontDoor.features', () => {
@@ -197,9 +199,13 @@ describe('HostingConstruct — frontDoor.features', () => {
         skewProtection: { enabled: true, maxAge: 3600 },
         cdn: {
           priceClass: PriceClass.PRICE_CLASS_200,
-          cacheKeyCookies: ['sid'],
+          cacheKeyCookies: NINE_COOKIES,
+          cacheKeyHeaders: ['authorization'],
           ssrDefaultTtl: Duration.seconds(5),
           geoRestriction: { type: 'whitelist', countries: ['US'] },
+          responseHeadersPolicy: ResponseHeadersPolicy.SECURITY_HEADERS,
+          // Nine cache-key cookies need a raised quota: dropping this alias fails synth.
+          quotas: { cacheKeyCookies: 12 },
         },
       },
       ssrManifest(),
@@ -214,15 +220,24 @@ describe('HostingConstruct — frontDoor.features', () => {
             monitoring: { enabled: true },
             skewProtection: { enabled: true, maxAge: 3600 },
             priceClass: PriceClass.PRICE_CLASS_200,
-            cacheKeyCookies: ['sid'],
+            cacheKeyCookies: NINE_COOKIES,
+            cacheKeyHeaders: ['authorization'],
             ssrDefaultTtl: Duration.seconds(5),
             geoRestriction: { type: 'whitelist', countries: ['US'] },
+            responseHeadersPolicy: ResponseHeadersPolicy.SECURITY_HEADERS,
+            quotas: { cacheKeyCookies: 12 },
           },
         },
       },
       ssrManifest(),
     ).template.toJSON();
     assert.deepEqual(migrated, aliased);
+    // Each alias took effect (the comparison alone can't tell a dropped alias
+    // from a dropped feature): the header is in the SSR cache key, and the BYO
+    // headers policy replaced the built one.
+    const json = JSON.stringify(aliased);
+    assert.match(json, /"authorization"/);
+    assert.equal(Object.keys(Template.fromJSON(aliased).findResources('AWS::CloudFront::ResponseHeadersPolicy')).length, 0);
   });
 
   it('an alias reaches a non-CloudFront door: top-level waf → the ALB web ACL', () => {

@@ -84,7 +84,7 @@ describe('buildDoorInput — app facts and origins', () => {
       plan: ssrPlan,
       bucket,
       staticDir: '.',
-      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks', paths: ['/webhooks/*', '/health'] },
+      api: { url: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', paths: ['/webhooks/*', '/health'] },
     });
     assert.deepEqual(input.origins.api?.paths, ['/aws-blocks/*', '/webhooks/*', '/health']);
     assert.ok(!input.origins.api?.paths.includes('/aws-blocks-auth/*'), 'no stale /aws-blocks-auth/* path');

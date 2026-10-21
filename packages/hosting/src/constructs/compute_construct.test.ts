@@ -150,6 +150,22 @@ void describe('ComputeConstruct', () => {
         InvokeMode: 'RESPONSE_STREAM',
       });
     });
+
+    void it("creates a BUFFERED Function URL for a streaming function built with responseMode 'buffered'", () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'image-optimization',
+        computeResource: handlerResource(bundle),
+        responseMode: 'buffered',
+      });
+
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Url', {
+        AuthType: 'AWS_IAM',
+        InvokeMode: 'BUFFERED',
+      });
+    });
   });
 
   // ---- HTTP Server type ----
