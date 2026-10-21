@@ -24,7 +24,7 @@ jobs:
     name: Windows E2E (dev + sandbox + deploy)
     runs-on: windows-latest
     timeout-minutes: 120
-    environment: publish
+    environment: e2e
     env:
       # Unique per run so a cancelled run can't collide with the next.
       BLOCKS_STACK_SUFFIX: w${{ github.run_number }}
