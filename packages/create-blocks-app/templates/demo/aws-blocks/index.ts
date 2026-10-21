@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, DistributedDatabase, sql } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -80,6 +80,15 @@ const todos = new DistributedTable(scope, 'todos', {
     partitionKey: 'userId',
     sortKey: 'todoId'
   }
+});
+
+// DistributedDatabase: a relational, strongly-consistent SQL database (Aurora
+// DSQL on deploy; PGlite locally via the mock, no AWS). Unlike DistributedTable
+// (key-value), it runs multi-row SQL transactions atomically — used here for a
+// money transfer between accounts that must move both balances or neither.
+// Schema lives in aws-blocks/dsql-migrations/*.sql, applied automatically.
+const ledger = new DistributedDatabase(scope, 'ledger', {
+  migrationsPath: './aws-blocks/dsql-migrations',
 });
 
 // Simple hello world API for testing CDK deployment
@@ -239,6 +248,54 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     
     await todos.delete({ userId: user.username, todoId });
+    return { success: true };
+  },
+
+  // ── DistributedDatabase (SQL) demo — atomic money transfer ───────────
+  // Create an account with a starting balance.
+  async openAccount(name: string, balance: number) {
+    await ledger.execute(
+      sql`INSERT INTO accounts (name, balance) VALUES (${name}, ${balance})
+          ON CONFLICT (name) DO UPDATE SET balance = ${balance}`,
+    );
+    return { name, balance };
+  },
+
+  // Read one account's balance.
+  async balanceOf(name: string) {
+    const row = await ledger.queryOne<{ balance: number }>(
+      sql`SELECT balance FROM accounts WHERE name = ${name}`,
+    );
+    return { name, balance: row ? Number(row.balance) : null };
+  },
+
+  // Move `amount` from one account to another inside a single transaction:
+  // both updates commit together or neither does. This is the capability
+  // DistributedTable cannot express — a multi-row atomic write. The debit is
+  // guarded by `balance >= amount` so a missing sender or insufficient funds
+  // matches zero rows; throwing an ApiError then aborts the transaction and the
+  // credit is rolled back too, making the atomic-abort path observable. ApiError
+  // (not a plain Error) is wire-safe, so the 'TransferDeclined' name and message
+  // reach the client instead of being scrubbed to a generic 500.
+  async transfer(from: string, to: string, amount: number) {
+    await ledger.transaction(async (tx) => {
+      const { rowCount: debited } = await tx.execute(
+        sql`UPDATE accounts SET balance = balance - ${amount} WHERE name = ${from} AND balance >= ${amount}`,
+      );
+      if (debited === 0) {
+        throw new ApiError(`transfer declined: '${from}' is missing or has less than ${amount}`, 400, {
+          name: 'TransferDeclined',
+        });
+      }
+      const { rowCount: credited } = await tx.execute(
+        sql`UPDATE accounts SET balance = balance + ${amount} WHERE name = ${to}`,
+      );
+      if (credited === 0) {
+        throw new ApiError(`transfer declined: recipient '${to}' does not exist`, 400, {
+          name: 'TransferDeclined',
+        });
+      }
+    });
     return { success: true };
   }
 }));

@@ -34,6 +34,8 @@ Open http://localhost:3000 after `npm run dev`.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
+- **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both
+  balance updates commit together or roll back together inside one transaction.
 
 The API mixes **public** methods (no auth) and **protected** methods (gated by
 `requireAuth`) in one namespace, showing where the auth boundary sits.
