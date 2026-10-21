@@ -81,6 +81,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  */
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
@@ -91,17 +92,43 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 /**
- * **Background job processing backed by SQS and Lambda.**
+ * **Background job processing backed by SQS, run on Lambda or a container.**
  *
  * Use for fire-and-forget async work: sending emails, processing uploads,
- * generating reports, or any task that shouldn't block an API response.
- * Supports single and batch submission (up to 10), optional delay, schema
- * validation, and automatic retries with dead-letter queue.
+ * generating reports, or any task that shouldn't block an API response. Runs on
+ * the app's default serverless compute, or assign a container `Compute` (Fargate)
+ * for long-running or high-memory jobs. Supports single and batch submission (up
+ * to 10,000 per call), optional delay, schema validation, and automatic retries
+ * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
  * Full docs: `README.md` in the package directory above.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+/**
+ * **`Compute` — choose where a workload runs by stating its type.**
+ *
+ * Construct a `Compute` with an explicit `type` (`'serverless'` | `'container'`)
+ * and that type's options; Blocks maps the type to the AWS service that backs it
+ * (`serverless` → Lambda, `container` → Fargate) — the service name never appears
+ * in your code. Options are a discriminated union on `type`, so an attribute that
+ * doesn't apply to the chosen type is a compile error. Hand the result to a
+ * handler-bearing block via its `compute` option (e.g. `AsyncJob`); omit it and
+ * the workload uses the app default (serverless).
+ *
+ * Package: `@aws-blocks/bb-compute`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 /**
  * **Username/password authentication with JWT sessions.**
  *

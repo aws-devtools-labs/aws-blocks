@@ -16,6 +16,9 @@
     },
     {
       "path": "../bb-lambda-compute"
+    },
+    {
+      "path": "../bb-container-compute"
     }
   ]
 }

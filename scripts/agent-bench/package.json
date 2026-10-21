@@ -7,7 +7,7 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "echo \"agent-bench tests run in agent-bench.yml (see test:ci)\" && exit 0",
-		"test:ci": "tsc --noEmit && node --test steps/lib/*.test.mjs"
+		"test:ci": "tsc --noEmit && node --test --test-concurrency=1 steps/lib/*.test.mjs"
 	},
 	"devDependencies": {
 		"@strands-agents/sdk": "^1.21.0",
