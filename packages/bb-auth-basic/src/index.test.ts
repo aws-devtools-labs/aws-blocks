@@ -496,6 +496,26 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 		assert.doesNotThrow(() => makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 60, lockoutSeconds: 120 } }));
 		assert.doesNotThrow(() => makeAuth({ lockout: {} }));
 	});
+
+	test('signUp clears a pre-registration lockout counter for the new username', async () => {
+		// Absent usernames are counted (to avoid an existence oracle), so an
+		// attacker can trip a lock on a name before it is registered. The real
+		// owner must not inherit that lock: signUp clears the counter.
+		const auth = makeAuth({ lockout: { maxAttempts: 2 } });
+
+		// Trip the lock for 'heidi' before she exists (two failed sign-ins).
+		await assert.rejects(auth.signIn('heidi', 'wrong', ctx()));
+		await assert.rejects(auth.signIn('heidi', 'wrong', ctx()));
+		assert.ok(await codesStore(auth).get('lockout:heidi'), 'a pre-registration counter exists');
+
+		// Heidi registers the name — the counter must be cleared…
+		await auth.signUp('heidi', 'password123');
+		assert.strictEqual(await codesStore(auth).get('lockout:heidi'), null, 'signUp cleared the counter');
+
+		// …so her very first real sign-in succeeds instead of hitting the lock.
+		const user = await auth.signIn('heidi', 'password123', ctx());
+		assert.strictEqual(user.username, 'heidi');
+	});
 });
 
 /**

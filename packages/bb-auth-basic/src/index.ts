@@ -359,6 +359,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		} catch {
 			throw new ApiError('Username already exists', 409, { name: AuthBasicErrors.UserAlreadyExists });
 		}
+		// Failed sign-ins against a not-yet-registered username leave a lockout
+		// counter behind (we deliberately count absent users to avoid an
+		// enumeration oracle). Clear it on successful registration so the real
+		// owner of the name isn't locked out on their first sign-in.
+		await this.clearLockout(username);
 		if (this.codeDelivery) {
 			const code = await this.generateCode('signup', username);
 			await this.codeDelivery(username, code);
@@ -629,8 +634,8 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	/**
 	 * Read the current lockout record for a username, or `null` when none exists
 	 * or throttling is disabled. `count` is the running consecutive-failure
-	 * count; `firstFailAt` is the epoch-ms of the oldest failure still inside the
-	 * sliding window; `lockedAt` is the epoch-ms at which the count first reached
+	 * count; `firstFailAt` is the epoch-ms of the first failure anchoring the
+	 * fixed counting window; `lockedAt` is the epoch-ms at which the count first reached
 	 * `maxAttempts` (absent until the lock trips) and is what the lockout window
 	 * is measured from.
 	 */
@@ -707,7 +712,9 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		}
 		// Expire the row after whichever window is longer so a tripped lock is
 		// enforced for its full duration and a counter that never trips still
-		// self-reaps once counting lapses.
+		// self-reaps once counting lapses. `ttlSeconds` (a relative duration) is
+		// intentional here — the other `codes` writes pass an absolute
+		// `expiresAt`, but a duration reads clearer for a rolling counter.
 		const ttlSeconds = Math.max(this.lockout.windowSeconds, this.lockout.lockoutSeconds);
 		try {
 			await this.codes.put(this.lockoutKey(username), JSON.stringify(next), { ttlSeconds });

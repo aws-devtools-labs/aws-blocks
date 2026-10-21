@@ -262,7 +262,7 @@ const auth = new AuthBasic(app, 'auth', {
 | Field | Default | Meaning |
 |---|---|---|
 | `maxAttempts` | `5` | Consecutive failed sign-ins that trip the lock. |
-| `windowSeconds` | `900` (15 min) | Sliding window over which failures are counted — a failure older than this resets the running count, so slow, spaced-out guesses don't accumulate. |
+| `windowSeconds` | `900` (15 min) | Fixed window, measured from the first failure, over which failures are counted — once it elapses the next failure resets the running count, so slow, spaced-out guesses don't accumulate. |
 | `lockoutSeconds` | `900` (15 min) | How long the account stays locked once tripped. The lock self-expires (no manual unlock). |
 
 While locked, `signIn` throws `AuthBasicErrors.AccountLocked` (`AccountLockedException`, HTTP 429) — **before** the password is checked, so a locked account sheds the bcrypt cost under attack and the decision carries no password-dependent timing signal. A successful sign-in clears the counter. Counting is **per-username** (the credential-stuffing target); it does not lock by IP, so a shared NAT isn't a false-positive risk.
