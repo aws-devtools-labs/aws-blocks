@@ -1875,7 +1875,14 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
   // own `isNextVersionSupported` stays the single source of truth for the
   // supported/unsupported decision, and its warning is the one the user sees.
-  args.push('--dangerously-use-unsupported-next-version');
+  //
+  // The explicit `'true'` value is REQUIRED, not cosmetic: OpenNext's CLI
+  // `parseArgs` only records a `--flag` when a following non-`-` token exists
+  // (otherwise it stores `undefined`), and `build()` then applies the override
+  // only when the value `!== undefined`. A bare trailing `--flag` would parse
+  // as `undefined` and the override would silently NOT apply, so the value
+  // token is what makes it take effect.
+  args.push('--dangerously-use-unsupported-next-version', 'true');
 
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,

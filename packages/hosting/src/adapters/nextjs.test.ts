@@ -1973,7 +1973,7 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
     );
   });
 
-  void it('always passes --dangerously-use-unsupported-next-version to the OpenNext build', () => {
+  void it('always passes --dangerously-use-unsupported-next-version=true to the OpenNext build', () => {
     // We pass the flag unconditionally: it is inert on a supported Next
     // (OpenNext reads it only inside its `if (!isSupported)` branch) and
     // prevents the hard exit(1) once a major ages out — so the deploy never
@@ -1990,9 +1990,20 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
         (a): a is string[] => Array.isArray(a) && a[0] === '@opennextjs/aws',
       );
     assert.ok(buildArgs, 'expected an `npx @opennextjs/aws build` spawn');
+    const flagIdx = buildArgs.indexOf(
+      '--dangerously-use-unsupported-next-version',
+    );
     assert.ok(
-      buildArgs.includes('--dangerously-use-unsupported-next-version'),
+      flagIdx !== -1,
       `build args should carry the override flag; got: ${JSON.stringify(buildArgs)}`,
+    );
+    // The value token is load-bearing: OpenNext's parseArgs records the flag
+    // only when a following non-`-` token exists, else stores undefined and
+    // the override never applies. A bare trailing flag would silently no-op.
+    assert.strictEqual(
+      buildArgs[flagIdx + 1],
+      'true',
+      `the flag must be followed by its 'true' value or OpenNext ignores it; got: ${JSON.stringify(buildArgs)}`,
     );
   });
 });
