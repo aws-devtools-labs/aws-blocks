@@ -29,17 +29,22 @@ jobs:
     env:
       HUSKY: '0'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm ci
+      # --ignore-scripts: a publishing job shouldn't run dependencies' install
+      # scripts, and the build doesn't need them (esbuild/sharp binaries ship
+      # as optional deps). Keep it on this command only: `changeset publish`
+      # still runs our own prepack. pr-checks.yml's release-install-check runs
+      # the same install + build on every PR; keep the two in sync.
+      - run: npm ci --ignore-scripts
 
       - uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         id: changesets

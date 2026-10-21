@@ -1,6 +1,8 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme } from '@aws-blocks/blocks/ui';
+
+injectTheme();
 
 // For coding agents: Leave this comment in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
@@ -161,73 +163,83 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Cookie test functions
 (window as any).testSetCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
   const value = (document.getElementById('cookieValue') as HTMLInputElement).value;
   
-  await api.setCookie(name, value);
+  await api.setCookie(value);
   document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Set cookie ${escapeHtml(name)} = ${escapeHtml(value)}</span>`;
+    `<span class="success">✓ Set cookie = ${escapeHtml(value)}</span>`;
 };
 
 (window as any).testGetCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
-  
-  const value = await api.getCookie(name);
+  const value = await api.getCookie();
   document.getElementById('cookie-result')!.innerHTML = 
     value ? `<span class="success">✓ Got cookie: ${escapeHtml(value)}</span>` 
           : `<span class="error">✗ Cookie not found</span>`;
 };
 
 (window as any).testDeleteCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
-  
-  await api.deleteCookie(name);
+  await api.deleteCookie();
   document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Deleted cookie ${escapeHtml(name)}</span>`;
+    `<span class="success">✓ Deleted cookie</span>`;
 };
 
-// KV Store test functions
+// KV Store test functions (requireAuth-gated: sign in first)
 (window as any).testSetValue = async () => {
   const key = (document.getElementById('key') as HTMLInputElement).value;
   const value = (document.getElementById('value') as HTMLInputElement).value;
   
-  const result = await api.setValue(key, value);
-  
-  document.getElementById('kv-result')!.innerHTML = 
-    `<span class="success">✓ Set ${escapeHtml(key)} = ${escapeHtml(value)}</span>`;
+  try {
+    await api.setValue(key, value);
+    document.getElementById('kv-result')!.innerHTML = 
+      `<span class="success">✓ Set ${escapeHtml(key)} = ${escapeHtml(value)}</span>`;
+  } catch (error: any) {
+    document.getElementById('kv-result')!.innerHTML = 
+      `<span class="error">✗ ${escapeHtml(error.message)}</span>`;
+  }
 };
 
 (window as any).testGetValue = async () => {
   const key = (document.getElementById('key') as HTMLInputElement).value;
   
-  const value = await api.getValue(key);
-  
-  document.getElementById('kv-result')!.innerHTML = 
-    value ? `<span class="success">✓ Got value: ${escapeHtml(value)}</span>` 
-          : `<span class="error">✗ Key not found</span>`;
+  try {
+    const value = await api.getValue(key);
+    document.getElementById('kv-result')!.innerHTML = 
+      value ? `<span class="success">✓ Got value: ${escapeHtml(value)}</span>` 
+            : `<span class="error">✗ Key not found</span>`;
+  } catch (error: any) {
+    document.getElementById('kv-result')!.innerHTML = 
+      `<span class="error">✗ ${escapeHtml(error.message)}</span>`;
+  }
 };
 
 (window as any).runAllTests = async () => {
   const results: string[] = [];
-  
+
+  // KV methods are requireAuth-gated: signed out, they reject with 401.
   try {
     await api.setValue('test1', 'value1');
     const val = await api.getValue('test1');
     results.push(val === 'value1' ? '✓ KV Store works' : '✗ KV Store failed');
-    
-    await api.setCookie('testCookie', 'testValue');
-    const cookie = await api.getCookie('testCookie');
-    results.push(cookie === 'testValue' ? '✓ Cookie set/get works' : '✗ Cookie failed');
-    
-    await api.deleteCookie('testCookie');
-    const deleted = await api.getCookie('testCookie');
-    results.push(!deleted ? '✓ Cookie delete works' : '✗ Cookie delete failed');
-
-    document.getElementById('test-results')!.innerHTML = results.join('<br>');
   } catch (error: any) {
-    document.getElementById('test-results')!.innerHTML = 
-      `<span class="error">✗ Tests failed: ${escapeHtml(error.message)}</span>`;
+    results.push(error.status === 401
+      ? '– KV Store skipped: sign in to run the KV test'
+      : `✗ KV Store failed: ${escapeHtml(error.message)}`);
   }
+
+  // The cookie round-trip is public, so it runs whether or not you're signed in.
+  try {
+    await api.setCookie('testValue');
+    const cookie = await api.getCookie();
+    results.push(cookie === 'testValue' ? '✓ Cookie set/get works' : '✗ Cookie failed');
+
+    await api.deleteCookie();
+    const deleted = await api.getCookie();
+    results.push(!deleted ? '✓ Cookie delete works' : '✗ Cookie delete failed');
+  } catch (error: any) {
+    results.push(`✗ Cookie test failed: ${escapeHtml(error.message)}`);
+  }
+
+  document.getElementById('test-results')!.innerHTML = results.join('<br>');
 };
 
 console.log('AWS Blocks Demo loaded - using direct backend imports with Proxy');

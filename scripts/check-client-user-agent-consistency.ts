@@ -37,6 +37,14 @@ function isBuildingBlockSource(absPath: string): boolean {
 }
 
 /**
+ * `clientConfig` is not an AWS SDK client option — it is the option name a
+ * third-party wrapper exposes for the client it constructs itself, so there is
+ * no client here to install the middleware on. Stripped from the line rather
+ * than skipping it, so a real site sharing the line is still counted.
+ */
+const WRAPPER_CLIENT_CONFIG = /\bclientConfig\s*:\s*\{[^}]*\}/g;
+
+/**
  * Estimates client-construction sites by counting `customUserAgent` property
  * lines in files that contain an SDK client constructor.
  */
@@ -45,7 +53,7 @@ function countClientUserAgentSites(content: string): number {
   for (const raw of content.split("\n")) {
     const line = raw.trim();
     if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) continue;
-    if (/\bcustomUserAgent\s*[:,}]/.test(line)) sites++;
+    if (/\bcustomUserAgent\s*[:,}]/.test(line.replace(WRAPPER_CLIENT_CONFIG, ""))) sites++;
   }
   if (sites === 0) return 0;
   // Also catches `new (await import(...)).XClient(` and `new ns.XClient(`. `[\s\S]`

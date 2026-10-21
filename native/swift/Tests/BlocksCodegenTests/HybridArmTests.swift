@@ -23,11 +23,11 @@ final class HybridArmTests: XCTestCase {
         return try Data(contentsOf: specURL)
     }
 
-    private func generateCode(_ data: Data) throws -> (models: String, api: String) {
+    private func generateCode(_ data: Data) throws -> GeneratedSources {
         let parser = OpenRPCParser()
         let rpcModel = try parser.parse(data: data)
         let codegenModel = CodegenModelBuilder().build(from: rpcModel)
-        return SwiftCodeGenerator().generate(from: codegenModel)
+        return try SwiftCodeGenerator().generate(from: codegenModel)
     }
 
     func testRealSetAuthStateSpecParsesWithoutError() throws {

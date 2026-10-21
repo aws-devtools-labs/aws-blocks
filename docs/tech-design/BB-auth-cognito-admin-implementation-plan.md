@@ -18,7 +18,7 @@ During implementation the compiler surfaced a **variance regression** that revis
 
 Expose the admin surface as an **opt-in handle on the existing `AuthCognito` class** (`auth.admin`), gated by an `admin` options object — **not** a second package/class. This deletes the `/internal` subpath, the `CognitoMockAdminPort` (11-method) indirection, the second construct, and the live-reference wiring, while preserving the API separation the original design valued.
 
-The two designs are equivalent on safety (neither is an access-control boundary; both rely on lint + the shared-Lambda IAM model — verified: `Scope.handler` resolves to one stack handler, `core/src/cdk/index.ts:92-102`). The handle wins on cost. We give up independent versioning of the admin surface, which we do not need.
+The two designs are equivalent on safety (neither is an access-control boundary; both rely on lint + the shared IAM model — every compute assumes the one stack-wide `executionRole`). The handle wins on cost. We give up independent versioning of the admin surface, which we do not need.
 
 **Breaking changes are acceptable** — the service is in preview. No back-compat shims.
 

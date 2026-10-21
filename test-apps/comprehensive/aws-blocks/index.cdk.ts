@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -15,6 +15,11 @@ const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
 const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
+
+// Optional IAM permissions boundary on every role AWS Blocks creates
+// (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
+// synthesizes with it set to prove every Building Block's roles are covered.
+const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
 
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
@@ -37,13 +42,13 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: BlocksPresets.sandbox,
+  defaults: { ...BlocksPresets.sandbox, permissionsBoundary },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
 // resolves the verified SES sender address in deployed environments.
 if (process.env.E2E_FROM_EMAIL) {
-  blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
+  registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
 
 // Tag every taggable resource in the stack for easy identification and cleanup

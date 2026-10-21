@@ -68,15 +68,21 @@ function scope(stack: cdk.Stack): ScopeParent {
  *
  * Runs against the built `dist/`, which the package's own test script requires
  * anyway (`node --test dist/**\/*.test.js`).
+ *
+ * Passing `sessionStore` exercises the standalone SessionStore constructor instead.
  */
-function synthUnderCdkConditions(): { id: string; timeToLive: unknown }[] {
+function synthUnderCdkConditions(sessionStore?: { ttlSeconds?: number }): { id: string; timeToLive: unknown }[] {
+	const construct =
+		sessionStore === undefined
+			? "new AuthCognito(stack, 'auth');"
+			: `new SessionStore(stack, 'standalone-sessions', ${sessionStore.ttlSeconds});`;
 	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
 	writeFileSync(probe, `
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
 import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { AuthCognito, SessionStore } from '@aws-blocks/bb-auth-cognito';
 
 const app = new cdk.App();
 const stack = new cdk.Stack(app, 'TestStack');
@@ -92,7 +98,7 @@ const handler = new lambda.Function(stack, 'Handler', {
 stack.handler = handler;
 stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
-new AuthCognito(stack, 'auth');
+${construct}
 finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
@@ -115,6 +121,24 @@ console.log('__TABLES__' + JSON.stringify(tables));
 		rmSync(probe, { force: true });
 	}
 }
+
+// ─── Standalone session retention ───────────────────────────────────────────
+
+describe('SessionStore (CDK) — retention', () => {
+	test('a positive session lifetime enables DynamoDB TTL on the standalone table', () => {
+		const tables = synthUnderCdkConditions({ ttlSeconds: 3600 });
+		assert.strictEqual(tables.length, 1);
+		assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: 'ttl', Enabled: true });
+	});
+
+	for (const ttlSeconds of [undefined, 0, -1]) {
+		test(`session lifetime ${ttlSeconds} leaves DynamoDB TTL disabled`, () => {
+			const tables = synthUnderCdkConditions({ ttlSeconds });
+			assert.strictEqual(tables.length, 1);
+			assert.strictEqual(tables[0].timeToLive, undefined);
+		});
+	}
+});
 
 // ─── User Pool ──────────────────────────────────────────────────────────────
 
@@ -737,5 +761,15 @@ describe('AuthCognito (CDK) — admin IAM grant', () => {
 		const actions = grantedActions(template);
 		assert.ok(actions.has('cognito-idp:AdminGetUser'), 'lifecycle must grant AdminGetUser');
 		assert.ok(actions.has('cognito-idp:AdminListGroupsForUser'), 'lifecycle must grant AdminListGroupsForUser for getUser groups');
+	});
+});
+
+// `admin` is an accessor, which the cross-package method-parity test skips, so pin
+// its guard here: `auth.admin.addUserToGroup(...)` at module scope must fail with
+// the actionable synth error, not "Cannot read properties of undefined".
+test('CDK: admin getter throws the synth-time guard error', () => {
+	synth((stack) => {
+		const auth = new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: {} });
+		assert.throws(() => auth.admin, { message: /^AuthCognito\.admin\(\) cannot be called during CDK synth\./ });
 	});
 });

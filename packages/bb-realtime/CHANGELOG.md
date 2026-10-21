@@ -1,5 +1,208 @@
 # @aws-blocks/bb-realtime
 
+## 0.4.0
+
+### Minor Changes
+
+- da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
+  
+  - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
+  - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
+  - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
+  - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
+  - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
+  - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
+  
+  **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+
+### Patch Changes
+
+- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
+- 38ce80c: fix: the local dev surface is no longer reachable from the network or from other websites
+  
+  - **Dev server binds loopback.** `npm run dev` now listens on `127.0.0.1` instead of every
+    interface. It serves your whole API against local mock data with no authentication, so it
+    must not be reachable from other machines. For a container or remote devbox, opt in with
+    `BLOCKS_DEV_HOST=0.0.0.0` (or `startDevServer({ host })`); a warning is printed when the host
+    isn't loopback.
+  - **Local realtime WebSocket matches the deployed one.** A client-sent `publish` was broadcast
+    to every subscriber with no authorization. The deployed WebSocket has no client publish, so
+    the local server now rejects it as well; publish from the server with `Realtime.publish()`.
+  - **Local realtime tokens are signed with a per-process random secret** instead of a constant
+    published in this repository, so they can't be forged.
+  - **The `/realtime` WebSocket upgrade checks `Origin`.** Only loopback origins can connect, plus
+    the opted-in host: with `BLOCKS_DEV_HOST=0.0.0.0`, a same-origin page opened by IP address; with
+    a concrete `BLOCKS_DEV_HOST` hostname, that hostname. This closes cross-site WebSocket hijacking from any
+    page the developer visits. Non-browser clients that send no `Origin` still connect.
+  - **`GET /aws-blocks/settings` opens an editor only under the local dev server.** It no longer
+    spawns a process or echoes the working directory when the built-in routes run in a deployed
+    Lambda, and it opens the file with `execFile` instead of a shell command.
+  - **The `nextjs` template's frontend dev server binds loopback** (`next dev --hostname
+    127.0.0.1`), like the Blocks dev server.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [92fa27b]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [4fe7be4]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-lambda-compute@0.6.0
+  - @aws-blocks/bb-app-setting@0.3.2
+  - @aws-blocks/bb-distributed-table@0.2.2
+  - @aws-blocks/bb-logger@0.2.2
+
+## 0.3.0
+
+### Minor Changes
+
+- f1d2cd5: feat(bb-realtime): production Realtime middleware now auto-reconnects and resubscribes after an unexpected WebSocket drop
+  
+  The production (`aws-middleware`) Realtime transport previously gave up when the WebSocket
+  closed unexpectedly (e.g. an API Gateway idle timeout or an abnormal `1006` closure) — only the
+  local mock middleware recovered. It now transparently reconnects with exponential backoff (capped
+  retries), rebuilds the socket URL from the retained connection token, and resubscribes every active
+  channel by replaying its stored per-channel token so the server can re-authorize. The keep-alive
+  ping timer is re-armed on the fresh socket. Only a client-initiated teardown — unsubscribing the last
+  channel (or the internal reset/give-up paths) — is treated as terminal; an unexpected drop reconnects on ANY close code, including a clean `1000`/`1005`.
+  
+  `SubscribeOptions` gains an optional `onReconnect` callback, fired once after a successful
+  reconnect for a channel once THAT channel's resubscribe has been re-confirmed by the server
+  (after the corresponding `onDisconnect` for the drop that triggered it; never on the initial
+  subscribe). Callbacks are routed per-channel: a channel whose resubscribe is rejected (e.g. a
+  stale replayed token) receives `onDisconnect('error')` and NOT `onReconnect`, and never sees a
+  sibling channel's rejection.
+  
+  This change is behavior-additive: existing `subscribe(handler)` / `SubscribeOptions` callers are
+  unaffected and need no changes. Note for maintainers: on a `0.x` package this ships as a `minor`
+  per this repo's convention (minor is the breaking/behavior-change channel pre-1.0), since it alters
+  the runtime reconnect behavior of the production transport.
+- de3c17c: feat(bb-realtime): refresh channel/connect tokens on reconnect so subscriptions outlive token TTLs
+  
+  Adds an optional `refresh` callback to `SubscribeOptions`:
+  
+  ```ts
+  refresh?: () => Promise<RealtimeChannelDescriptor>;
+  ```
+  
+  A reconnect opens a *new* WebSocket, which means API Gateway re-checks the
+  connect token (carried in the socket URL, validated at `$connect`, ~2h TTL) and
+  the server re-checks the channel token on resubscribe (~1h TTL, per `utils.ts`
+  `mintChannelToken`'s 3600s default). Until now both the AWS and mock middlewares
+  replayed the *original* stored `wsUrl` + channel token on every reconnect, so a
+  reconnect more than ~1h after the descriptor was minted failed (the channel
+  token had expired and the resubscribe was rejected), and more than ~2h after
+  failed to even open the socket (`$connect` 403). Token minting is server-only
+  (it needs the signing secret), so the client cannot re-sign locally — it must
+  re-call the server method that produced the descriptor.
+  
+  When `refresh` is provided, both middlewares now call it **before** opening the
+  reconnect socket (never on the initial subscribe), then open with the fresh
+  connect token in the URL and resubscribe each channel with its fresh channel
+  token. `refresh` is registered per-channel: a connection multiplexing several
+  channels re-mints every live channel's token in parallel on reconnect (the
+  instance-scoped connect token taken from any one of them), and a channel whose
+  refresh fails falls back to its stored token with a channel-scoped rejection
+  rather than dropping its siblings. The refresh-before-open ordering is required
+  because the connect token lives in the socket URL and is validated at `$connect`,
+  so it must be fresh at construction time. If `refresh` rejects, the middleware
+  does not crash: it surfaces the failure via the existing `onDisconnect('error')`
+  path and falls back to the normal exponential-backoff reconnect so a later
+  attempt can retry.
+  
+  Fully backward compatible: with no `refresh` callback, a reconnect replays the
+  stored `wsUrl` + token exactly as before, and the initial (non-reconnect) open
+  stays synchronous and unchanged.
+  
+  This is a `minor` bump. `@aws-blocks/bb-realtime` is pre-1.0, where `minor` is
+  this repo's signal for an API addition; the new option is optional and additive,
+  and existing behavior is unchanged when it is omitted.
+
+### Patch Changes
+
+- 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
+  
+  Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
+  request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
+  dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
+  and exports `installClientUserAgent`, an SDK middleware that appends the validated
+  token to the outgoing user agent. The 12 participating Building Blocks install it,
+  so native attribution rides the SDK user-agent chain AWS service telemetry already
+  counts. The Kotlin runtime already sends the header, so Kotlin
+  callers are attributed as soon as this ships; Swift and Dart follow.
+- cbedb3c: fix(bb-realtime): validate publish size against the 128 KiB message quota, not the 32 KiB frame quota
+  
+  `publish` rejected payloads above 32 KiB, API Gateway's WebSocket *frame* size — but a
+  message is reassembled from multiple frames, so the real limit is the 128 KiB message
+  quota. Messages between 32 KiB and 128 KiB were refused client-side even though API
+  Gateway would have delivered them. The serialized envelope is now checked against
+  131,072 bytes: 131,072 is accepted and 131,073 is rejected.
+- a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
+  
+  `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
+  
+  The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
+  
+  The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
+  
+  Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
+  
+  The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
+  
+  ## Breaking change (why `@aws-blocks/core` is a minor)
+  
+  App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
+  
+  ```ts
+  // before — message collapses to "Internal error" on the client
+  throw new Error('Todo not found');
+  
+  // after — status, message, and name all reach the client
+  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  ```
+  
+  Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+- Updated dependencies [0e18d5b]
+- Updated dependencies [5501cb6]
+- Updated dependencies [b58f248]
+- Updated dependencies [39628cb]
+- Updated dependencies [d4b32f2]
+- Updated dependencies [a649895]
+- Updated dependencies [27646ac]
+- Updated dependencies [5515483]
+- Updated dependencies [757d4a9]
+- Updated dependencies [a23b8d8]
+- Updated dependencies [9e02b82]
+- Updated dependencies [465a002]
+  - @aws-blocks/bb-app-setting@0.3.1
+  - @aws-blocks/core@0.6.0
+  - @aws-blocks/bb-distributed-table@0.2.1
+  - @aws-blocks/bb-lambda-compute@0.5.1
+  - @aws-blocks/bb-logger@0.2.1
+
 ## 0.2.1
 
 ### Patch Changes

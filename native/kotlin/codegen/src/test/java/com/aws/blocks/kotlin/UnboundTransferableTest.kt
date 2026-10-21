@@ -1,5 +1,6 @@
 package com.aws.blocks.kotlin
 
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
@@ -183,7 +184,7 @@ class UnboundTransferableTest : FunSpec({
         test("nullable direct result is out of scope and left unchanged") {
             // Nullable is out of scope and kept at today's behavior; Kotlin's "today" for
             // an unbound tag is a generation failure, so this path is deliberately left to throw.
-            shouldThrow<UnsupportedOperationException> {
+            shouldThrow<CodegenException> {
                 generate(
                     resultSpec("""{ "oneOf": [ { "x-blocks-transferable": "$UNBOUND_TAG" }, { "type": "null" } ] }"""),
                 )
@@ -228,7 +229,7 @@ class UnboundTransferableTest : FunSpec({
         test("a tag with all five escaped characters emits a correct regular literal") {
             // quote, backslash, dollar, CR, LF - all five need escaping to compile and round-trip.
             val src = generate(resultSpec("""{ "x-blocks-transferable": "a\"b\\c${'$'}d\r\n" }""")).source()
-            src shouldContain "expectedTag = \"a\\\"b\\\\c\\\$d\\r\\n\""
+            src shouldContain "expectedTag = \"a\\\"b\\\\c\${'\$'}d\\r\\n\""
             src shouldNotContain "trimMargin"
         }
     }

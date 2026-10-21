@@ -145,7 +145,13 @@ async function resolveApiUrl(): Promise<string> {
  * request is dispatched to the server.
  */
 export interface BlocksRequest {
-  /** The namespace name this call targets (e.g., 'api', 'auth'). Corresponds to the second argument of `new ApiNamespace(scope, name, handler)` in the backend. */
+  /**
+   * The namespace this call targets: the backend **export** name (e.g. `'api'`,
+   * `'authApi'` for `export const authApi = auth.createApi()`), not the
+   * `ApiNamespace` constructor's `name` argument. The request URL's
+   * `/{namespace}` segment is built from this value after middleware runs, so a
+   * middleware that changes it changes both the path and the body.
+   */
   apiNamespace: string;
   /** The method being called on the namespace (e.g., 'getUser', 'kvSet'). */
   method: string;
@@ -231,8 +237,39 @@ function processResponse(data: unknown): unknown {
  * Options for `ApiNamespaceClient`.
  */
 export interface ApiNamespaceClientOptions {
-  /** Explicit API URL. When provided, skips automatic config.json discovery. */
+  /**
+   * Explicit API **base** URL. When provided, skips automatic config.json discovery.
+   *
+   * This replaces only the *discovery* of the base URL, not the request path: the
+   * client still appends `/{namespace}` to it, exactly as it does for a base URL
+   * resolved from config.json. Pass the same value config.json would carry
+   * (for example `https://d123.cloudfront.net/aws-blocks/api`), not a
+   * namespace-qualified URL. A trailing slash is tolerated.
+   */
   url?: string;
+}
+
+/**
+ * Build the request URL for a namespace by appending `/{namespace}` to the API
+ * base URL.
+ *
+ * The namespace segment is what lets a gateway route each namespace to the
+ * compute that hosts it — a single-compute backend serves every namespace path
+ * from the same origin, so this is safe there too. The namespace also stays in
+ * the JSON-RPC body, which is what the server dispatches on — the path must name
+ * the same namespace — so raw HTTP callers posting to the bare `/aws-blocks/api`
+ * endpoint keep working.
+ *
+ * `baseUrl` may be relative (Hosting publishes `/aws-blocks/api` for same-origin
+ * browser calls), so this does deliberate string concatenation rather than going
+ * through `new URL()`.
+ */
+function namespaceRequestUrl(baseUrl: string, namespace: string): string {
+  // Trim trailing slashes with a loop, not `/\/+$/` — that regex backtracks
+  // quadratically on a long run of '/' that doesn't end the string.
+  let end = baseUrl.length;
+  while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return `${baseUrl.slice(0, end)}/${namespace}`;
 }
 
 /**
@@ -263,8 +300,8 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
     get(target, method: string | symbol) {
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
-        const apiUrl = urlOverride ?? await getApiUrl();
-        
+        const baseUrl = urlOverride ?? await getApiUrl();
+
         let request: BlocksRequest = {
           apiNamespace: name,
           method,
@@ -272,6 +309,10 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           headers: { 'Content-Type': 'application/json' },
         };
         request = await processRequest(request);
+        // Built after middleware, from the same `apiNamespace` the body carries,
+        // so a middleware that changes the namespace keeps path and body in step
+        // (the server rejects a mismatch) and the gateway routes the new one.
+        const requestUrl = namespaceRequestUrl(baseUrl, request.apiNamespace);
 
         // SSR cookie forwarding: when running server-side, forward the
         // inbound request cookies so auth sessions propagate to API calls.
@@ -301,7 +342,7 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           }
         }
         
-        const response = await fetch(apiUrl, {
+        const response = await fetch(requestUrl, {
           method: 'POST',
           headers: request.headers,
           credentials: 'include',
@@ -316,5 +357,5 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
   });
 }
 
-export { ApiError, blocksError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+export { ApiError, blocksError, brandBlocksError, isBlocksError, hasAuthError, isWireSafeError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 export { Scope, type ScopeOptions } from '../common/index.js';

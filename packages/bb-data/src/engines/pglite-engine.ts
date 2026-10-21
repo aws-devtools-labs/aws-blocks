@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -49,13 +49,13 @@ function translateError(e: unknown): never {
       // retriable — a blind retry of the same insert fails identically.
       throw uniqueConstraintConflict(e);
     }
-    if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
-      e.name = DatabaseErrors.ConnectionFailed;
-    } else {
-      e.name = DatabaseErrors.QueryFailed;
-    }
-    console.debug(`[PGliteEngine] ${e.name}`, { code });
-    throw e;
+    const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
+      ? DatabaseErrors.ConnectionFailed
+      : DatabaseErrors.QueryFailed;
+    console.debug(`[PGliteEngine] ${name}`, { code });
+    // Branded re-tag (stable BB message, raw error kept as cause) so the name
+    // crosses the wire without leaking driver text (D-003).
+    throw reTagged(name, e);
   }
   wrapError(e);
 }
@@ -262,6 +262,12 @@ export class PGliteEngine implements DatabaseEngine {
   async destroy(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    // PGlite 0.5.10's close() never resolves while the instance is still
+    // initializing, so let init settle (or fail) before closing. Fixed upstream
+    // in electric-sql/pglite#1149 (issue #1148), unreleased as of 0.5.10; remove
+    // this once the dependency requires a release that includes it.
+    // Promise.resolve: injected test clients may not expose waitReady.
+    await Promise.resolve(this.db.waitReady).catch(() => {});
     await this.db.close();
   }
 }

@@ -3,8 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
+import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -14,9 +13,11 @@ import {
   errorResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
+import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -397,8 +398,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // error envelope) or a plain HTTP path (simple error JSON).
         const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
-        const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
-        const body = isRpcPath
+        const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
         return {
@@ -531,33 +531,36 @@ function createHandler(backend: any) {
 
     return requestCookies.run(inboundCookies, () =>
       requestClientUserAgent.run(clientUserAgent, async () => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC
+    // RawRoute dispatch — check path-based routes before falling through to RPC.
+    // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
+    // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+    // JSON-RPC body, and a per-namespace path must name the same one (see
+    // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
+    // handling below.
     const requestPath = getRequestPath(event);
-    if (requestPath !== BLOCKS_RPC_PREFIX) {
+    if (!isRpcPath(requestPath)) {
       const matched = matchRoute(httpMethod, requestPath);
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // No RawRoute matched and the path is not under the RPC endpoint — 404.
       // Log it: an unmatched route used to be entirely silent, which is what
       // made a split route registry (duplicate @aws-blocks/core copies)
       // undiagnosable from CloudWatch alone. The path is already in the API
       // Gateway access logs, so this adds no new category of data.
-      if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
-        const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-        console.error(
-          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-        );
-        return {
-          statusCode: 404,
-          headers: {
-            'Content-Type': 'application/json',
-            ...corsHeaders,
-          },
-          body: JSON.stringify({ error: 'Not Found' }),
-        };
-      }
+      const copies = getLoadedCoreCopies();
+      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+      console.error(
+        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+      );
+      return {
+        statusCode: 404,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
+        body: JSON.stringify({ error: 'Not Found' }),
+      };
     }
 
     const rpcHeaders = {
@@ -569,7 +572,9 @@ function createHandler(backend: any) {
     };
 
     const { bodyText, bodyStream } = decodeEventBody(event);
-    const parsed = parseRpcRequest(bodyText);
+    // The path is validated against the body's namespace (see parseRpcRequest);
+    // dispatch always uses the body's `namespace.method`.
+    const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
 
     if (!parsed.ok) {
       return { statusCode: 200, headers: rpcHeaders, body: parsed.response };
@@ -602,8 +607,9 @@ function createHandler(backend: any) {
         },
       };
 
-      // Get the API by export name
-      const apiHandler = backend[apiNamespace];
+      // Get the API by export name. resolveApiNamespace refuses exported Building
+      // Block instances and `_`-private exports, so only an API surface is callable.
+      const apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -613,11 +619,13 @@ function createHandler(backend: any) {
         ? apiHandler(context)
         : apiHandler;
 
-      if (!apiMethods[method]) {
+      // Own/declared callable methods only — never an inherited Object.prototype member.
+      const apiMethod = resolveApiMethod(apiMethods, method);
+      if (!apiMethod) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const result = await apiMethod(...args);
 
       return {
         statusCode: responseStatus,
@@ -687,11 +695,9 @@ async function handleRawRoute(
       },
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('RawRoute Error:', error);
-    const status = error instanceof ApiError ? error.status : 500;
-    const body: Record<string, any> = { error: error.message };
-    if (error.name && error.name !== 'Error') body.name = error.name;
+    const { status, body } = rawRouteErrorFromCatch(error);
     return {
       statusCode: status,
       headers: Object.fromEntries(
@@ -700,7 +706,7 @@ async function handleRawRoute(
       multiValueHeaders: {
         'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
       },
-      body: JSON.stringify(body),
+      body,
     };
   }
 }

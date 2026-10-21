@@ -12,12 +12,74 @@ import Foundation
 // Thin translation layer that emits Swift source from a CodegenModel.
 // Makes no business logic decisions — only Swift-specific formatting.
 
-public struct SwiftCodeGenerator {
-    public init() {}
+public struct GeneratedSources {
+    public let models: String
+    public let api: String
+    public let warnings: [String]
+}
 
-    public func generate(from model: CodegenModel) -> (models: String, api: String) {
-        var modelLines: [String] = ["import Foundation", ""]
-        var apiLines: [String] = ["import Foundation", "import BlocksRuntime", ""]
+final class DeclaredNames {
+    private(set) var names: Set<String> = []
+
+    func record(_ name: String) {
+        names.insert(name)
+    }
+}
+
+public struct SwiftCodeGenerator {
+    let declaredBindings: [String: DeclaredTransferableBinding]
+    /// Unconditional once a module is declared: the generator cannot know a
+    /// customer package's export list.
+    let runtimePrefix: String
+    let declaredNames = DeclaredNames()
+
+    public init() {
+        self.init(declaredBindings: [:], runtimePrefix: "")
+    }
+
+    private init(declaredBindings: [String: DeclaredTransferableBinding], runtimePrefix: String) {
+        self.declaredBindings = declaredBindings
+        self.runtimePrefix = runtimePrefix
+    }
+
+    public func generate(from model: CodegenModel) throws -> GeneratedSources {
+        let generator = SwiftCodeGenerator(
+            declaredBindings: model.declaredTransferableBindings,
+            runtimePrefix: declaredModuleImports(model).isEmpty ? "" : "BlocksRuntime."
+        )
+        let output = generator.emitSources(from: model)
+        try generator.rejectModulesShadowedByEmittedNames(model)
+        return output
+    }
+
+    /// Rejected rather than qualified: Swift has no syntax to force module resolution.
+    private func rejectModulesShadowedByEmittedNames(_ model: CodegenModel) throws {
+        let declared = declaredNames.names
+        // `runtimePrefix` is what makes the runtime shadowable: an unqualified reference
+        // resolves fine beside a same-named declaration, a qualified one does not.
+        let qualified = runtimePrefix.isEmpty ? [] : [String(runtimePrefix.dropLast())]
+        for module in declaredModuleImports(model) + qualified where declared.contains(module) {
+            throw CodegenError.invalidNativeCatalog(
+                "Swift module '\(module)' is also declared as a type by the generated code; "
+                    + "a declaration in scope shadows a module of the same name"
+            )
+        }
+    }
+
+    func emitDeclaration(_ name: String, line: String, lines: inout [String]) {
+        declaredNames.record(name)
+        lines.append(line)
+    }
+
+    private func emitSources(from model: CodegenModel) -> GeneratedSources {
+        var modelLines = ["import Foundation"]
+        if !runtimePrefix.isEmpty {
+            modelLines.append("import BlocksRuntime")
+        }
+        modelLines.append("")
+        var apiLines: [String] = ["import Foundation", "import BlocksRuntime"]
+        apiLines.append(contentsOf: declaredModuleImports(model).map { "import \($0)" })
+        apiLines.append("")
         var emittedTypes: Set<String> = []
 
         // Generate type definitions (component schemas only — flat in Models.swift)
@@ -46,23 +108,34 @@ public struct SwiftCodeGenerator {
             }
         }
 
-        // Default server name for init parameter default
-        let defaultServerName = model.servers.first.map { "Servers.\(camelCase($0.name))" } ?? "Servers.local"
+        // Diagnostics are emitted here (not in the builder) so the model name uses
+        // the same `operationQualifiedNames` authority that drives emission.
+        var warnings: [String] = model.nativeCatalogWarnings
+
+        // The spec's first server, the default for `Blocks()` and the deprecated `init(server:)`
+        let defaultServerName = model.servers.first.map { "Servers.\(serverPropertyName($0.name))" } ?? "Servers.local"
+        let entryPoint = entryPointNames(for: model.apiNamespaces)
+        warnings += entryPoint.warnings
+        warnings += specWarnings(for: model)
 
         // Generate one class per namespace
-        for namespace in model.apiNamespaces {
-            let nsName = pascalCase(namespace.name)
-            apiLines.append("public class \(nsName) {")
-            apiLines.append("    private let client: BlocksClient")
-            apiLines.append("")
-            apiLines.append("    public init(server: BlocksServer = \(defaultServerName)) {")
-            apiLines.append("        self.client = BlocksClient(server: server)")
-            apiLines.append("    }")
+        for (namespace, names) in zip(model.apiNamespaces, entryPoint.names) {
+            emitNamespaceHeader(names, defaultServer: defaultServerName, lines: &apiLines)
 
             for operation in namespace.operations {
                 apiLines.append("")
                 let opKey = "\(namespace.name).\(operation.name)"
                 let opQualified = operationQualifiedNames[opKey] ?? [:]
+                if case .transferable(let blocksType, let typeArgs) = operation.result.type,
+                   !isBoundTag(blocksType) {
+                    let fullOp = namespace.name == "_default" ? operation.name : "\(namespace.name).\(operation.name)"
+                    let cause = model.unboundTransferableCauses[blocksType]
+                        .map { " (\($0))" } ?? ""
+                    warnings.append(formatUnboundTransferable(
+                        operation: fullOp, blocksType: blocksType, typeArgs: typeArgs,
+                        className: names.className, qualifiedNames: opQualified, cause: cause
+                    ))
+                }
                 emitOperation(
                     operation, namespace: namespace.name,
                     prefixNamespace: false, lines: &apiLines,
@@ -81,29 +154,21 @@ public struct SwiftCodeGenerator {
             apiLines.append("")
         }
 
-        // Generate Servers enum
-        apiLines.append("")
-        apiLines.append("// MARK: - Servers")
-        apiLines.append("")
-        apiLines.append("public enum Servers {")
-        for server in model.servers {
-            let propertyName = camelCase(server.name)
-            apiLines.append("    public static let \(propertyName) = BlocksServer(name: \"\(server.name)\", url: \"\(server.url)\")")
-        }
-        apiLines.append("}")
+        emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
+        emitServers(model.servers, lines: &apiLines)
 
         // Only include models file content if there are actual type definitions
         let hasTypes = !model.typeDefinitions.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
-        return (models: modelsContent, api: apiContent)
+        return GeneratedSources(models: modelsContent, api: apiContent, warnings: warnings)
     }
 
     // MARK: - Nested Type Emission
 
     private func emitOperationEnum(operation: Operation, indent: String, lines: inout [String]) {
         let opName = pascalCase(operation.name)
-        lines.append("\(indent)public enum \(opName) {")
+        emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
@@ -121,11 +186,11 @@ public struct SwiftCodeGenerator {
             )
         case .enum(_, let values):
             lines.append("")
-            lines.append("\(indent)public enum \(node.name): String, Codable {")
+            emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
-                    lines.append("\(indent)    case \(caseName) = \"\(val)\"")
+                    lines.append("\(indent)    case \(caseName) = \(swiftStringLiteral(val))")
                 } else {
                     lines.append("\(indent)    case \(caseName)")
                 }
@@ -141,7 +206,7 @@ public struct SwiftCodeGenerator {
     private func emitNestedRecordStruct(name: String, fields: [ResolvedField], additionalPropertiesType: ResolvedType?, embeddedUnion: ResolvedType?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
         let fields = fields.filter { !isVoidType($0.type) }
         lines.append("")
-        lines.append("\(indent)public struct \(name): Codable {")
+        emitDeclaration(name, line: "\(indent)public struct \(name): Codable {", lines: &lines)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -163,11 +228,11 @@ public struct SwiftCodeGenerator {
 
         if !isOpen && !hasEmbedded && (needsCodingKeys || hasOptionalFields) {
             lines.append("")
-            lines.append("\(indent)    enum CodingKeys: String, CodingKey {")
+            emitDeclaration("CodingKeys", line: "\(indent)    enum CodingKeys: String, CodingKey {", lines: &lines)
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    lines.append("\(indent)        case \(safe) = \"\(field.name)\"")
+                    lines.append("\(indent)        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     lines.append("\(indent)        case \(safe)")
                 }
@@ -205,11 +270,11 @@ public struct SwiftCodeGenerator {
             lines.append("\(indent)        self.challenge = challenge")
             lines.append("\(indent)    }")
             lines.append("")
-            lines.append("\(indent)    private enum OuterCodingKeys: String, CodingKey {")
+            emitDeclaration("OuterCodingKeys", line: "\(indent)    private enum OuterCodingKeys: String, CodingKey {", lines: &lines)
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    lines.append("\(indent)        case \(safe) = \"\(field.name)\"")
+                    lines.append("\(indent)        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     lines.append("\(indent)        case \(safe)")
                 }
@@ -290,7 +355,7 @@ public struct SwiftCodeGenerator {
         }
 
         lines.append("")
-        lines.append("\(indent)public enum \(name): Codable {")
+        emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
         for variant in variants {
             let caseName = camelCase(variant.name)
             let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
@@ -316,7 +381,7 @@ public struct SwiftCodeGenerator {
 
     private func emitDiscriminatedCodingNested(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, indent: String, lines: inout [String]) {
         lines.append("")
-        lines.append("\(indent)    enum CodingKeys: String, CodingKey {")
+        emitDeclaration("CodingKeys", line: "\(indent)    enum CodingKeys: String, CodingKey {", lines: &lines)
         lines.append("\(indent)        case \(escapedSwiftName(discriminator.fieldName))")
         lines.append("\(indent)    }")
         lines.append("")
@@ -327,12 +392,14 @@ public struct SwiftCodeGenerator {
             if let discVal = variant.discriminatorValue {
                 let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
+                let encodedTag = swiftStringLiteral(discVal)
+                let discKey = escapedSwiftName(discriminator.fieldName)
                 if !hasPayload {
                     lines.append("\(indent)        case .\(camelCase(variant.name)):")
-                    lines.append("\(indent)            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                 } else {
                     lines.append("\(indent)        case .\(camelCase(variant.name))(let params):")
-                    lines.append("\(indent)            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                     lines.append("\(indent)            try params.encode(to: encoder)")
                 }
             }
@@ -357,13 +424,13 @@ public struct SwiftCodeGenerator {
                 let variant = group[0]
                 let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("\(indent)        case \"\(tag)\": self = .\(camelCase(variant.name))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("\(indent)        case \"\(tag)\": self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
                 }
             } else {
-                lines.append("\(indent)        case \"\(tag)\":")
+                lines.append("\(indent)        case \(swiftStringLiteral(tag)):")
                 for (idx, variant) in group.enumerated() {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
@@ -406,30 +473,29 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)            try payload.encode(to: encoder)")
             } else {
                 lines.append("\(indent)        case .\(caseName):")
-                lines.append("\(indent)            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("\(indent)            _ = c")
+                lines.append("\(indent)            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
         lines.append("")
-        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
-        lines.append("\(indent)        var lastError: Error?")
-        for variant in variants {
-            let caseName = camelCase(variant.name)
-            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
-            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("\(indent)        do {")
-                lines.append("\(indent)            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("\(indent)            return")
-                lines.append("\(indent)        } catch { lastError = error }")
-            }
-        }
         let nestedFieldless = variants.first(where: {
             $0.fields.isEmpty && $0.payloadTypeName == nil
                 && $0.additionalPropertiesType == nil
                 && $0.embeddedUnion == nil
         })
+        lines.append("\(indent)    public init(from decoder: Decoder) throws {")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if nestedFieldless == nil {
+            lines.append("\(indent)        var lastError: Error?")
+        }
+        for variant in variants {
+            let caseName = camelCase(variant.name)
+            let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
+            if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
+                appendVariantAttempt(caseName, payload: payload, keepsError: nestedFieldless == nil, indent: indent + "        ", lines: &lines)
+            }
+        }
         if let nestedFieldless {
             lines.append("\(indent)        self = .\(camelCase(nestedFieldless.name))")
         } else {
@@ -442,12 +508,12 @@ public struct SwiftCodeGenerator {
         }
         lines.append("\(indent)    }")
         lines.append("")
-        lines.append("\(indent)    private enum EmptyKey: CodingKey {}")
+        emitDeclaration("EmptyKey", line: "\(indent)    private enum EmptyKey: CodingKey {}", lines: &lines)
     }
 
     // MARK: - Type Emission
 
-    private func emitType(_ type: ResolvedType, name: String, lines: inout [String], emitted: inout Set<String>) {
+    func emitType(_ type: ResolvedType, name: String, lines: inout [String], emitted: inout Set<String>) {
         guard !emitted.contains(name) else { return }
 
         switch type {
@@ -471,11 +537,11 @@ public struct SwiftCodeGenerator {
         case .enum(_, let values):
             emitted.insert(name)
             lines.append("")
-            lines.append("public enum \(name): String, Codable {")
+            emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
-                    lines.append("    case \(caseName) = \"\(val)\"")
+                    lines.append("    case \(caseName) = \(swiftStringLiteral(val))")
                 } else {
                     lines.append("    case \(caseName)")
                 }
@@ -517,7 +583,7 @@ public struct SwiftCodeGenerator {
             }
             var body: [String] = []
             body.append("")
-            body.append("public enum \(name): Codable {")
+            emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
             for variant in variants {
                 let caseName = camelCase(variant.name)
                 let hasSynthBody = !variant.fields.isEmpty
@@ -559,7 +625,7 @@ public struct SwiftCodeGenerator {
         let fields = fields.filter { !isVoidType($0.type) }
         var body: [String] = []
         body.append("")
-        body.append("public struct \(name): Codable {")
+        emitDeclaration(name, line: "public nonisolated struct \(name): Codable {", lines: &body)
         for field in fields {
             let swType = swiftTypeNameNoEmit(field.type)
             let alreadyOptional = swType.hasSuffix("?")
@@ -591,11 +657,11 @@ public struct SwiftCodeGenerator {
             body.append("    }")
 
             body.append("")
-            body.append("    private enum OuterCodingKeys: String, CodingKey {")
+            emitDeclaration("OuterCodingKeys", line: "    private enum OuterCodingKeys: String, CodingKey {", lines: &body)
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    body.append("        case \(safe) = \"\(field.name)\"")
+                    body.append("        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     body.append("        case \(safe)")
                 }
@@ -650,7 +716,7 @@ public struct SwiftCodeGenerator {
 
             // Custom Codable: flatten attributes onto the top-level JSON object.
             body.append("")
-            body.append("    private struct DynamicKey: CodingKey {")
+            emitDeclaration("DynamicKey", line: "    private struct DynamicKey: CodingKey {", lines: &body)
             body.append("        var stringValue: String")
             body.append("        var intValue: Int? { nil }")
             body.append("        init?(stringValue: String) { self.stringValue = stringValue }")
@@ -659,7 +725,7 @@ public struct SwiftCodeGenerator {
             body.append("")
             body.append("    private static let fixedFieldNames: Set<String> = [")
             for field in fields {
-                body.append("        \"\(field.name)\",")
+                body.append("        \(swiftStringLiteral(field.name)),")
             }
             body.append("    ]")
             body.append("")
@@ -670,9 +736,9 @@ public struct SwiftCodeGenerator {
                 let safe = escapedSwiftName(field.name)
                 let key = field.name
                 if field.required {
-                    body.append("        try c.encode(self.\(safe), forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        try c.encode(self.\(safe), forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 } else {
-                    body.append("        try c.encodeIfPresent(self.\(safe), forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        try c.encodeIfPresent(self.\(safe), forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 }
             }
             body.append("        for (k, v) in self.attributes {")
@@ -691,9 +757,9 @@ public struct SwiftCodeGenerator {
                 let alreadyOptional = swType.hasSuffix("?")
                 let baseType = alreadyOptional ? String(swType.dropLast()) : swType
                 if field.required && !alreadyOptional {
-                    body.append("        self.\(safe) = try c.decode(\(baseType).self, forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        self.\(safe) = try c.decode(\(baseType).self, forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 } else {
-                    body.append("        self.\(safe) = try c.decodeIfPresent(\(baseType).self, forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        self.\(safe) = try c.decodeIfPresent(\(baseType).self, forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 }
             }
             body.append("        var extras: [String: \(valueType)] = [:]")
@@ -706,11 +772,11 @@ public struct SwiftCodeGenerator {
             let hasOptionals = fields.contains { !$0.required || swiftTypeNameNoEmit($0.type).hasSuffix("?") }
             if needsCodingKeys || hasOptionals {
                 body.append("")
-                body.append("    enum CodingKeys: String, CodingKey {")
+                emitDeclaration("CodingKeys", line: "    enum CodingKeys: String, CodingKey {", lines: &body)
                 for field in fields {
                     let safe = escapedSwiftName(field.name)
                     if safe != field.name {
-                        body.append("        case \(safe) = \"\(field.name)\"")
+                        body.append("        case \(safe) = \(swiftStringLiteral(field.name))")
                     } else {
                         body.append("        case \(safe)")
                     }
@@ -799,28 +865,27 @@ public struct SwiftCodeGenerator {
                 let minErr = "\(field.name) must be at least \(min) characters"
                 checks.append(
                     "guard \(valueVar).count >= \(min)"
-                    + " else { throw CodegenError.validation(\"\(minErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(minErr))) }"
                 )
             }
             if let max = constraints.maxLength {
                 let maxErr = "\(field.name) must be at most \(max) characters"
                 checks.append(
                     "guard \(valueVar).count <= \(max)"
-                    + " else { throw CodegenError.validation(\"\(maxErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(maxErr))) }"
                 )
             }
             if let pattern = constraints.pattern {
                 // JSON Schema `pattern` uses ECMA-262 semantics (unanchored match).
                 // `range(of:options:.regularExpression)` matches this — it succeeds
                 // if the pattern matches anywhere in the string, not just the full string.
-                let escaped = pattern
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                let patternErr = "\(field.name) must match pattern \(escaped)"
+                // swiftStringLiteral escapes \, ", newline and CR and adds the quotes, so the
+                // regex and the message both reach the generated code verbatim.
+                let patternErr = "\(field.name) must match pattern \(pattern)"
                 checks.append(
-                    "guard \(valueVar).range(of: \"\(escaped)\","
+                    "guard \(valueVar).range(of: \(swiftStringLiteral(pattern)),"
                     + " options: .regularExpression) != nil"
-                    + " else { throw CodegenError.validation(\"\(patternErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(patternErr))) }"
                 )
             }
         case .primitive(.integer, _), .primitive(.number, _):
@@ -830,28 +895,28 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be >= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) >= \(cast(limit))"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maximum {
                 let err = "\(field.name) must be <= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) <= \(cast(limit))"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMinimum {
                 let err = "\(field.name) must be > \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) > \(cast(limit))"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMaximum {
                 let err = "\(field.name) must be < \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) < \(cast(limit))"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.multipleOf {
@@ -861,7 +926,7 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be a multiple of \(cast(limit))"
                 checks.append(
                     "guard \(mod) == 0"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
         case .list:
@@ -869,14 +934,14 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must have at least \(limit) items"
                 checks.append(
                     "guard \(valueVar).count >= \(limit)"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maxItems {
                 let err = "\(field.name) must have at most \(limit) items"
                 checks.append(
                     "guard \(valueVar).count <= \(limit)"
-                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
         default:
@@ -938,18 +1003,62 @@ public struct SwiftCodeGenerator {
             default: return nil
             }
         }
+        // Defaults are emitted as code, so only a well-formed literal matching
+        // the field's primitive type is passed through; anything else returns
+        // nil and the caller falls back to the no-default path. `format: time`
+        // strings are generated as Swift `String`, so they take the string path;
+        // other formatted types (Date / UUID / URL) are not string literals.
+        var target = type
+        if case .nullable(let inner) = target { target = inner }
+        let kind: PrimitiveKind
+        switch target {
+        case .primitive(let primitiveKind, _):
+            kind = primitiveKind
+        case .formattedType(.time, _):
+            kind = .string
+        default:
+            return nil
+        }
         // Strings: JSON renders them with surrounding quotes — that's a Swift
         // string literal too.
-        if trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"") {
-            return trimmed
+        // JSON escapes (`\/`, `\uXXXX`, `\b`, `\f`) are not all valid in Swift, so decode
+        // the JSON string and re-emit it through swiftStringLiteral.
+        if kind == .string && trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"") {
+            guard let data = trimmed.data(using: .utf8),
+                  let decoded = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) as? String
+            else { return nil }
+            return swiftStringLiteral(decoded)
         }
-        // Booleans + numbers round-trip as-is.
-        if trimmed == "true" || trimmed == "false" || Double(trimmed) != nil || Int(trimmed) != nil {
+        switch kind {
+        case .integer:
+            // INTEGER maps to Swift `Int`: require a JSON integer literal that fits.
+            guard isJSONIntegerLiteral(trimmed), Int(trimmed) != nil else { return nil }
             return trimmed
+        case .number:
+            // NUMBER maps to Swift `Double`; an integer literal such as `3` is a
+            // valid Double initializer in Swift, so the JSON text is kept as-is.
+            guard isJSONNumberLiteral(trimmed), Double(trimmed) != nil else { return nil }
+            return trimmed
+        case .boolean:
+            return (trimmed == "true" || trimmed == "false") ? trimmed : nil
+        default:
+            // String fields only accept a JSON string (handled above); arrays,
+            // objects, and other shapes are skipped — Swift can't initialise
+            // arbitrary nested shapes from a JSON literal at compile time.
+            return nil
         }
-        // Arrays / objects: skip — Swift can't initialise arbitrary nested
-        // shapes from a JSON literal at compile time.
-        return nil
+    }
+
+    /// True when `text` is a JSON integer literal (`-?(0|[1-9][0-9]*)`).
+    private func isJSONIntegerLiteral(_ text: String) -> Bool {
+        text.range(of: #"^-?(0|[1-9][0-9]*)$"#, options: .regularExpression) != nil
+    }
+
+    /// True when `text` is a JSON number literal (integer, optional fraction,
+    /// optional exponent). Rejects forms Swift's `Double(_:)` accepts but that
+    /// are not valid Swift literals, such as `nan`, `inf`, or `0x1p3`.
+    private func isJSONNumberLiteral(_ text: String) -> Bool {
+        text.range(of: #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#, options: .regularExpression) != nil
     }
 
     private func emitDiscriminatedCoding(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, lines: inout [String]) {
@@ -957,7 +1066,7 @@ public struct SwiftCodeGenerator {
         // discriminators to `emitTransparentUnionCoding`. Here we only handle
         // internal-discriminator unions.
         lines.append("")
-        lines.append("    enum CodingKeys: String, CodingKey {")
+        emitDeclaration("CodingKeys", line: "    enum CodingKeys: String, CodingKey {", lines: &lines)
         lines.append("        case \(escapedSwiftName(discriminator.fieldName))")
         lines.append("    }")
         lines.append("")
@@ -972,10 +1081,10 @@ public struct SwiftCodeGenerator {
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
                 if !hasPayload {
                     lines.append("        case .\(camelCase(variant.name)):")
-                    lines.append("            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                 } else {
                     lines.append("        case .\(camelCase(variant.name))(let params):")
-                    lines.append("            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                     lines.append("            try params.encode(to: encoder)")
                 }
             }
@@ -1005,13 +1114,13 @@ public struct SwiftCodeGenerator {
                     || variant.additionalPropertiesType != nil
                     || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("        case \"\(tag)\": self = .\(camelCase(variant.name))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("        case \"\(tag)\": self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
                 }
             } else {
-                lines.append("        case \"\(tag)\":")
+                lines.append("        case \(swiftStringLiteral(tag)):")
                 for (idx, variant) in group.enumerated() {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
@@ -1057,32 +1166,31 @@ public struct SwiftCodeGenerator {
                 lines.append("            try payload.encode(to: encoder)")
             } else {
                 lines.append("        case .\(caseName):")
-                lines.append("            var c = encoder.container(keyedBy: EmptyKey.self)")
-                lines.append("            _ = c")
+                lines.append("            _ = encoder.container(keyedBy: EmptyKey.self)")
             }
         }
         lines.append("        }")
         lines.append("    }")
         lines.append("")
+        let fieldlessFirst = variants.first(where: {
+            $0.fields.isEmpty && $0.payloadTypeName == nil
+                && $0.additionalPropertiesType == nil
+                && $0.embeddedUnion == nil
+        })
         lines.append("    public init(from decoder: Decoder) throws {")
-        lines.append("        var lastError: Error?")
+        // With a fieldless fallback no error is rethrown, so none is kept.
+        if fieldlessFirst == nil {
+            lines.append("        var lastError: Error?")
+        }
         for variant in variants {
             let caseName = camelCase(variant.name)
             let hasSynthBody = !variant.fields.isEmpty
                 || variant.additionalPropertiesType != nil
                 || variant.embeddedUnion != nil
             if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
-                lines.append("        do {")
-                lines.append("            self = .\(caseName)(try \(payload)(from: decoder))")
-                lines.append("            return")
-                lines.append("        } catch { lastError = error }")
+                appendVariantAttempt(caseName, payload: payload, keepsError: fieldlessFirst == nil, indent: "        ", lines: &lines)
             }
         }
-        let fieldlessFirst = variants.first(where: {
-            $0.fields.isEmpty && $0.payloadTypeName == nil
-                && $0.additionalPropertiesType == nil
-                && $0.embeddedUnion == nil
-        })
         if let fieldlessFirst {
             lines.append("        self = .\(camelCase(fieldlessFirst.name))")
         } else {
@@ -1095,12 +1203,12 @@ public struct SwiftCodeGenerator {
         }
         lines.append("    }")
         lines.append("")
-        lines.append("    private enum EmptyKey: CodingKey {}")
+        emitDeclaration("EmptyKey", line: "    private enum EmptyKey: CodingKey {}", lines: &lines)
     }
 
     // MARK: - Operation Emission
 
-    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String]) -> String {
+    private func qualifiedSwiftTypeName(_ type: ResolvedType, qualifiedNames: [String: String], direct: Bool = false) -> String {
         switch type {
         case .record(let name, _, _, _), .enum(let name, _), .union(let name, _, _):
             return qualifiedNames[name] ?? name
@@ -1109,9 +1217,11 @@ public struct SwiftCodeGenerator {
         case .map(let valueType):
             return "[String: \(qualifiedSwiftTypeName(valueType, qualifiedNames: qualifiedNames))]"
         case .nullable(let inner):
-            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames))?"
+            return "\(qualifiedSwiftTypeName(inner, qualifiedNames: qualifiedNames, direct: direct))?"
         case .typeReference(let name):
             return qualifiedNames[name] ?? name
+        case .transferable(let blocksType, let typeArgs):
+            return transferableTypeName(blocksType, typeArgs, direct: direct) { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
         default:
             return swiftTypeNameNoEmit(type)
         }
@@ -1119,8 +1229,21 @@ public struct SwiftCodeGenerator {
 
     private func emitOperation(_ operation: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
         let fullMethodName = namespace == "_default" ? operation.name : "\(namespace).\(operation.name)"
-        let returnType = qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
-        let isTransferable = isTransferableType(operation.result.type)
+        let transferable = transferableResult(operation.result.type)
+        let isTransferable = transferable != nil
+        // An unbound result returns UnknownTransferable; its type-arg model is still
+        // emitted (unreferenced here) so the AWSBLOCKS-NATIVE-001 diagnostic can name it.
+        let unboundTag = unboundTransferableTag(operation.result.type)
+        let returnType = unboundTag != nil
+            ? "BlocksRuntime.UnknownTransferable"
+            : declaredResultTypeName(
+                operation.result.type,
+                declared: declaredBindings,
+                fallbackMessageType: "\(runtimePrefix)JSONValue",
+                renderArg: {
+                    qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames)
+                }
+            ) ?? qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames, direct: true)
 
         // Build parameter list
         var paramList: [String] = []
@@ -1143,12 +1266,18 @@ public struct SwiftCodeGenerator {
             funcName = escapedSwiftName(operation.name)
         }
 
-        lines.append("    /// Calls `\(fullMethodName)`.")
+        // A line break in the method name would end the `///` comment early, and other control
+        // characters are rejected by the compiler; reuse the literal escaping, minus the quotes.
+        let docMethodName = String(swiftStringLiteral(fullMethodName).dropFirst().dropLast())
+        lines.append("    /// Calls `\(docMethodName)`.")
         lines.append("    public func \(funcName)(\(paramStr)) async throws -> \(returnType) {")
 
         // Build request
         if operation.parameters.isEmpty {
-            lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [], id: BlocksRequest.nextId())")
+            lines.append(
+                "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
+                    + "params: [], id: \(runtimePrefix)BlocksRequest.nextId())"
+            )
         } else {
             let hasTrailingOptionals = !operation.parameters.last!.required
             if hasTrailingOptionals {
@@ -1170,10 +1299,16 @@ public struct SwiftCodeGenerator {
                     let safe = escapedSwiftName(param.name)
                     lines.append("        if let \(safe) { _params.append(\(safe)) }")
                 }
-                lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: _params, id: BlocksRequest.nextId())")
+                lines.append(
+                    "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
+                        + "params: _params, id: \(runtimePrefix)BlocksRequest.nextId())"
+                )
             } else {
                 let arrayElements = operation.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
-                lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [\(arrayElements)], id: BlocksRequest.nextId())")
+                lines.append(
+                    "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
+                        + "params: [\(arrayElements)], id: \(runtimePrefix)BlocksRequest.nextId())"
+                )
             }
         }
 
@@ -1182,38 +1317,54 @@ public struct SwiftCodeGenerator {
 
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
-            if case .transferable(let blocksType, let typeArgs) = operation.result.type {
+            if let transferable, case .transferable(let blocksType, let typeArgs) = transferable.type {
+                // An optional result returns nil for a null body; a required one throws.
+                lines.append(transferable.optional
+                    ? "        guard let result else { return nil }"
+                    : "        guard let result else { throw \(runtimePrefix)RPCError(message: "
+                    + "\(swiftStringLiteral("Unexpected null result for \(fullMethodName)"))) }")
+                let descriptorNoun: String?
+                let returnLines: [String]
                 switch blocksType {
                 case "realtime/channel":
-                    let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid channel descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return RealtimeChannel<\(messageType)>.fromJSON(descriptor, baseHost: BlocksClient.baseHost) { data in")
-                    lines.append("            try JSONDecoder().decode(\(messageType).self, from: data)")
-                    lines.append("        }")
+                    let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) }
+                        ?? "\(runtimePrefix)JSONValue"
+                    // Decoded in BlocksRuntime: a message decoder formed here inherits MainActor default isolation and traps off it.
+                    descriptorNoun = nil
+                    returnLines = [
+                        "        return try JSONDecoder()"
+                            + ".decode(\(runtimePrefix)RealtimeChannel<\(messageType)>.self, from: result)"
+                    ]
                 case "file-bucket/download":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid file descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try FileDownloadHandle.fromJSON(descriptor)")
+                    descriptorNoun = "file"
+                    returnLines = ["        return try \(runtimePrefix)FileDownloadHandle.fromJSON(descriptor)"]
                 case "file-bucket/upload":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid file descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try FileUploadHandle.fromJSON(descriptor)")
+                    descriptorNoun = "file"
+                    returnLines = ["        return try \(runtimePrefix)FileUploadHandle.fromJSON(descriptor)"]
                 case "oidc/client":
-                    lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
-                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
-                    lines.append("            throw RPCError(message: \"Invalid OIDC client descriptor for \(fullMethodName)\")")
-                    lines.append("        }")
-                    lines.append("        return try OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)")
+                    descriptorNoun = "OIDC client"
+                    returnLines = [
+                        "        return try \(runtimePrefix)OIDCClient"
+                            + ".fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"
+                    ]
                 default:
-                    lines.append("        return result")
+                    descriptorNoun = "transferable"
+                    returnLines = transferableHydrationLines(
+                        declared: declaredBindings[blocksType],
+                        tagLiteral: swiftStringLiteral(blocksType),
+                        messageType: typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "\(runtimePrefix)JSONValue",
+                        runtimePrefix: runtimePrefix
+                    )
                 }
+                if let descriptorNoun {
+                    lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
+                    lines.append(
+                        "            throw \(runtimePrefix)RPCError(message: "
+                            + "\(swiftStringLiteral("Invalid \(descriptorNoun) descriptor for \(fullMethodName)")))"
+                    )
+                    lines.append("        }")
+                }
+                lines.append(contentsOf: returnLines)
             }
         } else if returnType == "Void" {
             // No return needed
@@ -1222,172 +1373,30 @@ public struct SwiftCodeGenerator {
             lines.append("        guard let result else { return nil }")
             lines.append("        return try JSONDecoder().decode(\(baseType).self, from: result)")
         } else {
-            lines.append("        guard let result else { throw RPCError(message: \"Unexpected null result for \(fullMethodName)\") }")
+            lines.append(
+                "        guard let result else { throw \(runtimePrefix)RPCError(message: "
+                    + "\(swiftStringLiteral("Unexpected null result for \(fullMethodName)"))) }"
+            )
             lines.append("        return try JSONDecoder().decode(\(returnType).self, from: result)")
         }
 
         lines.append("    }")
     }
+}
 
-    // MARK: - Transferable Helpers
-
-    private func isVoidType(_ type: ResolvedType) -> Bool {
-        if case .primitive(let kind, _) = type { return kind == .void }
-        if case .nullable(let inner) = type { return isVoidType(inner) }
-        return false
-    }
-
-    private func isTransferableType(_ type: ResolvedType) -> Bool {
-        if case .transferable = type { return true }
-        return false
-    }
-
-    private func isPrimitiveSwiftType(_ type: String) -> Bool {
-        switch type {
-        case "String", "Double", "Int", "Bool":
-            return true
-        default:
-            return false
-        }
-    }
-
-    // MARK: - Swift Type Name Resolution
-
-    /// Pre-emits any types that a given type depends on (ensures they're defined before use).
-    private func emitDependentTypes(_ type: ResolvedType, emitted: inout Set<String>, lines: inout [String]) {
-        switch type {
-        case .record(let name, _, _, let embeddedUnion):
-            if !emitted.contains(name) {
-                emitType(type, name: name, lines: &lines, emitted: &emitted)
-            }
-            if let embedded = embeddedUnion {
-                emitDependentTypes(embedded, emitted: &emitted, lines: &lines)
-            }
-        case .enum(let name, _):
-            if !emitted.contains(name) {
-                emitType(type, name: name, lines: &lines, emitted: &emitted)
-            }
-        case .union(let name, _, _):
-            if !emitted.contains(name) {
-                emitType(type, name: name, lines: &lines, emitted: &emitted)
-            }
-        case .list(let elementType, _):
-            emitDependentTypes(elementType, emitted: &emitted, lines: &lines)
-        case .map(let valueType):
-            emitDependentTypes(valueType, emitted: &emitted, lines: &lines)
-        case .nullable(let inner):
-            emitDependentTypes(inner, emitted: &emitted, lines: &lines)
-        case .transferable(_, let typeArgs):
-            for arg in typeArgs {
-                emitDependentTypes(arg, emitted: &emitted, lines: &lines)
-            }
-        case .primitive, .formattedType, .typeReference:
-            break
-        }
-    }
-
-    /// Pure Swift type-name resolver. Does NOT emit any types — assumes the
-    /// caller has already pre-emitted dependents (via `emitDependentTypes`).
-    private func swiftTypeNameNoEmit(_ type: ResolvedType) -> String {
-        switch type {
-        case .primitive(let kind, _):
-            switch kind {
-            case .string: return "String"
-            case .boolean: return "Bool"
-            case .integer: return "Int"
-            case .number: return "Double"
-            case .void: return "Void"
-            case .unknown: return "JSONValue"
-            }
-        case .formattedType(let format, _):
-            switch format {
-            case .uuid:     return "UUID"
-            case .dateTime: return "Date"
-            case .date:     return "Date"
-            case .time:     return "String"
-            case .uri:      return "URL"
-            }
-        case .record(let name, _, _, _):
-            return name
-        case .enum(let name, _):
-            return name
-        case .list(let elementType, _):
-            return "[\(swiftTypeNameNoEmit(elementType))]"
-        case .map(let valueType):
-            return "[String: \(swiftTypeNameNoEmit(valueType))]"
-        case .nullable(let inner):
-            return "\(swiftTypeNameNoEmit(inner))?"
-        case .union(let name, _, _):
-            return name
-        case .typeReference(let name):
-            return name
-        case .transferable(let blocksType, let typeArgs):
-            switch blocksType {
-            case "realtime/channel":
-                let argType = typeArgs.first.map { swiftTypeNameNoEmit($0) } ?? "JSONValue"
-                return "RealtimeChannel<\(argType)>"
-            case "file-bucket/download":
-                return "FileDownloadHandle"
-            case "file-bucket/upload":
-                return "FileUploadHandle"
-            case "oidc/client":
-                return "OIDCClient"
-            default:
-                return "JSONValue"
-            }
-        }
-    }
-
-    private func swiftTypeName(_ type: ResolvedType, emitted: inout Set<String>, modelLines: inout [String]) -> String {
-        switch type {
-        case .primitive(let kind, _):
-            switch kind {
-            case .string: return "String"
-            case .boolean: return "Bool"
-            case .integer: return "Int"
-            case .number: return "Double"
-            case .void: return "Void"
-            case .unknown: return "JSONValue"
-            }
-        case .formattedType(let format, _):
-            switch format {
-            case .uuid:     return "UUID"
-            case .dateTime: return "Date"
-            case .date:     return "Date"
-            case .time:     return "String"
-            case .uri:      return "URL"
-            }
-        case .record(let name, _, _, _):
-            emitType(type, name: name, lines: &modelLines, emitted: &emitted)
-            return name
-        case .enum(let name, _):
-            emitType(type, name: name, lines: &modelLines, emitted: &emitted)
-            return name
-        case .list(let elementType, _):
-            return "[\(swiftTypeName(elementType, emitted: &emitted, modelLines: &modelLines))]"
-        case .map(let valueType):
-            return "[String: \(swiftTypeName(valueType, emitted: &emitted, modelLines: &modelLines))]"
-        case .nullable(let inner):
-            return "\(swiftTypeName(inner, emitted: &emitted, modelLines: &modelLines))?"
-        case .union(let name, _, _):
-            emitType(type, name: name, lines: &modelLines, emitted: &emitted)
-            return name
-        case .typeReference(let name):
-            return name
-        case .transferable(let blocksType, let typeArgs):
-            switch blocksType {
-            case "realtime/channel":
-                let argType = typeArgs.first.map { swiftTypeName($0, emitted: &emitted, modelLines: &modelLines) } ?? "JSONValue"
-                return "RealtimeChannel<\(argType)>"
-            case "file-bucket/download":
-                return "FileDownloadHandle"
-            case "file-bucket/upload":
-                return "FileUploadHandle"
-            case "oidc/client":
-                return "OIDCClient"
-            default:
-                return "JSONValue"
-            }
+extension SwiftCodeGenerator {
+    /// One variant attempt in a union's `init(from:)`; with a fieldless fallback no error is kept to rethrow.
+    func appendVariantAttempt(_ caseName: String, payload: String, keepsError: Bool, indent: String, lines: inout [String]) {
+        if keepsError {
+            lines.append("\(indent)do {")
+            lines.append("\(indent)    self = .\(caseName)(try \(payload)(from: decoder))")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)} catch { lastError = error }")
+        } else {
+            lines.append("\(indent)if let value = try? \(payload)(from: decoder) {")
+            lines.append("\(indent)    self = .\(caseName)(value)")
+            lines.append("\(indent)    return")
+            lines.append("\(indent)}")
         }
     }
 }

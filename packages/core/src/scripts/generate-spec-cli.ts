@@ -26,6 +26,7 @@
 
 import { resolve, dirname, join } from 'node:path';
 import { writeSpec, type FoundationLoader } from './generate-spec.js';
+import { readNativeDeclarations } from './read-native-declarations.js';
 
 /** Pick a loader based on the file extension. `.ts` / `.tsx` use tsx; everything else uses Node's native `import()`. */
 async function selectLoader(foundationPath: string): Promise<FoundationLoader | undefined> {
@@ -80,7 +81,15 @@ async function main() {
 
 	try {
 		const loader = await selectLoader(backendPath);
-		await writeSpec(backendPath, outputPath, loader);
+		const nativeDeclarations = readNativeDeclarations(backendPath);
+		// Named because any installed package can declare a binding, and the
+		// generated native clients import whatever package it names. Sorted so
+		// the line is diffable between runs rather than readdir-ordered.
+		if (nativeDeclarations.length > 0) {
+			const declarers = nativeDeclarations.map((source) => source.sourcePackage).sort();
+			console.log('   native declarations:', declarers.join(', '));
+		}
+		await writeSpec(backendPath, outputPath, loader, { nativeDeclarations });
 		console.log('✅ OpenRPC spec written to', outputPath);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

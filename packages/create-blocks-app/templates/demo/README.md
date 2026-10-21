@@ -2,7 +2,7 @@
 
 A fuller example app on AWS Blocks. It wires together several Building Blocks in
 one place so you can see how they fit: `AuthBasic` for sign-in, a `KVStore` for
-loose key/value data, and a `DistributedTable` for a priority-sorted, per-user
+loose key/value data, and a `DistributedTable` for a sortable, per-user
 todo list. Vite + vanilla DOM frontend, no framework.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template demo`
@@ -29,12 +29,20 @@ Open http://localhost:3000 after `npm run dev`.
 ## What's Included
 
 - **AuthBasic** — sign up / sign in / sign out with JWT sessions.
-- **KVStore** — a public `getValue` / `setValue` pair plus a cookie round-trip
-  demo (`setCookie` / `getCookie` / `deleteCookie`).
-- **DistributedTable** — per-user todos with three secondary indexes
-  (`byPriority`, `byTitle`, `byCreatedAt`), so `listTodos(sortBy)` can sort on
-  the server. Every todo method calls `auth.requireAuth(context)`, so data is
-  isolated per user.
+- **KVStore** — a `getValue` / `setValue` pair gated by `requireAuth`, with
+  keys namespaced per user.
+- **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
+  `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
+  also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
+- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob** — upload/download
+  (paths scoped per user), `setFlag`, the API-key rotation methods,
+  `sendWelcome` and `runGreetingJob` all call `requireAuth`; `getFlag` and
+  `jobRan` stay public.
+- **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
+  the API (an in-memory sort, no secondary indexes to provision). Every todo
+  method calls `auth.requireAuth(context)`, so data is isolated per user.
+- **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both
+  balance updates commit together or roll back together inside one transaction.
 
 The API mixes **public** methods (no auth) and **protected** methods (gated by
 `requireAuth`) in one namespace, showing where the auth boundary sits.

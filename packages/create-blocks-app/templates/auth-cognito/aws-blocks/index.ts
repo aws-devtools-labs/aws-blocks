@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -49,7 +49,6 @@ let lastCode: { username: string; code: string; purpose: string } | null = null;
 // Authenticator drives a "Continue" step that exchanges the bridging
 // session for tokens — no second OTP, no separate sign-in.
 const auth = new AuthCognito(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
   passwordPolicy: { minLength: 8, requireDigits: true },
   signInWith: 'email' as const,
   authFlowType: 'USER_AUTH' as const,
@@ -86,20 +85,6 @@ const todos = new DistributedTable(scope, 'todos', {
   key: {
     partitionKey: 'userSub',
     sortKey: 'todoId'
-  },
-  indexes: {
-    byPriority: {
-      partitionKey: 'userSub',
-      sortKey: 'priority'
-    },
-    byTitle: {
-      partitionKey: 'userSub',
-      sortKey: 'title'
-    },
-    byCreatedAt: {
-      partitionKey: 'userSub',
-      sortKey: 'createdAt'
-    }
   }
 });
 
@@ -162,24 +147,21 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
     const user = await auth.requireAuth(context);
-    const indexMap = {
-      priority: 'byPriority',
-      title: 'byTitle',
-      createdAt: 'byCreatedAt',
-    } as const;
-    const iterator = todos.query({
-      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
-      where: { userSub: { equals: user.userSub } },
-    });
-    const out: Array<z.infer<typeof todoSchema>> = [];
-    for await (const t of iterator) out.push(t);
-    return out;
+    const list = await Array.fromAsync(
+      todos.query({ where: { userSub: { equals: user.userSub } } })
+    );
+    // Sort in the API (not via a secondary index) — a per-user todo list is
+    // small, so an in-memory sort is simpler and avoids provisioning GSIs.
+    if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
+    if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
+    // Default (and 'createdAt'): newest-last by creation time.
+    return list.sort((a, b) => a.createdAt - b.createdAt);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
     const user = await auth.requireAuth(context);
     const existing = await todos.get({ userSub: user.userSub, todoId });
-    if (!existing) throw new Error('Todo not found');
+    if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put({ ...existing, ...updates });
     return { success: true };
   },
@@ -256,13 +238,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // ── KV demo (not auth-gated for brevity) ─────────────────────────────
+  // ── KV demo (requireAuth-gated, keys namespaced per user) ────────────
   async getValue(key: string) {
-    return await store.get(key);
+    const user = await auth.requireAuth(context);
+    return await store.get(`${user.userSub}:${key}`);
   },
 
   async setValue(key: string, value: string) {
-    await store.put(key, value);
+    const user = await auth.requireAuth(context);
+    await store.put(`${user.userSub}:${key}`, value);
     return { success: true };
   },
 

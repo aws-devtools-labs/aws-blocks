@@ -28,6 +28,7 @@ import {
 	AdminSetUserPasswordCommand,
 	AdminUserGlobalSignOutCommand,
 	ListUsersCommand,
+	type ListUsersCommandOutput,
 	ListUsersInGroupCommand,
 	type AttributeType,
 	type UserType,
@@ -567,18 +568,70 @@ function mapFactorSetting(
 	}
 }
 
-/** Translate an SDK error (whose `name` mirrors Cognito's exception) into ApiError. */
-function asApiError(e: unknown): never {
+/**
+ * BB-authored wire messages per Cognito exception name. Cognito's own
+ * `message` text can embed account, endpoint, or role detail, and
+ * `ApiError.message` crosses the RPC wire verbatim, so the caller only ever
+ * sees one of these stable strings. Names outside the map get
+ * {@link DEFAULT_COGNITO_ERROR_MESSAGE}.
+ */
+const COGNITO_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+	[AuthCognitoErrors.NotAuthenticated]: 'Authentication required',
+	[AuthCognitoErrors.NotAuthorized]: 'Not authorized',
+	[AuthCognitoErrors.UserNotFound]: 'User not found',
+	[AuthCognitoErrors.UserAlreadyExists]: 'User already exists',
+	[AuthCognitoErrors.InvalidPassword]: 'Password does not meet the password policy',
+	[AuthCognitoErrors.InvalidParameter]: 'Invalid parameter',
+	[AuthCognitoErrors.CodeMismatch]: 'Invalid code',
+	[AuthCognitoErrors.ExpiredCode]: 'Code expired',
+	[AuthCognitoErrors.LimitExceeded]: 'Limit exceeded, try again later',
+	[AuthCognitoErrors.TooManyRequests]: 'Too many requests, try again later',
+	[AuthCognitoErrors.TooManyFailedAttempts]: 'Too many failed attempts, try again later',
+	[AuthCognitoErrors.PasswordResetRequired]: 'Password reset required',
+	[AuthCognitoErrors.UserNotConfirmed]: 'User not confirmed',
+	[AuthCognitoErrors.MFAMethodNotFound]: 'MFA method not found',
+	[AuthCognitoErrors.SoftwareTokenMFANotFound]: 'TOTP not set up',
+	[AuthCognitoErrors.GroupNotFound]: 'Resource not found',
+	[AuthCognitoErrors.UnsupportedUserState]: 'Unsupported user state',
+	[AuthCognitoErrors.AliasExists]: 'Email or phone number already in use',
+	[AuthCognitoErrors.InvalidLambdaResponse]: 'User pool Lambda trigger returned an invalid response',
+	[AuthCognitoErrors.UserLambdaValidation]: 'User pool Lambda trigger rejected the request',
+	[AuthCognitoErrors.InternalError]: 'Authentication service error, try again later',
+	[AuthCognitoErrors.EnableSoftwareTokenMFA]: 'Invalid code',
+	[AuthCognitoErrors.WebAuthnNotEnabled]: 'Passkeys are not enabled for this user pool',
+	[AuthCognitoErrors.WebAuthnOriginNotAllowed]: 'Passkey origin not allowed',
+	[AuthCognitoErrors.WebAuthnRelyingPartyMismatch]: 'Passkey relying party mismatch',
+	[AuthCognitoErrors.WebAuthnChallengeNotFound]: 'Passkey challenge expired, start again',
+	[AuthCognitoErrors.WebAuthnCredentialNotSupported]: 'Passkey credential not supported',
+	[AuthCognitoErrors.WebAuthnClientMismatch]: 'Passkey client mismatch',
+	[AuthCognitoErrors.WebAuthnConfigurationMissing]: 'Passkey configuration missing for this user pool',
+};
+
+const DEFAULT_COGNITO_ERROR_MESSAGE = 'Authentication request failed';
+
+/**
+ * Translate an SDK error (whose `name` mirrors Cognito's exception) into an
+ * ApiError. The wire `message` is BB-authored; the raw SDK error rides on
+ * `cause`, which `Error` installs as a non-enumerable own property, so it
+ * stays server-side and out of `JSON.stringify`.
+ *
+ * @internal
+ */
+export function toCognitoApiError(e: unknown): ApiError {
 	if (e instanceof Error) {
 		const status = statusForCognitoError(e.name);
 		const retriable = isRetriableAuthError(e.name);
-		throw new ApiError(e.message || e.name, status, {
+		return new ApiError(COGNITO_ERROR_MESSAGES[e.name] ?? DEFAULT_COGNITO_ERROR_MESSAGE, status, {
 			name: e.name,
 			cause: e,
 			...(retriable ? { retriable: true } : {}),
 		});
 	}
-	throw new ApiError('Unknown error', 500);
+	return new ApiError('Unknown error', 500);
+}
+
+function asApiError(e: unknown): never {
+	throw toCognitoApiError(e);
 }
 
 /**
@@ -926,9 +979,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				return (async function* () {
 					let paginationToken: string | undefined;
 					do {
-						const resp = await self.client.send(new ListUsersCommand({
-							UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
-						}));
+						let resp: ListUsersCommandOutput;
+						try {
+							resp = await self.client.send(new ListUsersCommand({
+								UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
+							}));
+						} catch (e) { throw asApiError(e); }
 						for (const u of resp.Users ?? []) {
 							const attributes: Record<string, string> = {};
 							for (const a of (u.Attributes ?? []) as AttributeType[]) {

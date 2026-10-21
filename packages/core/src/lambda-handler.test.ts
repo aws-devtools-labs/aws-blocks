@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
+import { ApiError, blocksError } from './errors.js';
 import { decodeRpcResponse } from './rpc.js';
 import { _resetConfigCache, _setS3Fetcher } from './common/config.js';
 import { HttpRequest } from '@smithy/protocol-http';
@@ -286,6 +287,68 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
   });
 });
 
+// ── per-namespace RPC path dispatch ──────────────────────────────────────────
+
+describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
+  it('dispatches a call sent to /aws-blocks/api/{namespace}', async () => {
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async generate(id: string) { return { id, done: true }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.generate', params: ['r1'], id: 1 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { id: 'r1', done: true });
+  });
+
+  it('still dispatches a call sent to the bare /aws-blocks/api using the body prefix (back-compat)', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) { return { msg }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { msg: 'hi' });
+  });
+
+  it('rejects a path namespace that does not match the body prefix', async () => {
+    // The path addresses `reports` but the body calls `api.generate`. Neither is
+    // silently preferred: dispatching either one would run code the caller didn't
+    // address on one side, so the request is an Invalid Request.
+    let called = false;
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-reports'; } }),
+      api: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-api'; } }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.generate', params: [], id: 2 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
+    assert.match(body.error?.message, /path addresses namespace "reports" but the method is in namespace "api"/);
+    assert.strictEqual(body.id, 2);
+    assert.strictEqual(called, false, 'neither namespace is dispatched');
+  });
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — RawRoute body handling', () => {
@@ -411,6 +474,133 @@ describe('createLambdaHandler — RawRoute body handling', () => {
     assert.strictEqual(result.statusCode, 200);
     assert.deepStrictEqual(capturedParams, Object.assign(Object.create(null), { id: 'abc-123' }));
     assert.ok(capturedBody !== null);
+  });
+});
+
+// ── RPC errors never carry ARNs / AWS SDK detail ────────────────────────────
+
+describe('createLambdaHandler — AWS SDK AccessDenied detail never reaches the RPC client', () => {
+  it('collapses an AccessDenied (role + resource ARNs in the message, $metadata attached) to a generic error', async () => {
+    const roleArn = 'arn:aws:sts::123456789012:assumed-role/app-backend-HandlerRole-ABC123/app-backend-handler';
+    const resourceArn = 'arn:aws:dynamodb:us-west-2:123456789012:table/app-backend-orders-prod';
+    const sdkError = Object.assign(
+      new Error(`User: ${roleArn} is not authorized to perform: dynamodb:PutItem on resource: ${resourceArn}`),
+      { name: 'AccessDeniedException', $fault: 'client', $metadata: { httpStatusCode: 400, requestId: 'REQ-123' } },
+    );
+    const backend = { api: (_ctx: BlocksContext) => ({ async write() { throw sdkError; } }) };
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke(backend, makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.write', params: [], id: 1 }) }));
+    } finally {
+      console.error = originalError;
+    }
+
+    const body: string = result.body;
+    for (const leak of ['arn:aws', '123456789012', 'HandlerRole', 'app-backend-orders-prod', 'AccessDeniedException', 'REQ-123', 'dynamodb:PutItem']) {
+      assert.ok(!body.includes(leak), `client-visible error body leaked "${leak}": ${body}`);
+    }
+    assert.ok(JSON.parse(body).error, 'the call must still fail');
+  });
+});
+
+// ── RawRoute uncaught-exception sanitization ────────────────────────────────
+
+describe('createLambdaHandler — RawRoute uncaught exceptions', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 without leaking its name or message', async () => {
+    class ResourceNotFoundException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'ResourceNotFoundException';
+      }
+    }
+    registerRoute({
+      method: 'GET',
+      path: '/raw/fails',
+      handler: async () => {
+        throw new ResourceNotFoundException('Requested resource not found: Table: internal-orders-prod');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/fails', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Internal error' });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes('ResourceNotFoundException'));
+    assert.ok(!serialized.includes('internal-orders-prod'));
+  });
+
+  it('keeps the name and message of a branded Building Block error thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/bb-error',
+      handler: async () => {
+        throw blocksError('ValidationFailedException', 'email must be a valid address');
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/bb-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 500);
+    assert.deepStrictEqual(JSON.parse(result.body), {
+      error: 'ValidationFailedException: email must be a valid address',
+      name: 'ValidationFailedException',
+    });
+  });
+
+  it('keeps the status of an ApiError thrown from a raw route', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/api-error',
+      handler: async () => {
+        throw new ApiError('Forbidden', 403, { name: 'AccessDenied' });
+      },
+    });
+
+    const originalError = console.error;
+    console.error = () => {};
+    let result: any;
+    try {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/api-error', body: null }));
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Forbidden', name: 'AccessDenied' });
+  });
+
+  it('leaves a deliberate ctx.response error write untouched', async () => {
+    registerRoute({
+      method: 'GET',
+      path: '/raw/own-error',
+      handler: async (ctx) => {
+        ctx.response.status = 502;
+        ctx.response.send({ error: 'upstream said: ResourceNotFoundException' });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/raw/own-error', body: null }));
+
+    assert.strictEqual(result.statusCode, 502);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'upstream said: ResourceNotFoundException' });
   });
 });
 
@@ -1427,4 +1617,58 @@ describe('createLambdaHandler — native client user-agent forwarding', () => {
     assert.strictEqual(body.result, 'aws-sdk-js/3.700.0 aws-blocks/0.5.0');
   });
 
+});
+
+// ── RPC dispatch: only API surfaces are callable ────────────────────────────
+//
+// The dispatcher resolves `backend[apiNamespace][method]`. It must not expose a
+// Building Block instance that happens to be exported from the backend module
+// (its whole data plane would bypass every `requireAuth` in the ApiNamespace
+// layer), `_`-private exports, or members inherited from `Object.prototype`.
+
+function rpcEvent(method: string, params: unknown[] = []) {
+  return makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }) });
+}
+
+function rpcError(result: any): { code: number; message: string } | undefined {
+  return JSON.parse(result.body).error;
+}
+
+describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () => {
+  it('rejects a method on an exported Building Block (Scope) instance', async () => {
+    let wrote = false;
+    // Structurally a Scope (id + fullId), like `export const todos = new DistributedTable(scope, 'todos')`.
+    const todos = { id: 'todos', fullId: 'app-todos', async put() { wrote = true; return 'WROTE'; } };
+    const result = await invoke({ todos }, rpcEvent('todos.put', ['k', 'v']));
+    assert.strictEqual(rpcError(result)?.code, -32601, 'block instance must be method-not-found');
+    assert.strictEqual(wrote, false, 'the block method must never run');
+  });
+
+  it('rejects an underscore-private export', async () => {
+    let ran = false;
+    const backend = { _internal: () => ({ async run() { ran = true; return 1; } }) };
+    const result = await invoke(backend, rpcEvent('_internal.run'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+    assert.strictEqual(ran, false);
+  });
+
+  for (const inherited of ['toString', 'hasOwnProperty', 'constructor', 'valueOf', '__proto__']) {
+    it(`rejects the inherited Object.prototype member "${inherited}"`, async () => {
+      const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return m; } }) };
+      const result = await invoke(backend, rpcEvent(`api.${inherited}`));
+      assert.strictEqual(rpcError(result)?.code, -32601, `${inherited} must be method-not-found`);
+    });
+  }
+
+  it('rejects a non-function own property on the method map', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ secretConfig: { key: 'x' }, async echo(m: string) { return m; } }) };
+    const result = await invoke(backend, rpcEvent('api.secretConfig'));
+    assert.strictEqual(rpcError(result)?.code, -32601);
+  });
+
+  it('still dispatches a real method (regression guard)', async () => {
+    const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
+    const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
+    assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
 });

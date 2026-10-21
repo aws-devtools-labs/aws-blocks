@@ -15,8 +15,9 @@ concurrency:
   group: native-e2e-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Grant OIDC tokens only to role-assuming jobs so PR-head build jobs cannot
+# mint AWS credentials.
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -24,6 +25,8 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       # Per-platform flags so a change to one language's SDK doesn't fan out to
       # the others. `any-changed` gates the shared setup/gate jobs.
       dart-changed: ${{ steps.check.outputs.dart-changed }}
@@ -31,10 +34,12 @@ jobs:
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -76,12 +81,12 @@ jobs:
     outputs:
       spec-path: ${{ steps.spec.outputs.path }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -97,7 +102,7 @@ jobs:
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
 
       - name: Upload spec artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/blocks.spec.json
@@ -113,17 +118,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
         with:
           sdk: '3.13.0'
 
@@ -136,7 +141,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -211,17 +216,17 @@ jobs:
             gradle-task: iosSimulatorArm64Test
             timeout: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
@@ -230,7 +235,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: native/kotlin/e2e/
@@ -260,15 +265,15 @@ jobs:
     name: Swift E2E
     needs: [detect-changes, setup]
     if: needs.detect-changes.outputs.swift-changed == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -282,7 +287,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -340,13 +345,16 @@ jobs:
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 16'
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
   # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
   # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
   dart-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
@@ -360,21 +368,21 @@ jobs:
     # wall / Destroy could be skipped → leaked stacks). Stop-gap until
     # deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
         with:
           sdk: '3.13.0'
 
@@ -391,10 +399,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
@@ -489,27 +497,30 @@ jobs:
         run: npm run destroy || true
 
   swift-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
       needs.detect-changes.outputs.swift-changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
+    runs-on: macos-26
     # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
     # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
     # Stop-gap until deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -523,10 +534,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
@@ -537,7 +548,8 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
-          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+          # apiUrl is already the full RPC endpoint and the spec's first server, so Blocks() reaches it too.
+          echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
@@ -579,7 +591,7 @@ jobs:
           xcodebuild test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 16'
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       - name: Destroy sandbox
         if: always()
@@ -587,6 +599,9 @@ jobs:
         run: npm run destroy || true
 
   kotlin-e2e-sandbox:
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-
@@ -597,7 +612,7 @@ jobs:
     # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
     # Swift iOS sandbox job and the non-sandbox Kotlin job above.
     timeout-minutes: ${{ matrix.timeout }}
-    environment: publish
+    environment: e2e
     strategy:
       fail-fast: false
       matrix:
@@ -606,7 +621,9 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            timeout: 30
+            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
+            # resources), so 30 min left no room for the build, tests and destroy.
+            timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
@@ -615,17 +632,17 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
@@ -634,10 +651,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
@@ -680,7 +697,7 @@ jobs:
         run: npm run spec
 
       - name: Download spec
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
           path: native/kotlin/e2e/

@@ -1,0 +1,12 @@
+{
+  "cases": [
+    { "name": "no pre-existing file, one event", "preExisting": null, "emits": 1, "preserved": false, "expectedLength": 1 },
+    { "name": "file created by this run, two events", "preExisting": null, "emits": 2, "preserved": false, "expectedLength": 2 },
+    { "name": "file created by this run, three events", "preExisting": null, "emits": 3, "preserved": false, "expectedLength": 3 },
+    { "name": "pre-existing JSON array", "preExisting": "[{\"existing\":true}]", "emits": 1, "preserved": true, "expectedLength": null },
+    { "name": "pre-existing JSON array, several events", "preExisting": "[{\"existing\":true}]", "emits": 3, "preserved": true, "expectedLength": null },
+    { "name": "pre-existing bare object", "preExisting": "{\"existing\":true}", "emits": 1, "preserved": true, "expectedLength": null },
+    { "name": "pre-existing non-JSON text", "preExisting": "this is not json", "emits": 1, "preserved": true, "expectedLength": null },
+    { "name": "pre-existing empty file", "preExisting": "", "emits": 1, "preserved": true, "expectedLength": null }
+  ]
+}

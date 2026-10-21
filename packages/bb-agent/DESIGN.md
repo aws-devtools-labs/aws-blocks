@@ -86,6 +86,8 @@ Two storage backends, same FileBucket BB:
 - **AWS:** Strands' native `S3Storage` → FileBucket-provisioned S3 bucket
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
+**Missing-snapshot parity (D-002/D-008).** A genuinely missing first-turn snapshot already comes back as `NoSuchKey`/`NoSuchBucket` → `null` (and a missing manifest as an empty one) from `S3Storage` itself, which Strands' `SessionManager` treats as "start fresh" — the same contract the local `FileBucketSnapshotStorage` honours (it returns `null` when `bucket.get` is falsy). So the deployed read paths are delegated to `S3Storage` **unchanged**: no wrapper is needed to start a true first turn fresh. A read that fails for any **other** reason — `AccessDenied`, a 5xx, a corrupt object — means the snapshot may exist and simply was not read, so it **rethrows and surfaces**. It must NOT degrade to a fresh start: `SessionManager` overwrites `snapshot_latest.json` after a fresh start, so swallowing a transient fault on turn N would silently overwrite an established conversation's saved history with a blank one (a local Strands reproduction confirmed a single 503 on turn N erased turns 1..N-1). A read fault cannot be distinguished from a genuine first turn, which is exactly why it must not be treated as one. The diagnostic value is kept where it belongs: a rethrown restore error propagates into `runAgent`'s catch, which logs the deepest cause's `name`, `httpStatusCode` and `requestId` (flattened out of the non-enumerable `.cause` by `errorCauseShape`) at **`error`** level — above the deployed agent's default `error` log level, so the concrete production error shape is captured for the first time, without the data-loss fallback. See the `createDeployedSnapshotStorage` JSDoc in `src/agent.aws.ts`, the `errorCauseShape` guard, and the rethrow regression tests plus the parity tripwire (`SessionManager does not read the manifest on a fresh-session restore`) in `index.test.ts`.
+
 ## Runaway-protection caps
 
 `AgentConfig.maxLlmCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
@@ -149,6 +151,11 @@ Custom Strands model provider for local development. No network, no API keys, no
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)
 
+`ModelConfig.cannedResponses` is forwarded to the lazily imported provider as `responses`. Inline dictionaries and JSON-file dictionaries replace only the built-in text lookup; tool-result summaries and tool selection still take priority, and the generic unmatched fallback remains. Inline phrase patterns use the existing phrase cache; file-backed phrases do not add cache entries. Selected custom text is streamed verbatim; default text keeps the existing word-by-word emission.
+
+Inline dictionaries are validated once when the provider is created; each provider owns its snapshot. Matching patterns are compiled and cached on first use. Invalid inline configuration fails before tool selection. `Agent` creates a fresh provider for each turn.
+
+File paths are resolved against `process.cwd()` when the provider is created. Each text selection reads and validates one complete dictionary snapshot, so subsequent requests see file updates without a watcher. Tool paths skip file access. Failed reads or validation do not retain stale responses, and the next request retries. Writers should replace the JSON file atomically using a temporary file in the same directory and rename.
 
 ## Reconnect Recovery (createChat & useChat)
 

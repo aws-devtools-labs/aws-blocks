@@ -1,7 +1,6 @@
 /** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import {
 	type ExecuteOptions,
 	type ExecutionResult,
@@ -10,121 +9,15 @@ import {
 	SandboxTimeoutError,
 	type StreamChunk,
 } from '@strands-agents/sdk';
+import { buildAgentSpawn } from './isolation.mjs';
+import { buildShellEnv, redactSecrets } from './secrets.mjs';
 
-// Process-identity isolation for the builder's agent shell (issue #184): run it as a
-// dedicated unprivileged user (`benchagent`) via `sudo -n runuser -u benchagent -- env
-// <full-env> bash -c`, so the agent's broad by-name/by-user kills (pkill/killall/fuser -k)
-// hit a cross-uid EPERM instead of reaping the parent harness. UID isolation (not a PID
-// namespace) so a `setsid` dev server the agent backgrounds persists across bash calls.
-// runuser isn't a login shell, so the full resolved env is re-materialized via `env
-// KEY=VAL … bash -c` (survives sudo's env scrub); HOME points at benchagent's home. Used
-// only when passwordless sudo+runuser works AND prepareWorkspaceIsolation's ACL is granted
-// (probed once, memoized); otherwise falls back to bare `bash -c`.
-export const BENCH_AGENT_USER = process.env.BENCH_AGENT_USER || 'benchagent';
-
-let isolationProbe: boolean | undefined;
-let agentHome: string | undefined;
-
-// benchagent's home dir (from its passwd entry) so HOME is writable; falls back to /home/<user>.
-function resolveAgentHome(): string {
-	try {
-		const r = spawnSync('getent', ['passwd', BENCH_AGENT_USER], { encoding: 'utf8', timeout: 5000 });
-		if (r.status === 0 && typeof r.stdout === 'string') {
-			const home = r.stdout.trim().split(':')[5];
-			if (home) return home;
-		}
-	} catch {
-		/* fall through */
-	}
-	return `/home/${BENCH_AGENT_USER}`;
-}
-
-// Probe (once, memoized) whether the agent shell can run as benchagent via passwordless
-// sudo+runuser, using the EXACT privilege transition runShell uses; false → caller falls back.
-// NOTE (probe breadth): this only exercises `sudo -n runuser`, but the reap path (killGroup)
-// also relies on `sudo -n kill` — and the harness's stale-server sweep on `sudo -n fuser`/`rm`.
-// We probe just the one verb because the runner grants benchagent's sudoers entry as
-// `NOPASSWD:ALL` (a single rule covering every command), so a passing `runuser` probe implies
-// the others pass too. If that sudoers policy is ever narrowed to per-command rules, this probe
-// must be widened to verify each verb the reap/sweep depends on.
-export function isolationAvailable(): boolean {
-	if (isolationProbe !== undefined) return isolationProbe;
-	try {
-		const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'true'], {
-			stdio: 'ignore',
-			timeout: 5000,
-		});
-		isolationProbe = r.status === 0 && !r.error;
-		if (isolationProbe) agentHome = resolveAgentHome();
-	} catch {
-		isolationProbe = false;
-	}
-	return isolationProbe;
-}
-
-// Grant benchagent + the harness user rwx on the workspace (recursive + default ACL, so
-// files either creates later stay mutually accessible), AND grant benchagent search (x) on
-// every ANCESTOR dir — the kernel checks x on each parent when resolving an ABSOLUTE path,
-// and npm/node/tsc resolve modules absolutely, so without it absolute-path opens EACCES
-// even though the workspace itself is rwx. Ancestor grant is best-effort per dir. Returns
-// true only if the workspace grants succeed; false → caller disables isolation.
-export function prepareWorkspaceIsolation(root: string): boolean {
-	if (!isolationAvailable()) return false;
-	let me = process.env.USER ?? '';
-	if (!me) {
-		try {
-			me = spawnSync('id', ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
-		} catch {
-			me = '';
-		}
-	}
-	const abs = resolve(root);
-	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync('setfacl', ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
-	// Grant benchagent search (x) up the ancestor chain so absolute-path opens can traverse.
-	let dir = dirname(abs);
-	let prev = '';
-	while (dir && dir !== prev && dir !== '/') {
-		spawnSync('setfacl', ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
-		prev = dir;
-		dir = dirname(dir);
-	}
-	return true;
-}
-
-// Build the argv for one agent shell command (`cd <cwd> && <command>`), wrapped to run as
-// benchagent when isolation is requested and available. Exported so the wrap decision is
-// unit-testable without spawning. `isolate` defaults false so the judge keeps the bare spawn.
-export function buildAgentSpawn(
-	command: string,
-	cwd: string,
-	isolate: boolean,
-	env: Record<string, string>,
-): { file: string; args: string[]; isolated: boolean } {
-	const inner = `cd ${shellQuote(cwd)} && ${command}`;
-	if (isolate && isolationAvailable()) {
-		const forwarded: Record<string, string> = { ...env, HOME: agentHome ?? `/home/${BENCH_AGENT_USER}` };
-		// Only forward valid shell identifier names (drops exported-function keys like
-		// `BASH_FUNC_x%%`); values pass as argv so need no quoting.
-		// NOTE (secrets-on-argv): any OIDC/AWS creds in the env land here on `env KEY=VAL … bash`
-		// argv, so they're briefly world-readable via `/proc/<pid>/cmdline`. Writing them to a
-		// 0600 env-file and `env -S "$(cat file)"` would avoid the exposure, but the file must be
-		// readable by benchagent (defeating 0600 across the uid boundary) and complicates the
-		// isolation path. Deferred: the runner is a single-tenant ephemeral GitHub-hosted VM, so
-		// the only local reader is benchagent itself, which already receives the creds by design.
-		const envPairs = Object.entries(forwarded)
-			.filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
-			.map(([k, v]) => `${k}=${v}`);
-		return {
-			file: 'sudo',
-			args: ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', ...envPairs, 'bash', '-c', inner],
-			isolated: true,
-		};
-	}
-	return { file: 'bash', args: ['-c', inner], isolated: false };
-}
+// Every command runs as the isolated agent user (lib/isolation.mjs): `sudo -n runuser -u benchagent
+// -- env -i <shell-env> bash -c`, with the shell env from buildShellEnv (allowlisted, credential-free).
+// Cross-uid, the agent's broad kills (pkill/killall/fuser -k) hit EPERM instead of the harness, and it
+// cannot read the harness's /proc/<pid>/environ, which still holds the job credentials. UID isolation
+// (not a PID namespace) so a `setsid` dev server the agent backgrounds persists across bash calls
+// (until the phase-end reap). Without isolation buildAgentSpawn refuses (bare shell: local dev only).
 
 // Bounded grace (ms) before force-resolving if a backgrounded grandchild escaped the
 // process group (e.g. via `setsid`) and still holds the inherited pipes open.
@@ -134,8 +27,8 @@ export const EXIT_DRAIN_GRACE_MS = 2000;
 // op through it, so rooting at `root` makes containment structural. `minTimeoutSec` floors
 // the per-command timeout (builder passes BASH_MIN_TIMEOUT_SEC so npm install/build survive).
 export class WorkspaceSandbox extends PosixShellSandbox {
-	// `isolate` runs each command as benchagent (cross-uid EPERM shields the harness); builder
-	// passes true, judge leaves false (its shell is read-only and never issues kills).
+	// `isolate` = the phase entered the agent-user boundary (enterAgentPhase). false only in the
+	// local-dev bare mode; without either, every command is refused (buildAgentSpawn throws).
 	constructor(
 		private readonly root: string,
 		private readonly minTimeoutSec = 0,
@@ -155,7 +48,8 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 		const result = await runShell(command, cwd, timeout, options?.signal, options?.env, this.isolate);
 		// Persist each command's exit code + output — the Strands trace records tool
 		// CALLS but not shell OUTPUT. Opt-in via BENCH_CMD_LOG; best-effort so logging can't break a
-		// command; sliced to 4000 chars/side.
+		// command. The log is uploaded as a public artifact, so every field is redacted BEFORE the
+		// 4000-char slice (a secret straddling the cut can't survive as an unmatched prefix).
 		const cmdLogPath = process.env.BENCH_CMD_LOG;
 		if (cmdLogPath) {
 			try {
@@ -163,11 +57,11 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 					cmdLogPath,
 					`${JSON.stringify({
 						ts: new Date().toISOString(),
-						cwd,
-						command,
+						cwd: redactSecrets(cwd),
+						command: redactSecrets(command),
 						exitCode: result.exitCode,
-						stdout: result.stdout.slice(0, 4000),
-						stderr: result.stderr.slice(0, 4000),
+						stdout: redactSecrets(result.stdout).slice(0, 4000),
+						stderr: redactSecrets(result.stderr).slice(0, 4000),
 					})}\n`,
 				);
 			} catch {
@@ -188,8 +82,8 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 // server the agent persists across calls escapes it by design); (2) resolve on 'close' for a
 // complete capture, but SIGKILL the group the moment the shell exits so a backgrounded child's
 // leaked pipe FDs close and 'close' fires promptly, with EXIT_DRAIN_GRACE_MS as a fallback.
-// `isolate` (builder only) runs as benchagent via sudo+runuser, so the group kill escalates
-// through `sudo kill` (the harness uid can't signal a benchagent-owned group directly).
+// `isolate` runs as benchagent via sudo+runuser, so the group kill escalates through `sudo kill`
+// (the harness uid can't signal a benchagent-owned group directly).
 export function runShell(
 	command: string,
 	cwd: string,
@@ -199,13 +93,13 @@ export function runShell(
 	isolate = false,
 ): Promise<ExecutionResult> {
 	return new Promise<ExecutionResult>((resolve, reject) => {
-		// Resolve the full env ONCE so the spawn and buildAgentSpawn's re-materialization match.
-		const merged: Record<string, string> = {};
-		for (const [k, v] of Object.entries(process.env)) if (v !== undefined) merged[k] = v;
-		if (env) for (const [k, v] of Object.entries(env)) merged[k] = v;
-		const { file, args } = buildAgentSpawn(command, cwd, isolate, merged);
+		// Resolve the shell env ONCE so the spawn and buildAgentSpawn's re-materialization match: the
+		// allowlisted, credential-free subset of the harness env (the harness keeps its own creds for
+		// the Bedrock calls) plus the per-command overrides. Same env on the isolated and bare paths.
+		const shellEnv = buildShellEnv(process.env, { overrides: env });
+		const { file, args } = buildAgentSpawn(command, cwd, isolate, shellEnv);
 		const proc = spawn(file, args, {
-			env: merged,
+			env: shellEnv,
 			detached: true,
 			// Explicit stdin EOF so an interactive prompt fails fast instead of blocking on a TTY.
 			stdio: ['ignore', 'pipe', 'pipe'],
@@ -274,11 +168,6 @@ export function runShell(
 			else signal.addEventListener('abort', onAbort, { once: true });
 		}
 	});
-}
-
-// Single-quote a path for safe interpolation into a shell command.
-export function shellQuote(s: string): string {
-	return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 export function describeError(err: unknown): string {

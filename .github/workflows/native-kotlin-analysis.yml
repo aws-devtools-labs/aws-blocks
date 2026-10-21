@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'native/kotlin/**'
+      - 'native/codegen-fixtures/**'
       - '.github/workflows/native-kotlin-analysis.yml'
   workflow_dispatch:
 
@@ -20,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
 
@@ -50,12 +51,12 @@ jobs:
       run:
         working-directory: native/kotlin
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
@@ -76,6 +77,12 @@ jobs:
       - name: Run codegen unit tests
         run: ./gradlew :codegen:test
 
+      # The plugin module owns the Gradle task and extension that carry codegen's inputs;
+      # :codegen:test does not reach them. `check` adds validatePlugins, the only gate that
+      # fails on a task input missing its annotation.
+      - name: Run plugin checks
+        run: ./gradlew :plugin:check
+
   ios-test:
     name: Build & Test (runtime, iOS)
     runs-on: macos-15
@@ -84,12 +91,12 @@ jobs:
       run:
         working-directory: native/kotlin
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17

@@ -36,6 +36,7 @@ import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
+import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
 import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
@@ -101,7 +102,7 @@ const ASTRO_SHARP_VERSION = '^0.34.0';
  * consumed by the X.1 cross-adapter version-pin test, which asserts it
  * stays a parseable range with an explicit upper bound.
  */
-export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
+export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <8.0.0';
 
 /**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
@@ -630,7 +631,14 @@ const loadAstroConfig = (projectDir: string): AstroConfigShape => {
   const configPath = findAstroConfigPath(projectDir);
   if (!configPath) return {};
   try {
-    const jiti = createJiti(projectDir, { interopDefault: true });
+    // `tryNative`: import the config natively first. Astro 7's `astro/config`
+    // pulls in a Vite build that uses `import.meta.require`, which jiti's
+    // CJS transform rejects, silently dropping the whole config (redirects,
+    // trailingSlash, image settings).
+    const jiti = createJiti(projectDir, {
+      interopDefault: true,
+      tryNative: true,
+    });
     const mod = jiti(configPath) as
       | AstroConfigShape
       | { default?: AstroConfigShape };
@@ -807,15 +815,22 @@ export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
  * then prunes the `@img/sharp-wasm32` fallback (~8.7 MB, never used on
  * linux-x64) and other dead weight. Net add ≈ 19.5 MB unzipped — ~8% of
  * Lambda's 250 MB unzipped limit. Mirrors the Nitro adapter's IPX bundle.
+ *
+ * `arch` defaults to the adapter run's target ({@link targetComputeArch}):
+ * `x64` for Lambda, `arm64` for Lambda Web Functions (`compute.type:
+ * 'web-function'`), which installs `@img/sharp-linux-arm64` instead.
  * @internal
  */
-export const installSharpForAstroSsr = (serverDir: string): void => {
-  // Idempotent: skip if a linux-x64 sharp is already present.
+export const installSharpForAstroSsr = (
+  serverDir: string,
+  arch: ComputeArch = targetComputeArch(),
+): void => {
+  // Idempotent: skip if a linux-<arch> sharp is already present.
   const existing = path.join(
     serverDir,
     'node_modules',
     '@img',
-    'sharp-linux-x64',
+    `sharp-linux-${arch}`,
   );
   if (fs.existsSync(existing)) return;
 
@@ -837,7 +852,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
   }
 
   process.stderr.write(
-    '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
+    `\u{1F4F8} Installing sharp (linux-${arch}) into the Astro SSR bundle for /_image optimization\n`,
   );
   try {
     // `spawn.sync` here is the local ./spawn.js wrapper, which THROWS on a
@@ -856,7 +871,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
         '--include=optional',
         '--omit=dev',
         '--os=linux',
-        '--cpu=x64',
+        `--cpu=${arch}`,
         '--libc=glibc',
       ],
       { cwd: serverDir, stdio: 'inherit' },
@@ -876,7 +891,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
       'AstroSharpInstallError',
       {
         message:
-          'Failed to install a linux-x64 `sharp` into the Astro SSR bundle for `/_image` optimization.',
+          `Failed to install a linux-${arch} \`sharp\` into the Astro SSR bundle for \`/_image\` optimization.`,
         resolution:
           'Ensure `npm` is on PATH and the build host can reach the npm registry. ' +
           'To ship without native image optimization, set `image.service` to ' +
@@ -1023,6 +1038,7 @@ const buildSsrManifest = (input: {
         type: 'http-server',
         bundle: distDir,
         entrypoint: path.posix.join(path.basename(serverDir), RUN_SH_FILENAME),
+        serverEntry: path.posix.join(path.basename(serverDir), 'entry.mjs'),
         port: ASTRO_SERVER_PORT,
         placement: 'regional',
         runtime: FRAMEWORK_COMPUTE_RUNTIME,

@@ -6,7 +6,7 @@
  * injecting their own `AuthEngine`.
  */
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX, brandBlocksError } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthAction, BlocksAuth } from '@aws-blocks/auth-common';
 import type { AuthEngine, ExchangeInput, ExchangeResult, AuthorizeParams, AuthorizeParamsRequest, BearerRefreshResult } from './engine.js';
 import type {
@@ -27,6 +27,16 @@ import { validateRelay } from './relay.js';
 export const DEFAULT_CALLBACK_PATH = `${BLOCKS_AUTH_PREFIX}/callback`;
 export const DEFAULT_SIGNOUT_PATH = `${BLOCKS_AUTH_PREFIX}/signout`;
 export const DEFAULT_POST_SIGNIN_PATH = '/';
+
+/** Sign-in kickoff base for a callback path: its parent with `/signin` appended. */
+export function signInBasePathFor(callbackPath: string): string {
+	return `${callbackPath.slice(0, callbackPath.lastIndexOf('/'))}/signin`;
+}
+
+/** Sign-in kickoff route for one provider. Pure, so the CDK entry can call it during synth. */
+export function signInRoutePathFor(callbackPath: string, providerName: string): string {
+	return `${signInBasePathFor(callbackPath)}/${encodeURIComponent(providerName)}`;
+}
 
 /**
  * OIDC sign-in gate. Turns an OIDC authorization-code flow into an
@@ -493,7 +503,7 @@ export class AuthOIDC<
 
 	/** The absolute-within-host path for a provider's sign-in kickoff route. */
 	signInRoutePath(providerName: string): string {
-		return `${this.signInBasePath}/${encodeURIComponent(providerName)}`;
+		return signInRoutePathFor(this.callbackPath, providerName);
 	}
 
 	/**
@@ -504,8 +514,7 @@ export class AuthOIDC<
 	 * callback/exchange/authorize-params routes are mounted).
 	 */
 	get signInBasePath(): string {
-		const base = this.callbackPath.slice(0, this.callbackPath.lastIndexOf('/'));
-		return `${base}/signin`;
+		return signInBasePathFor(this.callbackPath);
 	}
 }
 
@@ -651,13 +660,13 @@ function notAuthenticated(): ApiError {
 function providerNotConfigured(name: string): Error {
 	const err = new Error(`Provider not configured: ${name}`);
 	err.name = 'ProviderNotConfiguredException';
-	return err;
+	return brandBlocksError(err);
 }
 
 function invalidConfig(message: string): Error {
 	const err = new Error(`AuthOIDC config error: ${message}`);
 	err.name = 'AuthOIDCConfigError';
-	return err;
+	return brandBlocksError(err);
 }
 
 /** Result of the relay-aware callback dispatch. */

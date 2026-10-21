@@ -42,7 +42,7 @@ final class GoldenFileTests: XCTestCase {
             let specData = try Data(contentsOf: specURL)
             let rpcModel = try OpenRPCParser().parse(data: specData)
             let codegenModel = CodegenModelBuilder().build(from: rpcModel)
-            let output = SwiftCodeGenerator().generate(from: codegenModel)
+            let output = try SwiftCodeGenerator().generate(from: codegenModel)
 
             if shouldRegenerate {
                 try fileManager.createDirectory(at: goldenDir, withIntermediateDirectories: true)

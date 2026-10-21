@@ -6,6 +6,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 startDevServer({
   backendPath: join(__dirname, '..', 'index.ts'),
-  frontendCommand: 'npx next dev --webpack --port 3100',
+  // --hostname 127.0.0.1: `next dev` binds every interface by default; keep the
+  // frontend dev server (source, HMR) on loopback like the Blocks dev server.
+  frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
   frontendPort: 3100,
 });

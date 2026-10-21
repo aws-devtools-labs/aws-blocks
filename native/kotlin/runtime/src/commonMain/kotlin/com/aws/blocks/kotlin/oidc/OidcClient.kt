@@ -2,7 +2,9 @@ package com.aws.blocks.kotlin.oidc
 
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksServer
+import com.aws.blocks.kotlin.CLOSED_MESSAGE
 import com.aws.blocks.kotlin.InternalBlocksApi
+import com.aws.blocks.kotlin.exceptions.BlocksException
 import com.aws.blocks.kotlin.json.BlocksJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
@@ -17,6 +19,7 @@ import kotlin.io.encoding.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
@@ -40,6 +43,15 @@ class OidcClient internal constructor(
     private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.PRESENT_OPTIONAL)
 
     /**
+     * The engine belongs to the [com.aws.blocks.kotlin.Blocks] instance this client came from.
+     * Posting on it once that instance is closed fails inside Ktor with a cancellation a caller
+     * cannot tell from its own, so report the closed state instead.
+     */
+    private fun ensureOpen() {
+        if (!httpClient.isActive) throw BlocksException(CLOSED_MESSAGE)
+    }
+
+    /**
      * Signs the user in through [provider], opening the system browser and suspending until
      * the flow finishes.
      *
@@ -56,11 +68,13 @@ class OidcClient internal constructor(
      * @throws OidcCallbackException if the identity provider reported an error, or the
      *   callback's state or CSRF value did not match what was sent.
      * @throws OidcExchangeException if the backend rejected the authorization code.
+     * @throws BlocksException if the Blocks instance this client came from has been closed.
      */
     suspend fun signIn(
         provider: String,
         options: OidcSignInOptions = OidcSignInOptions(),
     ): OidcUser {
+        ensureOpen()
         if (provider !in config.providers) {
             throw OidcUnknownProviderException(provider)
         }
@@ -166,6 +180,7 @@ class OidcClient internal constructor(
         callbackUrl: String,
         iss: String? = null
     ): OidcUser {
+        ensureOpen()
         if (provider !in config.providers) {
             throw OidcUnknownProviderException(provider)
         }
@@ -248,6 +263,7 @@ class OidcClient internal constructor(
     }
 
     suspend fun signOut() {
+        ensureOpen()
         val signOutUrl = server.rawRoute(config.signOutPath)
         httpClient.post(signOutUrl) {
             contentType(ContentType.Application.Json)

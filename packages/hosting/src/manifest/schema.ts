@@ -10,6 +10,7 @@ export const computeResourceSchema = z
     bundle: z.string().min(1, 'Bundle path must not be empty'),
     handler: z.string().optional(),
     entrypoint: z.string().optional(),
+    serverEntry: z.string().optional(),
     port: z.number().positive().optional(),
     placement: z.enum(['regional', 'global']),
     streaming: z.boolean().optional(),
