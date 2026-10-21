@@ -1005,10 +1005,20 @@ public struct SwiftCodeGenerator {
         }
         // Defaults are emitted as code, so only a well-formed literal matching
         // the field's primitive type is passed through; anything else returns
-        // nil and the caller falls back to the no-default path.
+        // nil and the caller falls back to the no-default path. `format: time`
+        // strings are generated as Swift `String`, so they take the string path;
+        // other formatted types (Date / UUID / URL) are not string literals.
         var target = type
         if case .nullable(let inner) = target { target = inner }
-        guard case .primitive(let kind, _) = target else { return nil }
+        let kind: PrimitiveKind
+        switch target {
+        case .primitive(let primitiveKind, _):
+            kind = primitiveKind
+        case .formattedType(.time, _):
+            kind = .string
+        default:
+            return nil
+        }
         // Strings: JSON renders them with surrounding quotes — that's a Swift
         // string literal too.
         // JSON escapes (`\/`, `\uXXXX`, `\b`, `\f`) are not all valid in Swift, so decode
