@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   cleanup:
-    name: Delete Stale Stacks (${{ matrix.environment }})
+    name: Delete Stale Stacks (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # e2e is the dedicated E2E account; publish still holds stacks from runs
@@ -27,13 +27,26 @@ jobs:
     # Drop publish only after #878 has merged and the publish leg has reported
     # zero candidates (stacks, REST APIs, IAM roles) for several scheduled runs
     # in a row.
+    # One leg per E2E account; `index` points into the AWS_ROLE_ARNS secret.
     strategy:
       fail-fast: false
       matrix:
-        environment: [e2e, publish]
+        include:
+          - { name: e2e account 1, environment: e2e, index: 0 }
+          - { name: e2e account 2, environment: e2e, index: 1 }
+          - { name: e2e account 3, environment: e2e, index: 2 }
+          - { name: publish, environment: publish }
     environment: ${{ matrix.environment }}
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (E2E account)
+        if: matrix.environment == 'e2e'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[matrix.index] }}
+          aws-region: us-east-1
+
+      - name: Configure AWS credentials (publish)
+        if: matrix.environment == 'publish'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}

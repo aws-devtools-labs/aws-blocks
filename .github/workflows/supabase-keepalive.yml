@@ -14,7 +14,8 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # Not a PR run, so always E2E account 1 (see .github/actions/e2e-slot).
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[0] }}
           aws-region: us-east-1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

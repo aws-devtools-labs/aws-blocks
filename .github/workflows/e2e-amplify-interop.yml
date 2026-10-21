@@ -24,12 +24,16 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       source-changed: ${{ steps.check.outputs.source-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps|scripts)/|^\.github/workflows/e2e-amplify-interop\.yml$'; then
@@ -67,7 +71,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Scaffold Amplify + Blocks app
@@ -172,7 +176,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Install Playwright

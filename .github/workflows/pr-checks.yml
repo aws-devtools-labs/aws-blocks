@@ -40,12 +40,16 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       source-changed: ${{ steps.check.outputs.source-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
@@ -363,7 +367,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: E2E Test Sandbox
@@ -385,7 +389,7 @@ jobs:
     # (and the shared stack) and CloudFormation fails the second run. Queue
     # rather than cancel so an in-flight deploy/destroy isn't interrupted.
     concurrency:
-      group: blocks-test-vpc
+      group: blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -412,7 +416,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Ensure persistent test VPC
@@ -446,7 +450,7 @@ jobs:
     # two suites don't collide across groups because they target *different*
     # persistent VPCs, so they can run in parallel.
     concurrency:
-      group: blocks-test-compute
+      group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -472,7 +476,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Ensure persistent compute test VPC
@@ -521,7 +525,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: E2E Test Production
@@ -543,6 +547,7 @@ jobs:
       # feature end-to-end instead of connecting unverified. externalDbSsl() reads
       # this; the explicit-engine tests read it too.
       DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
+    # One Supabase project serves every E2E account, so this group stays global.
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false
@@ -588,7 +593,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Fetch Supabase secrets
@@ -678,7 +683,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Install Playwright
@@ -730,7 +735,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ fromJSON(secrets.AWS_ROLE_ARNS)[fromJSON(needs.detect-changes.outputs.e2e-index)] }}
           aws-region: us-east-1
 
       - name: Seed fixed e2e telemetry installation ID
