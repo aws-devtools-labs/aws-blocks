@@ -11,14 +11,19 @@ outputs:
   account:
     description: 1-based account number, for names and logs
     value: ${{ steps.pick.outputs.account }}
+  accounts:
+    description: Number of E2E accounts in the pool
+    value: ${{ steps.pick.outputs.accounts }}
 runs:
   using: composite
   steps:
     - id: pick
       shell: bash
       env:
-        # Number of E2E accounts. Keep in sync with the length of AWS_ROLE_ARNS
-        # in the e2e environment and in Dependabot secrets.
+        # Number of E2E accounts, the one place the pool size is set. The
+        # cleanup-stacks.yml matrix is built from it, and cleanup runs fail if
+        # AWS_ROLE_ARNS (e2e environment and Dependabot secrets) has a
+        # different length.
         E2E_ACCOUNTS: '3'
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: |
@@ -30,3 +35,4 @@ runs:
         echo "E2E account $((index + 1)) of $E2E_ACCOUNTS"
         echo "index=$index" >> "$GITHUB_OUTPUT"
         echo "account=$((index + 1))" >> "$GITHUB_OUTPUT"
+        echo "accounts=$E2E_ACCOUNTS" >> "$GITHUB_OUTPUT"
