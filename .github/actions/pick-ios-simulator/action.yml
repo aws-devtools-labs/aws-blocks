@@ -1,0 +1,47 @@
+name: Pick an available iOS simulator
+description: >-
+  Picks an iPhone simulator that exists on this runner and exports its UDID as
+  SIM_UDID (and its name as SIM_NAME) for later `xcodebuild -destination` steps.
+  macOS runner images change which simulators they ship, so a hard-coded device
+  name can disappear ("Unable to find a device matching the provided destination
+  specifier"). Prefers `preferred` when present, else any available iPhone on the
+  newest installed iOS runtime.
+inputs:
+  preferred:
+    description: Simulator name to use when the runner has it.
+    required: false
+    default: 'iPhone 17 Pro'
+runs:
+  using: composite
+  steps:
+    - name: Pick an available iOS simulator
+      shell: bash
+      env:
+        PREFERRED_SIMULATOR: ${{ inputs.preferred }}
+      run: |
+        set -euo pipefail
+        picked=$(xcrun simctl list devices available -j | python3 -c '
+        import json, os, re, sys
+        devices = json.load(sys.stdin)["devices"]
+        def version(runtime):
+            m = re.search(r"iOS-(\d+)-(\d+)", runtime)
+            return (int(m.group(1)), int(m.group(2))) if m else None
+        iphones = []
+        for runtime, entries in devices.items():
+            v = version(runtime)
+            if v is None:
+                continue
+            for d in entries:
+                if d.get("isAvailable", True) and d["name"].startswith("iPhone"):
+                    iphones.append((v, d["name"], d["udid"]))
+        if not iphones:
+            sys.exit("no available iPhone simulator on this runner")
+        preferred = os.environ.get("PREFERRED_SIMULATOR", "")
+        exact = sorted((d for d in iphones if d[1] == preferred), reverse=True)
+        best = exact[0] if exact else sorted(iphones, reverse=True)[0]
+        print(f"{best[2]}\t{best[1]}\tiOS {best[0][0]}.{best[0][1]}")
+        ')
+        IFS=$'\t' read -r udid name runtime <<< "$picked"
+        echo "Using simulator: $name ($runtime, $udid)"
+        echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+        echo "SIM_NAME=$name" >> "$GITHUB_ENV"

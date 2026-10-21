@@ -555,3 +555,48 @@ test('CDK: durability options passed alongside fromExisting warn at synth', () =
 	});
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('wrapped via fromExisting'));
 });
+
+// ── GSI manager log groups stay owned by the stack ──────────────────────────
+// The GSI manager's Lambdas (both handlers and the cr.Provider framework
+// functions) log to stack-owned log groups, and none of their roles may create
+// a log group: during destroy() a late flush would otherwise recreate a deleted
+// group outside the stack, where it outlives the stack.
+
+type CfnResource = { Type: string; Properties?: Record<string, any>; DeletionPolicy?: string };
+
+test('CDK: every GSI-manager Lambda logs to a stack-owned group and cannot create one', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const resources = Template.fromStack(stack).toJSON().Resources as Record<string, CfnResource>;
+
+	const logGroups = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::Logs::LogGroup');
+	const ownedLogGroupIds = new Set(logGroups.map(([id]) => id));
+	for (const [id, r] of logGroups) assert.strictEqual(r.DeletionPolicy, 'Delete', `${id} is deleted with the stack`);
+
+	// The handlers, plus the provider's onEvent / isComplete / onTimeout framework functions.
+	const gsiFunctions = Object.entries(resources).filter(
+		([id, r]) => r.Type === 'AWS::Lambda::Function' && id.startsWith('BlocksGsi'),
+	);
+	assert.strictEqual(gsiFunctions.length, 5, `expected 5 GSI-manager functions, found ${gsiFunctions.map(([id]) => id)}`);
+
+	const statementsOfRole = (roleId: string) =>
+		Object.values(resources)
+			.filter((r) => r.Type === 'AWS::IAM::Policy' && JSON.stringify(r.Properties?.Roles ?? []).includes(`"${roleId}"`))
+			.flatMap((r) => r.Properties?.PolicyDocument?.Statement ?? []);
+
+	for (const [id, fn] of gsiFunctions) {
+		const logGroupRef = fn.Properties?.LoggingConfig?.LogGroup?.Ref;
+		assert.ok(logGroupRef && ownedLogGroupIds.has(logGroupRef), `${id} logs to a stack-owned log group`);
+		const roleId = fn.Properties?.Role?.['Fn::GetAtt']?.[0];
+		assert.ok(roleId, `${id} has its own role`);
+		const denies = statementsOfRole(roleId).filter(
+			(s: { Effect: string; Action: string | string[] }) =>
+				s.Effect === 'Deny' && [s.Action].flat().includes('logs:CreateLogGroup'),
+		);
+		assert.strictEqual(denies.length, 1, `${id}'s role denies logs:CreateLogGroup`);
+	}
+});

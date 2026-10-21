@@ -334,6 +334,9 @@ jobs:
           echo "❌ Server never became ready"
           exit 1
 
+      - name: Pick an available iOS simulator
+        uses: ./.github/actions/pick-ios-simulator
+
       - name: Run E2E tests
         env:
           BLOCKS_URL: ${{ env.BLOCKS_URL }}
@@ -341,7 +344,7 @@ jobs:
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+            -destination "platform=iOS Simulator,id=$SIM_UDID"
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
@@ -579,6 +582,9 @@ jobs:
           echo "❌ Sandbox API did not return HTTP 200 after $attempts attempts."
           exit 1
 
+      - name: Pick an available iOS simulator
+        uses: ./.github/actions/pick-ios-simulator
+
       - name: Run Swift E2E against sandbox
         env:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
@@ -587,7 +593,7 @@ jobs:
           xcodebuild test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+            -destination "platform=iOS Simulator,id=$SIM_UDID"
 
       - name: Destroy sandbox
         if: always()
@@ -617,7 +623,10 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            timeout: 30
+            # 45, like the other sandbox legs: under account load the
+            # native-bindings deploy can spend ~20 min on one DynamoDB GSI
+            # build alone, and at 30 the job was cancelled before any test ran.
+            timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
