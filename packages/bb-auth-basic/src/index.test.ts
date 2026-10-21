@@ -324,6 +324,129 @@ describe('AuthBasic session revocation on sign-out', () => {
 });
 
 /**
+ * Sign-in throttling / account lockout (issue #766). AuthBasic can lock an
+ * account after too many consecutive failed sign-ins, matching the Cognito-
+ * managed lockout the equivalent CDK stack provides. Throttling is opt-in: with
+ * no `lockout` option, sign-in behaves exactly as before (no lock, ever).
+ */
+
+/** Reach the private `codes` KVStore a lockout counter is stored in (test plumbing). */
+function codesStore(auth: AuthBasic): {
+	get: (k: string) => Promise<string | null>;
+	put: (k: string, v: string, o?: { ttlSeconds?: number }) => Promise<void>;
+} {
+	return (auth as unknown as { codes: ReturnType<typeof codesStore> }).codes;
+}
+
+describe('AuthBasic sign-in throttling / lockout', () => {
+	test('locks the account after maxAttempts consecutive failures', async () => {
+		const auth = makeAuth({ lockout: { maxAttempts: 3 } });
+		await auth.signUp('alice', 'password123');
+
+		// Three wrong-password attempts: each rejects with InvalidCredentials.
+		for (let i = 0; i < 3; i++) {
+			await assert.rejects(
+				auth.signIn('alice', 'wrong-password', ctx()),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+			);
+		}
+
+		// The next attempt — even with the CORRECT password — is locked out (429).
+		await assert.rejects(
+			auth.signIn('alice', 'password123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.AccountLocked,
+		);
+	});
+
+	test('a lockout error is a 429 with a generic, non-leaking message', async () => {
+		const auth = makeAuth({ lockout: { maxAttempts: 1 } });
+		await auth.signUp('bob', 'password123');
+		await assert.rejects(auth.signIn('bob', 'wrong', ctx())); // trips the lock (maxAttempts=1)
+
+		let caught: (Error & { status?: number; name?: string }) | undefined;
+		try {
+			await auth.signIn('bob', 'password123', ctx());
+		} catch (e) {
+			caught = e as Error & { status?: number; name?: string };
+		}
+		assert.ok(caught, 'locked sign-in throws');
+		assert.strictEqual(caught!.name, AuthBasicErrors.AccountLocked);
+		assert.strictEqual((caught as unknown as { status: number }).status, 429);
+		assert.doesNotMatch(caught!.message, /arn:|password|bob/i, 'message leaks neither the username nor metadata');
+	});
+
+	test('a successful sign-in clears the failure counter', async () => {
+		const auth = makeAuth({ lockout: { maxAttempts: 3 } });
+		await auth.signUp('carol', 'password123');
+
+		// Two failures (below the threshold of 3)…
+		await assert.rejects(auth.signIn('carol', 'wrong', ctx()));
+		await assert.rejects(auth.signIn('carol', 'wrong', ctx()));
+		// …then a success clears the count.
+		await auth.signIn('carol', 'password123', ctx());
+
+		// A fresh pair of failures must not trip the lock (counter was reset),
+		// so the correct password still works on the very next try.
+		await assert.rejects(auth.signIn('carol', 'wrong', ctx()));
+		await assert.rejects(auth.signIn('carol', 'wrong', ctx()));
+		const user = await auth.signIn('carol', 'password123', ctx());
+		assert.strictEqual(user.username, 'carol');
+	});
+
+	test('throttling is disabled by default (no lockout option = unlimited attempts)', async () => {
+		const auth = makeAuth(); // no lockout option
+		await auth.signUp('dave', 'password123');
+
+		// Ten wrong attempts never lock — each is plain InvalidCredentials.
+		for (let i = 0; i < 10; i++) {
+			await assert.rejects(
+				auth.signIn('dave', 'wrong', ctx()),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+			);
+		}
+		// No counter row was ever written.
+		assert.strictEqual(await codesStore(auth).get('lockout:dave'), null);
+		// And the correct password still works.
+		const user = await auth.signIn('dave', 'password123', ctx());
+		assert.strictEqual(user.username, 'dave');
+	});
+
+	test('the lock self-expires after lockoutSeconds (stale counter does not lock)', async () => {
+		const auth = makeAuth({ lockout: { maxAttempts: 2, lockoutSeconds: 1, windowSeconds: 60 } });
+		await auth.signUp('erin', 'password123');
+
+		// Simulate a tripped lock whose firstFailAt is older than lockoutSeconds:
+		// count at threshold but the lock window has already elapsed.
+		const staleFirstFailAt = Date.now() - 5000; // 5s ago, lockoutSeconds=1
+		await codesStore(auth).put('lockout:erin', JSON.stringify({ count: 2, firstFailAt: staleFirstFailAt }));
+
+		// The stale lock no longer blocks — the correct password signs in.
+		const user = await auth.signIn('erin', 'password123', ctx());
+		assert.strictEqual(user.username, 'erin');
+	});
+
+	test('a failure older than windowSeconds resets the running count', async () => {
+		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 1, lockoutSeconds: 1 } });
+		await auth.signUp('frank', 'password123');
+
+		// Seed a near-threshold counter whose firstFailAt is older than the
+		// window — the next failure must start a FRESH window at count=1, not
+		// increment to the lock threshold.
+		const staleFirstFailAt = Date.now() - 5000; // older than windowSeconds=1
+		await codesStore(auth).put('lockout:frank', JSON.stringify({ count: 2, firstFailAt: staleFirstFailAt }));
+
+		await assert.rejects(
+			auth.signIn('frank', 'wrong', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
+		const raw = await codesStore(auth).get('lockout:frank');
+		assert.ok(raw, 'a counter row exists');
+		const parsed = JSON.parse(raw!) as { count: number };
+		assert.strictEqual(parsed.count, 1, 'the stale window was discarded and the count restarted at 1');
+	});
+});
+
+/**
  * Telemetry-registration tests for AuthBasic.
  *
  * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in

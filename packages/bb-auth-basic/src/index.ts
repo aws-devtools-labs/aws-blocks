@@ -57,6 +57,37 @@ export interface PasswordPolicy {
 export type CodeDeliveryFn = (username: string, code: string) => Promise<void>;
 
 /**
+ * Sign-in throttling / account-lockout policy.
+ *
+ * When configured (via {@link AuthBasicOptions.lockout}), consecutive failed
+ * sign-ins for a given username are counted; once `maxAttempts` is reached the
+ * account is locked for `lockoutSeconds`, during which `signIn` is rejected
+ * with {@link AuthBasicErrors.AccountLocked} (HTTP 429) **before** the password
+ * is ever checked. A successful sign-in clears the counter. Counting is
+ * per-username (the credential-stuffing target), matching the Cognito-managed
+ * lockout the equivalent CDK stack provides.
+ */
+export interface LockoutPolicy {
+	/**
+	 * Number of consecutive failed sign-ins that trips the lock. Must be a
+	 * positive integer. Default: 5.
+	 */
+	maxAttempts?: number;
+	/**
+	 * Sliding window (seconds) over which failures are counted. A failure older
+	 * than this resets the running count, so slow, spaced-out attempts don't
+	 * accumulate into a lock. Default: 900 (15 minutes).
+	 */
+	windowSeconds?: number;
+	/**
+	 * How long (seconds) the account stays locked once `maxAttempts` is reached.
+	 * The lock self-expires after this window (no manual unlock needed).
+	 * Default: 900 (15 minutes).
+	 */
+	lockoutSeconds?: number;
+}
+
+/**
  * Options for the AuthBasic Building Block.
  */
 export interface AuthBasicOptions {
@@ -83,6 +114,23 @@ export interface AuthBasicOptions {
 	 * @default false
 	 */
 	crossDomain?: boolean;
+	/**
+	 * Sign-in throttling / account-lockout policy. When omitted, throttling is
+	 * **disabled** — sign-in behaves exactly as before. Pass a (possibly empty)
+	 * object to enable it with the defaults; see {@link LockoutPolicy}.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Lock an account for 15 min after 5 consecutive failed sign-ins
+	 * const auth = new AuthBasic(scope, 'auth', { lockout: {} });
+	 *
+	 * // Stricter: 3 attempts, 30-minute lock
+	 * const auth = new AuthBasic(scope, 'auth', {
+	 *   lockout: { maxAttempts: 3, lockoutSeconds: 1800 },
+	 * });
+	 * ```
+	 */
+	lockout?: LockoutPolicy;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -161,6 +209,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	private readonly passwordPolicy: PasswordPolicy;
 	private readonly codeDelivery?: CodeDeliveryFn;
 	private readonly crossDomain: boolean;
+	/**
+	 * Resolved lockout policy, or `null` when throttling is disabled (no
+	 * `lockout` option passed). When set, all three fields are concrete numbers.
+	 */
+	private readonly lockout: Required<LockoutPolicy> | null;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 
@@ -182,6 +235,16 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		this.passwordPolicy = options?.passwordPolicy ?? {};
 		this.codeDelivery = options?.codeDelivery;
 		this.crossDomain = options?.crossDomain ?? false;
+		// Throttling is opt-in: only resolve a policy when `lockout` is present
+		// (an empty object enables it with defaults). When absent, `signIn` skips
+		// the counter entirely and behaves exactly as before.
+		this.lockout = options?.lockout
+			? {
+					maxAttempts: options.lockout.maxAttempts ?? 5,
+					windowSeconds: options.lockout.windowSeconds ?? 900,
+					lockoutSeconds: options.lockout.lockoutSeconds ?? 900,
+				}
+			: null;
 	}
 
 	// ── Secret management ────────────────────────────────────────────────
@@ -311,16 +374,28 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 * @param context - The request context (used to set session cookie).
 	 * @returns The authenticated user.
 	 * @throws {AuthBasicErrors.InvalidCredentials} If the username or password is incorrect, or user is unconfirmed.
+	 * @throws {AuthBasicErrors.AccountLocked} If sign-in throttling is enabled and the account is currently locked out after too many failed attempts.
 	 */
 	async signIn(username: string, password: string, context: BlocksContext): Promise<AuthBasicUser> {
+		// Enforce the lockout BEFORE touching the user record or comparing the
+		// password: a locked account sheds the bcrypt cost under a brute-force
+		// attack, and the lock decision is independent of whether the password is
+		// right (no timing oracle). A no-op when throttling is disabled.
+		await this.assertNotLockedOut(username);
 		const record = await this.getUserRecord(username);
 		if (!record || record.unconfirmed) {
+			// Count the failure before throwing so repeated attempts against an
+			// existing-but-unconfirmed (or absent) username still trip the lock.
+			await this.recordFailedSignIn(username);
 			throw new ApiError('Invalid username or password', 401, { name: AuthBasicErrors.InvalidCredentials });
 		}
 		const valid = await bcrypt.compare(password, record.hash);
 		if (!valid) {
+			await this.recordFailedSignIn(username);
 			throw new ApiError('Invalid username or password', 401, { name: AuthBasicErrors.InvalidCredentials });
 		}
+		// Success: clear any accumulated failure count so the user starts fresh.
+		await this.clearLockout(username);
 		await this.setCookie(context, username);
 		return this.toAuthBasicUser(username, record);
 	}
@@ -527,6 +602,99 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 */
 	private async isRevoked(jti: string): Promise<boolean> {
 		return (await this.codes.get(this.revokedKey(jti))) === REVOKED_MARKER;
+	}
+
+	// ── Sign-in throttling / account lockout ─────────────────────────────
+
+	/** Lockout-counter key for a username. Stored in the shared `codes` store. */
+	private lockoutKey(username: string): string {
+		return `lockout:${username}`;
+	}
+
+	/**
+	 * Read the current lockout record for a username, or `null` when none exists
+	 * or throttling is disabled. `count` is the running consecutive-failure
+	 * count; `firstFailAt` is the epoch-ms of the oldest failure still inside the
+	 * sliding window.
+	 */
+	private async readLockout(username: string): Promise<{ count: number; firstFailAt: number } | null> {
+		const raw = await this.codes.get(this.lockoutKey(username));
+		if (!raw) return null;
+		try {
+			const parsed = JSON.parse(raw) as { count: number; firstFailAt: number };
+			if (typeof parsed.count !== 'number' || typeof parsed.firstFailAt !== 'number') return null;
+			return parsed;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Throw {@link AuthBasicErrors.AccountLocked} (429) when `username` is
+	 * currently locked out. Called at the TOP of `signIn` — before the user
+	 * record is read or the password is compared — so a locked account sheds the
+	 * bcrypt cost under a brute-force attack and the lock decision carries no
+	 * password-dependent timing signal. A no-op when throttling is disabled.
+	 *
+	 * An account is locked when its failure count has reached `maxAttempts` and
+	 * the newest failure is still inside the `lockoutSeconds` window (the counter
+	 * row's TTL also reaps it, but reads don't depend on the reaper).
+	 */
+	private async assertNotLockedOut(username: string): Promise<void> {
+		if (!this.lockout) return;
+		const record = await this.readLockout(username);
+		if (!record) return;
+		if (record.count < this.lockout.maxAttempts) return;
+		const lockExpiresAt = record.firstFailAt + this.lockout.lockoutSeconds * 1000;
+		if (Date.now() < lockExpiresAt) {
+			throw new ApiError('Too many failed sign-in attempts; try again later', 429, {
+				name: AuthBasicErrors.AccountLocked,
+			});
+		}
+	}
+
+	/**
+	 * Record one failed sign-in for `username`, incrementing the running count.
+	 * A failure older than `windowSeconds` starts a fresh window (count resets to
+	 * 1). The counter row's TTL is set to the longer of the counting window and
+	 * the lockout window, so a tripped lock survives long enough to be enforced
+	 * and an untripped counter still self-expires. A no-op when throttling is
+	 * disabled. Best-effort: a write failure is logged, never thrown — a throttle
+	 * bookkeeping hiccup must not convert a failed sign-in into a 5xx.
+	 */
+	private async recordFailedSignIn(username: string): Promise<void> {
+		if (!this.lockout) return;
+		const now = Date.now();
+		const existing = await this.readLockout(username);
+		const windowMs = this.lockout.windowSeconds * 1000;
+		const withinWindow = existing !== null && now - existing.firstFailAt < windowMs;
+		const next = withinWindow
+			? { count: existing.count + 1, firstFailAt: existing.firstFailAt }
+			: { count: 1, firstFailAt: now };
+		// Expire the row after whichever window is longer so a tripped lock is
+		// enforced for its full duration and a counter that never trips still
+		// self-reaps once counting lapses.
+		const ttlSeconds = Math.max(this.lockout.windowSeconds, this.lockout.lockoutSeconds);
+		try {
+			await this.codes.put(this.lockoutKey(username), JSON.stringify(next), { ttlSeconds });
+		} catch (e) {
+			this.log.error('AuthBasic: failed to record sign-in throttle counter', { error: e });
+		}
+	}
+
+	/**
+	 * Clear a username's lockout counter after a successful sign-in, so a user
+	 * who eventually gets their password right starts fresh. A no-op when
+	 * throttling is disabled or no counter exists. Best-effort: a failed clear is
+	 * logged, never thrown (the sign-in already succeeded).
+	 */
+	private async clearLockout(username: string): Promise<void> {
+		if (!this.lockout) return;
+		try {
+			await this.codes.delete(this.lockoutKey(username));
+		} catch (e) {
+			this.log.error('AuthBasic: failed to clear sign-in throttle counter', { error: e });
+		}
 	}
 
 	// ── BlocksAuth interface ────────────────────────────────────────────────

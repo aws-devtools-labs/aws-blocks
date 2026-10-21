@@ -88,7 +88,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `getCurrentUser(context)` | `Promise<AuthBasicUser \| null>` | Get current user or null. |
 | `signUp(username, password)` | `Promise<void>` | Register a new user. If `codeDelivery` is set, user is unconfirmed until code is verified. |
 | `confirmSignUp(username, code)` | `Promise<void>` | Confirm signup with verification code. Only when `codeDelivery` is set. |
-| `signIn(username, password, context)` | `Promise<AuthBasicUser>` | Authenticate and set session cookie. Rejects unconfirmed users. |
+| `signIn(username, password, context)` | `Promise<AuthBasicUser>` | Authenticate and set session cookie. Rejects unconfirmed users. When `lockout` is enabled, throws `AccountLockedException` (429) while the account is locked after too many failed attempts. |
 | `signOut(context)` | `Promise<void>` | Revoke the presented session server-side (a replayed cookie is rejected) and clear the session cookie. The local cookie is always cleared; if the server-side revocation write fails it throws `SignOutIncompleteException` (503) so the caller can retry. |
 | `resetPassword(username)` | `Promise<void>` | Send a password reset code. Only when `codeDelivery` is set. |
 | `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. |
@@ -116,6 +116,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `codeDelivery` | `(username, code) => Promise<void>` | — | Code delivery callback. Enables confirmed signup and password reset. |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `crossDomain` | `boolean` | `false` | Set to `true` when the frontend and API are on different registrable domains (e.g. frontend on Vercel, API on AWS). Switches the session cookie to `SameSite=None; Secure; Partitioned`. |
+| `lockout` | `LockoutPolicy` | — (disabled) | Sign-in throttling / account lockout. Omit to disable (default). Pass `{}` to enable with defaults, or override `maxAttempts` (5), `windowSeconds` (900), `lockoutSeconds` (900). See [Sign-in throttling](#sign-in-throttling). |
 
 ### Password Policy
 
@@ -163,6 +164,7 @@ try {
 | `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token that was revoked at sign-out (still unexpired, but invalidated) |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
 | `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | `signOut` cleared the local cookie but the server-side revocation write failed (e.g. a DynamoDB throttle); status 503 — retry to revoke the token |
+| `AuthBasicErrors.AccountLocked` | `AccountLockedException` | `signIn` rejected because the account is locked after too many failed attempts (only when `lockout` is enabled); status 429 — try again after the lockout window |
 
 ### Branching on the `setAuthState` client path
 
@@ -242,3 +244,29 @@ On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `P
 Server-side sign-out revocation (see `signOut`) adds **one DynamoDB `GetItem` per authenticated request** — `checkAuth`, `getCurrentUser`, `requireAuth`, and the `getAuthState` call that runs on page load each check the token's `jti` against a revocation list. On an auth-gated, high-traffic app this roughly doubles read volume to the underlying table versus pure stateless JWT validation. Tokens issued before revocation shipped (no `jti`) skip the read and simply expire within `sessionDuration`.
 
 The revocation read is an eventually-consistent `GetItem` (no `ConsistentRead`), so revocation is **near-immediate, not instantaneous**: for a sub-second window after `signOut`, a token replayed against a different Lambda instance may still authenticate before the revocation marker propagates. A signed-out token stops working everywhere within that propagation window, and always expires at its own `exp` regardless.
+
+## Sign-in throttling
+
+Brute-force and credential-stuffing attacks hammer `signIn` with password guesses. Enable the `lockout` policy to lock an account after too many consecutive failures — parity with the Cognito-managed lockout you'd get from `AuthCognito`:
+
+```typescript
+// Lock an account for 15 minutes after 5 consecutive failed sign-ins (defaults)
+const auth = new AuthBasic(app, 'auth', { lockout: {} });
+
+// Stricter: 3 attempts, 30-minute lock
+const auth = new AuthBasic(app, 'auth', {
+  lockout: { maxAttempts: 3, lockoutSeconds: 1800 },
+});
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `maxAttempts` | `5` | Consecutive failed sign-ins that trip the lock. |
+| `windowSeconds` | `900` (15 min) | Sliding window over which failures are counted — a failure older than this resets the running count, so slow, spaced-out guesses don't accumulate. |
+| `lockoutSeconds` | `900` (15 min) | How long the account stays locked once tripped. The lock self-expires (no manual unlock). |
+
+While locked, `signIn` throws `AuthBasicErrors.AccountLocked` (`AccountLockedException`, HTTP 429) — **before** the password is checked, so a locked account sheds the bcrypt cost under attack and the decision carries no password-dependent timing signal. A successful sign-in clears the counter. Counting is **per-username** (the credential-stuffing target); it does not lock by IP, so a shared NAT isn't a false-positive risk.
+
+Throttling is **opt-in** — with no `lockout` option, sign-in is unlimited and behaves exactly as before. Counters live in the same TTL-backed store as verification codes and revocation markers, so they self-reap and never grow unbounded.
+
+> **Local development:** the mock KVStore is in-memory, so lockout counters (like all AuthBasic state) reset when the dev server restarts.
