@@ -247,7 +247,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
 - `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
-- Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
+- Enable `frontDoor: { features: { monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] } } }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only; the top-level `monitoring` prop is its deprecated alias)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 

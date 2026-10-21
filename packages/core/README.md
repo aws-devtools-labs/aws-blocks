@@ -355,7 +355,7 @@ CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. C
 
 ### Hosting
 
-CDK construct (from the `/cdk` entry point) that deploys a frontend on CloudFront + S3, with a single-origin API proxy when a backend stack is provided.
+CDK construct (from the `/cdk` entry point) that deploys a frontend on S3 behind a front door — CloudFront by default, or another door (`frontDoor`, below) — with a single-origin API proxy when a backend stack is provided.
 
 ```typescript
 import { Hosting } from '@aws-blocks/core/cdk';
@@ -406,14 +406,18 @@ A `config()` domain works in `frontDoor.features.domain` too, through the async 
 
 | Setting | CloudFront | ALB | API Gateway | Stacked | Custom |
 |---|---|---|---|---|---|
-| `domain` | ✓ | – | ✓ (no `wwwRedirect`) | – | ✓ |
+| `domain` | ✓ | ✓ (with `certificate`; no `wwwRedirect`) | ✓ (no `wwwRedirect`) | `router.domain` (the name the edge reaches the router at over HTTPS, with `certificate`) | ✓ |
 | `waf` | ✓ | ✓ (REGIONAL) | – | `edge.waf.webAclArn` (CLOUDFRONT), `router.waf` (REGIONAL) | ✓ |
-| `logging` | ✓ | ✓ | – | `router.logging` | ✓ |
-| `monitoring` | ✓ | ✓ (`enabled` only) | – | `router.monitoring` (`enabled` only) | ✓ |
+| `logging` | ✓ | ✓ (off unless set) | – | `router.logging` | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only, off unless set) | – | `router.monitoring` (`enabled` only) | ✓ |
 | `skewProtection` | ✓ | – | – | – | ✓ |
 | `geoRestriction` | ✓ | – | – | – | ✓ |
 | `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
 | `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
+
+The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which synth warns about). The router admits only the edge through a header whose value Secrets Manager generates once per stack.
+
+Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
 
 The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
@@ -471,8 +475,8 @@ By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin
 
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
-- **Same-origin requests** (frontend fetches through the CloudFront proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
-- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the CloudFront distribution's domain (or your custom domain) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
+- **Same-origin requests** (frontend fetches through the front door's proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
+- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
 With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
 

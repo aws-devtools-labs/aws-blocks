@@ -742,8 +742,9 @@ export class Hosting extends Construct {
    * ```ts
    * await Hosting.create(stack, 'Web', {
    *   root: '.', framework: 'nextjs', api: blocksStack,
-   *   domain: { domainName: config('DOMAIN_PROD') },
+   *   frontDoor: { features: { domain: { domainName: config('DOMAIN_PROD') } } },
    * });
+   * // (The deprecated top-level `domain: { domainName: config(…) }` resolves the same way.)
    * ```
    */
   static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
