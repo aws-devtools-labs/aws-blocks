@@ -116,8 +116,8 @@ export type AlbConstructProps = {
   /**
    * Admit only a CloudFront door in front of this ALB (the stacked door's
    * router; `HostingConstruct` sets it only for `kind: 'stackedRouter'`).
-   * Every listener rule then also requires the per-deploy
-   * {@link ORIGIN_VERIFY_HEADER} secret, and the default action is a 403. A
+   * Every listener rule then also requires the
+   * {@link ORIGIN_VERIFY_HEADER} secret (see {@link AlbConstruct.originVerifySecret}), and the default action is a 403. A
    * public ALB's security group admits only the CloudFront origin-facing
    * managed prefix list; an internal ALB is reached through a CloudFront VPC
    * origin, which the door in front admits into the security group (see
@@ -136,7 +136,7 @@ export type AlbConstructProps = {
 
 /**
  * The header a CloudFront door in front of a locked ALB sends with the
- * per-deploy secret (see {@link AlbConstructProps.restrictToCloudFront}).
+ * generated secret (see {@link AlbConstructProps.restrictToCloudFront}).
  */
 export const ORIGIN_VERIFY_HEADER = 'x-blocks-origin-verify';
 

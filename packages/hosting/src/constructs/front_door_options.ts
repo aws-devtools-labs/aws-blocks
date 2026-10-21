@@ -165,11 +165,17 @@ export type AlbDoorFeatures<TDomain = HostingDomainConfig> = {
    * (`enabled`), or yours (`webAclArn`, a REGIONAL ACL in the stack's region).
    */
   waf?: HostingWafConfig;
-  /** The ALB's own access logs (a dedicated bucket), plus the asset bucket's access logs. */
+  /**
+   * The ALB's own access logs (a dedicated bucket): off unless set (and not
+   * `enabled: false`). The asset bucket's access logs are on by default on
+   * every door; `{ enabled: false }` turns both off.
+   */
   logging?: HostingLoggingConfig;
   /**
-   * Alarms on the ALB's own metrics (5xx count, target response time). The ALB
-   * door does not subscribe endpoints to them, so only `enabled` applies.
+   * Alarms on the ALB's own metrics (5xx count, target response time): off
+   * unless set (and not `enabled: false`). The ALB door creates no alarm topic
+   * and subscribes no endpoints, so only `enabled` applies; attach actions to
+   * the alarms yourself.
    */
   monitoring?: { enabled?: boolean };
 };
@@ -192,7 +198,8 @@ export type ApiGatewayDoorFeatures<TDomain = HostingDomainConfig> = {
  * Settings a bring-your-own door receives. They reach the door as
  * `input.features` ({@link DoorFeatures}) under the SAME names and shapes,
  * keeping only what the app asked for: `waf` when `enabled` or a web ACL is
- * given, `logging` when `enabled`, `monitoring` unless `enabled: false`,
+ * given, `logging` when `enabled`, `monitoring` when set and not
+ * `enabled: false` (a door receives no `monitoring` unless the app sets it),
  * `skewProtection` unless `enabled: false` (on by default, `maxAge` resolved),
  * and `domain` / `geoRestriction` when set.
  *

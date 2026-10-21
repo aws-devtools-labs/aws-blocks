@@ -6,8 +6,8 @@
  * any front-door service (CloudFront, ALB, API Gateway, …). A front-door
  * adapter renders these entries into its own primitive:
  *   - CloudFront: KVS chunks read by a CloudFront Function (see `kvs_router.ts`).
- *   - ALB (future): listener rules → target groups.
- *   - API Gateway (future): routes → integrations.
+ *   - ALB: listener rules → target groups (see `alb_construct.ts`).
+ *   - API Gateway: routes / resources → integrations (see `apigw_construct.ts`).
  *
  * `coalesceRoutes` and `routeSpecificity` live here (not in the CloudFront
  * renderer) because they are pure routing concerns every adapter shares. The

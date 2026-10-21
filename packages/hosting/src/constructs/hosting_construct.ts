@@ -453,17 +453,21 @@ export type HostingConstructProps = {
    *   full edge caching, WAF, custom domains, streaming). Unchanged.
    * - `{ kind: 'alb', … }` — an Application Load Balancer (regional, no CDN).
    *   For enterprises behind an existing ALB, private/internal deploys, or
-   *   apps that simply don't need a global edge. What CloudFront does at the
-   *   edge (edge cache, per-route response headers, skew-pin, geo) is not
-   *   available on an ALB.
+   *   apps that simply don't need a global edge. The ALB has no edge cache,
+   *   skew protection or geo restriction; the app's redirects, header rules
+   *   and error pages are applied by its asset proxy (and the headers by its
+   *   API forwarder), except on responses it routes straight to the server or
+   *   image function (synth names them: `DoorRulesNotApplied`). A custom
+   *   domain (`features.domain`, with `certificate`) serves HTTPS.
    * - `{ kind: 'apiGateway', … }` — an Amazon API Gateway as the front door
    *   (regional, no CDN, no VPC/NAT, scale-to-zero, pay-per-request). The
    *   *serverless* sibling of the ALB door: API Gateway owns routing (a route
    *   per origin/namespace), serves private S3 assets via an asset-proxy
    *   Lambda, and proxies `/aws-blocks/*` same-origin to the backend natively
    *   (no forwarder Lambda). Best for a SPA/SSR app that wants no CDN and no
-   *   always-on ALB baseline. Edge features (edge cache, per-route headers,
-   *   skew-pin, geo) are not available. Choose the flavor with `api`:
+   *   always-on ALB baseline. It has no edge cache, skew protection or geo
+   *   restriction; redirects, header rules and error pages are applied by the
+   *   asset proxy, as on the ALB door. Choose the flavor with `api`:
    *   `'http'` (default; SSR responses are buffered) or `'rest'` (streamed SSR;
    *   requires `domain`).
    *
@@ -474,9 +478,10 @@ export type HostingConstructProps = {
    * - `{ kind: 'custom', door }` — bring your own front door, written as one
    *   `build` function (see {@link FrontDoor} and `defineFrontDoor`).
    *
-   * There is no feature check: a door applies the features the app asked for
-   * as far as it supports them. Only a bring-your-own door is checked, and only
-   * for its routing (see `wiringCheck`).
+   * A setting a door kind doesn't implement is a type error in `features`
+   * and a synth error through a deprecated top-level prop (see below). A
+   * bring-your-own door is checked only for its routing (see `wiringCheck`):
+   * which of `input.features` it applies is its author's call.
    *
    * Each door kind takes its settings as `features`, typed for that kind: only
    * the settings that door implements compile (see `CloudFrontDoorFeatures`,
@@ -530,8 +535,10 @@ export type HostingConstructProps = {
 /**
  * Unified, manifest-driven hosting construct.
  *
- * Always creates: S3 bucket (private, BLOCK_ALL), CloudFront distribution,
- * OAC, atomic deployment with Build ID.
+ * Always creates: S3 bucket (private, BLOCK_ALL) and an atomic deployment with
+ * Build ID, and the front door (`frontDoor`): by default a CloudFront
+ * distribution with OAC; an ALB, an API Gateway, an S3 website (`'none'`) or a
+ * bring-your-own door instead.
  *
  * Provisions based on manifest content:
  * - compute entries → Lambda functions (handler/http-server/edge types)
@@ -1370,17 +1377,15 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- Front-door selection ----
-    // Which front door serves the deploy: CloudFront (default) or a
-    // non-CloudFront door (ALB). Storage + compute + cache + image + the S3
-    // asset upload (sections 1-5, 11-12) are front-door-AGNOSTIC and run for
-    // BOTH; the CloudFront-specific wiring (WAF, DNS-via-CF, security-headers
-    // policy, the CDN distribution, OPEN_NEXT_ORIGIN, OAC KMS grant) is guarded
-    // by `!useAlb` below. The ALB branch renders the same neutral HostingPlan
-    // onto an Application Load Balancer.
-    // The CloudFront default handles `undefined` and `'cloudfront'`. Every other
-    // value — `'none'` (serve S3 directly) or `{ kind: 'alb' }` — is a
-    // non-CloudFront door rendered via the front-door graph below.
-    const useCustomDoor = resolved.kind !== 'cloudfront';
+    // Which front door serves the deploy: CloudFront (the default: `undefined`,
+    // `'cloudfront'`, `{ features }`) or any other door. Storage, compute,
+    // cache, image (sections 1-5) and the error-page and asset uploads
+    // (sections 11-12) are built for every door; section 12 is skipped for a
+    // door that serves its own public bucket (`'none'`). The CloudFront branch
+    // below builds the WAF, DNS, the security-headers policy, the CDN
+    // distribution and OPEN_NEXT_ORIGIN; every other door is a free-form door
+    // (`buildFrontDoor`) rendering the same neutral HostingPlan.
+    const isCloudFront = resolved.kind === 'cloudfront';
     let cdn: CdnConstruct | undefined;
     // A door's post-upload hook (`FrontDoorResult.onUpload`), called once every
     // asset upload below has been declared (section 12d).
@@ -1388,391 +1393,391 @@ export class HostingConstruct extends Construct {
     // The constructs that switch traffic to the new build (`FrontDoorResult.cutover`).
     let cutover: readonly IConstruct[] = [];
 
-    if (!useCustomDoor) {
-    // ---- 6. WAF (conditional) ----
-    // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
-    const effectiveWebAclArn = f.waf?.webAclArn ?? cdnWebAclArn;
-    if (!effectiveWebAclArn) {
-      const wafConstruct = new WafConstruct(this, 'Waf', {
-        enabled: f.waf?.enabled ?? false,
-        rateLimit: f.waf?.rateLimit,
-        skipRegionValidation: props.skipRegionValidation,
-      });
-      this.webAcl = wafConstruct.webAcl;
-    }
-
-    // ---- 7. Custom domain resources (conditional) ----
-    const dnsConstructs: DnsConstruct[] = [];
-    let resolvedDomainNames: string[] = [];
-    const domain = f.domain;
-    if (domain) {
-      // Resolve domain names from single string or array
-      resolvedDomainNames = Array.isArray(domain.domainName)
-        ? domain.domainName
-        : [domain.domainName];
-
-      // Create DNS construct for the first/primary domain (handles certificate)
-      const primaryDomain = resolvedDomainNames[0];
-      const primaryDns = new DnsConstruct(this, 'Dns', {
-        domainName: primaryDomain,
-        hostedZone: domain.hostedZone,
-        hostedZoneId: domain.hostedZoneId,
-        certificate: domain.certificate,
-        skipRegionValidation: props.skipRegionValidation,
-      });
-      dnsConstructs.push(primaryDns);
-      this.certificate = primaryDns.certificate;
-      this.hostedZone = primaryDns.hostedZone;
-
-      // Additional domains share the same certificate but get separate DNS records
-      for (let i = 1; i < resolvedDomainNames.length; i++) {
-        const additionalDns = new DnsConstruct(this, `Dns${i + 1}`, {
-          domainName: resolvedDomainNames[i],
-          hostedZone: domain.hostedZone,
-          hostedZoneId: domain.hostedZoneId,
-          certificate: primaryDns.certificate,
+    if (isCloudFront) {
+      // ---- 6. WAF (conditional) ----
+      // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
+      const effectiveWebAclArn = f.waf?.webAclArn ?? cdnWebAclArn;
+      if (!effectiveWebAclArn) {
+        const wafConstruct = new WafConstruct(this, 'Waf', {
+          enabled: f.waf?.enabled ?? false,
+          rateLimit: f.waf?.rateLimit,
           skipRegionValidation: props.skipRegionValidation,
         });
-        dnsConstructs.push(additionalDns);
+        this.webAcl = wafConstruct.webAcl;
       }
-    }
 
-    // ---- 8. Security headers ----
-    // Policy selection priority:
-    //   1. BYO policy via `cdn.responseHeadersPolicy` — share across stacks.
-    //   2. Custom policy when `cdn.contentSecurityPolicy` is configured.
-    //   3. Managed SECURITY_HEADERS policy (default) — consumes no quota.
-    //
-    // The account-level ResponseHeadersPolicy limit is 20 (soft, raisable
-    // to 200). Using the managed policy by default avoids quota exhaustion
-    // when many hosting stacks deploy to the same account. The managed
-    // policy includes HSTS, X-Content-Type-Options, X-Frame-Options,
-    // X-XSS-Protection, and Referrer-Policy. CSP is intentionally omitted
-    // from the default — frameworks (Next.js, Nuxt) emit their own CSP via
-    // response headers, and a blanket L3 CSP would conflict.
-    //
-    // A Web Function names its internal log stream + revision in every
-    // response (`lambda-web-logstream`). Strip it with the policy rather than a
-    // viewer-response function: CloudFront skips viewer-response functions on
-    // 4xx/5xx origin responses, but applies response headers policies to all.
-    // The request id (`lambda-web-request-id`) stays, like API Gateway's
-    // `x-amzn-requestid`, for support correlation.
-    const removeOriginHeaders = this.computeWebFunctions.size > 0 ? [...WEB_FUNCTION_INTERNAL_HEADERS] : [];
-    let securityHeadersPolicy: IResponseHeadersPolicy;
-    if (f.responseHeadersPolicy) {
-      securityHeadersPolicy = f.responseHeadersPolicy;
-      if (removeOriginHeaders.length > 0) {
-        Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
-          `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
-            "(internal Web Function log stream name) from responses. Make sure the policy's removeHeaders includes it " +
-            '(a shared policy like this avoids one Hosting-created policy per stack).',
-        );
+      // ---- 7. Custom domain resources (conditional) ----
+      const dnsConstructs: DnsConstruct[] = [];
+      let resolvedDomainNames: string[] = [];
+      const domain = f.domain;
+      if (domain) {
+        // Resolve domain names from single string or array
+        resolvedDomainNames = Array.isArray(domain.domainName)
+          ? domain.domainName
+          : [domain.domainName];
+
+        // Create DNS construct for the first/primary domain (handles certificate)
+        const primaryDomain = resolvedDomainNames[0];
+        const primaryDns = new DnsConstruct(this, 'Dns', {
+          domainName: primaryDomain,
+          hostedZone: domain.hostedZone,
+          hostedZoneId: domain.hostedZoneId,
+          certificate: domain.certificate,
+          skipRegionValidation: props.skipRegionValidation,
+        });
+        dnsConstructs.push(primaryDns);
+        this.certificate = primaryDns.certificate;
+        this.hostedZone = primaryDns.hostedZone;
+
+        // Additional domains share the same certificate but get separate DNS records
+        for (let i = 1; i < resolvedDomainNames.length; i++) {
+          const additionalDns = new DnsConstruct(this, `Dns${i + 1}`, {
+            domainName: resolvedDomainNames[i],
+            hostedZone: domain.hostedZone,
+            hostedZoneId: domain.hostedZoneId,
+            certificate: primaryDns.certificate,
+            skipRegionValidation: props.skipRegionValidation,
+          });
+          dnsConstructs.push(additionalDns);
+        }
       }
-    } else if (f.contentSecurityPolicy) {
-      securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
+
+      // ---- 8. Security headers ----
+      // Policy selection priority:
+      //   1. BYO policy via `cdn.responseHeadersPolicy` — share across stacks.
+      //   2. Custom policy when `cdn.contentSecurityPolicy` is configured.
+      //   3. Managed SECURITY_HEADERS policy (default) — consumes no quota.
+      //
+      // The account-level ResponseHeadersPolicy limit is 20 (soft, raisable
+      // to 200). Using the managed policy by default avoids quota exhaustion
+      // when many hosting stacks deploy to the same account. The managed
+      // policy includes HSTS, X-Content-Type-Options, X-Frame-Options,
+      // X-XSS-Protection, and Referrer-Policy. CSP is intentionally omitted
+      // from the default — frameworks (Next.js, Nuxt) emit their own CSP via
+      // response headers, and a blanket L3 CSP would conflict.
+      //
+      // A Web Function names its internal log stream + revision in every
+      // response (`lambda-web-logstream`). Strip it with the policy rather than a
+      // viewer-response function: CloudFront skips viewer-response functions on
+      // 4xx/5xx origin responses, but applies response headers policies to all.
+      // The request id (`lambda-web-request-id`) stays, like API Gateway's
+      // `x-amzn-requestid`, for support correlation.
+      const removeOriginHeaders = this.computeWebFunctions.size > 0 ? [...WEB_FUNCTION_INTERNAL_HEADERS] : [];
+      let securityHeadersPolicy: IResponseHeadersPolicy;
+      if (f.responseHeadersPolicy) {
+        securityHeadersPolicy = f.responseHeadersPolicy;
+        if (removeOriginHeaders.length > 0) {
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:WebFunctionHeaderNotStripped',
+            `cdn.responseHeadersPolicy is your own policy, so Hosting can't remove ${removeOriginHeaders.join(', ')} ` +
+              "(internal Web Function log stream name) from responses. Make sure the policy's removeHeaders includes it " +
+              '(a shared policy like this avoids one Hosting-created policy per stack).',
+          );
+        }
+      } else if (f.contentSecurityPolicy) {
+        securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
+          contentSecurityPolicy: f.contentSecurityPolicy,
+          removeHeaders: removeOriginHeaders,
+        });
+      } else if (removeOriginHeaders.length > 0) {
+        securityHeadersPolicy = createManagedEquivalentSecurityHeadersPolicy(this, 'SecurityHeaders', removeOriginHeaders);
+      } else {
+        securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
+      }
+
+      // ---- 9. CloudFront distribution ----
+      const manifestWithBuildId: DeployManifest = { ...manifest, buildId };
+
+      // Per-route Lambda@Edge function versions (OpenNext edge routes). Only
+      // computes with type === 'edge' get a `currentVersion` from the
+      // EdgeFunction CDK construct — middleware is excluded because it has
+      // its own dedicated wiring on the default behavior.
+      const routeEdgeFunctions = new Map<string, IVersion>();
+      for (const [name, resource] of Object.entries(manifest.compute)) {
+        if (resource.type !== 'edge') continue;
+        if (name === 'middleware') continue;
+        const fn = this.computeFunctions.get(name);
+        if (fn instanceof experimental.EdgeFunction) {
+          routeEdgeFunctions.set(name, fn.currentVersion);
+        }
+      }
+
+      const cdnProps: CdnConstructProps = {
+        bucket: this.bucket,
+        manifest: manifestWithBuildId,
+        securityHeadersPolicy,
         contentSecurityPolicy: f.contentSecurityPolicy,
-        removeHeaders: removeOriginHeaders,
-      });
-    } else if (removeOriginHeaders.length > 0) {
-      securityHeadersPolicy = createManagedEquivalentSecurityHeadersPolicy(this, 'SecurityHeaders', removeOriginHeaders);
-    } else {
-      securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
-    }
+        computeFunctionUrls: this.computeFunctionUrls,
+        computeFunctions: this.computeFunctions,
+        computeAliases: this.computeAliases,
+        computeWebFunctions: this.computeWebFunctions,
+        middlewareEdgeFunction: middlewareEdgeVersion,
+        routeEdgeFunctions,
+        webAcl: this.webAcl,
+        certificate: this.certificate,
+        domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
+        wwwRedirect: f.domain?.wwwRedirect,
+        accessLogBucket: storage.accessLogBucket,
+        accessLogVersion: f.logging?.version,
+        accessLogPartitioning: f.logging?.partitioning,
+        accessLogFormat: f.logging?.format,
+        skipLoggingRegionValidation: props.skipRegionValidation,
+        priceClass: f.priceClass,
+        geoRestriction: f.geoRestriction,
+        skewProtection: f.skewProtection ?? { enabled: true },
+        ssrDefaultTtl: f.ssrDefaultTtl,
+        cacheKeyCookies: f.cacheKeyCookies,
+        cacheKeyHeaders: f.cacheKeyHeaders,
+        webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
+        quotas: f.quotas,
+        customErrorPages: props.errorPages
+          ? {
+              notFound: !!props.errorPages.notFound,
+              serverError: !!props.errorPages.serverError,
+            }
+          : undefined,
+      };
 
-    // ---- 9. CloudFront distribution ----
-    const manifestWithBuildId: DeployManifest = { ...manifest, buildId };
-
-    // Per-route Lambda@Edge function versions (OpenNext edge routes). Only
-    // computes with type === 'edge' get a `currentVersion` from the
-    // EdgeFunction CDK construct — middleware is excluded because it has
-    // its own dedicated wiring on the default behavior.
-    const routeEdgeFunctions = new Map<string, IVersion>();
-    for (const [name, resource] of Object.entries(manifest.compute)) {
-      if (resource.type !== 'edge') continue;
-      if (name === 'middleware') continue;
-      const fn = this.computeFunctions.get(name);
-      if (fn instanceof experimental.EdgeFunction) {
-        routeEdgeFunctions.set(name, fn.currentVersion);
-      }
-    }
-
-    const cdnProps: CdnConstructProps = {
-      bucket: this.bucket,
-      manifest: manifestWithBuildId,
-      securityHeadersPolicy,
-      contentSecurityPolicy: f.contentSecurityPolicy,
-      computeFunctionUrls: this.computeFunctionUrls,
-      computeFunctions: this.computeFunctions,
-      computeAliases: this.computeAliases,
-      computeWebFunctions: this.computeWebFunctions,
-      middlewareEdgeFunction: middlewareEdgeVersion,
-      routeEdgeFunctions,
-      webAcl: this.webAcl,
-      certificate: this.certificate,
-      domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
-      wwwRedirect: f.domain?.wwwRedirect,
-      accessLogBucket: storage.accessLogBucket,
-      accessLogVersion: f.logging?.version,
-      accessLogPartitioning: f.logging?.partitioning,
-      accessLogFormat: f.logging?.format,
-      skipLoggingRegionValidation: props.skipRegionValidation,
-      priceClass: f.priceClass,
-      geoRestriction: f.geoRestriction,
-      skewProtection: f.skewProtection ?? { enabled: true },
-      ssrDefaultTtl: f.ssrDefaultTtl,
-      cacheKeyCookies: f.cacheKeyCookies,
-      cacheKeyHeaders: f.cacheKeyHeaders,
-      webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
-      quotas: f.quotas,
-      customErrorPages: props.errorPages
-        ? {
-            notFound: !!props.errorPages.notFound,
-            serverError: !!props.errorPages.serverError,
-          }
-        : undefined,
-    };
-
-    // The CloudFront door is a free-form door like every other door: one
-    // `build` that creates the CdnConstruct from `cdnProps` (the app's features
-    // included, exactly as configured). It receives the same DoorInput a
-    // bring-your-own door gets, plus that internal extra.
-    const cfServerName = this.computeFunctions.has('default')
-      ? 'default'
-      : this.computeFunctions.has('server')
-        ? 'server'
-        : undefined;
-    const cfPlan = buildHostingPlan({
-      manifest,
-      buildId,
-      hasServer: Boolean(cfServerName),
-      hasImage: this.computeFunctions.has('image-optimization'),
-      skewEnabled: (f.skewProtection ?? { enabled: true }).enabled !== false,
-      wwwRedirect: f.domain?.wwwRedirect,
-    });
-    this.doorInput = this.assembleDoorInput(cfPlan, manifest, props, resolved, cfServerName);
-    const cfBuild = buildFrontDoor(this, cloudFrontDoor, { ...this.doorInput, cdnProps }, { wiringCheck: false });
-    cdn = cfBuild.result.cdn;
-    this.frontDoor = { service: cloudFrontDoor.service, url: cfBuild.result.url, originHandle: cfBuild.result.originHandle };
-
-    this.cdn = cdn;
-    this.invalidationId = cdn.invalidationId;
-    this._distribution = cdn.distribution;
-    this.distributionUrl = cdn.distributionUrl;
-
-    // Output the CloudFront distribution domain when custom domain is configured.
-    // BYO domain users need this to set up their external DNS CNAME.
-    if (resolvedDomainNames.length > 0) {
-      new CfnOutput(this, 'DistributionDomainName', {
-        value: cdn.distribution.distributionDomainName,
-        description: 'CloudFront distribution domain name. Point your DNS CNAME to this value.',
-      });
-    }
-
-    // ---- Deletion ordering: Distribution before AccessLogBucket cleanup ----
-    // CloudFront delivers access logs asynchronously. During stack deletion,
-    // CDK's autoDeleteObjects Lambda can empty the bucket, but if the
-    // distribution is still alive it writes MORE logs before being fully
-    // removed — causing "bucket not empty" on the subsequent bucket delete.
-    // Adding a DependsOn from the Distribution to the auto-delete custom
-    // resource ensures CFN deletes the distribution FIRST (stopping log
-    // delivery), THEN fires the auto-delete Lambda to empty the bucket.
-    if (storage.accessLogBucket) {
-      const autoDeleteCr = storage.accessLogBucket.node.tryFindChild('AutoDeleteObjectsCustomResource');
-      if (autoDeleteCr) {
-        cdn.distribution.node.addDependency(autoDeleteCr as Construct);
-      }
-    }
-
-    // ---- 9c. Default CloudWatch alarms (P3.1 + P3.2) ----
-    // Enabled by default — alarms cost cents/month idle and the
-    // out-of-the-box visibility (CloudFront 5xx, Lambda errors/throttles,
-    // image-opt errors, revalidation DLQ depth) is high-value during
-    // the construct's validation phase. Opt out with
-    // `monitoring: { enabled: false }`. When on, surfaces the SNS topic
-    // ARN as a CloudFormation output so operators can wire subscriptions
-    // externally without touching the construct again.
-    const monitoringEnabled = f.monitoring?.enabled ?? true;
-    if (monitoringEnabled) {
-      const subscriptions = f.monitoring?.subscriptions ?? [];
-      const ssrComputeName = this.computeFunctions.has('default')
+      // The CloudFront door is a free-form door like every other door: one
+      // `build` that creates the CdnConstruct from `cdnProps` (the app's features
+      // included, exactly as configured). It receives the same DoorInput a
+      // bring-your-own door gets, plus that internal extra.
+      const cfServerName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
           ? 'server'
           : undefined;
-      const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
-      const imgFn = this.computeFunctions.get('image-optimization');
-
-      // CloudFront metrics only exist in us-east-1 and an alarm can't
-      // watch a metric cross-region (issue #481). Off-region, defer the
-      // CloudFront alarm to a dedicated us-east-1 support stack.
-      //
-      // NOTE on the three region cases:
-      //   - region === 'us-east-1'      → alarm created locally (correct).
-      //   - region resolved, off-region → alarm deferred to the us-east-1
-      //     support stack below.
-      //   - region UNRESOLVED (token)   → we cannot decide at synth where
-      //     the app deploys, so the alarm is created locally. If that
-      //     deploy target turns out NOT to be us-east-1, the alarm can
-      //     never fire (the #481 bug). We can't fix that at synth, but we
-      //     refuse to do it silently. Warn so it's visible in build
-      //     output rather than a green-but-dead alarm.
-      const hostingStack = Stack.of(this);
-      const region = hostingStack.region;
-      const regionResolved = !Token.isUnresolved(region);
-      const offRegion = regionResolved && region !== 'us-east-1';
-
-      if (!regionResolved && this._distribution) {
-        Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
-          `The hosting stack is environment-agnostic (region is an ` +
-            `unresolved token), so the CloudFront 5xx alarm is created ` +
-            `locally. AWS/CloudFront metrics only publish in us-east-1, so ` +
-            `if this app deploys outside us-east-1 the alarm will never ` +
-            `fire. Set env: { account, region } on the stack so the alarm ` +
-            `can be placed in a us-east-1 support stack (issue #481).`,
-        );
-      }
-
-      const monitoring = new MonitoringConstruct(this, 'Monitoring', {
-        enabled: true,
-        subscriptions,
-        distribution: cdn.distribution,
-        // Lambda@Edge functions don't accept the CW metric helpers we
-        // use; only attach when the SSR compute is a regional Lambda.
-        ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
-        imageFunction: imgFn instanceof LambdaFunction ? imgFn : undefined,
-        revalidationDlq: this.revalidationDlq,
-        createCloudFrontAlarmLocally: !offRegion,
+      const cfPlan = buildHostingPlan({
+        manifest,
+        buildId,
+        hasServer: Boolean(cfServerName),
+        hasImage: this.computeFunctions.has('image-optimization'),
+        skewEnabled: (f.skewProtection ?? { enabled: true }).enabled !== false,
+        wwwRedirect: f.domain?.wwwRedirect,
       });
+      this.doorInput = this.assembleDoorInput(cfPlan, manifest, props, resolved, cfServerName);
+      const cfBuild = buildFrontDoor(this, cloudFrontDoor, { ...this.doorInput, cdnProps }, { wiringCheck: false });
+      cdn = cfBuild.result.cdn;
+      this.frontDoor = { service: cloudFrontDoor.service, url: cfBuild.result.url, originHandle: cfBuild.result.originHandle };
 
-      const alarmTopics: ITopic[] = monitoring.topic ? [monitoring.topic] : [];
-      const alarms: Alarm[] = [...monitoring.alarms];
+      this.cdn = cdn;
+      this.invalidationId = cdn.invalidationId;
+      this._distribution = cdn.distribution;
+      this.distributionUrl = cdn.distributionUrl;
 
-      if (monitoring.topic) {
-        new CfnOutput(this, 'MonitoringTopicArn', {
-          value: monitoring.topic.topicArn,
-          description: 'SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.',
+      // Output the CloudFront distribution domain when custom domain is configured.
+      // BYO domain users need this to set up their external DNS CNAME.
+      if (resolvedDomainNames.length > 0) {
+        new CfnOutput(this, 'DistributionDomainName', {
+          value: cdn.distribution.distributionDomainName,
+          description: 'CloudFront distribution domain name. Point your DNS CNAME to this value.',
         });
       }
 
-      // Off-region: place the CloudFront alarm in a us-east-1 support
-      // stack, always (no opt-out). The same subscriptions are applied to
-      // its topic so callers subscribe in one place and both topics are
-      // covered.
-      if (this._distribution && monitoring.cloudFrontAlarmDeferred) {
-        if (Token.isUnresolved(hostingStack.account)) {
-          // Off-region + unresolved account (a legitimate single-synth,
-          // multi-account pipeline shape): we CANNOT build the us-east-1
-          // support stack, because a cross-region stack pairing needs a
-          // concrete account at synth. CDK bakes real ARNs into the
-          // cross-region export machinery, and Aws.ACCOUNT_ID / Ref is
-          // rejected. See docs/DECISIONS.md D-016.
-          //
-          // Rather than hard-throw (which forced monitoring.enabled:false
-          // and took down the working regional SSR/image/DLQ alarms too),
-          // skip ONLY the CloudFront alarm and warn loudly. A visible
-          // synth warning is not the silent-alarm failure #481 is about.
-          // The operator is told, in build output, exactly what is missing
-          // and how to get it (set env: { account, region }).
-          Annotations.of(this).addWarningV2(
-            '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
-            `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
-              `region is '${region}' but its account is unresolved, and a ` +
-              `us-east-1 support stack cannot be synthesized without a ` +
-              `concrete account. All other hosting alarms (SSR, image, ` +
-              `DLQ) are unaffected. Set env: { account, region } on the ` +
-              `stack to enable CloudFront 5xx coverage (issue #481).`,
-          );
-        } else {
-          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
-          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
-          // than synthesize a mis-scoped us-east-1 support stack.
-          const stage = Stage.of(this);
-          if (!stage) {
-            throw new HostingError('MonitoringStageRequiredError', {
-              message:
-                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
-                `enclosing App/Stage was found for this construct.`,
-              resolution:
-                `Instantiate hosting within a CDK App (or Stage).`,
-            });
-          }
-          // The us-east-1 CloudFront alarm must reference the regional
-          // distribution's id; CDK bridges that with its standard
-          // cross-region export reader/writer custom resources (added to
-          // both stacks automatically). The support stack applies the same
-          // subscriptions to its own us-east-1 topic. Its id folds in the
-          // construct's node addr so two Hosting constructs in one stage
-          // don't collide.
-          const cfMonitoring = new UsEast1MonitoringStack(
-            stage,
-            `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
-            {
-              env: { account: hostingStack.account, region: 'us-east-1' },
-              distributionId: this._distribution.distributionId,
-              subscriptions,
-            },
-          );
-          alarmTopics.push(cfMonitoring.topic);
-          alarms.push(cfMonitoring.alarm);
+      // ---- Deletion ordering: Distribution before AccessLogBucket cleanup ----
+      // CloudFront delivers access logs asynchronously. During stack deletion,
+      // CDK's autoDeleteObjects Lambda can empty the bucket, but if the
+      // distribution is still alive it writes MORE logs before being fully
+      // removed — causing "bucket not empty" on the subsequent bucket delete.
+      // Adding a DependsOn from the Distribution to the auto-delete custom
+      // resource ensures CFN deletes the distribution FIRST (stopping log
+      // delivery), THEN fires the auto-delete Lambda to empty the bucket.
+      if (storage.accessLogBucket) {
+        const autoDeleteCr = storage.accessLogBucket.node.tryFindChild('AutoDeleteObjectsCustomResource');
+        if (autoDeleteCr) {
+          cdn.distribution.node.addDependency(autoDeleteCr as Construct);
         }
       }
 
-      this.monitoring = { alarms, alarmTopics };
-    }
-
-    // ---- 9a. OPEN_NEXT_ORIGIN env var for URL construction ----
-    // OpenNext's origin resolver (pattern-env) reads OPEN_NEXT_ORIGIN as a JSON
-    // map of origin names → {host, protocol, port}. Only the primary server
-    // function needs this — it enables internal routing to resolve origins for
-    // URL construction (avoiding "TypeError: Invalid URL" on path-only rewrites).
-    // Image optimization and other secondary compute functions don't need it.
-    if (hasCompute) {
-      // Identify the primary server function (the one handling SSR routing)
-      const primaryComputeName =
-        [...this.computeWebFunctions.keys()][0] ??
-        (this.computeFunctions.has('default')
+      // ---- 9c. Default CloudWatch alarms (P3.1 + P3.2) ----
+      // Enabled by default — alarms cost cents/month idle and the
+      // out-of-the-box visibility (CloudFront 5xx, Lambda errors/throttles,
+      // image-opt errors, revalidation DLQ depth) is high-value during
+      // the construct's validation phase. Opt out with
+      // `monitoring: { enabled: false }`. When on, surfaces the SNS topic
+      // ARN as a CloudFormation output so operators can wire subscriptions
+      // externally without touching the construct again.
+      const monitoringEnabled = f.monitoring?.enabled ?? true;
+      if (monitoringEnabled) {
+        const subscriptions = f.monitoring?.subscriptions ?? [];
+        const ssrComputeName = this.computeFunctions.has('default')
           ? 'default'
           : this.computeFunctions.has('server')
             ? 'server'
-            : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware'));
+            : undefined;
+        const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
+        const imgFn = this.computeFunctions.get('image-optimization');
 
-      if (primaryComputeName) {
-        const primaryFn =
-          this.computeWebFunctions.get(primaryComputeName) ?? this.computeFunctions.get(primaryComputeName);
-        if (primaryFn instanceof LambdaFunction || primaryFn instanceof WebFunctionConstruct) {
-          // Build origin map with OTHER functions' URLs (not self → avoids cycle)
-          const originEntries: string[] = [];
-          for (const [urlName, fnUrl] of this.computeFunctionUrls.entries()) {
-            if (urlName === primaryComputeName) continue;
-            const originKey = urlName === 'image-optimization' ? 'imageOptimizer' : urlName;
-            const host = Fn.select(2, Fn.split('/', fnUrl.url));
-            originEntries.push(Fn.join('', [`"${originKey}":{"host":"`, host, `","protocol":"https","port":443}`]));
-          }
+        // CloudFront metrics only exist in us-east-1 and an alarm can't
+        // watch a metric cross-region (issue #481). Off-region, defer the
+        // CloudFront alarm to a dedicated us-east-1 support stack.
+        //
+        // NOTE on the three region cases:
+        //   - region === 'us-east-1'      → alarm created locally (correct).
+        //   - region resolved, off-region → alarm deferred to the us-east-1
+        //     support stack below.
+        //   - region UNRESOLVED (token)   → we cannot decide at synth where
+        //     the app deploys, so the alarm is created locally. If that
+        //     deploy target turns out NOT to be us-east-1, the alarm can
+        //     never fire (the #481 bug). We can't fix that at synth, but we
+        //     refuse to do it silently. Warn so it's visible in build
+        //     output rather than a green-but-dead alarm.
+        const hostingStack = Stack.of(this);
+        const region = hostingStack.region;
+        const regionResolved = !Token.isUnresolved(region);
+        const offRegion = regionResolved && region !== 'us-east-1';
 
-          if (originEntries.length > 0) {
-            const openNextOriginJson = Fn.join('', ['{', Fn.join(',', originEntries), '}']);
-            primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', openNextOriginJson);
+        if (!regionResolved && this._distribution) {
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CloudFrontAlarmRegionUnresolved',
+            `The hosting stack is environment-agnostic (region is an ` +
+              `unresolved token), so the CloudFront 5xx alarm is created ` +
+              `locally. AWS/CloudFront metrics only publish in us-east-1, so ` +
+              `if this app deploys outside us-east-1 the alarm will never ` +
+              `fire. Set env: { account, region } on the stack so the alarm ` +
+              `can be placed in a us-east-1 support stack (issue #481).`,
+          );
+        }
+
+        const monitoring = new MonitoringConstruct(this, 'Monitoring', {
+          enabled: true,
+          subscriptions,
+          distribution: cdn.distribution,
+          // Lambda@Edge functions don't accept the CW metric helpers we
+          // use; only attach when the SSR compute is a regional Lambda.
+          ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
+          imageFunction: imgFn instanceof LambdaFunction ? imgFn : undefined,
+          revalidationDlq: this.revalidationDlq,
+          createCloudFrontAlarmLocally: !offRegion,
+        });
+
+        const alarmTopics: ITopic[] = monitoring.topic ? [monitoring.topic] : [];
+        const alarms: Alarm[] = [...monitoring.alarms];
+
+        if (monitoring.topic) {
+          new CfnOutput(this, 'MonitoringTopicArn', {
+            value: monitoring.topic.topicArn,
+            description: 'SNS topic for hosting alarms. Subscribe via monitoring.subscriptions, or an email/Slack/PagerDuty endpoint here.',
+          });
+        }
+
+        // Off-region: place the CloudFront alarm in a us-east-1 support
+        // stack, always (no opt-out). The same subscriptions are applied to
+        // its topic so callers subscribe in one place and both topics are
+        // covered.
+        if (this._distribution && monitoring.cloudFrontAlarmDeferred) {
+          if (Token.isUnresolved(hostingStack.account)) {
+            // Off-region + unresolved account (a legitimate single-synth,
+            // multi-account pipeline shape): we CANNOT build the us-east-1
+            // support stack, because a cross-region stack pairing needs a
+            // concrete account at synth. CDK bakes real ARNs into the
+            // cross-region export machinery, and Aws.ACCOUNT_ID / Ref is
+            // rejected. See docs/DECISIONS.md D-016.
+            //
+            // Rather than hard-throw (which forced monitoring.enabled:false
+            // and took down the working regional SSR/image/DLQ alarms too),
+            // skip ONLY the CloudFront alarm and warn loudly. A visible
+            // synth warning is not the silent-alarm failure #481 is about.
+            // The operator is told, in build output, exactly what is missing
+            // and how to get it (set env: { account, region }).
+            Annotations.of(this).addWarningV2(
+              '@aws-blocks/hosting:CloudFrontAlarmSkippedNoAccount',
+              `Skipping the off-region CloudFront 5xx alarm: the stack's ` +
+                `region is '${region}' but its account is unresolved, and a ` +
+                `us-east-1 support stack cannot be synthesized without a ` +
+                `concrete account. All other hosting alarms (SSR, image, ` +
+                `DLQ) are unaffected. Set env: { account, region } on the ` +
+                `stack to enable CloudFront 5xx coverage (issue #481).`,
+            );
           } else {
-            primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', '{}');
+            // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+            // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+            // than synthesize a mis-scoped us-east-1 support stack.
+            const stage = Stage.of(this);
+            if (!stage) {
+              throw new HostingError('MonitoringStageRequiredError', {
+                message:
+                  `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+                  `enclosing App/Stage was found for this construct.`,
+                resolution:
+                  `Instantiate hosting within a CDK App (or Stage).`,
+              });
+            }
+            // The us-east-1 CloudFront alarm must reference the regional
+            // distribution's id; CDK bridges that with its standard
+            // cross-region export reader/writer custom resources (added to
+            // both stacks automatically). The support stack applies the same
+            // subscriptions to its own us-east-1 topic. Its id folds in the
+            // construct's node addr so two Hosting constructs in one stage
+            // don't collide.
+            const cfMonitoring = new UsEast1MonitoringStack(
+              stage,
+              `${hostingStack.stackName}-CfMonitoring-${this.node.addr.slice(0, 8)}`,
+              {
+                env: { account: hostingStack.account, region: 'us-east-1' },
+                distributionId: this._distribution.distributionId,
+                subscriptions,
+              },
+            );
+            alarmTopics.push(cfMonitoring.topic);
+            alarms.push(cfMonitoring.alarm);
+          }
+        }
+
+        this.monitoring = { alarms, alarmTopics };
+      }
+
+      // ---- 9a. OPEN_NEXT_ORIGIN env var for URL construction ----
+      // OpenNext's origin resolver (pattern-env) reads OPEN_NEXT_ORIGIN as a JSON
+      // map of origin names → {host, protocol, port}. Only the primary server
+      // function needs this — it enables internal routing to resolve origins for
+      // URL construction (avoiding "TypeError: Invalid URL" on path-only rewrites).
+      // Image optimization and other secondary compute functions don't need it.
+      if (hasCompute) {
+        // Identify the primary server function (the one handling SSR routing)
+        const primaryComputeName =
+          [...this.computeWebFunctions.keys()][0] ??
+          (this.computeFunctions.has('default')
+            ? 'default'
+            : this.computeFunctions.has('server')
+              ? 'server'
+              : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware'));
+
+        if (primaryComputeName) {
+          const primaryFn =
+            this.computeWebFunctions.get(primaryComputeName) ?? this.computeFunctions.get(primaryComputeName);
+          if (primaryFn instanceof LambdaFunction || primaryFn instanceof WebFunctionConstruct) {
+            // Build origin map with OTHER functions' URLs (not self → avoids cycle)
+            const originEntries: string[] = [];
+            for (const [urlName, fnUrl] of this.computeFunctionUrls.entries()) {
+              if (urlName === primaryComputeName) continue;
+              const originKey = urlName === 'image-optimization' ? 'imageOptimizer' : urlName;
+              const host = Fn.select(2, Fn.split('/', fnUrl.url));
+              originEntries.push(Fn.join('', [`"${originKey}":{"host":"`, host, `","protocol":"https","port":443}`]));
+            }
+
+            if (originEntries.length > 0) {
+              const openNextOriginJson = Fn.join('', ['{', Fn.join(',', originEntries), '}']);
+              primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', openNextOriginJson);
+            } else {
+              primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', '{}');
+            }
           }
         }
       }
-    }
 
-    // ---- 9b. KMS decrypt for CloudFront OAC ----
-    // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
-    // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
-    // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
-    // `AWS:SourceArn` matching this account's CloudFront distributions.
+      // ---- 9b. KMS decrypt for CloudFront OAC ----
+      // No explicit key-policy statement is added here: `S3BucketOrigin.withOriginAccessControl`
+      // (cdn_construct.ts) grants `kms:Decrypt` on the bucket's key — including a BYO
+      // `storage.encryptionKey`, which is set as the bucket's encryption key — conditioned on
+      // `AWS:SourceArn` matching this account's CloudFront distributions.
 
-    // ---- 10. DNS records ----
-    if (f.domain && dnsConstructs.length > 0) {
-      for (const dns of dnsConstructs) {
-        dns.createDnsRecords(cdn.distribution);
+      // ---- 10. DNS records ----
+      if (f.domain && dnsConstructs.length > 0) {
+        for (const dns of dnsConstructs) {
+          dns.createDnsRecords(cdn.distribution);
+        }
       }
-    }
     } else {
       // ---- Front door: non-CloudFront (dispatch by kind) ----
       // Storage + compute are already built above (front-door-agnostic). Every
