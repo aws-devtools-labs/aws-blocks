@@ -12,6 +12,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { Scope, BlocksPresets, DEFAULT_NODE_RUNTIME, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { getOrCreateVpc, initializeVpc } from '@aws-blocks/core/cdk/internal';
 import { materialize } from './infra.js';
 import { Database } from './index.cdk.js';
 
@@ -296,4 +297,49 @@ test('Database: engine log retention follows defaults.logRetention', () => {
   template.hasResourceProperties('Custom::LogRetention', {
     RetentionInDays: 365,
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VPC source gating — the data-loss guard.
+//
+// A Database must join a CUSTOMER-provided shared VPC (as it always has), but
+// must NEVER auto-join a Blocks-DERIVED shared VPC (e.g. one a container compute
+// created). Auto-joining a derived VPC would move the cluster into a different
+// VPC on a routine change — adding a container, or bumping the dependency to a
+// version that derives one — which CloudFormation applies as a REPLACEMENT,
+// destroying the database. These tests pin that invariant.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('Database: joins a customer-PROVIDED shared VPC (does not build its own)', () => {
+  const { stack, parent } = setupDatabaseStack();
+  const customerVpc = new ec2.Vpc(stack, 'CustomerVpc', { maxAzs: 2 });
+  // Customer path: default source is 'provided'.
+  initializeVpc(stack, { network: customerVpc });
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  // Only the customer VPC exists — the Database did NOT stand up its own.
+  template.resourceCountIs('AWS::EC2::VPC', 1);
+  // The cluster's subnet group is built from the customer VPC's subnets.
+  template.resourceCountIs('AWS::RDS::DBSubnetGroup', 1);
+});
+
+test('Database: IGNORES a Blocks-DERIVED shared VPC and builds its own (data-loss guard)', () => {
+  const { stack, parent } = setupDatabaseStack();
+  // Simulate what a container compute does: derive the shared root VPC and
+  // publish it tagged source='derived'.
+  const derivedVpc = getOrCreateVpc(stack);
+  initializeVpc(stack, { network: derivedVpc }, 'derived');
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  // TWO VPCs: the derived shared one AND the Database's own `${name}Vpc`. The
+  // Database refused to join the derived VPC, so its cluster stays in a VPC it
+  // owns — adding a container never moves (and never replaces) the cluster.
+  template.resourceCountIs('AWS::EC2::VPC', 2);
+});
+
+test('Database: with no shared VPC at all, builds its own (unchanged baseline)', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::EC2::VPC', 1);
 });

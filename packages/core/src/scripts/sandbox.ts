@@ -11,7 +11,8 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
+import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -50,6 +51,50 @@ export interface SandboxDeployArgsOptions {
   projectRoot: string;
   /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
   backendPath: string;
+  /**
+   * Use CloudFormation Express Mode (`--express`). Default `true`. Turned off
+   * when the deployed sandbox contains a resource Express Mode can't update —
+   * see {@link findExpressUnsafeStacks}.
+   */
+  express?: boolean;
+  /**
+   * Deploy an already-synthesized cloud assembly (`--app <dir>`) instead of
+   * synthesizing from `backendPath` again. The sandbox synthesizes once into
+   * `<outDir>/cdk.out` to inspect the templates, then deploys that output, so
+   * the framework build runs only once.
+   */
+  assemblyDir?: string;
+}
+
+/**
+ * Build the `npm exec cdk -- synth …` argv the sandbox runs first: synthesize
+ * once into `<outDir>/cdk.out`, inspect the templates (see
+ * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
+ */
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "exec", "cdk", "--", "synth",
+    "--quiet",
+    "--output", `${outDir}/cdk.out`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
+}
+
+/**
+ * cdk child env for the sandbox synth + deploy. Includes the telemetry framework
+ * sink so the synth child reports its framework before this parent emits SUCCESS.
+ * The watch spawn omits it: watch sends no event, and the sink is already consumed
+ * and deleted by then, so wiring this same path in would silently write nowhere.
+ */
+export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    NODE_OPTIONS: "--conditions=cdk",
+    ...getCdkTelemetryEnv('sandbox'),
+    ...getFrameworkSinkEnv(frameworkSink),
+  };
 }
 
 /**
@@ -79,18 +124,27 @@ export interface SandboxDeployArgsOptions {
  *   change set and full stabilization with rollback, which are exactly the
  *   safety signals a production deploy should keep. Requires an aws-cdk CLI
  *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
+ *   `express: false` drops it (still `--method direct`, with rollback) for a
+ *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
+ *   Web Function endpoint (`compute.type: 'web-function'`).
  */
-export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxDeployArgs({
+  outDir,
+  projectRoot,
+  backendPath,
+  express = true,
+  assemblyDir,
+}: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
     "--method", "direct",
-    "--express",
+    ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
 
@@ -170,21 +224,43 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
+  // Framework resolves in the cdk synth child; it writes the value here so the
+  // parent can attach it to the sandbox telemetry event.
+  const frameworkSink = createFrameworkSink();
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
 
+  const cdkEnv = buildSandboxCdkEnv(frameworkSink);
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const assemblyDir = `${outDir}/cdk.out`;
+
   try {
+    // Synthesize once, so the deploy decision is based on what is about to be
+    // deployed (not on local state that may be missing — a fresh clone, a
+    // cleaned .blocks-sandbox, another machine). The deploy below reuses this
+    // assembly, so the framework build still runs only once.
+    runSync("npm", buildSandboxSynthArgs(argOptions), { stdio: "inherit", env: cdkEnv });
+
+    // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
+    // creating them is fine. Fall back to a full deploy when a stack about to be
+    // deployed has one and already exists — or can't be inspected (fail closed).
+    const expressUnsafe = await findExpressUnsafeStacks(stacksWithExpressUnsafeResources(assemblyDir));
+    if (expressUnsafe.length > 0) {
+      console.log(
+        `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} has a Lambda Web Function endpoint, ` +
+          "which Express Mode can't update. Deploying with full stabilization + rollback instead.",
+      );
+    }
+
     runSync(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
-      {
-        stdio: "inherit",
-        env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
-      },
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
+      { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -195,6 +271,8 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(sandboxFailureRecoveryHint());
     throw error;
   }
+
+  registerFrameworkFromSink(frameworkSink);
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
   const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
@@ -363,6 +441,88 @@ export async function listStackBucketNames(cfn: CloudFormationClient, stackName:
 		token = res.NextToken;
 	} while (token);
 	return buckets;
+}
+
+/**
+ * Resource types CloudFormation Express Mode can't UPDATE. Re-pointing a
+ * Lambda Web Function endpoint's `RevisionWeights` at a new revision fails
+ * there with "RevisionWeights: expected minimum item count: 1, found: 0" (a
+ * plain update with rollback succeeds), and Express Mode's disabled rollback
+ * then leaves the stack stuck in UPDATE_FAILED. Creates are unaffected.
+ */
+export const EXPRESS_UNSAFE_RESOURCE_TYPES: ReadonlySet<string> = new Set(['AWS::Lambda::WebFunctionEndpoint']);
+
+/** A stack in a synthesized cloud assembly. `region` is unset for environment-agnostic stacks. */
+export interface AssemblyStack {
+	stackName: string;
+	region?: string;
+}
+
+/**
+ * The stacks in the synthesized assembly at `assemblyDir` whose template
+ * contains a resource in {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Reads
+ * `manifest.json` + each stack's template; [] if the assembly can't be read.
+ */
+export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyStack[] {
+	type Artifact = {
+		type?: string;
+		environment?: string;
+		displayName?: string;
+		properties?: { templateFile?: string; stackName?: string };
+	};
+	let artifacts: Record<string, Artifact>;
+	try {
+		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, Artifact> })
+			.artifacts ?? {};
+	} catch {
+		return [];
+	}
+	const stacks: AssemblyStack[] = [];
+	for (const [id, artifact] of Object.entries(artifacts)) {
+		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
+		let template: { Resources?: Record<string, { Type?: string }> };
+		try {
+			template = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8'));
+		} catch {
+			continue;
+		}
+		const hasUnsafe = Object.values(template.Resources ?? {}).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type ?? ''));
+		if (!hasUnsafe) continue;
+		const region = artifact.environment?.split('/')[3];
+		stacks.push({
+			stackName: artifact.properties.stackName ?? id,
+			region: region && region !== 'unknown-region' ? region : undefined,
+		});
+	}
+	return stacks;
+}
+
+/**
+ * The stacks (of `stacks`, each containing a resource Express Mode can't
+ * update) that already exist — so this deploy would UPDATE them. Fails closed:
+ * any error other than "stack does not exist" (credentials, throttling, access)
+ * counts as existing, so a deploy never risks Express Mode's unrecoverable
+ * UPDATE_FAILED state on a guess.
+ */
+export async function findExpressUnsafeStacks(
+	stacks: AssemblyStack[],
+	cfnFor?: (region: string | undefined) => CloudFormationClient,
+): Promise<string[]> {
+	if (stacks.length === 0) return [];
+	const { CloudFormationClient: Client, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+	const clientFor = cfnFor ?? ((region: string | undefined) => new Client(region ? { region } : {}));
+	const unsafe: string[] = [];
+	for (const { stackName, region } of stacks) {
+		try {
+			const res = await clientFor(region).send(new DescribeStacksCommand({ StackName: stackName }));
+			const status = res.Stacks?.[0]?.StackStatus;
+			if (status && status !== 'DELETE_COMPLETE') unsafe.push(stackName);
+		} catch (e) {
+			const message = (e as Error).message ?? '';
+			if (!/does not exist/i.test(message)) unsafe.push(stackName);
+		}
+	}
+	return unsafe;
 }
 
 /** Empty a versioned bucket: delete every object version + delete marker in

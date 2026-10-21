@@ -8,13 +8,18 @@ import { Scope } from '../common/index.js';
 import { isTelemetryEnabled } from './consent.js';
 import { collectEnvironment } from './environment.js';
 import { getInstallationId, getProjectId, generateEventId } from './identifiers.js';
-import type { BlocksTelemetryEvent, BuildAndSendEventOptions } from './types.js';
+import { REPORTED_FRAMEWORKS } from './types.js';
+import type { BlocksTelemetryEvent, BuildAndSendEventOptions, ReportedFramework } from './types.js';
 
 // Debug log: writes to stderr via NODE_DEBUG=blocks-telemetry (developer-facing, for troubleshooting)
 const debug = debuglog('blocks-telemetry');
 
 const DEFAULT_ENDPOINT = 'https://blocks-telemetry.us-east-1.api.aws/metrics';
 const TELEMETRY_VERSION = '1.0.0';
+
+function isReportedFramework(name: string): name is ReportedFramework {
+  return (REPORTED_FRAMEWORKS as readonly string[]).includes(name);
+}
 
 function getEndpoint(): string {
   return process.env.BLOCKS_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
@@ -112,6 +117,10 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
 
   const buildingBlocks = blocks;
 
+  const resolvedFramework = opts.product?.framework ?? Scope._getRegisteredFramework();
+  const framework =
+    resolvedFramework !== undefined && isReportedFramework(resolvedFramework) ? resolvedFramework : undefined;
+
   return {
     telemetryVersion: TELEMETRY_VERSION,
     identifiers: {
@@ -130,7 +139,7 @@ export function buildEvent(opts: BuildAndSendEventOptions): BlocksTelemetryEvent
     product: {
       blocksVersion: CORE_VERSION,
       ...(opts.product?.cdkVersion && { cdkVersion: opts.product.cdkVersion }),
-      ...(opts.product?.framework && { framework: opts.product.framework }),
+      ...(framework && { framework }),
       ...(templateName && {
         template: {
           name: templateName,

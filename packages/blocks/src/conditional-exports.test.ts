@@ -298,6 +298,12 @@ const SYNTH_SAFE_METHODS = new Set([
 	'AuthOIDC.prototype.signInRoutePath',
 	// Synth-time config: sets an environment variable on the Lambda function.
 	'LambdaCompute.prototype.setEnv',
+	// Synth-time config: adds an env var to the Fargate container definition.
+	'ContainerCompute.prototype.setEnv',
+	// Resolves the backing compute at synth (an AsyncJob/CronJob calls it in its
+	// CDK constructor to wire against the real backing) — the ComputeProvider
+	// contract, not a runtime-only method.
+	'Compute.prototype.resolve',
 	// Top-level logging also runs under `cdk synth`; it writes the same lines as at runtime.
 	'Logger.prototype.debug',
 	'Logger.prototype.info',
@@ -403,8 +409,8 @@ for (const { name, files } of [umbrellaEntry, ...bbEntries]) {
 			assert.deepStrictEqual(
 				missing,
 				[],
-				`${name} "${condition}" entry is missing type exports:\n  ${missing.join(', ')}\n\n` +
-					`Re-export them from the ${condition} entry file with \`export type\`.`,
+				`${name} "${condition}" entry is missing exports:\n  ${missing.join(', ')}\n\n` +
+					`Re-export them from the ${condition} entry file: \`export type\` for types, a plain \`export\` for values.`,
 			);
 		});
 	}

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { BuildingBlockScope, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import type { VpcContext } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -10,6 +11,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import { materialize, grantExternalDataApi } from './infra.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX, DEFAULT_BACKUP_RETENTION_DAYS } from './constants.js';
 import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
+import { BB_NAME } from './version.js';
 
 /**
  * CDK layer for the Database Building Block.
@@ -38,6 +40,18 @@ const SUBNET_TYPE_MAP: Record<NonNullable<SubnetSelection['subnetType']>, ec2.Su
   'private-with-egress': ec2.SubnetType.PRIVATE_WITH_EGRESS,
   public: ec2.SubnetType.PUBLIC,
 };
+
+/**
+ * The shared VPC context only when the **customer provided** it (`source:
+ * 'provided'`), else `undefined`. A Database must never auto-join a Blocks-
+ * **derived** shared VPC — see the call site for why (data-loss via cluster
+ * replacement). Returning `undefined` makes `materialize()` build the Database's
+ * own VPC, exactly as it did before derived shared VPCs existed.
+ */
+function providedVpcContext(scope: BuildingBlockScope): VpcContext | undefined {
+  const ctx = getVpcContext(scope);
+  return ctx?.source === 'provided' ? ctx : undefined;
+}
 
 /**
  * Resolve the customer's CDK-free {@link SubnetSelection} (from `Database({ subnets })`)
@@ -75,6 +89,7 @@ export class Database extends BuildingBlockScope {
     // resolved by the Database construct itself via `selectSubnets`, not here.
     super(id, {
       parent: scope,
+      bbName: BB_NAME,
       vpc: {
         interfaceEndpoints: [
           ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
@@ -230,7 +245,16 @@ export class Database extends BuildingBlockScope {
         ? kms.Key.fromKeyArn(this, 'db-storage-key', options.storageEncryptionKeyArn)
         : undefined,
       backupRetention: cdk.Duration.days(backupRetentionDays),
-      vpcContext: getVpcContext(this),
+      // Join the shared VPC only when the CUSTOMER provided it (`source:
+      // 'provided'`). A Blocks-DERIVED shared VPC (e.g. one a container compute
+      // created) is deliberately ignored: auto-joining it would move this
+      // stateful cluster into a new VPC on a routine change — adding a container,
+      // or bumping the dependency to a version that derives one — which
+      // CloudFormation applies as a REPLACEMENT, destroying the database. With no
+      // provided context, materialize() falls back to its own `${name}Vpc`,
+      // exactly as before this shared-VPC work. Bringing a Database into a derived
+      // shared VPC is a deliberate, out-of-band migration, never an implicit one.
+      vpcContext: providedVpcContext(this),
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.
       logRetention: this.defaults.logRetention,

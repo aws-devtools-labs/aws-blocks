@@ -20,7 +20,7 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "FileDo
 /// // or stream to disk:
 /// try await handle.downloadTo(fileURL: localPath)
 /// ```
-public class FileDownloadHandle {
+public final class FileDownloadHandle: Sendable {
     private let url: String
     private let session: URLSession
 
@@ -33,10 +33,15 @@ public class FileDownloadHandle {
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileDownloadHandle {
+        try FileDownloadHandle(url: url(in: json))
+    }
+
+    /// The presigned URL a descriptor carries.
+    static func url(in json: [String: Any]) throws -> String {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        return FileDownloadHandle(url: url)
+        return url
     }
 
     /// Returns the presigned download URL.
@@ -104,5 +109,19 @@ public class FileDownloadHandle {
         } catch {
             throw FileBucketError.downloadFailed(error.localizedDescription, error)
         }
+    }
+}
+
+// MARK: - Codable
+
+extension FileDownloadHandle: Codable {
+    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
+    public convenience init(from decoder: Decoder) throws {
+        try self.init(url: Self.url(in: TransferableCoding.descriptor(from: decoder)))
+    }
+
+    /// Always throws: transferables are read-only.
+    public func encode(to encoder: Encoder) throws {
+        throw TransferableCoding.readOnlyError(self, encoder)
     }
 }

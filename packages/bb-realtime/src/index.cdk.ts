@@ -41,6 +41,7 @@ export type {
 	DisconnectReason,
 	RealtimeChannelDescriptor,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
 
@@ -175,7 +176,7 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
  */
 export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's
 		// DEFAULT compute deterministically — not this block's resolved compute.

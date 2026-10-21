@@ -14,7 +14,7 @@ import {
 	BlocksBackend as CoreBlocksBackend,
 	BlocksStack as CoreBlocksStack,
 } from '@aws-blocks/core/cdk';
-import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import type { ComputeBase, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import type { Construct } from 'constructs';
 
 // The umbrella is the one package that depends on both core and a concrete
@@ -30,7 +30,7 @@ import type { Construct } from 'constructs';
 // is the CDK `LambdaCompute` that extends `Compute`. The cast bridges that
 // condition-vs-value gap; it is not a public-API cast.
 const lambdaDefaultComputeFactory: DefaultComputeFactory = (root) =>
-	new LambdaCompute(root as never, 'DefaultCompute') as unknown as Compute;
+	new LambdaCompute(root as never, 'DefaultCompute') as unknown as ComputeBase;
 
 /**
  * `BlocksStack` with the Lambda default compute wired in. Same API and instance
@@ -74,6 +74,7 @@ export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
@@ -84,6 +85,16 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 // Building Blocks (CDK versions)
 export {
 	AuthBasic,

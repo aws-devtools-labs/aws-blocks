@@ -20,10 +20,11 @@ import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
 import { validateMigrations } from './validation.js';
+import { BB_NAME } from './version.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope, vpc: { requiresEgress: true } });
+    super(id, { parent: scope, bbName: BB_NAME, vpc: { requiresEgress: true } });
 
     const stack = cdk.Stack.of(this);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');

@@ -97,4 +97,7 @@ public struct RPCModel {
     let methods: [RPCMethod]
     let servers: [ServerDefinition]
     let componentSchemas: [String: TypeRef]
+    let declaredTransferableBindings: [String: DeclaredTransferableBinding]
+    let unboundTransferableCauses: [String: String]
+    let nativeCatalogWarnings: [String]
 }

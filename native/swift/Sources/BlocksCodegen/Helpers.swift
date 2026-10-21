@@ -163,3 +163,74 @@ func escapedSwiftName(_ name: String) -> String {
     }
     return safe
 }
+
+// MARK: - Entry-point names
+
+/// Members of the generated `Blocks`, plus names `blocks.<name>` cannot reach without backticks.
+let blocksMemberNames: Set<String> = ["client", "server", "close", "self", "init"]
+
+/// Names no namespace class may take: types the generated files declare or name unqualified,
+/// the modules they qualify with, and keywords no class can be named.
+let reservedNamespaceClassNames: Set<String> = [
+    "Blocks", "Servers", "BlocksRuntime", "Foundation",
+    "BlocksClient", "BlocksServer", "BlocksRequest", "RPCError", "CodegenError", "JSONValue",
+    "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient",
+    "Sendable", "URLSession",
+    "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",
+    "Codable", "Encodable", "Decoder", "Encoder", "CodingKey", "DecodingError", "JSONDecoder", "JSONSerialization",
+    "Self", "Any"
+]
+
+/// Names a spec model can't take: the entry point and servers the API file declares, and the module it qualifies with.
+let reservedModelNames: Set<String> = ["Blocks", "Servers", "BlocksRuntime"]
+
+/// Class name per namespace. A reserved or already claimed name gets an `Api` suffix;
+/// names that need no change claim first, so a rename never takes another's name.
+func namespaceClassNames(_ namespaces: [String]) -> [String: String] {
+    var names: [String: String] = [:]
+    var taken = reservedNamespaceClassNames
+    for namespace in namespaces where taken.insert(pascalCase(namespace)).inserted {
+        names[namespace] = pascalCase(namespace)
+    }
+    for namespace in namespaces where names[namespace] == nil {
+        var name = pascalCase(namespace) + "Api"
+        while !taken.insert(name).inserted {
+            name += "Api"
+        }
+        names[namespace] = name
+    }
+    return names
+}
+
+/// The `Blocks` property a namespace would get without collisions: camelCased, leading underscores dropped.
+func naturalAccessorName(_ namespace: String) -> String {
+    let trimmed = String(namespace.drop { $0 == "_" })
+    let name = camelCase(trimmed.isEmpty ? namespace : trimmed)
+    return isValidSwiftIdentifier(name) ? name : sanitizedSwiftName(name)
+}
+
+/// Unescaped `Blocks` property per namespace. A `Blocks` member or an already claimed name gets
+/// an `Api` suffix; names that need no change claim first, so a rename never takes another's name.
+func namespaceAccessorNames(_ namespaces: [String]) -> [String: String] {
+    var names: [String: String] = [:]
+    var taken = blocksMemberNames
+    for namespace in namespaces where naturalAccessorName(namespace) == camelCase(namespace) {
+        if taken.insert(camelCase(namespace)).inserted {
+            names[namespace] = camelCase(namespace)
+        }
+    }
+    for namespace in namespaces where names[namespace] == nil {
+        var name = naturalAccessorName(namespace)
+        while taken.contains(name) {
+            name += "Api"
+        }
+        names[namespace] = name
+        taken.insert(name)
+    }
+    return names
+}
+
+/// `Servers` property for a server; keywords such as `default` are backticked.
+func serverPropertyName(_ server: String) -> String {
+    escapedSwiftName(camelCase(server))
+}
