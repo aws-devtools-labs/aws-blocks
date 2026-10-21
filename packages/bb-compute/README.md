@@ -22,7 +22,14 @@ Hand a `Compute` to a workload that supports it:
 
 ```ts
 new AsyncJob(scope, 'reports', { compute: worker, timeoutSeconds: 1800, handler });
+
+export const reports = new ApiNamespace(scope, 'reports', handler, { compute: api });
 ```
+
+| Workload | Option | Compute types |
+| --- | --- | --- |
+| `AsyncJob` | `compute` | `serverless`, `container` |
+| `ApiNamespace` | `compute` (4th argument) | `serverless` |
 
 ## Compute types
 
@@ -62,6 +69,34 @@ type is a compile error.
   `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
   [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
 
+## API namespaces
+
+Every `ApiNamespace` runs on the app's default compute unless you pass one:
+
+```ts
+const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 120 });
+
+export const reports = new ApiNamespace(scope, 'reports', (context) => ({
+  async build(month: string) {
+    // …
+  },
+}), { compute: reportsCompute });
+```
+
+- **The client doesn't change.** `reports.build('2026-10')` still calls
+  `POST /aws-blocks/api/reports`; the stack's shared API gateway routes that
+  path to the namespace's compute. It works the same on every `apiFrontDoor`
+  tier and behind `Hosting`, so the API keeps one domain.
+- **Routing follows the export name** — the name your frontend imports
+  (`export const reports = …` → `reports`), not the second `ApiNamespace`
+  argument.
+- **Share a compute** across namespaces and `AsyncJob`s by passing the same
+  `Compute` to each; they then run in the same function.
+- **Only `serverless` computes serve API namespaces** today; passing a
+  `container` compute is a type error.
+- **Everything else stays on the default compute:** namespaces without a
+  `compute`, `RawRoute`s, and the auth routes.
+
 ## Local development
 
 Compute assignment is transparent in local dev — handlers run in-process
@@ -72,5 +107,6 @@ infrastructure (size, scaling) have no effect in the mock.
 
 Assign a `Compute` when a workload needs a runtime other than the app default
 (serverless) — most commonly a long-running or high-memory background job that a
-container can serve but a serverless function cannot. Omit `compute` and the
-workload uses the app default.
+container can serve but a serverless function cannot, or an API namespace that
+needs more memory, a longer timeout, or isolation from the rest of the API. Omit
+`compute` and the workload uses the app default.

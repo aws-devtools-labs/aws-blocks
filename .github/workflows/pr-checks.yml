@@ -486,6 +486,50 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
+  e2e-multi-compute:
+    # An API namespace on its own Compute, served through the managed CloudFront
+    # front door (apiFrontDoor: 'cloudfront'). The default `apigateway` tier is
+    # covered by E2E Sandbox/Production (comprehensive) and Hosting's
+    # distribution by E2E Hosting (spa); this is the one deploy for the third.
+    name: E2E Multi-Compute
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
+    needs: [build-and-test-local, detect-changes]
+    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: e2e
+    env:
+      BLOCKS_STACK_SUFFIX: mc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: E2E Multi-Compute
+        run: npm run test:e2e:sandbox:multi-compute
+
   e2e-production:
     permissions:
       contents: read
@@ -755,7 +799,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-multi-compute, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -782,6 +826,7 @@ jobs:
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-compute-smoke.result }}" != "success" && "${{ needs.e2e-compute-smoke.result }}" != "skipped" ]] ||
+             [[ "${{ needs.e2e-multi-compute.result }}" != "success" && "${{ needs.e2e-multi-compute.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||

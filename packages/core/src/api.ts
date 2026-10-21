@@ -68,11 +68,11 @@ import type { ScopeParent } from './common/index.js';
  * the resolver at synth, after the backend module has been imported — not at
  * construction — so routing reflects compute assignments made in any order. The
  * precedence lives here, with the options that define it, so the gateway never
- * needs to know where a namespace's compute comes from: today that is the
- * scope's compute (`scope.compute` — the nearest compute assigned up the scope
- * chain, else the default); a per-namespace compute option, once it exists,
- * takes precedence over it. Routes key on the **export** name (what the client
- * sends and dispatch resolves), not the constructor's `name`.
+ * needs to know where a namespace's compute comes from: the namespace's own
+ * {@link ApiNamespaceOptions.compute} when given, else the scope's compute
+ * (`scope.compute` — the nearest compute assigned up the scope chain, else the
+ * default). Routes key on the **export** name (what the client sends and
+ * dispatch resolves), not the constructor's `name`.
  *
  * A symbol key, like {@link API_NAMESPACE_MARKER}, so `Object.entries`,
  * `JSON.stringify` and the client/spec generators never see it.
@@ -83,6 +83,38 @@ export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
 
 /** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
 type ComputeResolvingScope = { compute?: unknown };
+
+/**
+ * Options for an {@link ApiNamespace}.
+ */
+export interface ApiNamespaceOptions {
+  /**
+   * The compute this namespace's methods run on. Omit to run on the app's
+   * default compute, like every namespace before.
+   *
+   * Pass a `Compute` block (from `@aws-blocks/blocks`) to give a namespace its
+   * own function — for example more memory or a longer timeout than the rest of
+   * the API, or to keep a slow namespace from competing with latency-sensitive
+   * ones:
+   *
+   * ```ts
+   * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 120 });
+   * export const reports = new ApiNamespace(scope, 'reports', handler, { compute: reportsCompute });
+   * ```
+   *
+   * The client calls the namespace exactly as before — the shared API gateway
+   * routes `/aws-blocks/api/<export name>` to the namespace's compute, on every
+   * `apiFrontDoor` tier and behind `Hosting`. One compute can host several
+   * namespaces (and `AsyncJob`s). Only a `serverless` compute can serve API
+   * namespaces today. In local dev every namespace still runs in the one dev
+   * server process.
+   *
+   * Typed structurally — anything whose `resolve()` yields a `serverless`
+   * compute, which is what a `Compute` block is — so this entry carries no CDK
+   * types.
+   */
+  compute?: { resolve(): { readonly type: 'serverless' } };
+}
 
 /**
  * Define a type-safe API namespace that works seamlessly between frontend and backend.
@@ -113,6 +145,22 @@ type ComputeResolvingScope = { compute?: unknown };
  * import { api } from 'aws-blocks';
  * 
  * const result = await api.greet('World'); // Fully typed
+ * ```
+ * 
+ * ## Running a namespace on its own compute
+ * 
+ * Every namespace runs on the app's default compute unless you pass one. Give a
+ * namespace its own (for example, more memory or a longer timeout) with the
+ * `compute` option — the frontend call doesn't change:
+ * 
+ * ```typescript
+ * const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 2048 });
+ * 
+ * export const reports = new ApiNamespace(scope, 'reports', (context) => ({
+ *   async build(month: string) {
+ *     // …
+ *   },
+ * }), { compute: reportsCompute });
  * ```
  * 
  * ## Authentication — every method is a public endpoint
@@ -176,18 +224,29 @@ type ComputeResolvingScope = { compute?: unknown };
  * - Use Building Blocks (KVStore, DistributedTable) for state
  */
 export interface ApiNamespaceConstructor {
-  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, name: string, handler: ApiHandler<T>): AsyncAPI<T>;
+  new <T extends Record<string, (...args: any[]) => any>>(
+    scope: ScopeParent,
+    name: string,
+    handler: ApiHandler<T>,
+    options?: ApiNamespaceOptions,
+  ): AsyncAPI<T>;
 }
 
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
-  constructor(scope: ScopeParent, name: string, handler: any) {
+  constructor(scope: ScopeParent, name: string, handler: any, options?: ApiNamespaceOptions) {
     handler[API_NAMESPACE_MARKER] = name;
     // How synth-time routing finds this namespace's compute (see
-    // API_NAMESPACE_COMPUTE): resolved when called, never here. A scopeless
-    // namespace resolves to undefined and routes to the default compute.
-    // Signature and returned handler are unchanged.
+    // API_NAMESPACE_COMPUTE): resolved when called, never here. The namespace's
+    // own `compute` wins; otherwise the scope's (nearest assigned, else the
+    // default). A scopeless namespace without one resolves to undefined and
+    // routes to the default compute. The returned handler is unchanged.
+    const compute = options?.compute;
     handler[API_NAMESPACE_COMPUTE] = () =>
-      scope && typeof scope === 'object' ? (scope as ComputeResolvingScope).compute : undefined;
+      compute
+        ? compute.resolve()
+        : scope && typeof scope === 'object'
+          ? (scope as ComputeResolvingScope).compute
+          : undefined;
     // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }

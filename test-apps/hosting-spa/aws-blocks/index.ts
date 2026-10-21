@@ -4,7 +4,7 @@
 // Notes Manager — SPA e2e test backend
 // AuthBasic + notes CRUD + public stats
 
-import { ApiNamespace, Scope, KVStore, AuthBasic } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic } from '@aws-blocks/blocks';
 
 const scope = new Scope('hosting-spa-test');
 
@@ -148,6 +148,29 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
     return { success: true };
   },
+
+  // Which function served this call — compared with isolatedApi below.
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
 
 export const authApi = auth.createApi();
+
+// Multi-compute behind Hosting: `isolatedApi` runs on its own, smaller compute.
+// Through Hosting's distribution the call still lands on that compute, because
+// Hosting forwards /aws-blocks/api/* to the shared gateway, which routes it.
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });

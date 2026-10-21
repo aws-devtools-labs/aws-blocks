@@ -214,4 +214,24 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(statsLocator).not.toHaveText('0');
     await expect(statsLocator).toHaveText(/^[1-9]\d*$/);
   });
+
+  test('11. A namespace on its own compute is served by it through Hosting', async ({ request }) => {
+    // The browser path: same origin as the page, per-namespace path, Hosting's
+    // distribution → shared gateway → the namespace's compute.
+    const whereAmI = async (namespace: string) => {
+      const resp = await request.post(`${hostingUrl}/aws-blocks/api/${namespace}`, {
+        headers: { 'Content-Type': 'application/json' },
+        data: { jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 },
+      });
+      expect(resp.ok()).toBeTruthy();
+      return (await resp.json()).result as { functionName: string | null; memoryMb: string | null };
+    };
+
+    const onDefault = await whereAmI('api');
+    const onIsolated = await whereAmI('isolatedApi');
+    expect(onIsolated.functionName).toBeTruthy();
+    expect(onIsolated.functionName).not.toBe(onDefault.functionName);
+    expect(onIsolated.memoryMb).toBe('512');
+    expect(onDefault.memoryMb).not.toBe('512');
+  });
 });

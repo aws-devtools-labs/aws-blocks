@@ -21,12 +21,14 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { BlocksStack, BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
 let backendPath: string;
 let earlyReadBackendPath: string;
 let throwingBackendPath: string;
+let computeBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -50,6 +52,18 @@ before(() => {
 	);
 	throwingBackendPath = join(tmpDir, 'backend-throwing.mjs');
 	writeFileSync(throwingBackendPath, "throw new Error('backend module was imported');\n");
+	// A customer-shaped backend: `api` on the default compute, and a `reports`
+	// namespace (constructed as 'reportsApi') plus an AsyncJob on one `Compute`.
+	computeBackendPath = join(tmpDir, 'backend-compute.mjs');
+	writeFileSync(
+		computeBackendPath,
+		"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 512 });\n" +
+			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
+			"export const reports = new ApiNamespace(scope, 'reportsApi', () => ({ async build() { return 'ok'; } }), { compute: reportsCompute });\n" +
+			"export const reportsJob = new AsyncJob(scope, 'reports-job', { compute: reportsCompute, handler: async () => {} });\n",
+	);
 });
 
 after(() => {
@@ -373,3 +387,95 @@ describe('apiFrontDoor: cloudfront', () => {
 		);
 	});
 });
+
+// A namespace given its own `Compute` through the public `compute` option, end
+// to end through the real Compute block and LambdaCompute.
+describe('ApiNamespace compute option', () => {
+	type Resources = Record<string, { Type: string; Properties: Record<string, unknown> }>;
+
+	// The Compute block's backing function, found by its construct path.
+	const reportsFunctionId = (resources: Resources) => {
+		const ids = Object.keys(resources).filter(
+			(id) => resources[id].Type === 'AWS::Lambda::Function' && /reportsbacking/i.test(id),
+		);
+		assert.strictEqual(ids.length, 1, `one reports-compute function, got ${ids.join(', ')}`);
+		return ids[0];
+	};
+
+	const assertRoutedToReportsCompute = (template: Template) => {
+		const resources = template.toJSON().Resources as Resources;
+		const fnId = reportsFunctionId(resources);
+
+		// Routed by the export name, to the reports compute's function only.
+		const parts = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource');
+		const reportsResource = parts.find(([, r]) => r.Properties.PathPart === 'reports');
+		assert.ok(reportsResource, 'a /aws-blocks/api/reports resource');
+		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'reportsApi'), 'not the constructor name');
+		const method = Object.values(resources).find(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === reportsResource[0],
+		);
+		assert.ok(JSON.stringify(method?.Properties.Integration).includes(fnId), 'integrates the reports function');
+
+		// The compute's options apply, and the same function also runs the AsyncJob.
+		assert.strictEqual(resources[fnId].Properties.MemorySize, 512);
+		const mappings = Object.values(resources).filter((r) => r.Type === 'AWS::Lambda::EventSourceMapping');
+		assert.ok(
+			mappings.some((m) => JSON.stringify(m.Properties.FunctionName).includes(fnId)),
+			'the AsyncJob on the same compute is delivered to the same function',
+		);
+
+		// One API-scoped invoke permission, not one per method.
+		const permissions = Object.values(resources).filter(
+			(r) =>
+				r.Type === 'AWS::Lambda::Permission' &&
+				r.Properties.Principal === 'apigateway.amazonaws.com' &&
+				JSON.stringify(r.Properties.FunctionName).includes(fnId),
+		);
+		assert.strictEqual(permissions.length, 1);
+	};
+
+	test('BlocksStack', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ComputeOptionStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		assertRoutedToReportsCompute(Template.fromStack(stack));
+	});
+
+	test('BlocksBackend', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ComputeOptionParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		assertRoutedToReportsCompute(Template.fromStack(parent));
+	});
+
+	// The front door has a single origin (the gateway) under `cloudfront`, so
+	// fan-out stays inside the gateway: still exactly one distribution.
+	test('cloudfront tier: same routing, one distribution', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ComputeOptionCloudFront', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const template = Template.fromStack(stack);
+		assertRoutedToReportsCompute(template);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+});
+
+// Compile-time only (never called): `ApiNamespaceOptions.compute` takes a
+// serverless `Compute` and rejects other compute types.
+function _apiNamespaceComputeTypeChecks(scope: InstanceType<typeof Scope>) {
+	const serverless = new Compute(scope, 'serverless', { type: 'serverless' });
+	new ApiNamespace(scope, 'ok', () => ({}), { compute: serverless });
+
+	const container = new Compute(scope, 'container', { type: 'container' });
+	// @ts-expect-error — only a serverless compute can serve an API namespace
+	new ApiNamespace(scope, 'notYet', () => ({}), { compute: container });
+}
+void _apiNamespaceComputeTypeChecks;

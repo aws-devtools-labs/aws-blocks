@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -2585,7 +2585,40 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { stdout: captured.stdout, stderr: captured.stderr };
   },
+
+  // ------------------------------------------------------------------------
+  // Multi-compute — which function served this call (see isolatedApi below)
+  // ------------------------------------------------------------------------
+
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
+
+// ============================================================================
+// Multi-compute — a namespace on its own compute
+//
+// `isolatedApi` runs on a separate serverless compute with less memory than the
+// default, so a deployed call proves the gateway routed it there: it reports a
+// different function and the compute's own memory size. The export name differs
+// from the constructor name ('isolated'), as with `auth.createApi()`, because
+// the gateway routes on the export name the client calls.
+// ============================================================================
+
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
 
 // Export auth state machine API
 export const authApi = auth.createApi();
