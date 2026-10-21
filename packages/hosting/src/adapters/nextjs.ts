@@ -1462,13 +1462,17 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
  * major it prints `Next.js version X is not supported by the Next.js team` and
  * **exits 1** unless invoked with `--dangerously-use-unsupported-next-version`.
  *
- * This table mirrors OpenNext's own `NEXT_RELEASE_DATES`
+ * This table is copied **verbatim** from OpenNext's own `NEXT_RELEASE_DATES`
  * (`@opennextjs/aws/dist/build/helper.js`) so {@link isNextWithinOpenNextSupportWindow}
  * reaches the *same verdict OpenNext will* before we spawn the build — letting
  * us pass the override flag proactively instead of hard-failing a user's deploy
- * the day a major ages out. Keep it in sync when OpenNext adds a major; an
- * unknown major is treated as outside the window (fail-safe: we pass the flag
- * and let OpenNext's own, authoritative check make the final call).
+ * the day a major ages out. Because it mirrors OpenNext's source rather than an
+ * independent guess, the two agree by construction for every major listed here.
+ *
+ * **Keep it in sync** when a new `@opennextjs/aws` adds a major (re-copy from its
+ * `NEXT_RELEASE_DATES`); a major we don't have a date for is treated as outside
+ * the window (fail-safe: we pass the flag and let OpenNext's own, authoritative
+ * check make the final call), so a missed sync defers rather than misbehaves.
  *
  * Source: https://nextjs.org/support-policy#supported-versions
  */
@@ -1497,11 +1501,17 @@ export const isNextWithinOpenNextSupportWindow = (
   nextVersion: string,
   now: Date = new Date(),
 ): boolean => {
+  if (!semver.valid(nextVersion)) return false;
   const major = semver.major(nextVersion);
   const releaseDateStr = NEXT_MAJOR_RELEASE_DATES[major];
   if (!releaseDateStr) return false;
+  // The release date parses as UTC midnight (`new Date('2024-10-21')` →
+  // 2024-10-21T00:00:00Z), so add the 2 years with the UTC accessors too —
+  // the local-time `setFullYear`/`getFullYear` would shift the window end by
+  // the host's UTC offset and could flip the verdict near the boundary on a
+  // host east/west of UTC.
   const supportEndDate = new Date(releaseDateStr);
-  supportEndDate.setFullYear(supportEndDate.getFullYear() + 2);
+  supportEndDate.setUTCFullYear(supportEndDate.getUTCFullYear() + 2);
   return now <= supportEndDate;
 };
 

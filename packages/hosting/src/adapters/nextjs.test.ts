@@ -2046,6 +2046,15 @@ void describe('isNextWithinOpenNextSupportWindow', () => {
       false,
     );
   });
+
+  void it('returns false for an unparseable version string (direct-caller contract)', () => {
+    // The production caller gates on detectNextVersion (semver.valid) first,
+    // but a direct caller might not — the guard keeps the documented contract.
+    assert.strictEqual(
+      isNextWithinOpenNextSupportWindow('not-a-version', new Date('2026-10-21T08:25:00Z')),
+      false,
+    );
+  });
 });
 
 void describe('stripBasePathPrefix', () => {
