@@ -196,7 +196,7 @@ npx bb-data pull
 What it does:
 - Introspects your public-schema tables (read-only — your database is not modified)
 - Generates typed definitions, CRUD operations, and a personalized migration guide
-- Stores your connection string locally (encrypted in SSM on deploy)
+- Stores your connection string locally as `SUPABASE_DB_URL` in `.env.local` (encrypted in SSM on deploy). Only that entry is added or updated — other settings, comments, and the file's permissions are kept; the `SUPABASE_DB_URL` line itself is rewritten whole, so a comment at the end of it is not kept. If `.env.local` can't be updated safely (for example, the change would alter how another entry is read), `db pull` stops before generating any files and asks you to set the entry by hand. Choosing "production" does the same for `.env.production`.
 
 What it does NOT migrate: Supabase Auth, Storage, Realtime, or Edge Functions. If you use a third-party OIDC provider (Auth0, Clerk, Google, Cognito), you can wire it into Blocks — see the generated `MIGRATION_GUIDE.md#auth`.
 

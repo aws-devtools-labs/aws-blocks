@@ -1,0 +1,201 @@
+name: Harbor agent check (advisory)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Open PR number to evaluate (approval required before model access)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harbor-agent-check-pr-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  revisions:
+    # Run the reviewed controller from main, never a PR-controlled privileged workflow.
+    if: github.repository == 'aws-devtools-labs/aws-blocks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      candidate: ${{ steps.revisions.outputs.candidate }}
+      baseline: ${{ steps.revisions.outputs.baseline }}
+      source_repository: ${{ steps.revisions.outputs.source_repository }}
+    steps:
+      - id: revisions
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const value = process.env.PR_NUMBER;
+            if (!/^[1-9][0-9]*$/.test(value)) throw new Error('Expected a positive PR number');
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: Number(value),
+            });
+            if (pr.state !== 'open' || !pr.head.repo) throw new Error('PR must be open with an accessible head repository');
+            if (pr.base.ref !== 'main') throw new Error('Only PRs targeting main are supported');
+            const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner, repo: context.repo.repo,
+              basehead: `${pr.base.sha}...${pr.head.sha}`,
+            });
+            core.setOutput('candidate', pr.head.sha);
+            core.setOutput('baseline', comparison.merge_base_commit.sha);
+            core.setOutput('source_repository', pr.head.repo.full_name);
+            await core.summary.addHeading('Requested Harbor evaluation')
+              .addTable([['PR', 'Candidate', 'Baseline'], [value, pr.head.sha, comparison.merge_base_commit.sha]])
+              .addRaw('Optional and non-required. Review these exact revisions before approving model access. '
+                + 'A new dispatch for this PR cancels this run.').write();
+
+  packages:
+    needs: revisions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ matrix.arm == 'baseline' && needs.revisions.outputs.baseline || needs.revisions.outputs.candidate }}
+          repository: ${{ matrix.arm == 'baseline' && github.repository || needs.revisions.outputs.source_repository }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.3'
+      - name: Build and pack selected revision
+        env:
+          HUSKY: '0'
+          BLOCKS_DISABLE_TELEMETRY: '1'
+          NPM_CONFIG_USERCONFIG: /dev/null
+          NPM_CONFIG_GLOBALCONFIG: /etc/harbor-empty-npmrc
+          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-${{ matrix.arm }}
+        run: |
+          set -euo pipefail
+          sudo touch /etc/harbor-empty-npmrc
+          unset S3_BUCKET CLOUDFRONT_DOMAIN CLOUDFRONT_DISTRIBUTION_ID
+          npm ci
+          npm run build
+          npm run publish:local
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harbor-packages-${{ matrix.arm }}
+          path: dist-registry/
+          retention-days: 7
+          if-no-files-found: error
+
+  benchmark:
+    needs: [revisions, packages]
+    # blocks-team reviews exact candidate/baseline revisions before enabling model credentials.
+    environment: harbor-bench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, candidate]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: harbor-packages-${{ matrix.arm }}
+          path: packed
+      - name: Install pinned Harbor
+        run: python -m pip install -r scripts/harbor-bench/requirements.txt
+      - name: Prepare isolated registry and task image
+        env:
+          ARM: ${{ matrix.arm }}
+          COMMIT: ${{ matrix.arm == 'baseline' && needs.revisions.outputs.baseline || needs.revisions.outputs.candidate }}
+          HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/harbor-bench/prepare.py --registry packed --output run --arm "$ARM" --commit "$COMMIT" --harness-commit "$HARNESS_SHA"
+          image=$(python -c 'import json; print(json.load(open("run/identity.json"))["image"])')
+          docker build --tag "$image" run/task/environment
+      - name: Assume dedicated Bedrock-only role
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-duration-seconds: 10800
+          role-session-name: harbor-${{ github.run_id }}-${{ matrix.arm }}
+          mask-aws-account-id: true
+          # Intersection with the role policy, never permission to deploy or publish.
+          inline-session-policy: >-
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5","arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5"]}]}
+      - name: Run three phases in one Harbor container and Claude session
+        run: python scripts/harbor-bench/run.py run
+      - name: Upload allowlisted results only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harbor-result-${{ matrix.arm }}
+          path: run/public/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Remove isolated runtime containers
+        if: always()
+        run: |
+          ids=$(docker ps -aq --filter 'label=com.docker.compose.project')
+          if [ -n "$ids" ]; then docker rm -f $ids; fi
+
+  report:
+    needs: [revisions, packages, benchmark]
+    if: always() && needs.revisions.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true # Missing artifacts must still produce an honest report.
+        with:
+          pattern: harbor-result-*
+          path: results
+      - name: Render comparison
+        env:
+          BASELINE_SHA: ${{ needs.revisions.outputs.baseline }}
+          CANDIDATE_SHA: ${{ needs.revisions.outputs.candidate }}
+          HARNESS_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/harbor-bench/report.py results report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Update advisory PR comment
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- harbor-agent-check -->';
+            const body = marker + '\n' + fs.readFileSync('report.md', 'utf8');
+            const params = { owner: context.repo.owner, repo: context.repo.repo, issue_number: Number(process.env.PR_NUMBER) };
+            const comments = await github.paginate(github.rest.issues.listComments, params);
+            const previous = comments.find(c => c.user.type === 'Bot' && c.body.startsWith(marker));
+            if (previous) await github.rest.issues.updateComment({ ...params, comment_id: previous.id, body });
+            else await github.rest.issues.createComment({ ...params, body });
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harbor-comparison
+          path: report.md
+          retention-days: 14
