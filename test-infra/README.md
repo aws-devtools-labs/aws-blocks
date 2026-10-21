@@ -126,6 +126,22 @@ Set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e` GitHub
 environment and as a Dependabot secret. Deploy this stack only into the
 dedicated E2E account.
 
+### More E2E accounts
+
+PR E2E jobs can be spread over a pool of E2E accounts. All of them sit behind
+the same `e2e` GitHub environment: deploy this stack unchanged into each
+account, so every account's role trusts only `e2e`.
+
+```bash
+E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
+```
+
+Store each account's `RoleArn` as `AWS_ROLE_ARN_<n>` in the `e2e` environment
+and as a Dependabot secret (Dependabot runs only get Dependabot secrets), where
+`<n>` is the account's number in the pool (`aws-blocks+github-e2e-<n>@amazon.com`).
+Each account also needs the Supabase test secret, the SES sender and the quota
+increases that the first account has.
+
 CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep this
 account limited to E2E test stacks.
 
