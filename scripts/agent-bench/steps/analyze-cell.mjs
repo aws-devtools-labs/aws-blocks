@@ -22,10 +22,10 @@ import {
 	isFailureCell,
 	parseCellAnalysis,
 	parseFailureAnalysis,
-	redactSecrets,
 	trimTrace,
 	truthy,
 } from './lib/analysis.mjs';
+import { stringifyRedacted } from './lib/secrets.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
 const TRACE_PATH = process.env.TRACE ?? '/tmp/trace.json';
@@ -92,10 +92,10 @@ function analyze(result, trace, metrics) {
 function analyzeFailure(result, trace) {
 	const failingTests = extractFailingTests(readJson(PW_RESULTS_PATH));
 	const buildFailed = result?.build_succeeded != null && !truthy(result.build_succeeded);
-	// If there's genuinely nothing to look at (no failing tests, no logs), skip the model call.
-	// Scrub any credential material the dev/build logs may have echoed before it reaches the model.
-	const devLogTail = redactSecrets(readText(DEV_LOG_PATH));
-	const buildLogTail = buildFailed ? redactSecrets(readText(BUILD_LOG_PATH)) : '';
+	// If there's genuinely nothing to look at (no failing tests, no logs), skip the model call. The
+	// prompt builder scrubs credential material from these logs before they reach the model.
+	const devLogTail = readText(DEV_LOG_PATH);
+	const buildLogTail = buildFailed ? readText(BUILD_LOG_PATH) : '';
 	if (failingTests.totalFailing === 0 && !devLogTail && !buildLogTail) return null;
 
 	const userText = buildFailureUserText({
@@ -165,7 +165,8 @@ function main() {
 	}
 
 	try {
-		writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2));
+		// Redacted: result.json is uploaded publicly and the analysis quotes trace/log evidence.
+		writeFileSync(RESULT_PATH, stringifyRedacted(result));
 		process.stderr.write(`[analyze-cell] wrote analysis (${analysis.length} chars, ${issues.length} issue(s)${result.failure_analysis ? ', +failure_analysis' : ''}) to ${RESULT_PATH}\n`);
 	} catch (err) {
 		process.stderr.write(`[analyze-cell] failed to write analysis to ${RESULT_PATH} (ignored): ${err?.message ?? err}\n`);

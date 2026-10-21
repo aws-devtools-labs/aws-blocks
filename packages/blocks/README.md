@@ -161,10 +161,11 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
-| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
+| bb-async-job | Background job processing backed by SQS, run on Lambda or a container. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
 | bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
 | bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
 | bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-compute | The `Compute` Building Block is the single surface for choosing where a workload runs. | — |
 | bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
 | bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
 | bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
@@ -244,6 +245,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
 - Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
 - Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards
+- `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
 - For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
 - Enable `monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only)
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default

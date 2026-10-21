@@ -129,12 +129,13 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      # AGENT-SHELL ISOLATION (issue #184): the builder runs the agent's vended bash as an
-      # unprivileged user (benchagent) via sudo+runuser, so broad kills the agent issues can't
-      # signal the parent harness (cross-uid EPERM). A distinct uid (not a PID namespace) lets a
-      # setsid dev server persist across bash calls. Create the user here; the workspace ACL is
-      # granted at runtime by prepareWorkspaceIsolation. Best-effort: if it fails, isolation is
-      # disabled at runtime and the agent falls back to a bare shell (never reds a cell).
+      # AGENT-SHELL ISOLATION (issue #184): every agent-controlled process (builder + judge shells,
+      # the app step 3 builds/serves/tests) runs as an unprivileged user (benchagent) via
+      # sudo+runuser, so it can't signal the harness or read its credential-bearing environ
+      # (cross-uid). A distinct uid (not a PID namespace) lets a setsid dev server persist across bash
+      # calls. Create the user here; the workspace ACL and runner-temp lockdown are applied and
+      # verified at runtime (lib/isolation.mjs). If it fails, the cell's agent phases refuse to run
+      # (harness_error) — there is no same-uid fallback in CI.
       - name: Create isolation user (agent-shell isolation)
         continue-on-error: true
         run: |
@@ -142,7 +143,7 @@ jobs:
           if sudo -n runuser -u benchagent -- true 2>/dev/null; then
             echo "benchagent + passwordless sudo+runuser: AVAILABLE (agent-shell isolation will be ACTIVE)"
           else
-            echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (agent-shell isolation will be DISABLED)"
+            echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (agent phases will refuse to run: harness_error)"
           fi
 
       # The runner user has passwordless sudo (that is how it enters benchagent via runuser);
@@ -277,11 +278,11 @@ jobs:
           # Playwright layout change can't reintroduce the EACCES this fixes.
           chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || sudo chmod -R a+rwX "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
 
-      # SECURITY: this step runs an LLM agent (shell tool), so a prompt-injected task could reach any
-      # AWS API in the CURRENT session's scope — which the OIDC step's inline session policy has
-      # narrowed to Bedrock-only (the *session*, not the role), so s3:PutObject is NOT reachable here.
-      # Still bounded by the same-repo guard in pr-agent-bench.yml (fork PRs get no secrets/OIDC).
-      # See the "Configure AWS credentials (OIDC)" step above and README "Security" for the mechanism.
+      # SECURITY: this step runs an LLM agent with a shell. Its commands run as the unprivileged
+      # benchagent user with a credential-free env (fail closed under CI: no benchagent, no agent run),
+      # behind a locked runner temp dir, and are reaped at the end; the job's AWS session is also
+      # narrowed to Bedrock-only by the OIDC step's inline session policy. Same-repo guard in
+      # pr-agent-bench.yml (fork PRs get no secrets/OIDC). See README "Security" for the boundary.
       - name: 2. Agent run
         id: agent
         continue-on-error: true
@@ -371,35 +372,44 @@ jobs:
           BUILD_LOG: /tmp/build.log
           # BENCH_JUDGE_MODEL and AWS_REGION are inherited from the job-level env.
 
-      - name: 5. Upload result
+      # Build the ONLY copy that gets published: reap every benchagent process (fail closed), then
+      # stage + redact result, trace, metrics, command log and the generated source into a runner-only
+      # dir (no symlinks, binaries, oversized/unreadable files or credential-bearing names). The
+      # uploads, the S3 re-assume and the persist below run only if this succeeded. See README "Security".
+      - name: 4c. Stage artifacts (reap + redact)
+        id: stage
         if: always()
+        continue-on-error: true
+        timeout-minutes: 10
+        run: node scripts/agent-bench/steps/stage-artifacts.mjs
+        env:
+          STAGE_DIR: ${{ runner.temp }}/bench-stage
+          RESULT_PATH: /tmp/result.json
+          TRACE: /tmp/trace.json
+          METRICS: /tmp/metrics.json
+          # WORKSPACE and BENCH_CMD_LOG are inherited from the job-level env.
+
+      - name: 5. Upload result
+        if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
-          path: /tmp/result.json
+          path: ${{ runner.temp }}/bench-stage/result/result.json
           retention-days: 90
           overwrite: true
           # No file to upload if npm ci fails before 0-init writes result.json — ignore.
           if-no-files-found: ignore
 
-      # Archive the agent's generated source for post-run audit. Excludes deps/build output, VCS,
-      # the Blocks sandbox, and anything credential-shaped so no secret is archived.
+      # Archive the agent's generated source for post-run audit, from the staged copy (deps/build
+      # output, VCS, the Blocks sandbox and anything credential-shaped were never staged).
       - name: 6. Upload source
-        if: always()
+        if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
-          path: |
-            bench-app
-            !bench-app/**/node_modules/**
-            !bench-app/**/.git/**
-            !bench-app/**/dist/**
-            !bench-app/**/.blocks-sandbox/**
-            !bench-app/**/.env*
-            !bench-app/**/*.pem
-            !bench-app/**/.aws/**
+          path: ${{ runner.temp }}/bench-stage/source
           retention-days: 90
           overwrite: true
           if-no-files-found: ignore
@@ -407,15 +417,12 @@ jobs:
       # Archive the agent's full trace + run metrics (step 2) for post-hoc inspection. A wall-clock
       # timeout writes no trace, so this simply finds no file.
       - name: 6b. Upload trace
-        if: always()
+        if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
-          path: |
-            /tmp/trace.json
-            /tmp/metrics.json
-            ${{ env.BENCH_CMD_LOG }}
+          path: ${{ runner.temp }}/bench-stage/trace
           retention-days: 90
           overwrite: true
           if-no-files-found: ignore
@@ -431,7 +438,7 @@ jobs:
       # end and only needs to outlive the ~3min best-effort upload, so the ~1h default is ample.
       - name: Re-assume role for S3 persist (drop Bedrock-only session policy)
         id: oidc_s3
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
@@ -441,7 +448,7 @@ jobs:
       # Archive the raw per-cell result under a COMMIT-keyed prefix; the summary job builds the
       # aggregate + baseline from these.
       - name: Persist to S3 (best-effort)
-        if: always()
+        if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 3
         env:
@@ -457,7 +464,7 @@ jobs:
             echo "::warning title=Bench S3 archive skipped::S3 re-assume outcome='${OIDC_S3_OUTCOME}' (not success); the Bedrock-only session is still active so this cell's baseline archive will likely fail — historical baseline entry for ${TASK}-${TEMPLATE} may be missing."
           fi
           KEY="bench/runs/${BENCH_SHA}/cells/${TASK}-${TEMPLATE}.json"
-          bash scripts/agent-bench/steps/lib/s3-put.sh /tmp/result.json "s3://${BUCKET}/$KEY" "cell archive"
+          bash scripts/agent-bench/steps/lib/s3-put.sh "${RUNNER_TEMP}/bench-stage/result/result.json" "s3://${BUCKET}/$KEY" "cell archive"
 
   summary:
     needs: [bench, build-blocks]
@@ -672,8 +679,9 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       # Same isolation-user creation as the bench job. Free (no Bedrock/OIDC); its unit suite runs
-      # the issue-#184 isolation tests, proving benchagent containment at no Bedrock cost (the FIX
-      # test skips if the user can't be created).
+      # the isolation tests against the real runner (benchagent containment, runner-temp lockdown,
+      # unreadable harness environ, fail-closed refusal). Under CI those tests fail, not skip, if the
+      # user can't be created.
       - name: Create isolation user (agent-shell isolation)
         continue-on-error: true
         run: |
@@ -681,7 +689,7 @@ jobs:
           if sudo -n runuser -u benchagent -- true 2>/dev/null; then
             echo "benchagent + passwordless sudo+runuser: AVAILABLE (isolation tests will run)"
           else
-            echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (isolation FIX test will skip)"
+            echo "benchagent + passwordless sudo+runuser: UNAVAILABLE (the credential-boundary tests will fail)"
           fi
       # The runner user has passwordless sudo (that is how it enters benchagent via runuser);
       # benchagent must have none, or any agent command could become root and the uid isolation

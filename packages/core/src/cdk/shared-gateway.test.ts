@@ -20,7 +20,7 @@ import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-c
 import type { Construct } from 'constructs';
 import { API_NAMESPACE_COMPUTE, ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
-import { Compute } from './compute/compute.js';
+import { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import { Scope } from './index.js';
 import { createSharedGateway, resolveNamespaceRoutes } from './shared-gateway.js';
@@ -34,9 +34,9 @@ before(() => {
 // apiHandler(), so the gateway has something to integrate — or, with
 // `servesApi: false`, a worker-only compute that takes no API traffic. The
 // `scope as never` cast is test plumbing — a plain cdk.Stack isn't a ScopeParent,
-// but Compute only needs it as a construct-tree parent here (it never reads
+// but ComputeBase only needs it as a construct-tree parent here (it never reads
 // root-derived state).
-class StubCompute extends Compute {
+class StubCompute extends ComputeBase {
 	constructor(
 		scope: Construct,
 		id: string,
@@ -86,7 +86,7 @@ let scopeCount = 0;
  * compute-assignment surface will do). Returns the namespace object a backend
  * module would export.
  */
-function namespaceOn(stack: cdk.Stack, compute: Compute, name: string): object {
+function namespaceOn(stack: cdk.Stack, compute: ComputeBase, name: string): object {
 	const apiScope = new Scope(`scope-${scopeCount++}`, { parent: stack as never });
 	apiScope._compute = compute;
 	return new ApiNamespace(apiScope, name, () => ({

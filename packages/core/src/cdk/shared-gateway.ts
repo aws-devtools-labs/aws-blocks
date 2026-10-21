@@ -10,7 +10,7 @@ import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 
 /**
  * Characters API Gateway allows in a literal resource path part — the same set
@@ -28,7 +28,7 @@ export interface SharedGatewayProps {
 	 * resource per name. Namespaces on the {@link defaultCompute} need no entry —
 	 * the catch-all resources already reach it. Omitted ⇒ no fan-out.
 	 */
-	readonly namespaceRoutes?: ReadonlyMap<Compute, readonly string[]>;
+	readonly namespaceRoutes?: ReadonlyMap<ComputeBase, readonly string[]>;
 	/**
 	 * The stack's default compute. Its `apiHandler()` backs the catch-all
 	 * resources, so the RPC root (`/aws-blocks/api`), auth, `RawRoute`s, and any
@@ -36,7 +36,7 @@ export interface SharedGatewayProps {
 	 * per-namespace resource. Must expose an `apiHandler()` — the shared gateway
 	 * needs an HTTP front door — or construction throws.
 	 */
-	readonly defaultCompute: Compute;
+	readonly defaultCompute: ComputeBase;
 	/**
 	 * Stack-wide infrastructure defaults. Drives the stage's request throttling
 	 * (`throttling.rateLimit`/`burstLimit`), whether structured JSON access
@@ -252,14 +252,14 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  */
 export function resolveNamespaceRoutes(
 	backendModule: object,
-	defaultCompute: Compute,
-	ownedComputes: readonly Compute[],
-): Map<Compute, string[]> {
+	defaultCompute: ComputeBase,
+	ownedComputes: readonly ComputeBase[],
+): Map<ComputeBase, string[]> {
 	const owned = new Set(ownedComputes);
-	const routes = new Map<Compute, string[]>();
+	const routes = new Map<ComputeBase, string[]>();
 	for (const [exportName, value] of Object.entries(backendModule)) {
 		if (!isDispatchableExport(exportName, value)) continue;
-		const resolveCompute = (value as Record<symbol, (() => Compute | undefined) | undefined>)[API_NAMESPACE_COMPUTE];
+		const resolveCompute = (value as Record<symbol, (() => ComputeBase | undefined) | undefined>)[API_NAMESPACE_COMPUTE];
 		const compute = resolveCompute?.();
 		if (!compute || compute === defaultCompute || !owned.has(compute)) continue;
 		const names = routes.get(compute);

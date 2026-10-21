@@ -136,6 +136,24 @@ export interface VpcContext {
 	readonly computeSecurityGroup: ec2.ISecurityGroup;
 	readonly computeSubnets: ec2.SubnetSelection;
 	/**
+	 * Where this shared VPC came from:
+	 *
+	 * - `'provided'` — the customer passed it via `defaults.vpc.network`. An
+	 *   explicit choice, so **stateful** Building Blocks (e.g. `Database`) place
+	 *   their resources in it, exactly as before.
+	 * - `'derived'` — Blocks created it automatically because some block required
+	 *   a VPC (today: a container compute). Stateless compute (Lambda, the
+	 *   container) shares it, but a stateful block must **not** auto-join a derived
+	 *   VPC: doing so would move an existing cluster into a new VPC on a routine
+	 *   change (e.g. adding a container), replacing it and destroying its data.
+	 *   Such a block keeps provisioning its own VPC instead.
+	 *
+	 * The distinction exists only because a derived shared VPC is new: before it,
+	 * the only shared VPC was a customer-provided one, which a stateful block
+	 * could always safely join.
+	 */
+	readonly source: 'provided' | 'derived';
+	/**
 	 * Resolve a {@link SubnetRole} to a concrete {@link ec2.SubnetSelection} for a
 	 * resource this Building Block provisions itself, verifying the VPC actually
 	 * has subnets of that role.

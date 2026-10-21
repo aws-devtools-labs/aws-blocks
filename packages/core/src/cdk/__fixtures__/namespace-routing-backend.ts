@@ -12,11 +12,11 @@
  * because core's tests can't depend on a concrete compute package.
  */
 import { ApiNamespace } from '../../api.js';
-import type { Compute } from '../compute/compute.js';
+import type { ComputeBase } from '../compute/compute.js';
 import { Scope } from '../index.js';
 
 const root = (globalThis as any).CURRENT_BLOCKS_STACK;
-const makeCompute = (globalThis as any).__BLOCKS_TEST_MAKE_COMPUTE__ as (parent: unknown, id: string) => Compute;
+const makeCompute = (globalThis as any).__BLOCKS_TEST_MAKE_COMPUTE__ as (parent: unknown, id: string) => ComputeBase;
 
 const ordersScope = new Scope('orders-scope', { parent: root });
 ordersScope._compute = makeCompute(root, 'OrdersCompute');
