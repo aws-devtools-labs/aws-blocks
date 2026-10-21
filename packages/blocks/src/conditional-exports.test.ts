@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import ts from 'typescript';
 
 /**
@@ -31,8 +32,9 @@ import ts from 'typescript';
  * Type-only exports are erased at runtime, so they are compared from the same
  * `.d.ts` files, for every BB and the umbrella package.
  *
- * Each BB's "browser" entry must load under that condition and export the BB's
- * error constants, which frontends use with `isBlocksError`.
+ * Every BB that exports error constants (used by frontends with `isBlocksError`)
+ * must have a "browser" entry that exports the same constants with the same
+ * values, and that entry must bundle for the browser with esbuild.
  *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
@@ -65,8 +67,6 @@ const buildingBlocks = readdirSync(packagesDir, { withFileTypes: true })
 	.map((dir) => readPackage(join(packagesDir, dir.name)))
 	.sort((a, b) => a.name.localeCompare(b.name));
 const bbPackages = buildingBlocks.filter((pkg) => pkg.exports['aws-runtime']);
-const browserPackages = buildingBlocks.filter((pkg) => pkg.exports.browser);
-const umbrellaPackage = readPackage(join(packagesDir, 'blocks'));
 const serverConditions: ServerCondition[] = ['aws-runtime', 'cdk'];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -117,6 +117,9 @@ test('discovery sanity check', () => {
 	for (const expected of ['@aws-blocks/bb-kv-store', '@aws-blocks/bb-distributed-table', '@aws-blocks/bb-data']) {
 		assert.ok(names.includes(expected), `Expected to discover ${expected}`);
 	}
+	// The browser checks below cover every bb-* package, so a floor keeps the set
+	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
+	assert.ok(buildingBlocks.length >= 21, `Expected ≥21 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // `cdk synth` loads the whole backend module under --conditions=cdk, so an export
@@ -131,23 +134,62 @@ for (const { name } of bbPackages) {
 
 // ── BB packages: browser (auto-discovered) ──────────────────────────────────
 // Frontend code imports a BB package directly only for its error constants, to
-// match errors with `isBlocksError(e, FileBucketErrors.FileNotFound)`. The
-// bundler resolves the browser entry, so it must load under that condition and
-// export every `*Errors` constant the default entry has. The rest of a BB is
-// server-side, so other exports are not compared.
+// match errors with `isBlocksError(e, FileBucketErrors.FileNotFound)`. Only the
+// error name crosses the RPC wire, so the browser entry must export every
+// `*Errors` constant the default entry has, with the same values: a frontend
+// typechecks against the default entry's `.d.ts`, so a missing key is `undefined`
+// at runtime and the match silently fails. Re-export them from `errors.js` rather
+// than copying literals. The rest of a BB is server-side, so other exports are
+// not compared.
+//
+// A BB with error constants but no "browser" condition fails too: a frontend
+// import would resolve the server entry. Packages without an aws-runtime entry
+// (like bb-auth-basic) are included.
 
-// Includes packages without an aws-runtime entry, like bb-auth-basic.
-for (const { name } of browserPackages) {
-	test(`${name}: browser entry exports error constants`, () => {
-		const browserNames = getExports(name, 'browser');
-		const missing = [...getExports(name)].filter((n) => n.endsWith('Errors') && !browserNames.has(n));
+/** Load `pkg` under `condition` and return its `*Errors` constants with their values. */
+const getErrorConstants = (pkg: string, condition?: string): Record<string, unknown> => {
+	const flags = condition ? [`--conditions=${condition}`] : [];
+	const script = `import(${JSON.stringify(pkg)}).then(m => console.log(JSON.stringify(Object.fromEntries(Object.entries(m).filter(([k]) => k.endsWith('Errors'))))))`;
+	const out = execFileSync(process.execPath, [...flags, '--input-type=module', '-e', script], {
+		encoding: 'utf-8',
+	});
+	return JSON.parse(out.trim());
+};
 
+for (const { name, exports: entry } of buildingBlocks) {
+	test(`${name}: browser entry exports the same error constants`, () => {
+		const expected = getErrorConstants(name);
+		if (!entry.browser) {
+			assert.deepStrictEqual(
+				Object.keys(expected),
+				[],
+				`${name} exports error constants but has no "browser" condition, so a frontend import ` +
+					'resolves the server entry. Add a browser entry that re-exports them from `errors.js`.',
+			);
+			return;
+		}
 		assert.deepStrictEqual(
-			missing,
-			[],
-			`${name} "browser" entry is missing error constants:\n  ${missing.join(', ')}\n\n` +
-				'Re-export them from the browser entry file so frontends can match errors with `isBlocksError`.',
+			getErrorConstants(name, 'browser'),
+			expected,
+			`${name} "browser" entry error constants differ from the default entry. ` +
+				'Re-export them from `errors.js` in the browser entry file instead of copying them.',
 		);
+	});
+
+	// Node resolves `node:*` built-ins and server packages under --conditions=browser,
+	// so loading the entry in Node (above) does not prove a bundler can build it.
+	test(`${name}: browser entry bundles for the browser`, { skip: !entry.browser }, async () => {
+		const result = await build({
+			stdin: { contents: `export * from ${JSON.stringify(name)};`, resolveDir: packagesDir },
+			bundle: true,
+			platform: 'browser',
+			conditions: ['browser'],
+			write: false,
+			metafile: true,
+			logLevel: 'silent',
+		});
+		const serverOnly = Object.keys(result.metafile.inputs).filter((input) => input.includes('node_modules/@aws-sdk/'));
+		assert.deepStrictEqual(serverOnly, [], `${name} "browser" entry bundles server-only modules`);
 	});
 }
 
@@ -190,7 +232,7 @@ const bbEntries = bbPackages.map(declarationEntry);
 // The umbrella re-exports core (`Scope`, `RawRoute`, `ApiNamespace`, ...) from a
 // different module per condition, so its classes get the same method-parity check.
 // Not the guard check below: core's cdk classes are constructs, not `synthGuard` stubs.
-const umbrellaEntry = declarationEntry(umbrellaPackage);
+const umbrellaEntry = declarationEntry(readPackage(join(packagesDir, 'blocks')));
 
 let program: ts.Program | undefined;
 

@@ -4,10 +4,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
+import { EmailErrors } from '@aws-blocks/bb-email-client';
 import type { api as apiType } from 'aws-blocks';
-
-const InvalidInput = 'InvalidInputException';
-const SendFailed = 'EmailSendFailedException';
 
 export function emailClientTests(getApi: () => typeof apiType) {
 
@@ -72,8 +70,8 @@ export function emailClientTests(getApi: () => typeof apiType) {
           });
           assert.fail('Expected error for invalid email address');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidInput),
-            `Expected ${InvalidInput}, got ${e}`);
+          assert.ok(isBlocksError(e, EmailErrors.InvalidInput),
+            `Expected ${EmailErrors.InvalidInput}, got ${e}`);
         }
       });
 
@@ -87,8 +85,8 @@ export function emailClientTests(getApi: () => typeof apiType) {
           });
           assert.fail('Expected error for invalid email address');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidInput),
-            `Expected ${InvalidInput}, got ${e}`);
+          assert.ok(isBlocksError(e, EmailErrors.InvalidInput),
+            `Expected ${EmailErrors.InvalidInput}, got ${e}`);
         }
       });
 
@@ -104,8 +102,8 @@ export function emailClientTests(getApi: () => typeof apiType) {
           });
           assert.fail('Expected error for exceeding recipient limit');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidInput),
-            `Expected ${InvalidInput}, got ${e}`);
+          assert.ok(isBlocksError(e, EmailErrors.InvalidInput),
+            `Expected ${EmailErrors.InvalidInput}, got ${e}`);
         }
       });
 
@@ -127,8 +125,8 @@ export function emailClientTests(getApi: () => typeof apiType) {
           });
           assert.fail('Expected error for exceeding combined recipient limit');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidInput),
-            `Expected ${InvalidInput}, got ${e}`);
+          assert.ok(isBlocksError(e, EmailErrors.InvalidInput),
+            `Expected ${EmailErrors.InvalidInput}, got ${e}`);
         }
       });
     });
