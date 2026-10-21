@@ -10,6 +10,7 @@ import {
 	BUILDER_PRICING,
 	CHECKPOINT_STOP_REASON,
 	DEAD_SERVER_KLASS,
+	ISOLATION_UNAVAILABLE_REASON,
 	DEAD_SERVER_REASON,
 	DEAD_SERVER_STATUS,
 	PGLITE_OOM_REASON,
@@ -133,6 +134,15 @@ describe('classifyCell(result)', () => {
 			klass: 'harness_error',
 			reason: 'preflight_failed',
 		});
+	});
+
+	it('a phase that refused to run without agent-user isolation → harness_error (infra), wherever it landed', () => {
+		for (const failed_at of [AGENT_FAIL_AT, '3-build-test', '4-judge']) {
+			const cell = { failed_at, status: 'error', isolation_failure: 'isolation unavailable', tests_passed: 3, tests_failed: 1 };
+			assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: ISOLATION_UNAVAILABLE_REASON });
+			assert.equal(isScoredCell(cell), false);
+		}
+		assert.notEqual(classifyCell({ failed_at: AGENT_FAIL_AT, isolation_failure: '' }).klass, 'harness_error');
 	});
 
 	it('a CANCELLATION at the agent step → harness_error (cancel is an infra abort wherever it lands), not agent_fail', () => {
