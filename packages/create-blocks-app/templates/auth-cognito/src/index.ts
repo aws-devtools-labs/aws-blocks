@@ -248,16 +248,25 @@ async function testReadersOnly() {
 async function testSetValue() {
   const key = (document.getElementById('key') as HTMLInputElement).value;
   const value = (document.getElementById('value') as HTMLInputElement).value;
-  await api.setValue(key, value);
-  showMessage(document.getElementById('kv-result')!, `✓ Set ${key} = ${value}`, 'success');
+  const out = document.getElementById('kv-result')!;
+  try {
+    await api.setValue(key, value);
+    showMessage(out, `✓ Set ${key} = ${value}`, 'success');
+  } catch (e: any) {
+    showError(out, e.message);
+  }
 }
 
 async function testGetValue() {
   const key = (document.getElementById('key') as HTMLInputElement).value;
-  const value = await api.getValue(key);
   const out = document.getElementById('kv-result')!;
-  if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
-  else showError(out, '✗ Key not found');
+  try {
+    const value = await api.getValue(key);
+    if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
+    else showError(out, '✗ Key not found');
+  } catch (e: any) {
+    showError(out, e.message);
+  }
 }
 
 // ── Profile ────────────────────────────────────────────────────────────
