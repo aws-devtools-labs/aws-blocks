@@ -97,7 +97,22 @@ extension SwiftCodeGenerator {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
-        return "\"\(escaped)\""
+        // Swift rejects any other raw control character in a literal ("unprintable ASCII
+        // character"), so spell those as `\t` / `\u{XX}`. Text without them is unchanged.
+        guard escaped.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else {
+            return "\"\(escaped)\""
+        }
+        var spelled = ""
+        for scalar in escaped.unicodeScalars {
+            if scalar == "\t" {
+                spelled += "\\t"
+            } else if scalar.value < 0x20 || scalar.value == 0x7F {
+                spelled += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
+            } else {
+                spelled.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"\(spelled)\""
     }
 
     // MARK: - Swift Type Name Resolution

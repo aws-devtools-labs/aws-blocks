@@ -229,7 +229,7 @@ class UnboundTransferableTest : FunSpec({
         test("a tag with all five escaped characters emits a correct regular literal") {
             // quote, backslash, dollar, CR, LF - all five need escaping to compile and round-trip.
             val src = generate(resultSpec("""{ "x-blocks-transferable": "a\"b\\c${'$'}d\r\n" }""")).source()
-            src shouldContain "expectedTag = \"a\\\"b\\\\c\\\$d\\r\\n\""
+            src shouldContain "expectedTag = \"a\\\"b\\\\c\${'\$'}d\\r\\n\""
             src shouldNotContain "trimMargin"
         }
     }

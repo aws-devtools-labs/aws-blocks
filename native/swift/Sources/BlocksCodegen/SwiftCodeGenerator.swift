@@ -190,7 +190,7 @@ public struct SwiftCodeGenerator {
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
-                    lines.append("\(indent)    case \(caseName) = \"\(val)\"")
+                    lines.append("\(indent)    case \(caseName) = \(swiftStringLiteral(val))")
                 } else {
                     lines.append("\(indent)    case \(caseName)")
                 }
@@ -232,7 +232,7 @@ public struct SwiftCodeGenerator {
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    lines.append("\(indent)        case \(safe) = \"\(field.name)\"")
+                    lines.append("\(indent)        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     lines.append("\(indent)        case \(safe)")
                 }
@@ -274,7 +274,7 @@ public struct SwiftCodeGenerator {
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    lines.append("\(indent)        case \(safe) = \"\(field.name)\"")
+                    lines.append("\(indent)        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     lines.append("\(indent)        case \(safe)")
                 }
@@ -394,10 +394,10 @@ public struct SwiftCodeGenerator {
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
                 if !hasPayload {
                     lines.append("\(indent)        case .\(camelCase(variant.name)):")
-                    lines.append("\(indent)            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                 } else {
                     lines.append("\(indent)        case .\(camelCase(variant.name))(let params):")
-                    lines.append("\(indent)            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("\(indent)            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                     lines.append("\(indent)            try params.encode(to: encoder)")
                 }
             }
@@ -422,13 +422,13 @@ public struct SwiftCodeGenerator {
                 let variant = group[0]
                 let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("\(indent)        case \"\(tag)\": self = .\(camelCase(variant.name))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("\(indent)        case \"\(tag)\": self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
                 }
             } else {
-                lines.append("\(indent)        case \"\(tag)\":")
+                lines.append("\(indent)        case \(swiftStringLiteral(tag)):")
                 for (idx, variant) in group.enumerated() {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
@@ -539,7 +539,7 @@ public struct SwiftCodeGenerator {
             for val in values {
                 let caseName = camelCase(val)
                 if caseName != val {
-                    lines.append("    case \(caseName) = \"\(val)\"")
+                    lines.append("    case \(caseName) = \(swiftStringLiteral(val))")
                 } else {
                     lines.append("    case \(caseName)")
                 }
@@ -659,7 +659,7 @@ public struct SwiftCodeGenerator {
             for field in fields {
                 let safe = escapedSwiftName(field.name)
                 if safe != field.name {
-                    body.append("        case \(safe) = \"\(field.name)\"")
+                    body.append("        case \(safe) = \(swiftStringLiteral(field.name))")
                 } else {
                     body.append("        case \(safe)")
                 }
@@ -723,7 +723,7 @@ public struct SwiftCodeGenerator {
             body.append("")
             body.append("    private static let fixedFieldNames: Set<String> = [")
             for field in fields {
-                body.append("        \"\(field.name)\",")
+                body.append("        \(swiftStringLiteral(field.name)),")
             }
             body.append("    ]")
             body.append("")
@@ -734,9 +734,9 @@ public struct SwiftCodeGenerator {
                 let safe = escapedSwiftName(field.name)
                 let key = field.name
                 if field.required {
-                    body.append("        try c.encode(self.\(safe), forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        try c.encode(self.\(safe), forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 } else {
-                    body.append("        try c.encodeIfPresent(self.\(safe), forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        try c.encodeIfPresent(self.\(safe), forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 }
             }
             body.append("        for (k, v) in self.attributes {")
@@ -755,9 +755,9 @@ public struct SwiftCodeGenerator {
                 let alreadyOptional = swType.hasSuffix("?")
                 let baseType = alreadyOptional ? String(swType.dropLast()) : swType
                 if field.required && !alreadyOptional {
-                    body.append("        self.\(safe) = try c.decode(\(baseType).self, forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        self.\(safe) = try c.decode(\(baseType).self, forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 } else {
-                    body.append("        self.\(safe) = try c.decodeIfPresent(\(baseType).self, forKey: DynamicKey(stringValue: \"\(key)\")!)")
+                    body.append("        self.\(safe) = try c.decodeIfPresent(\(baseType).self, forKey: DynamicKey(stringValue: \(swiftStringLiteral(key)))!)")
                 }
             }
             body.append("        var extras: [String: \(valueType)] = [:]")
@@ -774,7 +774,7 @@ public struct SwiftCodeGenerator {
                 for field in fields {
                     let safe = escapedSwiftName(field.name)
                     if safe != field.name {
-                        body.append("        case \(safe) = \"\(field.name)\"")
+                        body.append("        case \(safe) = \(swiftStringLiteral(field.name))")
                     } else {
                         body.append("        case \(safe)")
                     }
@@ -863,28 +863,27 @@ public struct SwiftCodeGenerator {
                 let minErr = "\(field.name) must be at least \(min) characters"
                 checks.append(
                     "guard \(valueVar).count >= \(min)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(minErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(minErr))) }"
                 )
             }
             if let max = constraints.maxLength {
                 let maxErr = "\(field.name) must be at most \(max) characters"
                 checks.append(
                     "guard \(valueVar).count <= \(max)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(maxErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(maxErr))) }"
                 )
             }
             if let pattern = constraints.pattern {
                 // JSON Schema `pattern` uses ECMA-262 semantics (unanchored match).
                 // `range(of:options:.regularExpression)` matches this — it succeeds
                 // if the pattern matches anywhere in the string, not just the full string.
-                let escaped = pattern
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                let patternErr = "\(field.name) must match pattern \(escaped)"
+                // swiftStringLiteral escapes \, ", newline and CR and adds the quotes, so the
+                // regex and the message both reach the generated code verbatim.
+                let patternErr = "\(field.name) must match pattern \(pattern)"
                 checks.append(
-                    "guard \(valueVar).range(of: \"\(escaped)\","
+                    "guard \(valueVar).range(of: \(swiftStringLiteral(pattern)),"
                     + " options: .regularExpression) != nil"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(patternErr)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(patternErr))) }"
                 )
             }
         case .primitive(.integer, _), .primitive(.number, _):
@@ -894,28 +893,28 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be >= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) >= \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maximum {
                 let err = "\(field.name) must be <= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) <= \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMinimum {
                 let err = "\(field.name) must be > \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) > \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMaximum {
                 let err = "\(field.name) must be < \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) < \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.multipleOf {
@@ -925,7 +924,7 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be a multiple of \(cast(limit))"
                 checks.append(
                     "guard \(mod) == 0"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
         case .list:
@@ -933,14 +932,14 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must have at least \(limit) items"
                 checks.append(
                     "guard \(valueVar).count >= \(limit)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maxItems {
                 let err = "\(field.name) must have at most \(limit) items"
                 checks.append(
                     "guard \(valueVar).count <= \(limit)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\"\(err)\") }"
+                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
                 )
             }
         default:
@@ -1002,18 +1001,52 @@ public struct SwiftCodeGenerator {
             default: return nil
             }
         }
+        // Defaults are emitted as code, so only a well-formed literal matching
+        // the field's primitive type is passed through; anything else returns
+        // nil and the caller falls back to the no-default path.
+        var target = type
+        if case .nullable(let inner) = target { target = inner }
+        guard case .primitive(let kind, _) = target else { return nil }
         // Strings: JSON renders them with surrounding quotes — that's a Swift
         // string literal too.
-        if trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"") {
-            return trimmed
+        // JSON escapes (`\/`, `\uXXXX`, `\b`, `\f`) are not all valid in Swift, so decode
+        // the JSON string and re-emit it through swiftStringLiteral.
+        if kind == .string && trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"") {
+            guard let data = trimmed.data(using: .utf8),
+                  let decoded = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) as? String
+            else { return nil }
+            return swiftStringLiteral(decoded)
         }
-        // Booleans + numbers round-trip as-is.
-        if trimmed == "true" || trimmed == "false" || Double(trimmed) != nil || Int(trimmed) != nil {
+        switch kind {
+        case .integer:
+            // INTEGER maps to Swift `Int`: require a JSON integer literal that fits.
+            guard isJSONIntegerLiteral(trimmed), Int(trimmed) != nil else { return nil }
             return trimmed
+        case .number:
+            // NUMBER maps to Swift `Double`; an integer literal such as `3` is a
+            // valid Double initializer in Swift, so the JSON text is kept as-is.
+            guard isJSONNumberLiteral(trimmed), Double(trimmed) != nil else { return nil }
+            return trimmed
+        case .boolean:
+            return (trimmed == "true" || trimmed == "false") ? trimmed : nil
+        default:
+            // String fields only accept a JSON string (handled above); arrays,
+            // objects, and other shapes are skipped — Swift can't initialise
+            // arbitrary nested shapes from a JSON literal at compile time.
+            return nil
         }
-        // Arrays / objects: skip — Swift can't initialise arbitrary nested
-        // shapes from a JSON literal at compile time.
-        return nil
+    }
+
+    /// True when `text` is a JSON integer literal (`-?(0|[1-9][0-9]*)`).
+    private func isJSONIntegerLiteral(_ text: String) -> Bool {
+        text.range(of: #"^-?(0|[1-9][0-9]*)$"#, options: .regularExpression) != nil
+    }
+
+    /// True when `text` is a JSON number literal (integer, optional fraction,
+    /// optional exponent). Rejects forms Swift's `Double(_:)` accepts but that
+    /// are not valid Swift literals, such as `nan`, `inf`, or `0x1p3`.
+    private func isJSONNumberLiteral(_ text: String) -> Bool {
+        text.range(of: #"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"#, options: .regularExpression) != nil
     }
 
     private func emitDiscriminatedCoding(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, lines: inout [String]) {
@@ -1036,10 +1069,10 @@ public struct SwiftCodeGenerator {
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
                 if !hasPayload {
                     lines.append("        case .\(camelCase(variant.name)):")
-                    lines.append("            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                 } else {
                     lines.append("        case .\(camelCase(variant.name))(let params):")
-                    lines.append("            try container.encode(\"\(discVal)\", forKey: .\(escapedSwiftName(discriminator.fieldName)))")
+                    lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                     lines.append("            try params.encode(to: encoder)")
                 }
             }
@@ -1069,13 +1102,13 @@ public struct SwiftCodeGenerator {
                     || variant.additionalPropertiesType != nil
                     || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("        case \"\(tag)\": self = .\(camelCase(variant.name))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("        case \"\(tag)\": self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
                 }
             } else {
-                lines.append("        case \"\(tag)\":")
+                lines.append("        case \(swiftStringLiteral(tag)):")
                 for (idx, variant) in group.enumerated() {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
@@ -1221,13 +1254,16 @@ public struct SwiftCodeGenerator {
             funcName = escapedSwiftName(operation.name)
         }
 
-        lines.append("    /// Calls `\(fullMethodName)`.")
+        // A line break in the method name would end the `///` comment early, and other control
+        // characters are rejected by the compiler; reuse the literal escaping, minus the quotes.
+        let docMethodName = String(swiftStringLiteral(fullMethodName).dropFirst().dropLast())
+        lines.append("    /// Calls `\(docMethodName)`.")
         lines.append("    public func \(funcName)(\(paramStr)) async throws -> \(returnType) {")
 
         // Build request
         if operation.parameters.isEmpty {
             lines.append(
-                "        let request = \(runtimePrefix)BlocksRequest(method: \"\(fullMethodName)\", "
+                "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
                     + "params: [], id: \(runtimePrefix)BlocksRequest.nextId())"
             )
         } else {
@@ -1252,13 +1288,13 @@ public struct SwiftCodeGenerator {
                     lines.append("        if let \(safe) { _params.append(\(safe)) }")
                 }
                 lines.append(
-                    "        let request = \(runtimePrefix)BlocksRequest(method: \"\(fullMethodName)\", "
+                    "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
                         + "params: _params, id: \(runtimePrefix)BlocksRequest.nextId())"
                 )
             } else {
                 let arrayElements = operation.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
                 lines.append(
-                    "        let request = \(runtimePrefix)BlocksRequest(method: \"\(fullMethodName)\", "
+                    "        let request = \(runtimePrefix)BlocksRequest(method: \(swiftStringLiteral(fullMethodName)), "
                         + "params: [\(arrayElements)], id: \(runtimePrefix)BlocksRequest.nextId())"
                 )
             }
@@ -1274,7 +1310,7 @@ public struct SwiftCodeGenerator {
                 lines.append(transferable.optional
                     ? "        guard let result else { return nil }"
                     : "        guard let result else { throw \(runtimePrefix)RPCError(message: "
-                    + "\"Unexpected null result for \(fullMethodName)\") }")
+                    + "\(swiftStringLiteral("Unexpected null result for \(fullMethodName)"))) }")
                 let descriptorNoun: String?
                 let returnLines: [String]
                 switch blocksType {
@@ -1312,7 +1348,7 @@ public struct SwiftCodeGenerator {
                     lines.append("        guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {")
                     lines.append(
                         "            throw \(runtimePrefix)RPCError(message: "
-                            + "\"Invalid \(descriptorNoun) descriptor for \(fullMethodName)\")"
+                            + "\(swiftStringLiteral("Invalid \(descriptorNoun) descriptor for \(fullMethodName)")))"
                     )
                     lines.append("        }")
                 }
@@ -1327,7 +1363,7 @@ public struct SwiftCodeGenerator {
         } else {
             lines.append(
                 "        guard let result else { throw \(runtimePrefix)RPCError(message: "
-                    + "\"Unexpected null result for \(fullMethodName)\") }"
+                    + "\(swiftStringLiteral("Unexpected null result for \(fullMethodName)"))) }"
             )
             lines.append("        return try JSONDecoder().decode(\(returnType).self, from: result)")
         }
