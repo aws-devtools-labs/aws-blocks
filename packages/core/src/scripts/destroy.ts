@@ -6,7 +6,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
-import { emptySandboxBuckets, runDestroyWithRetries, sandboxDeleteThrottled } from './sandbox.js';
+import { destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -74,7 +74,7 @@ export async function destroy(options: DestroyOptions) {
       runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
       listStackNames: () => listProductionStackNames(options, cdkEnv),
       emptyBuckets: emptySandboxBuckets,
-      isThrottled: sandboxDeleteThrottled,
+      isThrottled: destroyWasThrottled,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       successLabel: 'Production stack',
     });

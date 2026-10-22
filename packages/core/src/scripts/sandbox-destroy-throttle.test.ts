@@ -106,7 +106,40 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		// +4 -> fail@27 (> 5 + 20), stop. The wait that would start past the budget is never taken.
 		assert.strictEqual(attempts, 4);
 		assert.deepStrictEqual(sleeps, [60_000, 120_000, 240_000]);
-		assert.ok(clock.now() - 5 * MIN <= 20 * MIN + 5 * MIN, 'stays within the budget plus one attempt');
+		assert.strictEqual(clock.now(), 27 * MIN, 'gives up right after the attempt that follows the last wait');
+	});
+
+	it('never gives a non-throttle failure more than the ordinary [60s, 120s], whatever throttles came between', async () => {
+		// Each attempt's classification, in order; the destroy always fails.
+		for (const sequence of [
+			[false, true, false, false],
+			[true, false, true, false, false],
+			[true, true, false, false, false],
+		]) {
+			let attempts = 0;
+			const ordinarySleeps: number[] = [];
+			let lastThrottled = false;
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						attempts++;
+						throw new Error('x');
+					},
+					listStackNames: () => ['stackA'],
+					emptyBuckets: async () => {},
+					isThrottled: async () => {
+						lastThrottled = sequence[attempts - 1] ?? false;
+						return lastThrottled;
+					},
+					sleep: async (ms) => {
+						if (!lastThrottled) ordinarySleeps.push(ms);
+					},
+					random: () => 0.5,
+				}),
+			);
+			assert.deepStrictEqual(ordinarySleeps, [60_000, 120_000], `sequence ${sequence.join(',')}`);
+			assert.strictEqual(attempts, sequence.length, `sequence ${sequence.join(',')}`);
+		}
 	});
 
 	it('keeps the ordinary [60s, 120s] schedule for a failure that is not a throttle', async () => {
@@ -191,10 +224,21 @@ describe('isThrottleReason', () => {
 			isThrottleReason('Rate exceeded (Service: AmazonCloudFormation; Status Code: 400; Error Code: Throttling)'),
 		);
 		assert.ok(isThrottleReason('TooManyRequestsException: Too many requests'));
+		assert.ok(
+			isThrottleReason(
+				'Request limit exceeded. (Service: Ec2, Status Code: 503, Error Code: RequestLimitExceeded)',
+			),
+		);
+		assert.ok(
+			isThrottleReason('Please reduce your request rate. (Service: S3, Status Code: 503, Error Code: SlowDown)'),
+		);
 	});
 
 	it('does not match ordinary teardown failures', () => {
 		assert.ok(!isThrottleReason(undefined));
+		// A resource whose name contains "throttling" is not a throttle.
+		assert.ok(!isThrottleReason('The following resource(s) failed to delete: [ApiThrottlingPlan1A2B3C]. '));
+		assert.ok(!isThrottleReason('Role my-app-throttling-role is in use'));
 		assert.ok(!isThrottleReason('The following resource(s) failed to delete: [DefaultComputeAPI5E5CE44A]. '));
 		assert.ok(!isThrottleReason('The bucket you tried to delete is not empty'));
 		assert.ok(!isThrottleReason('Network interface is currently in use'));
@@ -289,6 +333,99 @@ describe('stackDeleteThrottled', () => {
 			hot: attempt('hot', 2, THROTTLE),
 		});
 		assert.strictEqual(await stackDeleteThrottled(cfn, ['gone', 'ok', 'hot'], SINCE), true);
+	});
+
+	it('does not read a stack-level summary or nested stack as a throttle', async () => {
+		const [stackFailed, , started] = attempt('s', 1, undefined);
+		const events: FakeEvent[] = [
+			{
+				...stackFailed,
+				ResourceStatusReason: 'The following resource(s) failed to delete: [Nested]. Throttling',
+			},
+			{
+				Timestamp: at(4),
+				LogicalResourceId: 'Nested',
+				ResourceType: 'AWS::CloudFormation::Stack',
+				ResourceStatus: 'DELETE_FAILED',
+				ResourceStatusReason: THROTTLE,
+			},
+			{
+				Timestamp: at(3),
+				LogicalResourceId: 'Eni',
+				ResourceType: 'AWS::EC2::NetworkInterface',
+				ResourceStatus: 'DELETE_FAILED',
+				ResourceStatusReason: 'Network interface is currently in use',
+			},
+			started,
+		];
+		const { cfn } = fakeCfn({ s: events });
+		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE), false);
+	});
+
+	it('ignores a recent throttle (inside the clock-skew window) when this attempt never started a delete', async () => {
+		// Previous attempt: began 6 min ago, RestApi throttled 50s ago. This attempt (at SINCE) never reached DeleteStack.
+		const events: FakeEvent[] = [
+			{
+				Timestamp: new Date(SINCE - 45_000),
+				LogicalResourceId: 's',
+				ResourceType: 'AWS::CloudFormation::Stack',
+				ResourceStatus: 'DELETE_FAILED',
+			},
+			{
+				Timestamp: new Date(SINCE - 50_000),
+				LogicalResourceId: 'DefaultComputeAPI5E5CE44A',
+				ResourceType: 'AWS::ApiGateway::RestApi',
+				ResourceStatus: 'DELETE_FAILED',
+				ResourceStatusReason: THROTTLE,
+			},
+			{
+				Timestamp: new Date(SINCE - 6 * MIN),
+				LogicalResourceId: 's',
+				ResourceType: 'AWS::CloudFormation::Stack',
+				ResourceStatus: 'DELETE_IN_PROGRESS',
+			},
+		];
+		const { cfn } = fakeCfn({ s: events });
+		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE), false);
+	});
+
+	it('throws a non-"does not exist" error after checking the other stacks', async () => {
+		const denied = new Error('User is not authorized to perform: cloudformation:DescribeStackEvents');
+		const { cfn, calls } = fakeCfn({ a: denied, b: attempt('b', 1, 'Network interface is currently in use') });
+		await assert.rejects(stackDeleteThrottled(cfn, ['a', 'b'], SINCE), /not authorized/);
+		assert.ok(
+			calls.some((c) => c.startsWith('b:')),
+			'still checked stack b',
+		);
+		// ...but a throttle found on another stack wins over the error.
+		const hot = fakeCfn({ a: denied, b: attempt('b', 1, THROTTLE) });
+		assert.strictEqual(await stackDeleteThrottled(hot.cfn, ['a', 'b'], SINCE), true);
+	});
+
+	it('throws when every stack is missing (e.g. stacks in another Region), so the caller warns', async () => {
+		const { cfn } = fakeCfn({ a: new Error('Stack [a] does not exist'), b: new Error('Stack [b] does not exist') });
+		await assert.rejects(stackDeleteThrottled(cfn, ['a', 'b'], SINCE), /none of the stacks/);
+	});
+
+	it('stops after a bounded number of pages', async () => {
+		let pages = 0;
+		const send = async () => {
+			pages++;
+			return {
+				StackEvents: [
+					{
+						Timestamp: at(5),
+						LogicalResourceId: 'Fn',
+						ResourceType: 'AWS::Lambda::Function',
+						ResourceStatus: 'DELETE_COMPLETE',
+					},
+				],
+				NextToken: 'more',
+			};
+		};
+		const cfn = { send } as unknown as CloudFormationClient;
+		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE), false);
+		assert.strictEqual(pages, 10);
 	});
 
 	it('follows pagination back to the start of this attempt', async () => {
