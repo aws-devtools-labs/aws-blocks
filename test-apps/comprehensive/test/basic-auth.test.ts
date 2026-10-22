@@ -535,7 +535,8 @@ export function basicAuthTests(getApi: () => typeof apiType) {
 
       // Purges only this test's user: a purge of every code would delete one
       // the Agent suite, running in a background process at the same time, is
-      // still waiting to read (./background-suites.ts).
+      // still waiting to read (./background-suites.ts). e2e.test.ts tests the
+      // full purge before those suites start.
       test('purge clears code records and leaves other keys alone', async () => {
         const api = getApi();
         const username = uniqueUser();

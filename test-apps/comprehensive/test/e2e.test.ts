@@ -213,22 +213,33 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
   }
 });
 
+// The full (no-argument) purge of delivered verification codes. It runs here,
+// before the background suites below start, because once they overlap a full
+// purge could delete a code one of them is waiting to read (basic-auth.test.ts
+// covers the per-user purge). Locally it also sweeps the records earlier runs
+// left in .bb-data/.
+test('AuthBasic - full purge clears every code record and leaves other keys alone', async () => {
+  const stamp = Date.now().toString(36);
+  const bystander = `kv-bystander-${stamp}`;
+  await api.kvPut(`__last-code:auth:purge-probe-${stamp}`, JSON.stringify({ username: `purge-probe-${stamp}`, code: '000000' }));
+  await api.kvPut(bystander, 'keep me');
+
+  const { deleted } = await api.authPurgeDeliveredCodes();
+  assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+
+  const left = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
+  assert.deepStrictEqual(left, [], 'no code record survives a full purge');
+  assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
+  await api.kvDelete(bystander);
+});
+
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
 // queues, Lambda and the model, so each runs in its own child process against
 // this server/stack while the suites below run here. They start now and are
 // awaited at the end of this file. See ./background-suites.ts for why a child
 // process and what a suite must not share to belong there.
 const background = backgroundSuites(['agent', 'async-job', 'async-job-status']);
-test('Background suites - start Agent, AsyncJob, AsyncJob status', async () => {
-  try {
-    // Sweep delivered-code records left by earlier runs (they persist in
-    // .bb-data/ locally) while nothing else is running: once the suites
-    // overlap, a full purge could delete a code one is waiting to read.
-    await api.authPurgeDeliveredCodes();
-  } finally {
-    background.start();
-  }
-});
+test('Background suites - start Agent, AsyncJob, AsyncJob status', () => background.start());
 
 // KVStore tests (separate file)
 kvStoreTests(() => api);
