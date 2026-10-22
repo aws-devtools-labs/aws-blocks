@@ -69,6 +69,27 @@ function ssrFixture(root: string, seen: { profile?: BuildProfile }) {
   };
 }
 
+type CfnResourceJson = {
+  Type: string;
+  DependsOn?: string[];
+  Properties?: { Environment?: { Variables?: Record<string, unknown> } };
+};
+
+/**
+ * The upload resources (`Custom::CDKBucketDeployment` and the AWS CLI layers
+ * that come with each) the asset proxy — the function whose environment names
+ * the build (`ASSET_KEY_PREFIX`) — or its role and policy depend on.
+ */
+function deployResourcesTheProxyWaitsOn(resources: Record<string, CfnResourceJson>): string[] {
+  const [proxyId] = Object.keys(resources).filter(
+    (id) => resources[id].Type === 'AWS::Lambda::Function' && resources[id].Properties?.Environment?.Variables?.ASSET_KEY_PREFIX !== undefined,
+  );
+  assert.ok(proxyId, 'an asset proxy');
+  const proxyResources = Object.keys(resources).filter((id) => id === proxyId || id.startsWith(`${proxyId.replace(/[0-9A-F]{8}$/, '')}ServiceRole`));
+  const deps = new Set(proxyResources.flatMap((id) => resources[id].DependsOn ?? []));
+  return [...deps].filter((id) => resources[id]?.Type === 'Custom::CDKBucketDeployment' || resources[id]?.Type === 'AWS::Lambda::LayerVersion').sort();
+}
+
 const newStack = (name: string) =>
   new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
 
@@ -138,6 +159,30 @@ describe('Hosting with HostingPresets.preview', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
     });
+  });
+
+  it('the asset proxy is not ordered after the uploads: a fixed build has no switch-over to gate', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PreviewParallelProxy');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, root: tmpDir, api: MOCK_API });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<string, CfnResourceJson>;
+    const waitsOn = deployResourcesTheProxyWaitsOn(resources);
+    // Neither the asset uploads nor the resolved runtime config (whose
+    // deployment is ordered after the uploads), nor their layers.
+    assert.deepStrictEqual(waitsOn, []);
+  });
+
+  it("per-deploy builds behind the same door keep the proxy after every upload and the runtime config", () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PerDeployProxy');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, buildId: 'per-deploy', root: tmpDir, api: MOCK_API });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<string, CfnResourceJson>;
+    const waitsOn = deployResourcesTheProxyWaitsOn(resources);
+    const uploads = Object.keys(resources).filter((id) => resources[id].Type === 'Custom::CDKBucketDeployment');
+    assert.ok(uploads.some((id) => id.includes('BlocksConfigDeployment')), 'the runtime config is one of the uploads');
+    for (const u of uploads) assert.ok(waitsOn.includes(u), `the proxy waits for ${u}`);
   });
 
   it('builds the adapter for the HTTP API and with every preview trim', () => {

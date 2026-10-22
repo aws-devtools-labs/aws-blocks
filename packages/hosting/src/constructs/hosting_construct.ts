@@ -546,6 +546,29 @@ export type HostingConstructProps = {
    * @default false
    */
   skipImageOptimization?: boolean;
+
+  /**
+   * Each deploy overwrites the build in place: the manifest's `buildId` is the
+   * same on every deploy (core `Hosting` `buildId: 'fixed'`,
+   * `HostingPresets.preview`), so the new files land under the same
+   * `builds/<buildId>/` prefix the door already serves.
+   *
+   * There is then no switch-over to a new build, so the door's
+   * `FrontDoorResult.cutover` constructs (the ALB and API Gateway asset
+   * proxies, whose environment names the prefix) are not ordered after the
+   * asset uploads or after the uploads registered later through
+   * {@link HostingConstruct.addBuildAssetDependency}. CloudFormation creates
+   * them alongside the uploads, which takes the proxy (its role, policy and
+   * function) off the end of a first deploy. A door's `onUpload` resources
+   * still run after every upload.
+   *
+   * Use it only for throwaway environments: while a deploy runs, the door
+   * serves a mix of the previous and the new files. The CloudFront door
+   * ignores it (its edge cache would keep serving the overwritten files; core
+   * `Hosting` rejects `buildId: 'fixed'` behind it).
+   * @default false
+   */
+  inPlaceBuild?: boolean;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -2394,7 +2417,9 @@ export class HostingConstruct extends Construct {
     // upload here, and — recorded with the post-upload constructs — for the
     // uploads declared later (`addBuildAssetDependency`, e.g. the resolved
     // runtime config), so the previous build serves until the new one is whole.
-    for (const c of cutover) {
+    // An in-place build (`inPlaceBuild`) has no new build to switch to: the
+    // prefix never changes, so the cutover is created alongside the uploads.
+    for (const c of props.inPlaceBuild ? [] : cutover) {
       for (const dep of buildAssetDeployments) c.node.addDependency(dep);
       this.postUploadConstructs.push(c);
     }

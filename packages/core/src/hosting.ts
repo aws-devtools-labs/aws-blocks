@@ -650,7 +650,9 @@ export interface HostingProps {
    * builds with a pinned `generateBuildId`), so a re-deploy skips the asset
    * upload and a code-only change can be hotswapped
    * (`startSandbox({ preview: true })`). There is no atomic switch-over, so
-   * use it only for throwaway environments. Not available behind a door with
+   * use it only for throwaway environments. With nothing to switch, the
+   * door's asset proxy is not held back until the uploads finish:
+   * CloudFormation creates it alongside them, which shortens a first deploy. Not available behind a door with
    * an edge cache (CloudFront, the stacked door), which would keep serving the
    * overwritten files; those fail synth (`UnsupportedHostingSettingError`).
    *
@@ -1177,6 +1179,9 @@ export class Hosting extends Construct {
       manifest,
       compute: normalizedCompute,
       ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
+      // `buildId: 'fixed'`: the build is overwritten in place, so there is no
+      // switch-over for the door's asset proxy to wait for.
+      ...(fixedBuildId ? { inPlaceBuild: true } : {}),
       // Plain env + deploy-time literals go straight to the L3 (which stays
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.
