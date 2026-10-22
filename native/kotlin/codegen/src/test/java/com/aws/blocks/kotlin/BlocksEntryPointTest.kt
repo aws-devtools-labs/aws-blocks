@@ -182,11 +182,14 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain "public val Blocks.typesApi: TypesApi\n  get() = TypesApi(client())"
     }
 
-    test("a namespace that would collide with a renamed one fails rather than overwriting it") {
-        val failure = runCatching {
-            result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
-        }.exceptionOrNull()
+    // Namespace class names are allocated like every other generated name: a namespace that would
+    // collide with a renamed one gets the next free name instead of failing the generation.
+    test("a namespace that would collide with a renamed one gets its own name rather than overwriting it") {
+        val generated = result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
+        val names = generated.files.map { it.name }
 
-        failure!!.message!! shouldContain "TypesApi"
+        names shouldContain "TypesApi"
+        names shouldContain "TypesApi_2"
+        names shouldBe names.distinct()
     }
 })
