@@ -11,7 +11,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal, selectAppStackOutputs } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDeploySignal, selectAppStack } from './deploy-stream.js';
 import { waitForLiveBuild, type InvalidationProbe, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 
@@ -209,9 +209,9 @@ export function makeInvalidationProbe(
 /**
  * Production deploy behind `npm run deploy`: provisions secrets, applies
  * pending migrations, generates the client, then runs `cdk deploy --all` (see
- * {@link buildCdkDeployArgs}), so every top-level stack of the app is deployed,
- * and writes `.blocks-sandbox/config.json` from the outputs of the stack that
- * carries `ApiUrl`.
+ * {@link buildCdkDeployArgs}), so every top-level stack of the app is deployed
+ * (not stacks inside a CDK `Stage`), and writes `.blocks-sandbox/config.json`
+ * from the outputs of the stack that carries `ApiUrl` (see {@link selectAppStack}).
  */
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
@@ -328,7 +328,7 @@ export async function deploy(options: DeployOptions) {
     registerFrameworkFromSink(frameworkSink);
 
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = selectAppStackOutputs(outputs);
+    const stackOutputs = selectAppStack(outputs).outputs;
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME

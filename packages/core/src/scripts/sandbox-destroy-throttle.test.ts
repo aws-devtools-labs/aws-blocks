@@ -490,7 +490,7 @@ describe('destroy call sites', () => {
 		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {});
 		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
 		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
-		assert.strictEqual(deps.successLabel, 'Production stack');
+		assert.strictEqual(deps.successLabel, 'Production stacks');
 	});
 
 	it('destroyWasThrottled returns false for no stacks and calls no AWS API', async () => {
