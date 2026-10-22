@@ -142,6 +142,34 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		}
 	});
 
+	it('gives no ordinary retry once a throttle backoff has used up the budget', async () => {
+		const clock = fakeClock(5 * MIN);
+		let attempts = 0;
+		const sleeps: number[] = [];
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					clock.attempt();
+					throw new Error('x');
+				},
+				listStackNames: () => ['stackA'],
+				emptyBuckets: async () => {},
+				// Throttled 3 times, then (the RestApi gone) an ordinary failure past the budget.
+				isThrottled: async () => attempts <= 3,
+				sleep: async (ms) => {
+					sleeps.push(ms);
+					clock.advance(ms);
+				},
+				now: clock.now,
+				random: () => 1,
+			}),
+		);
+		// fail@5, 11, 18 (throttled; waits 1, 2, 4 min), fail@27 ordinary: 22 min after the first failure > 20.
+		assert.strictEqual(attempts, 4);
+		assert.deepStrictEqual(sleeps, [60_000, 120_000, 240_000]);
+	});
+
 	it('keeps the ordinary [60s, 120s] schedule for a failure that is not a throttle', async () => {
 		let attempts = 0;
 		const sleeps: number[] = [];
@@ -192,6 +220,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 	it('passes the attempt start time so a stale throttle from an earlier attempt is not counted', async () => {
 		const clock = fakeClock(5 * MIN);
 		const seen: number[] = [];
+		const previous: (number | undefined)[] = [];
 		await assert.rejects(
 			runDestroyWithRetries({
 				runDestroy: () => {
@@ -200,8 +229,9 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 				},
 				listStackNames: () => ['stackA'],
 				emptyBuckets: async () => {},
-				isThrottled: async (_names: string[], since: number) => {
+				isThrottled: async (_names: string[], since: number, prev?: number) => {
 					seen.push(since);
+					previous.push(prev);
 					return false;
 				},
 				sleep: async (ms) => clock.advance(ms),
@@ -210,6 +240,8 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		);
 		// attempt 1 starts at 0; attempt 2 at 5 + 1 = 6 min; attempt 3 at 11 + 2 = 13 min.
 		assert.deepStrictEqual(seen, [0, 6 * MIN, 13 * MIN]);
+		// ...and when the previous attempt failed, so its events are not read as this one's.
+		assert.deepStrictEqual(previous, [undefined, 5 * MIN, 11 * MIN]);
 	});
 });
 
@@ -224,6 +256,7 @@ describe('isThrottleReason', () => {
 			isThrottleReason('Rate exceeded (Service: AmazonCloudFormation; Status Code: 400; Error Code: Throttling)'),
 		);
 		assert.ok(isThrottleReason('TooManyRequestsException: Too many requests'));
+		assert.ok(isThrottleReason('Rate Exceeded. (Service: Lambda, Error Code: TooManyRequestsException)'));
 		assert.ok(
 			isThrottleReason(
 				'Request limit exceeded. (Service: Ec2, Status Code: 503, Error Code: RequestLimitExceeded)',
@@ -402,6 +435,33 @@ describe('stackDeleteThrottled', () => {
 		assert.strictEqual(await stackDeleteThrottled(hot.cfn, ['a', 'b'], SINCE), true);
 	});
 
+	it("ignores the previous attempt's events when that attempt was short (notBeforeMs)", async () => {
+		// Previous attempt began 55s ago (inside the skew window) and was throttled 30s ago;
+		// this attempt (at SINCE) never reached DeleteStack, and the previous one failed 20s ago.
+		const events: FakeEvent[] = [
+			{
+				Timestamp: new Date(SINCE - 30_000),
+				LogicalResourceId: 'DefaultComputeAPI5E5CE44A',
+				ResourceType: 'AWS::ApiGateway::RestApi',
+				ResourceStatus: 'DELETE_FAILED',
+				ResourceStatusReason: THROTTLE,
+			},
+			{
+				Timestamp: new Date(SINCE - 55_000),
+				LogicalResourceId: 's',
+				ResourceType: 'AWS::CloudFormation::Stack',
+				ResourceStatus: 'DELETE_IN_PROGRESS',
+			},
+		];
+		const { cfn } = fakeCfn({ s: events });
+		assert.strictEqual(
+			await stackDeleteThrottled(cfn, ['s'], SINCE),
+			true,
+			'without notBeforeMs the skew window lets it in',
+		);
+		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE, SINCE - 20_000), false);
+	});
+
 	it('throws when every stack is missing (e.g. stacks in another Region), so the caller warns', async () => {
 		const { cfn } = fakeCfn({ a: new Error('Stack [a] does not exist'), b: new Error('Stack [b] does not exist') });
 		await assert.rejects(stackDeleteThrottled(cfn, ['a', 'b'], SINCE), /none of the stacks/);
@@ -425,7 +485,7 @@ describe('stackDeleteThrottled', () => {
 		};
 		const cfn = { send } as unknown as CloudFormationClient;
 		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE), false);
-		assert.strictEqual(pages, 10);
+		assert.strictEqual(pages, 30);
 	});
 
 	it('follows pagination back to the start of this attempt', async () => {

@@ -626,7 +626,7 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
  * shapes, so a resource name that merely contains "throttling" does not match.
  */
 export function isThrottleReason(reason: string | undefined): boolean {
-	return /\bToo Many Requests\b|\bStatus Code: 429\b|\bTooManyRequestsException\b|\bThrottlingException\b|\bError Code: Throttling\b|\bRate exceeded\b|\bRequestLimitExceeded\b|\bError Code: SlowDown\b|\bRequest was throttled\b/.test(
+	return /\bToo Many Requests\b|\bStatus Code: 429\b|\bTooManyRequestsException\b|\bThrottlingException\b|\bError Code: Throttling\b|\bRate [Ee]xceeded\b|\bRequestLimitExceeded\b|\bError Code: SlowDown\b|\bRequest was throttled\b/.test(
 		reason ?? '',
 	);
 }
@@ -634,15 +634,16 @@ export function isThrottleReason(reason: string | undefined): boolean {
 /** Clock skew allowed between this machine and CloudFormation event timestamps. */
 const EVENT_CLOCK_SKEW_MS = 60_000;
 /** DescribeStackEvents pages read per stack before giving up on finding this attempt's start. */
-const MAX_EVENT_PAGES = 10;
+const MAX_EVENT_PAGES = 30;
 
 /**
  * Whether the delete attempt that began at `sinceMs` failed because AWS
  * throttled a resource delete in any of `stackNames`. Reads each stack's
  * events newest-first back to this attempt's own stack-level
  * `DELETE_IN_PROGRESS` and counts a throttle only if that start event is found
- * and is no older than `sinceMs` (less clock skew), so a throttle left over
- * from an earlier attempt is not counted. Stack-level events (the stack's
+ * and is no older than `sinceMs` (less clock skew) nor than `notBeforeMs`
+ * (the previous attempt's failure, when there was one), so a throttle left
+ * over from an earlier attempt is not counted. Stack-level events (the stack's
  * "failed to delete: [ids]" summary, nested stacks) are never read as a
  * throttle. A stack that no longer exists is skipped; any other error (or
  * every stack missing, e.g. stacks in another Region) is thrown after checking
@@ -653,9 +654,10 @@ export async function stackDeleteThrottled(
 	cfn: CloudFormationClient,
 	stackNames: string[],
 	sinceMs: number,
+	notBeforeMs?: number,
 ): Promise<boolean> {
 	const { DescribeStackEventsCommand } = await import('@aws-sdk/client-cloudformation');
-	const oldest = sinceMs - EVENT_CLOCK_SKEW_MS;
+	const oldest = Math.max(sinceMs - EVENT_CLOCK_SKEW_MS, notBeforeMs ?? Number.NEGATIVE_INFINITY);
 	let firstError: unknown;
 	let missing = 0;
 	for (const stackName of stackNames) {
@@ -685,7 +687,7 @@ export async function stackDeleteThrottled(
 	}
 	if (firstError !== undefined) throw firstError;
 	if (stackNames.length > 0 && missing === stackNames.length) {
-		throw new Error(`none of the stacks (${stackNames.join(', ')}) were found in the default Region`);
+		throw new Error(`none of the stacks (${stackNames.join(', ')}) were found (already deleted, never deployed, or in another Region)`);
 	}
 	return false;
 }
@@ -695,10 +697,14 @@ export async function stackDeleteThrottled(
  * the real `isThrottled` for both destroy paths (`destroySandbox` here and the
  * production `destroy` in `./destroy.ts`).
  */
-export async function destroyWasThrottled(stackNames: string[], sinceMs: number): Promise<boolean> {
+export async function destroyWasThrottled(
+	stackNames: string[],
+	sinceMs: number,
+	notBeforeMs?: number,
+): Promise<boolean> {
 	if (stackNames.length === 0) return false;
 	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
-	return stackDeleteThrottled(new CloudFormationClient({}), stackNames, sinceMs);
+	return stackDeleteThrottled(new CloudFormationClient({}), stackNames, sinceMs, notBeforeMs);
 }
 
 /** Backoff for a destroy that failed on an AWS API throttle. */
@@ -751,11 +757,13 @@ export interface DestroyRetryDeps {
 	successLabel?: string;
 	/**
 	 * Whether the attempt that started at `attemptStartedAt` (epoch ms) failed
-	 * on an AWS API throttle (e.g. DeleteRestApi 429). A throttled failure is
+	 * on an AWS API throttle (e.g. DeleteRestApi 429); `previousFailureAt` is
+	 * when the previous attempt failed (events up to then belong to it, not to
+	 * this attempt), undefined on the first attempt. A throttled failure is
 	 * retried with {@link throttleBackoff} instead of `retryDelays`; a rejection
 	 * is logged and treated as "not throttled". Default: never throttled.
 	 */
-	isThrottled?: (stackNames: string[], attemptStartedAt: number) => Promise<boolean>;
+	isThrottled?: (stackNames: string[], attemptStartedAt: number, previousFailureAt?: number) => Promise<boolean>;
 	/** Backoff for throttled failures. Default: randomized waits of up to 1min, 2min, 4min, then 5min, within 20min of the first failure. */
 	throttleBackoff?: ThrottleBackoff;
 	/** Jitter source in [0, 1). Default: `Math.random`. */
@@ -782,7 +790,8 @@ export interface DestroyRetryDeps {
  * jittered exponential backoff ({@link throttleBackoffDelay}) until
  * `throttleBackoff.budgetMs` after the first failure is spent. Every other
  * failure keeps the `retryDelays` schedule: at most `retryDelays.length`
- * ordinary retries per call, whatever throttled retries came between them.
+ * ordinary retries per call, whatever throttled retries came between them,
+ * and none once a throttle backoff has used up the budget.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
@@ -793,6 +802,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	const { budgetMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...deps.throttleBackoff };
 	let stackNames: string[] | undefined;
 	let firstFailureAt: number | undefined;
+	let lastFailureAt: number | undefined;
 	let throttleRetries = 0;
 	let ordinaryRetries = 0;
 	for (let attempt = 0; ; attempt++) {
@@ -802,11 +812,13 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
-			firstFailureAt ??= now();
+			const previousFailureAt = lastFailureAt;
+			lastFailureAt = now();
+			firstFailureAt ??= lastFailureAt;
 			if (stackNames === undefined) stackNames = deps.listStackNames();
 			let throttled = false;
 			try {
-				throttled = await isThrottled(stackNames, attemptStartedAt);
+				throttled = await isThrottled(stackNames, attemptStartedAt, previousFailureAt);
 			} catch (e) {
 				console.warn(
 					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
@@ -816,7 +828,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			if (throttled) {
 				const next = throttleBackoffDelay(throttleRetries, deps.throttleBackoff ?? {}, random);
 				if (now() - firstFailureAt + next <= budgetMs) delayMs = next;
-			} else if (ordinaryRetries < retryDelays.length) {
+			} else if (ordinaryRetries < retryDelays.length && !(throttleRetries > 0 && now() - firstFailureAt > budgetMs)) {
 				delayMs = retryDelays[ordinaryRetries];
 			}
 			if (delayMs === undefined) {
