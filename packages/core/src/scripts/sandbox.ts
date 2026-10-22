@@ -78,7 +78,7 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: Sand
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -144,7 +144,7 @@ export function buildSandboxDeployArgs({
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -331,7 +331,7 @@ export async function startSandbox(options: SandboxOptions) {
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${process.cwd()}`,
     `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
+    `--app`, `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`
   ], {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree

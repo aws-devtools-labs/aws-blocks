@@ -67,7 +67,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
     assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), 'npm exec tsx -- -C cdk aws-blocks/index.ts');
+    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
   });
 
   it('interpolates the provided outDir and projectRoot', () => {
@@ -116,6 +116,7 @@ describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => 
     assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
     assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
     assert.ok(synth.includes('sandboxMode=true'));
+    assert.strictEqual(valueAfter(synth, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.cdk.ts')}`);
     const deploy = buildSandboxDeployArgs({
       outDir: '.blocks-sandbox',
       projectRoot: '/app',
