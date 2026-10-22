@@ -12,15 +12,19 @@
 // The app's CDK entry puts a random id, written once per checkout to
 // <app-dir>/.blocks-sandbox/sandbox-id.txt, into every stack name. Another run
 // of the same PR (same BLOCKS_STACK_SUFFIX) has another id, so this deletes
-// only what this job deployed. A no-op when the suite already cleaned up.
+// only what this job deployed. When the suite cleaned up, it makes one
+// ListStacks call and exits.
 //
-// It issues DeleteStack and does not wait for the delete to finish: GitHub
+// It waits until each delete has started, not until it finishes: GitHub
 // force-stops a cancelled job 5 minutes after the cancel, and a production
 // stack takes ~12 minutes to delete. A delete that fails later is left to
-// cleanup-stacks.yml. Failures it can see (a denied or rejected delete, a stack
-// already DELETE_FAILED, a passing job that left a stack) fail the step.
+// cleanup-stacks.yml. What it can see fails the step: stacks it cannot list,
+// a delete that is denied, or one that has not started within the budget.
+// A passing job whose suite left a stack (its test.after destroy failed, which
+// node:test does not turn into a failed run) gets a warning and a new delete.
 //
-// Env: JOB_STATUS (`job.status`), E2E_TEARDOWN_BUDGET_SECONDS (default 150).
+// Env: JOB_STATUS (`job.status`), E2E_TEARDOWN_BUDGET_SECONDS (default 100, under the
+// step's 2-minute timeout).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -52,28 +56,55 @@ const LIVE_STATUSES = [
 	'IMPORT_ROLLBACK_FAILED',
 	'IMPORT_ROLLBACK_COMPLETE',
 ];
-// Errors that clear on their own: another operation still running on the
-// stack, throttling, a network blip.
-const RETRYABLE = /_IN_PROGRESS|Throttl|Rate exceeded|RequestLimitExceeded|timed out|Could not connect|\b50\d\b/i;
+// Errors that clear on their own: throttling, a service or network blip, and
+// CloudFormation refusing the delete while another operation on the stack runs.
+function retryable(err) {
+	return (
+		/\((Throttling|ThrottlingException|RequestLimitExceeded|InternalFailure|ServiceUnavailable)\)/.test(err) ||
+		/\(ValidationError\).*_IN_PROGRESS/.test(err) ||
+		/Could not connect|Read timeout|Connect timeout|ETIMEDOUT/.test(err)
+	);
+}
 
 const appDir = process.argv[2];
 if (!appDir) {
 	console.error('Usage: node scripts/ci/e2e-teardown.mjs <app-dir>');
 	process.exit(2);
 }
-const jobStatus = process.env.JOB_STATUS ?? '';
-const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 150) * 1000;
+const jobStatus = process.env.JOB_STATUS || 'unknown';
+const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 100) * 1000;
 const pollMs = Number(process.env.E2E_TEARDOWN_POLL_MS ?? 10_000);
 
 const error = (msg) => console.log(`::error title=E2E teardown::${msg}`);
+const warning = (msg) => console.log(`::warning title=E2E teardown::${msg}`);
 
 function aws(...args) {
+	// No single call may outlive the budget.
+	const timeout = Math.max(1000, Math.min(60_000, deadline - Date.now()));
 	const r = spawnSync('aws', ['cloudformation', ...args, '--output', 'json', '--cli-read-timeout', '20'], {
 		encoding: 'utf8',
-		timeout: 60_000,
+		timeout,
 	});
 	const err = (r.error?.message ?? r.stderr ?? '').trim();
 	return { ok: r.status === 0, out: r.stdout, err: err || `aws exited ${r.status}` };
+}
+
+// Repeats a call while it fails with a retryable error and the budget lasts.
+async function awsRetry(label, ...args) {
+	let res = aws(...args);
+	while (!res.ok && retryable(res.err) && Date.now() + pollMs < deadline) {
+		console.log(`${label}: ${res.err}; retrying.`);
+		await sleep(pollMs);
+		res = aws(...args);
+	}
+	return res;
+}
+
+// Status of a stack by name; 'gone' once it no longer exists.
+function statusOf(name) {
+	const r = aws('describe-stacks', '--stack-name', name, '--query', 'Stacks[0].StackStatus');
+	if (r.ok) return JSON.parse(r.out);
+	return /does not exist/.test(r.err) ? 'gone' : `unknown (${r.err})`;
 }
 
 async function main() {
@@ -83,14 +114,15 @@ async function main() {
 		return 0;
 	}
 	const id = readFileSync(idFile, 'utf8').trim();
-	// Both apps write `<user>-<6 chars>` or 8 hex chars; anything shorter could
+	// The app writes `<user>-<6 base36 chars>`; anything much shorter could
 	// match another run's stack.
 	if (!/^[A-Za-z0-9-]{6,}$/.test(id)) {
 		error(`Unexpected sandbox id '${id}' in ${idFile}; not deleting anything.`);
 		return 1;
 	}
 
-	const list = aws(
+	const list = await awsRetry(
+		'ListStacks',
 		'list-stacks',
 		'--stack-status-filter',
 		...LIVE_STATUSES,
@@ -110,36 +142,28 @@ async function main() {
 	}
 
 	let failed = false;
-	for (const { StackName: name, StackStatus: status } of mine) {
-		if (status === 'DELETE_IN_PROGRESS') {
-			console.log(`${name}: already DELETE_IN_PROGRESS.`);
-			continue;
+	for (const { StackName: name, StackStatus: was } of mine) {
+		if (was !== 'DELETE_IN_PROGRESS') {
+			const res = await awsRetry(name, 'delete-stack', '--stack-name', name);
+			if (!res.ok) {
+				error(`DeleteStack ${name} (was ${was}) failed: ${res.err}`);
+				failed = true;
+				continue;
+			}
 		}
-		let res = aws('delete-stack', '--stack-name', name);
-		while (!res.ok && RETRYABLE.test(res.err) && Date.now() + pollMs < deadline) {
-			console.log(`${name}: delete not accepted yet (${res.err}); retrying.`);
+		// DeleteStack can be accepted without starting a delete; wait until it has.
+		let now = statusOf(name);
+		while (now !== 'DELETE_IN_PROGRESS' && now !== 'gone' && Date.now() + pollMs < deadline) {
 			await sleep(pollMs);
-			res = aws('delete-stack', '--stack-name', name);
+			now = statusOf(name);
 		}
-		if (!res.ok) {
-			error(`DeleteStack ${name} (was ${status}) failed: ${res.err}`);
+		if (now !== 'DELETE_IN_PROGRESS' && now !== 'gone') {
+			error(`${name} (was ${was}) is ${now} after DeleteStack; cleanup-stacks.yml retries it.`);
 			failed = true;
 			continue;
 		}
-		const after = aws('describe-stacks', '--stack-name', name, '--query', 'Stacks[0].StackStatus');
-		const now = after.ok ? JSON.parse(after.out) : 'gone';
-		if (now === 'DELETE_FAILED') {
-			error(`${name} (was ${status}) is DELETE_FAILED; cleanup-stacks.yml retries it.`);
-			failed = true;
-			continue;
-		}
-		console.log(
-			`::warning title=E2E teardown::Deleting ${name}, left ${status} by this ${jobStatus || 'unknown'} job (now ${now}).`,
-		);
-	}
-	if (jobStatus === 'success') {
-		error("The tests passed but left this job's stacks behind; their own destroy should have removed them.");
-		failed = true;
+		const why = jobStatus === 'success' ? "the tests passed but the suite's own destroy left it" : `this ${jobStatus} job left it`;
+		warning(`Deleting ${name}: ${why} ${was} (now ${now}).`);
 	}
 	return failed ? 1 : 0;
 }

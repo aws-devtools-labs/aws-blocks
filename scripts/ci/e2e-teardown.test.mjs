@@ -35,6 +35,7 @@ const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
 switch (args[1]) {
 	case 'list-stacks':
 		if (state.listError) fail(state.listError);
+		if ((state.listErrors || []).length) { const e = state.listErrors.shift(); save(); fail(e); }
 		process.stdout.write(JSON.stringify(state.stacks.filter((s) => s.StackStatus !== 'DELETE_COMPLETE')));
 		break;
 	case 'describe-stacks': {
@@ -169,7 +170,7 @@ describe('e2e-teardown.mjs', () => {
 
 	it('gives up within its time budget instead of hanging', () => {
 		const name = `bb-test-${ID}-pr-9-1`;
-		const busy = 'An error occurred (ValidationError): Stack is in UPDATE_IN_PROGRESS state and can not be deleted';
+		const busy = 'An error occurred (ValidationError) when calling the DeleteStack operation: Stack is in UPDATE_IN_PROGRESS state and can not be deleted';
 		const started = Date.now();
 		const r = run({
 			stacks: [stack(name, 'UPDATE_IN_PROGRESS')],
@@ -181,19 +182,53 @@ describe('e2e-teardown.mjs', () => {
 		assert.match(r.out, /::error title=E2E teardown::.*UPDATE_IN_PROGRESS/);
 	});
 
+	it('re-issues the delete of a stack the suite left DELETE_FAILED', () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name, 'DELETE_FAILED')], jobStatus: 'failure' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [name]);
+		assert.match(r.out, /::warning title=E2E teardown::.*this failure job left it DELETE_FAILED/);
+	});
+
+	it('fails when an accepted delete never starts', () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name, 'CREATE_IN_PROGRESS')], statusAfterDelete: 'CREATE_IN_PROGRESS', budget: '1' });
+		assert.equal(r.status, 1, r.out);
+		assert.match(r.out, /::error title=E2E teardown::.*is CREATE_IN_PROGRESS after DeleteStack/);
+	});
+
 	it('reports a stack that moves to DELETE_FAILED', () => {
 		const name = `bb-test-${ID}-pr-9-1`;
-		const r = run({ stacks: [stack(name, 'CREATE_FAILED')], statusAfterDelete: 'DELETE_FAILED' });
+		const r = run({ stacks: [stack(name, 'CREATE_FAILED')], statusAfterDelete: 'DELETE_FAILED', budget: '1' });
 		assert.equal(r.status, 1, r.out);
 		assert.match(r.out, /::error title=E2E teardown::.*DELETE_FAILED/);
 	});
 
-	it('fails a passing job that left a stack behind', () => {
+	it("warns, without failing, when a passing job's suite left its stack", () => {
 		const name = `bb-test-${ID}-pr-9-1`;
-		const r = run({ stacks: [stack(name)], jobStatus: 'success' });
+		const r = run({ stacks: [stack(name, 'DELETE_FAILED')], jobStatus: 'success' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [name]);
+		assert.match(r.out, /::warning title=E2E teardown::.*tests passed but the suite's own destroy left it DELETE_FAILED/);
+	});
+
+	it('retries a throttled ListStacks', () => {
+		const r = run({ listErrors: ['An error occurred (Throttling) when calling the ListStacks operation: Rate exceeded'] });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(
+			r.calls.map((c) => c[1]),
+			['list-stacks', 'list-stacks'],
+		);
+	});
+
+	it('does not retry a denied delete because the stack name looks like a 5xx', () => {
+		const name = `bb-test-${ID}-pr-503-1`;
+		const r = run({
+			stacks: [stack(name)],
+			deleteErrors: { [name]: [`An error occurred (AccessDenied) when calling the DeleteStack operation: not authorized on ${name}`] },
+		});
 		assert.equal(r.status, 1, r.out);
 		assert.deepEqual(deletes(r.calls), [name]);
-		assert.match(r.out, /::error title=E2E teardown::.*passed/);
 	});
 
 	it('fails when it cannot list the stacks', () => {
@@ -249,30 +284,35 @@ describe('pr-checks.yml', () => {
 		assert.ok(deploying.includes('e2e-production'));
 	});
 
+	// What a last always() step may run to tear a job's stacks down.
+	const TEARDOWN = /scripts\/ci\/e2e-teardown\.mjs|test\/sandbox-destroy\.ts|scripts\/sandbox-destroy\.ts|scripts\/destroy\.ts/;
+
 	for (const id of deploying) {
-		it(`${id} tears down in an always() step after its tests`, () => {
+		it(`${id} ends with an always() step that tears its stacks down`, () => {
 			const steps = stepsOf(jobs[id]);
 			const last = steps.at(-1);
 			assert.match(ifOf(last), /^always\(\)/, `${id}: the last step must run with if: always()`);
+			assert.match(last, TEARDOWN, `${id}: the last step must run a teardown`);
 			const creds = steps.findIndex((s) => s.includes(CREDENTIALS));
-			const teardown = steps.findIndex((s, i) => i > creds && /^always\(\)/.test(ifOf(s)));
-			assert.ok(teardown > creds, `${id}: no always() step after the credentials step`);
+			assert.ok(creds >= 0 && creds < steps.length - 1, `${id}: the teardown must come after the credentials step`);
 		});
 	}
 
-	for (const id of deploying.filter((j) => jobs[j].includes('scripts/ci/e2e-teardown.mjs'))) {
+	for (const id of ['e2e-sandbox', 'e2e-production']) {
 		it(`${id} refreshes credentials for the teardown, skips it when nothing was synthesized, and bounds it`, () => {
 			const steps = stepsOf(jobs[id]);
-			const i = steps.findIndex((s) => s.includes('scripts/ci/e2e-teardown.mjs'));
-			const appDir = steps[i].match(/scripts\/ci\/e2e-teardown\.mjs (\S+)/)[1];
-			const guard = `always() && hashFiles('${appDir}/.blocks-sandbox/sandbox-id.txt') != ''`;
-			assert.equal(ifOf(steps[i]), guard);
-			assert.ok(steps[i - 1].includes(CREDENTIALS), `${id}: the teardown must follow a credentials step`);
-			assert.equal(ifOf(steps[i - 1]), guard);
-			assert.match(steps[i], /JOB_STATUS: \$\{\{ job\.status \}\}/);
-			// GitHub force-stops a cancelled job 5 minutes after the cancel.
-			const minutes = Number(steps[i].match(/timeout-minutes: (\d+)/)?.[1]);
-			assert.ok(minutes > 0 && minutes <= 4, `${id}: teardown timeout-minutes must be 1-4`);
+			const [teardown, refresh] = [steps.at(-1), steps.at(-2)];
+			assert.match(teardown, /run: node scripts\/ci\/e2e-teardown\.mjs test-apps\/comprehensive\n/);
+			const guard = "always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''";
+			assert.equal(ifOf(teardown), guard);
+			assert.ok(refresh.includes(CREDENTIALS), `${id}: the teardown must follow a credentials step`);
+			assert.equal(ifOf(refresh), guard);
+			assert.match(teardown, /JOB_STATUS: \$\{\{ job\.status \}\}/);
+			// GitHub force-stops a cancelled job 5 minutes after the cancel; both
+			// steps together must end before that.
+			const minutes = (step) => Number(step.match(/timeout-minutes: (\d+)/)?.[1]);
+			assert.ok(minutes(refresh) >= 1 && minutes(teardown) >= 1, `${id}: both steps need timeout-minutes`);
+			assert.ok(minutes(refresh) + minutes(teardown) <= 4, `${id}: the steps may take at most 4 minutes together`);
 		});
 	}
 });
