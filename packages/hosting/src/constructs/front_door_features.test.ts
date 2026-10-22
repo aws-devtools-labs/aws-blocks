@@ -208,7 +208,7 @@ describe('HostingConstruct — frontDoor.features', () => {
           cacheKeyHeaders: ['authorization'],
           ssrDefaultTtl: Duration.seconds(5),
           geoRestriction: { type: 'whitelist', countries: ['US'] },
-          responseHeadersPolicy: ResponseHeadersPolicy.SECURITY_HEADERS,
+          responseHeadersPolicy: ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT_AND_SECURITY_HEADERS,
           // Nine cache-key cookies need a raised quota: dropping this alias fails synth.
           quotas: { cacheKeyCookies: 12 },
         },
@@ -229,7 +229,7 @@ describe('HostingConstruct — frontDoor.features', () => {
             cacheKeyHeaders: ['authorization'],
             ssrDefaultTtl: Duration.seconds(5),
             geoRestriction: { type: 'whitelist', countries: ['US'] },
-            responseHeadersPolicy: ResponseHeadersPolicy.SECURITY_HEADERS,
+            responseHeadersPolicy: ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT_AND_SECURITY_HEADERS,
             quotas: { cacheKeyCookies: 12 },
           },
         },
@@ -243,6 +243,14 @@ describe('HostingConstruct — frontDoor.features', () => {
     const json = JSON.stringify(aliased);
     assert.match(json, /"authorization"/);
     assert.equal(Object.keys(Template.fromJSON(aliased).findResources('AWS::CloudFront::ResponseHeadersPolicy')).length, 0);
+    // A non-default policy, so a dropped `cdn.responseHeadersPolicy` alias can't pass as the default.
+    Template.fromJSON(aliased).hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        DefaultCacheBehavior: Match.objectLike({
+          ResponseHeadersPolicyId: ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS_WITH_PREFLIGHT_AND_SECURITY_HEADERS.responseHeadersPolicyId,
+        }),
+      }),
+    });
   });
 
   it('an alias reaches a non-CloudFront door: top-level waf → the ALB web ACL', () => {
