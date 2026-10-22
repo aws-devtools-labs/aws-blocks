@@ -40,6 +40,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+import { imagePathPrefixes } from './asset_proxy_core.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
@@ -83,12 +84,13 @@ export type ApiGatewayConstructProps = {
   computeRoutes?: readonly { pattern: string; computeName: string }[];
   /**
    * The deploy has no image function: route the framework image endpoints
-   * (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to the asset
+   * (`/_next/image`, `/_ipx/*` and each of `pathPrefixes`, `/_image`, under
+   * the basePath) to the asset
    * proxy, which serves the source image unoptimized. A remote source is
    * redirected to itself only when its host is in `hosts` (the app's image
    * allowlist); the proxy never fetches it.
    */
-  imageFallback?: { hosts: readonly string[] };
+  imageFallback?: { hosts: readonly string[]; pathPrefixes?: readonly string[] };
 };
 
 
@@ -246,7 +248,8 @@ export class ApiGatewayConstruct extends Construct {
     // which answers them with the source image.
     if (props.imageFallback && !imageFn) {
       const base = (plan.policies.basePath ?? '').replace(/\/+$/, '');
-      for (const path of [`${base}/_next/image`, `${base}/_ipx/{proxy+}`, `${base}/_image`]) {
+      const pathForms = imagePathPrefixes(props.imageFallback.pathPrefixes).map((p) => `${base}${p}/{proxy+}`);
+      for (const path of [`${base}/_next/image`, ...pathForms, `${base}/_image`]) {
         if (seen.has(path)) continue;
         seen.add(path);
         this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });

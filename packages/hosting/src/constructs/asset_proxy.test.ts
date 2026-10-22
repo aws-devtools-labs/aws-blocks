@@ -510,6 +510,25 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     assert.equal((await handler()(get('/_next/image', { url: '/img/missing.png' }))).statusCode, 404);
   });
 
+  it('a custom IPX base URL (`pathPrefixes`) is answered like `/_ipx`, under the basePath too', async () => {
+    const custom = (stripPrefix = '') =>
+      loadHandler(
+        generateApiGwAssetProxyCode({
+          spaFallback: false,
+          stripPrefix,
+          imageFallback: { hosts: ['images.example.com'], pathPrefixes: ['/img/'] },
+        }),
+        IMAGE_OBJECTS,
+      );
+    assert.equal(decode(await custom()(get('/img/w_640/img/cat.png'))), 'png-bytes');
+    assert.equal(decode(await custom('/app')(get('/app/img/w_640/img/cat.png'))), 'png-bytes');
+    const remote = await custom()(get('/img/w_640/https:/images.example.com/a.jpg'));
+    assert.equal(remote.statusCode, 302);
+    assert.equal(remote.headers.location, 'https://images.example.com/a.jpg');
+    // The default endpoint still works next to the custom one.
+    assert.equal(decode(await custom()(get('/_ipx/w_640/img/cat.png'))), 'png-bytes');
+  });
+
   it('without `imageFallback` the endpoints are plain paths (no source lookup)', async () => {
     const plain = loadHandler(generateApiGwAssetProxyCode({ spaFallback: false }), IMAGE_OBJECTS);
     const res = await plain(get('/_next/image', { url: '/img/cat.png' }));

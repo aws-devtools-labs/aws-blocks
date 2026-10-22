@@ -12,6 +12,7 @@ import {
   buildDevServerSpawn,
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
+  buildSandboxWatchArgs,
   findHostingUrl,
   PREVIEW_MODE_CONTEXT,
   findExpressUnsafeStacks,
@@ -259,8 +260,14 @@ describe('preview sandbox — the previewMode context', () => {
     }
   });
 
+  it('the watch after the first deploy keeps previewMode=true, so a file change re-deploys the preview', () => {
+    const args = buildSandboxWatchArgs({ ...base, preview: true });
+    assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'watch']);
+    assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true', 'previewMode=true']);
+  });
+
   it('a plain sandbox passes no previewMode context', () => {
-    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base)]) {
+    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base), buildSandboxWatchArgs(base)]) {
       assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true']);
     }
   });

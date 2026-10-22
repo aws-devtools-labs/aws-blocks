@@ -207,6 +207,33 @@ describe('Hosting with HostingPresets.preview', () => {
     });
   });
 
+  it('a custom IPX endpoint from the manifest is routed to the asset proxy, which matches it', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const fixture = ssrFixture(tmpDir, seen);
+    const stack = newStack('PreviewCustomIpx');
+    new Hosting(stack, 'Hosting', {
+      ...HostingPresets.preview,
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: (dir) => {
+        const manifest = fixture(dir);
+        // What the Nitro adapter emits for `runtimeConfig.ipx.baseURL: '/img'` with no image function.
+        manifest.routes.unshift({ pattern: '/img/*', target: 'image-optimization' });
+        delete manifest.imageOptimization;
+        return manifest;
+      },
+    });
+
+    const t = Template.fromStack(stack);
+    const [route] = Object.values(t.findResources('AWS::ApiGatewayV2::Route', { Properties: { RouteKey: 'ANY /img/{proxy+}' } }));
+    assert.ok(route, 'the custom endpoint has its own API route');
+    assert.match(JSON.stringify(route.Properties.Target), /AssetInt/);
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      Code: { ZipFile: Match.stringLikeRegexp('IMAGE_PATH_PREFIXES = \\["/_ipx","/img"\\]') },
+    });
+  });
+
   it('`imageOptimization: true` after the spread keeps the image function', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewKeepImage');

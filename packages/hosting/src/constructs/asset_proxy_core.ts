@@ -108,8 +108,12 @@ export type AssetProxyOptions = ProxyRules & {
    * 404. The proxy never fetches a remote URL, so it can't be used to reach
    * internal endpoints. Only the API Gateway door's proxy reads the request
    * query, so only it answers these.
+   *
+   * `pathPrefixes` are the path-form (IPX-style, `<prefix>/<modifiers>/<src>`)
+   * endpoints, basePath-relative: `/_ipx` by default, plus a custom
+   * `runtimeConfig.ipx.baseURL`.
    */
-  imageFallback?: { hosts: readonly string[] };
+  imageFallback?: { hosts: readonly string[]; pathPrefixes?: readonly string[] };
 };
 
 /**
@@ -120,6 +124,17 @@ export type AssetProxyOptions = ProxyRules & {
  * @param opts the prefix to strip, the SPA fallback, and the app's rules and error pages.
  * @returns the source, to inline ahead of an envelope handler.
  */
+/**
+ * The path-form image endpoint prefixes: `/_ipx` plus any configured ones,
+ * normalized (one leading slash, no trailing slash) and deduplicated.
+ *
+ * @param prefixes the configured prefixes, basePath-relative.
+ * @returns the prefixes the proxy matches.
+ */
+export const imagePathPrefixes = (prefixes: readonly string[] = []): string[] => [
+  ...new Set(['/_ipx', ...prefixes].map((p) => `/${p.replace(/^\/+/, '').replace(/\/+$/, '')}`).filter((p) => p !== '/')),
+];
+
 export const assetProxyCoreJs = (opts: AssetProxyOptions): string => {
   const pageKey = (page: string | undefined): string => JSON.stringify((page ?? '').replace(/^\/+/, ''));
   return `const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
@@ -132,6 +147,7 @@ const SPA_FALLBACK = ${opts.spaFallback ? 'true' : 'false'};
 const NOT_FOUND_PAGE = ${pageKey(opts.errorPages?.notFound)};
 const IMAGE_FALLBACK = ${opts.imageFallback ? 'true' : 'false'};
 const IMAGE_REMOTE_HOSTS = ${JSON.stringify(opts.imageFallback?.hosts ?? [])};
+const IMAGE_PATH_PREFIXES = ${JSON.stringify(imagePathPrefixes(opts.imageFallback?.pathPrefixes))};
 const SERVER_ERROR_PAGE = ${pageKey(opts.errorPages?.serverError)};
 
 ${proxyRulesJs(opts)}
@@ -312,10 +328,14 @@ function blocksImageSource(requestUri, query) {
   if (!IMAGE_FALLBACK) return null;
   var rel = stripBasePath(requestUri, STRIP_PREFIX);
   var src;
-  if (rel.indexOf('/_ipx/') === 0) {
-    // '/_ipx/<modifiers>/<src>'; a remote source is inlined ('https://host/…'),
+  var prefix = null;
+  for (var p = 0; p < IMAGE_PATH_PREFIXES.length; p++) {
+    if (rel.indexOf(IMAGE_PATH_PREFIXES[p] + '/') === 0) { prefix = IMAGE_PATH_PREFIXES[p]; break; }
+  }
+  if (prefix !== null) {
+    // '<prefix>/<modifiers>/<src>'; a remote source is inlined ('https://host/…'),
     // and API Gateway may collapse its '//'.
-    var rest = rel.substring('/_ipx/'.length);
+    var rest = rel.substring(prefix.length + 1);
     var slash = rest.indexOf('/');
     src = slash === -1 ? '' : rest.substring(slash + 1).replace(/^(https?):\\/+/i, '$1://');
   } else if (rel === '/_next/image' || rel === '/_image') {

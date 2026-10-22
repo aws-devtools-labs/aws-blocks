@@ -227,6 +227,30 @@ void describe('nitroAdapter — IPX provisioning', () => {
     assert.strictEqual(ipxRoute.pattern, '/_ipx/*');
   });
 
+  void it('`skipImageOptimization` builds no IPX bundle but keeps a custom IPX endpoint route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ runtimeConfig: { ipx: { baseURL: '/img' } } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined, 'no image function is built');
+    const ipxRoute = manifest.routes.find((r) => r.target === 'image-optimization');
+    assert.strictEqual(ipxRoute?.pattern, '/img/*', 'the custom endpoint stays in the route table');
+  });
+
+  void it('`skipImageOptimization` without @nuxt/image emits no image route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.routes.find((r) => r.target === 'image-optimization'), undefined);
+  });
+
   void it('does NOT provision IPX Lambda when @nuxt/image is missing', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
