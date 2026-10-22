@@ -468,8 +468,12 @@ ${headerRowsJs('HEADERS', '  ')}
     // The assets origin sits at the build prefix, so a page is served at its key.
     const errorResponses = customErrorResponses(errorPages, { pathPrefix: '', hasCompute: Boolean(origins.server) });
     const behaviors: Record<string, BehaviorOptions> = {};
+    const record = recordOf(origins.assets);
     for (const page of new Set(errorResponses.map((r) => r.responsePagePath ?? ''))) {
-      if (page) behaviors[page] = behaviorFor(origins.assets);
+      if (!page) continue;
+      behaviors[page] = behaviorFor(origins.assets);
+      // Counted toward the distribution's behavior budget, like every helper behavior.
+      record?.behaviors.add(page);
     }
     return { errorResponses, behaviors };
   },

@@ -27,13 +27,14 @@ const plan: HostingPlan = {
 
 const API_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
 
-const setup = (opts: { api?: boolean; rawRoutes?: string[] } = {}) => {
+const setup = (opts: { api?: boolean; rawRoutes?: string[]; errorPages?: boolean } = {}) => {
 	const stack = new Stack(new App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
 	const input = buildDoorInput({
 		plan,
 		bucket: new Bucket(stack, 'Assets'),
 		staticDir: '.',
 		...(opts.api ? { api: { url: API_URL, paths: opts.rawRoutes } } : {}),
+		...(opts.errorPages ? { errorPages: { notFound: '404.html', serverError: '500.html' } } : {}),
 	});
 	return { stack, input };
 };
@@ -43,7 +44,9 @@ const helperDoor = (opts: { wireApi?: boolean; wireAssets?: boolean } = {}) =>
 	defineFrontDoor({
 		service: 'helper-cdn',
 		build(scope, { app, origins }) {
+			const pages = cf.errorPages(app.errorPages, origins);
 			const dist = new Distribution(scope, 'Cdn', {
+				errorResponses: pages.errorResponses,
 				defaultBehavior: {
 					origin:
 						opts.wireAssets === false
@@ -53,6 +56,7 @@ const helperDoor = (opts: { wireApi?: boolean; wireAssets?: boolean } = {}) =>
 				additionalBehaviors: {
 					...(opts.wireAssets === false ? {} : cf.behaviors(app.routes)),
 					...(opts.wireApi === false ? {} : cf.apiBehaviors(origins.api)),
+					...pages.behaviors,
 				},
 			});
 			return { url: `https://${dist.distributionDomainName}` };
@@ -194,6 +198,15 @@ describe('buildFrontDoor — the routes/API wiring check', () => {
 		const over = warn(23);
 		assert.equal(over.length, 1, '25 do not');
 		assert.match(String(over[0]?.entry.data), /25 cache behaviors/);
+	});
+
+	it("counts cf.errorPages' page behaviors toward the limit", () => {
+		const { stack, input } = setup({ api: true, errorPages: true, rawRoutes: Array.from({ length: 22 }, (_, i) => `/hook${i}/*`) });
+		buildFrontDoor(stack, helperDoor(), input);
+		// `/assets/*` + `/aws-blocks/*` + 22 raw routes + the 404 and 500 pages = 26.
+		const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('FrontDoorBehaviorLimit'));
+		assert.equal(warnings.length, 1);
+		assert.match(String(warnings[0]?.entry.data), /26 cache behaviors/);
 	});
 
 	describe('escape hatches for a door wired with raw CDK', () => {
