@@ -1,0 +1,4 @@
+# Auth immutability baselines (written at synth, keyed by stack id). This e2e
+# app deploys a fresh, per-checkout sandbox stack id every time, so they are
+# machine-specific and never committed — a real app commits its baselines.
+aws-blocks/baselines/

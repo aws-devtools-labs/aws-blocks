@@ -82,6 +82,8 @@
     "test:e2e:local": "cd test-apps/comprehensive && npm run test:e2e:local && cd ../.. && npm run test:vendorize && npm run test:iam-boundary",
     "test:e2e:sandbox": "cd test-apps/comprehensive && npm run test:e2e:sandbox",
     "test:e2e:production": "cd test-apps/comprehensive && npm run test:e2e:production",
+    "test:e2e:upgrade-in-place": "cd test-apps/comprehensive && npm run test:upgrade-in-place",
+    "test:e2e:upgrade-in-place:dry-run": "cd test-apps/comprehensive && npm run test:upgrade-in-place:dry-run",
     "test:e2e:local:vpc": "cd test-apps/vpc-smoke && npm run test:e2e:local",
     "test:e2e:sandbox:vpc": "cd test-apps/vpc-smoke && npm run test:e2e:sandbox",
     "test:e2e:production:vpc": "cd test-apps/vpc-smoke && npm run test:e2e:production",
