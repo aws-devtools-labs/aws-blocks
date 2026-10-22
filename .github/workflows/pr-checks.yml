@@ -253,6 +253,11 @@ jobs:
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs
 
+      # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to count
+      # REST APIs against the EDGE quota; a broken count must fail its leg.
+      - name: Test the REST API quota report
+        run: node --test scripts/ci/rest-api-quota.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
