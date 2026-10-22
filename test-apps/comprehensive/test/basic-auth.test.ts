@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { isBlocksError } from '@aws-blocks/core';
+import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
@@ -65,13 +66,6 @@ function sessionCookieHeader(setCookies: string[]): string | null {
   return found.split(';')[0]; // name=value, drop attributes
 }
 
-const InvalidCredentials = 'InvalidCredentialsException';
-const UserAlreadyExists = 'UserAlreadyExistsException';
-const SessionExpired = 'SessionExpiredException';
-const SessionRevoked = 'SessionRevokedException';
-const InvalidPassword = 'InvalidPasswordException';
-const InvalidCode = 'InvalidCodeException';
-
 function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -97,7 +91,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
 
@@ -127,7 +121,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmSignUp(username, '000000');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
 
@@ -139,7 +133,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(username, 'password456');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, UserAlreadyExists), `Expected ${UserAlreadyExists}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.UserAlreadyExists), `Expected ${AuthBasicErrors.UserAlreadyExists}, got ${e}`);
         }
       });
 
@@ -149,7 +143,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(uniqueUser(), 'short');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidPassword), `Expected ${AuthBasicErrors.InvalidPassword}, got ${e}`);
         }
       });
     });
@@ -181,7 +175,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'wrongpassword');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
 
@@ -191,7 +185,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn('no-such-user-ever', 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
     });
@@ -264,7 +258,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authRequired();
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, SessionExpired), `Expected ${SessionExpired}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.SessionExpired), `Expected ${AuthBasicErrors.SessionExpired}, got ${e}`);
         }
       });
 
@@ -320,7 +314,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(err.code, 401, 'requireAuth rejects the revoked cookie with 401');
         assert.strictEqual(
           err.data?.name,
-          SessionRevoked,
+          AuthBasicErrors.SessionRevoked,
           'the revoked session surfaces as SessionRevokedException over the wire',
         );
       });
@@ -357,7 +351,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials));
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials));
         }
 
         // New password should work
@@ -378,7 +372,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmResetPassword(username, '000000', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
 
@@ -393,7 +387,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmResetPassword(username, '123456', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
     });
