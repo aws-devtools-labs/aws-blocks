@@ -323,6 +323,79 @@ void main() {
       );
     });
 
+    test('defaults the authorize-params and callback routes to the auth '
+        "block's /aws-blocks/auth/* routes", () async {
+      // Regression: the defaults were `/auth/authorize-params` and
+      // `/auth/callback`, which no auth block serves — the block mounts every
+      // federation route under `/aws-blocks/auth/`. A client built without the
+      // two paths must hit the routes the backend actually serves.
+      final authParamsUrls = <String>[];
+      final exchangeUrls = <String>[];
+      Map<String, dynamic>? exchangeBody;
+      final httpClient = MockClient((req) async {
+        if (req.url.path.contains('/authorize-params/')) {
+          authParamsUrls.add(req.url.toString());
+          final csrf = (jsonDecode(req.body) as Map)['csrf'] as String;
+          return http.Response(
+            jsonEncode({
+              'authorizeUrl': 'https://idp.example.com/authorize',
+              'clientId': 'cid',
+              'scopes': ['openid'],
+              'kind': 'oidc-builtin',
+              'state': makeStateEnvelope(csrf: csrf, relay: _relayTo),
+            }),
+            200,
+          );
+        }
+        exchangeUrls.add(req.url.toString());
+        exchangeBody = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'user': {'userId': 'u1', 'username': 'dave'},
+          }),
+          200,
+        );
+      });
+
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'https://host.example.com/prod/aws-blocks/api',
+        tokenStore: InMemoryTokenStore(),
+        httpClient: httpClient,
+      );
+      final launcher = FakeLauncher(
+        onLaunch: (authorizeUrl, scheme) {
+          final state = authorizeUrl.queryParameters['state']!;
+          return Uri.parse(
+            '$_relayTo?code=c&state=${Uri.encodeComponent(state)}',
+          );
+        },
+      );
+
+      await client.signInRelay('google', launcher: launcher, relayTo: _relayTo);
+
+      expect(
+        authParamsUrls.single,
+        'https://host.example.com/prod/aws-blocks/auth/authorize-params/google',
+      );
+      expect(
+        exchangeUrls.single,
+        'https://host.example.com/prod/aws-blocks/auth/exchange',
+      );
+      expect(
+        exchangeBody!['callbackUrl'],
+        'https://host.example.com/prod/aws-blocks/auth/callback',
+      );
+      expect(
+        launcher.capturedAuthorizeUrl!.queryParameters['redirect_uri'],
+        'https://host.example.com/prod/aws-blocks/auth/callback',
+      );
+    });
+
     test(
       'omits iss from exchange body when the relay redirect has none',
       () async {
