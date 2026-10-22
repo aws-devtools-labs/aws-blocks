@@ -1,0 +1,129 @@
+{
+	"$comment": [
+		"FROZEN at the cutover (F1b): what the real AuthCognito (bb-auth-cognito@0.1.10) and AuthBasic",
+		"(bb-auth-basic@0.1.9) mocks left in .bb-data/ and in the browser cookie jar after each scenario,",
+		"byte for byte. Tests restore the files and cookies and pin Date to capturedAt.",
+		"Proven equal to the live packages by legacy-fixtures.proof.test.ts in the commit that froze it.",
+		"Regenerate from the revision that froze it (the parent of the commit that deleted packages/bb-auth-cognito): UPDATE_LEGACY_FIXTURES=1 node --test dist/legacy-fixtures.proof.test.js (in packages/bb-auth)."
+	],
+	"captures": {
+		"cognito-mfa-session": {
+			"scenario": "cognito-mfa-session: AuthCognito { groups: ['admins'], mfa: 'optional', mfaTypes: ['TOTP'], admin: {} }: sign up + confirm alice (email attribute), add her to admins, sign in, set up and verify TOTP, remember the device.",
+			"rootId": "legacy-mfa",
+			"capturedAt": 1791080035576,
+			"files": {
+				"legacy-mfa-auth/last-code.json": "{\n  \"username\": \"alice\",\n  \"code\": \"177325\",\n  \"purpose\": \"signUp\"\n}",
+				"legacy-mfa-auth/state.json": "{\n  \"users\": {\n    \"alice\": {\n      \"userSub\": \"8f847ba5-6682-47bf-98ce-2aa3e5faa9ee\",\n      \"password\": \"Passw0rd!\",\n      \"confirmed\": true,\n      \"disabled\": false,\n      \"attributes\": {\n        \"email\": \"alice@example.com\",\n        \"email_verified\": \"true\"\n      },\n      \"mfaPreference\": {\n        \"preferred\": \"TOTP\",\n        \"enabled\": [\n          \"TOTP\"\n        ]\n      },\n      \"totpVerified\": true,\n      \"devices\": {\n        \"4359b056-de71-4335-a63c-e0b482ec8eb5\": {\n          \"deviceKey\": \"4359b056-de71-4335-a63c-e0b482ec8eb5\",\n          \"attributes\": {},\n          \"createDate\": \"2026-10-04T02:13:55.573Z\",\n          \"lastModifiedDate\": \"2026-10-04T02:13:55.575Z\",\n          \"lastAuthenticatedDate\": \"2026-10-04T02:13:55.575Z\"\n        }\n      },\n      \"totpSharedSecret\": \"GAIRFZCHVDLXZF25OWSJGYEJSXDNZB67\"\n    }\n  },\n  \"groups\": {\n    \"admins\": [\n      \"alice\"\n    ]\n  },\n  \"codes\": {},\n  \"challenges\": {},\n  \"sessionSecret\": \"e25c1246934c4e95d4c51cddaf5b3beb011e7b738ed43119ff6c632f0f7eabb2\"\n}",
+				"legacy-mfa-auth-sessions/store.json": "{\n  \"VOoi-6shW0vWGeOoYQr_E9x65eRFwyGl\": {\n    \"value\": \"{\\\"idToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6IjhmODQ3YmE1LTY2ODItNDdiZi05OGNlLTJhYTNlNWZhYTllZSIsImNvZ25pdG86dXNlcm5hbWUiOiJhbGljZSIsImNvZ25pdG86Z3JvdXBzIjpbImFkbWlucyJdLCJ0b2tlbl91c2UiOiJpZCIsImV4cCI6MTgyNTY0MDAzNSwiZW1haWwiOiJhbGljZUBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjoidHJ1ZSJ9.mock-signature\\\",\\\"accessToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6IjhmODQ3YmE1LTY2ODItNDdiZi05OGNlLTJhYTNlNWZhYTllZSIsInVzZXJuYW1lIjoiYWxpY2UiLCJ0b2tlbl91c2UiOiJhY2Nlc3MiLCJleHAiOjE4MjU2NDAwMzV9.mock-signature\\\",\\\"refreshToken\\\":\\\"mock-refresh-1ddb6e8b83158b6f\\\"}\",\n    \"ttl\": 1825640035\n  }\n}"
+			},
+			"cookies": {
+				"auth_legacy-mfa-auth": "VOoi-6shW0vWGeOoYQr_E9x65eRFwyGl.y9sb3NtbPBLm_UMoO47os-ZCMVXVHFaj43eBOnzmlKw"
+			},
+			"results": {
+				"user": {
+					"userId": "alice",
+					"username": "alice",
+					"userSub": "8f847ba5-6682-47bf-98ce-2aa3e5faa9ee",
+					"groups": [
+						"admins"
+					],
+					"attributes": {
+						"email": "alice@example.com",
+						"email_verified": "true"
+					}
+				}
+			}
+		},
+		"cognito-email-only-session": {
+			"scenario": "cognito-email-only-session: AuthCognito { signInWith: 'email' }: sign up + confirm nora@example.com, sign in.",
+			"rootId": "legacy-email",
+			"capturedAt": 1791080035586,
+			"files": {
+				"legacy-email-auth/last-code.json": "{\n  \"username\": \"nora@example.com\",\n  \"code\": \"965105\",\n  \"purpose\": \"signUp\"\n}",
+				"legacy-email-auth/state.json": "{\n  \"users\": {\n    \"nora@example.com\": {\n      \"userSub\": \"24b22f16-e82e-44fd-b58a-5b62f50056fb\",\n      \"password\": \"Passw0rd!\",\n      \"confirmed\": true,\n      \"disabled\": false,\n      \"attributes\": {\n        \"email\": \"nora@example.com\",\n        \"email_verified\": \"true\"\n      },\n      \"mfaPreference\": {\n        \"enabled\": []\n      },\n      \"totpVerified\": false,\n      \"devices\": {}\n    }\n  },\n  \"groups\": {},\n  \"codes\": {},\n  \"challenges\": {},\n  \"sessionSecret\": \"809c55606a05065eb0949656850b35a61943112dd67e6b18829fe5f49050c1b2\"\n}",
+				"legacy-email-auth-sessions/store.json": "{\n  \"YtiINKGwIlNi3qHd6UnaGkBxFqCIiSy-\": {\n    \"value\": \"{\\\"idToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6IjI0YjIyZjE2LWU4MmUtNDRmZC1iNThhLTViNjJmNTAwNTZmYiIsImNvZ25pdG86dXNlcm5hbWUiOiJub3JhQGV4YW1wbGUuY29tIiwiY29nbml0bzpncm91cHMiOltdLCJ0b2tlbl91c2UiOiJpZCIsImV4cCI6MTgyNTY0MDAzNSwiZW1haWwiOiJub3JhQGV4YW1wbGUuY29tIiwiZW1haWxfdmVyaWZpZWQiOiJ0cnVlIn0.mock-signature\\\",\\\"accessToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6IjI0YjIyZjE2LWU4MmUtNDRmZC1iNThhLTViNjJmNTAwNTZmYiIsInVzZXJuYW1lIjoibm9yYUBleGFtcGxlLmNvbSIsInRva2VuX3VzZSI6ImFjY2VzcyIsImV4cCI6MTgyNTY0MDAzNX0.mock-signature\\\",\\\"refreshToken\\\":\\\"mock-refresh-11de7e9bc7b2993b\\\"}\",\n    \"ttl\": 1825640035\n  }\n}"
+			},
+			"cookies": {
+				"auth_legacy-email-auth": "YtiINKGwIlNi3qHd6UnaGkBxFqCIiSy-.S13wTGOfPefIY7KtgC5cOZFcz60s7qdxrf8vY7twQsk"
+			},
+			"results": {
+				"user": {
+					"userId": "nora@example.com",
+					"username": "nora@example.com",
+					"userSub": "24b22f16-e82e-44fd-b58a-5b62f50056fb",
+					"groups": [],
+					"attributes": {
+						"email": "nora@example.com",
+						"email_verified": "true"
+					}
+				}
+			}
+		},
+		"cognito-groups-session": {
+			"scenario": "cognito-groups-session: AuthCognito { groups: ['admins'] } under app 'upgrade-app': sign up + confirm alice, sign in.",
+			"rootId": "upgrade-app",
+			"capturedAt": 1791080035594,
+			"files": {
+				"upgrade-app-auth/last-code.json": "{\n  \"username\": \"alice\",\n  \"code\": \"199083\",\n  \"purpose\": \"signUp\"\n}",
+				"upgrade-app-auth/state.json": "{\n  \"users\": {\n    \"alice\": {\n      \"userSub\": \"ae2cbd62-2797-4ced-b8a0-a37bac99f149\",\n      \"password\": \"Passw0rd!\",\n      \"confirmed\": true,\n      \"disabled\": false,\n      \"attributes\": {\n        \"email\": \"alice@example.com\",\n        \"email_verified\": \"true\"\n      },\n      \"mfaPreference\": {\n        \"enabled\": []\n      },\n      \"totpVerified\": false,\n      \"devices\": {}\n    }\n  },\n  \"groups\": {\n    \"admins\": []\n  },\n  \"codes\": {},\n  \"challenges\": {},\n  \"sessionSecret\": \"e1f6ff9fba9fd9f04d9b032850cce29d2b5abbca8c179d0c695105e7b5bc9ac0\"\n}",
+				"upgrade-app-auth-sessions/store.json": "{\n  \"ejX7uOPtfF29XgyEW8vBtono-YSgVwV6\": {\n    \"value\": \"{\\\"idToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6ImFlMmNiZDYyLTI3OTctNGNlZC1iOGEwLWEzN2JhYzk5ZjE0OSIsImNvZ25pdG86dXNlcm5hbWUiOiJhbGljZSIsImNvZ25pdG86Z3JvdXBzIjpbXSwidG9rZW5fdXNlIjoiaWQiLCJleHAiOjE4MjU2NDAwMzUsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS5jb20iLCJlbWFpbF92ZXJpZmllZCI6InRydWUifQ.mock-signature\\\",\\\"accessToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL21vY2suYmItYXV0aC1jb2duaXRvIiwiYXVkIjoibW9jay1jbGllbnQiLCJpYXQiOjE3OTEwODAwMzUsInN1YiI6ImFlMmNiZDYyLTI3OTctNGNlZC1iOGEwLWEzN2JhYzk5ZjE0OSIsInVzZXJuYW1lIjoiYWxpY2UiLCJ0b2tlbl91c2UiOiJhY2Nlc3MiLCJleHAiOjE4MjU2NDAwMzV9.mock-signature\\\",\\\"refreshToken\\\":\\\"mock-refresh-0ff843f08ebbf5cb\\\"}\",\n    \"ttl\": 1825640035\n  }\n}"
+			},
+			"cookies": {
+				"auth_upgrade-app-auth": "ejX7uOPtfF29XgyEW8vBtono-YSgVwV6.BxBezMqcqDkZl_odDpKqP7jvahiUwABlc5q4rC61vWI"
+			},
+			"results": {
+				"user": {
+					"userId": "alice",
+					"username": "alice",
+					"userSub": "ae2cbd62-2797-4ced-b8a0-a37bac99f149",
+					"groups": [],
+					"attributes": {
+						"email": "alice@example.com",
+						"email_verified": "true"
+					}
+				}
+			}
+		},
+		"cognito-secret-only": {
+			"scenario": "cognito-secret-only: new AuthCognito({ id: 'secret-app' }, 'auth') — the constructor alone (writes the mock session secret).",
+			"rootId": "secret-app",
+			"capturedAt": 1791080035598,
+			"files": {
+				"secret-app-auth/state.json": "{\n  \"users\": {},\n  \"groups\": {},\n  \"codes\": {},\n  \"challenges\": {},\n  \"sessionSecret\": \"c98e5fefd3eac073a14fd849ff70bc88a5e331cc098b74410130bcd3052d6ba5\"\n}"
+			},
+			"cookies": {},
+			"results": {}
+		},
+		"cognito-sessionstore-row": {
+			"scenario": "cognito-sessionstore-row: bb-auth-cognito's SessionStore(new Scope('auth', { parent: { id: 'aws-app' } }), 'sessions', 400 days).createSession(poolTokens('bob', { sub: 'uuid-bob', groups: ['admins', 'stale'], attributes: { email } })).",
+			"rootId": "aws-app",
+			"capturedAt": 1791080035600,
+			"files": {
+				"aws-app-auth-sessions/store.json": "{\n  \"TwY0kYxwYHEKYDcY-U9dn1TxObRXfluw\": {\n    \"value\": \"{\\\"idToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1dWlkLWJvYiIsImNvZ25pdG86dXNlcm5hbWUiOiJib2IiLCJjb2duaXRvOmdyb3VwcyI6WyJhZG1pbnMiLCJzdGFsZSJdLCJ0b2tlbl91c2UiOiJpZCIsImF1dGhfdGltZSI6MTc5MTA4MDAzNSwiaWF0IjoxNzkxMDgwMDM1LCJleHAiOjE3OTEwODM2MzUsImVtYWlsIjoiYm9iQGV4YW1wbGUuY29tIn0.sig\\\",\\\"accessToken\\\":\\\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1dWlkLWJvYiIsInVzZXJuYW1lIjoiYm9iIiwidG9rZW5fdXNlIjoiYWNjZXNzIiwiZXhwIjoxNzkxMDgzNjM1fQ.sig\\\",\\\"refreshToken\\\":\\\"refresh-bob\\\"}\",\n    \"ttl\": 1825640035\n  }\n}"
+			},
+			"cookies": {},
+			"results": {
+				"sessionId": "TwY0kYxwYHEKYDcY-U9dn1TxObRXfluw"
+			}
+		},
+		"basic-session": {
+			"scenario": "basic-session: AuthBasic (no codeDelivery) under app 'basic-app': sign up alice (instant), sign in.",
+			"rootId": "basic-app",
+			"capturedAt": 1791080036194,
+			"files": {
+				"basic-app-auth-users/store.json": "{\n  \"alice\": \"\\\"{\\\\\\\"hash\\\\\\\":\\\\\\\"$2b$12$2X0NuDEMJEA.TKRvophTlex2PpbDpaaflBTIqFFH8H1iW7PKODWP6\\\\\\\",\\\\\\\"createdAt\\\\\\\":\\\\\\\"2026-10-04T02:13:55.903Z\\\\\\\"}\\\"\"\n}",
+				"settings.json": "{\n  \"basic-app-auth-jwt-secret\": \"5IdJ8Z-LOhpS5AwYikRX6x40LZy9BzX5YLQbjUm94H0\"\n}"
+			},
+			"cookies": {
+				"auth_basic-app-auth": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6ImFsaWNlIiwiaWF0IjoxNzkxMDgwMDM2LCJleHAiOjE3OTExNjY0MzYsImlzcyI6ImJiLWF1dGgtYmFzaWM6YmFzaWMtYXBwLWF1dGgiLCJzdWIiOiJhbGljZSJ9.wNV6A3Eujc0C-K9LHebKfzHDJZ2uj_86OH_PpHGwz2Q"
+			},
+			"results": {
+				"user": {
+					"userId": "alice",
+					"username": "alice",
+					"createdAt": "2026-10-04T02:13:55.903Z"
+				}
+			}
+		}
+	}
+}
