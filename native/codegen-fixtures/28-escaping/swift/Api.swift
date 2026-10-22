@@ -31,17 +31,25 @@ public final nonisolated class Api: Sendable {
 
     public enum DoAction {
 
-        public struct Create$: Codable {
+        public struct Actioncreate_: Codable {
             public let title: String
+
+            public init(title: String) {
+                self.title = title
+            }
         }
 
-        public struct Re$move: Codable {
+        public struct Actionre_move: Codable {
             public let id: String
+
+            public init(id: String) {
+                self.id = id
+            }
         }
 
         public enum Input: Codable {
-            case create$(Create$)
-            case re$move(Re$move)
+            case actioncreate_(Actioncreate_)
+            case actionre_Move(Actionre_move)
 
             enum CodingKeys: String, CodingKey {
                 case action
@@ -50,10 +58,10 @@ public final nonisolated class Api: Sendable {
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .create$(let params):
+                case .actioncreate_(let params):
                     try container.encode("create$", forKey: .action)
                     try params.encode(to: encoder)
-                case .re$move(let params):
+                case .actionre_Move(let params):
                     try container.encode("re$move", forKey: .action)
                     try params.encode(to: encoder)
                 }
@@ -63,8 +71,8 @@ public final nonisolated class Api: Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .action)
                 switch disc {
-                case "create$": self = .create$(try Create$(from: decoder))
-                case "re$move": self = .re$move(try Re$move(from: decoder))
+                case "create$": self = .actioncreate_(try Actioncreate_(from: decoder))
+                case "re$move": self = .actionre_Move(try Actionre_move(from: decoder))
                 default:
                     throw DecodingError.dataCorruptedError(forKey: .action, in: container, debugDescription: "Unknown value: \(disc)")
                 }
@@ -73,6 +81,10 @@ public final nonisolated class Api: Sendable {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

@@ -136,8 +136,8 @@ public final class BlocksClient: Sendable {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        // Encode request body
-        urlRequest.httpBody = try JSONEncoder().encode(request)
+        // Encode request body (dates as ISO 8601 strings, see `makeEncoder()`)
+        urlRequest.httpBody = try makeEncoder().encode(request)
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
@@ -157,7 +157,12 @@ public final class BlocksClient: Sendable {
         if let errorObj = responseJson["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            throw RPCError(message: "Error occured with code: \(code) message: \(message)")
+            let name = (errorObj["data"] as? [String: Any])?["name"] as? String
+            throw RPCError(
+                message: "Error occured with code: \(code) message: \(message)",
+                code: code,
+                name: name
+            )
         }
 
         // Check HTTP status
@@ -224,7 +229,8 @@ public final class BlocksClient: Sendable {
         urlRequest.httpMethod = "POST"
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Sorted keys, as `makeEncoder()` writes them: the same body is the same bytes every time.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         // Attach stored cookies
         let reqHost = requestURL.host ?? ""
@@ -242,6 +248,24 @@ public final class BlocksClient: Sendable {
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
             processCookies(from: httpResponse)
+            // An error response is the server refusing the request, not a malformed success:
+            // surface its status and error name instead of handing the error body to the caller.
+            if !(200 ..< 300).contains(httpResponse.statusCode) {
+                // Blocks routes answer `{ error: <message>, name }`; a plain OAuth body is
+                // `{ error: <code>, error_description }`.
+                let errorBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let blocksName = errorBody?["name"] as? String
+                let name = blocksName ?? (errorBody?["error"] as? String)
+                let detail = blocksName != nil
+                    ? (errorBody?["error"] as? String)
+                    : (errorBody?["error_description"] as? String)
+                let reason = [name, detail].compactMap { $0 }.joined(separator: ": ")
+                throw RawRouteError(
+                    message: "\(path) answered HTTP \(httpResponse.statusCode)" + (reason.isEmpty ? "" : " (\(reason))"),
+                    statusCode: httpResponse.statusCode,
+                    errorName: name
+                )
+            }
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -313,8 +337,19 @@ public struct RPCError: BlocksError {
     public let message: String
     public let underlyingError: Error?
 
-    public init(message: String, underlyingError: Error? = nil) {
+    /// The JSON-RPC `error.code` of a server error — for a server-side `ApiError`, its
+    /// HTTP status (e.g. `401`). `nil` for transport and decoding failures.
+    public let code: Int?
+
+    /// The server's error name (`error.data.name`, e.g. `"NotAuthenticatedException"`).
+    /// Errors cross the wire by name, so match on this rather than on `message`.
+    /// `nil` when the server sent none, and for transport and decoding failures.
+    public let name: String?
+
+    public init(message: String, code: Int? = nil, name: String? = nil, underlyingError: Error? = nil) {
         self.message = message
+        self.code = code
+        self.name = name
         self.underlyingError = underlyingError
     }
 }
@@ -329,8 +364,14 @@ public struct ClientClosedError: BlocksError {
 /// Error thrown by raw route (non-RPC) requests.
 public struct RawRouteError: BlocksError {
     public let message: String
+    /// The HTTP status of a response outside 2xx; `nil` when no such response was received.
+    public let statusCode: Int?
+    /// The error name from the response body (`name`, else `error`), when the body is JSON and has one.
+    public let errorName: String?
 
-    public init(message: String) {
+    public init(message: String, statusCode: Int? = nil, errorName: String? = nil) {
         self.message = message
+        self.statusCode = statusCode
+        self.errorName = errorName
     }
 }
