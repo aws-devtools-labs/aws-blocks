@@ -55,6 +55,16 @@ export interface BackgroundSuites {
   start(): void;
 }
 
+/**
+ * The child's stdout is a pipe, so node:test would pick TAP. Ask for spec,
+ * unless a reporter is already set (CI sets one in NODE_OPTIONS, which the
+ * child inherits): a second `--test-reporter` makes node:test exit on startup.
+ */
+function reporterArgs(): string[] {
+  const flags = [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)];
+  return flags.some((flag) => flag.startsWith('--test-reporter')) ? [] : ['--test-reporter=spec'];
+}
+
 export function backgroundSuites(names: readonly BackgroundSuiteName[]): BackgroundSuites {
   const results = new Map<BackgroundSuiteName, Promise<void>>();
 
@@ -62,11 +72,10 @@ export function backgroundSuites(names: readonly BackgroundSuiteName[]): Backgro
     new Promise<void>((resolve, reject) => {
       const prefix = `[${name}] `;
       // Same node binary and loader flags as this process (tsx, -C browser), so
-      // `import 'aws-blocks'` resolves to the same generated client. The spec
-      // reporter is explicit because stdout is a pipe, which would select TAP.
+      // `import 'aws-blocks'` resolves to the same generated client.
       const child = spawn(
         process.execPath,
-        [...process.execArgv, '--test-reporter=spec', entry, name],
+        [...process.execArgv, ...reporterArgs(), entry, name],
         { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
       );
       createInterface({ input: child.stdout }).on('line', (line) => process.stdout.write(`${prefix}${line}\n`));
