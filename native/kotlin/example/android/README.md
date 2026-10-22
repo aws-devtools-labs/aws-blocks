@@ -25,7 +25,7 @@ This produces the `blocks.spec.json` file that the Gradle plugin reads at build 
 
 ## Configuring OIDC
 
-Sign-in goes through the shared backend's Google provider, which needs a real OAuth client — there is no fake-user fallback, so the Auth section reports `ProviderNotConfigured` until it is set up. Creating the client in Google Cloud Console and providing its client ID and secret to a local or sandbox backend is covered in the [backend README](../typescript/README.md#configuring-oidc).
+Sign-in goes through the shared backend's Google provider, which needs a real OAuth client — there is no fake-user fallback, so sign-in fails at Google until it is set up. Creating the client in Google Cloud Console, and giving its client ID and secret to a local or sandbox backend, is covered in the [backend README](../typescript/README.md#configuring-oidc).
 
 Two things are specific to this app:
 

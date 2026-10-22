@@ -11,9 +11,9 @@
     <h1>Native Bindings Test App</h1>
     <p style="color:#666; margin-bottom:16px;">Test backend for native client bindings (Swift, Kotlin, Dart).</p>
 
-    <!-- BasicAuth + Todos -->
+    <!-- Email + password Auth + Todos -->
     <div class="section">
-      <h2>Todos (BasicAuth)</h2>
+      <h2>Todos (email + password)</h2>
       <div id="basic-auth-container"></div>
       <div class="todo-add">
         <input type="text" id="todo-input" placeholder="New todo..." onkeypress="if(event.key==='Enter') addTodo()">
@@ -36,22 +36,18 @@
       <div id="todo-error" class="result" style="display:none;"></div>
     </div>
 
-    <!-- CognitoAuth -->
+    <!-- Cognito-style Auth -->
     <div class="section">
-      <h2>Cognito Auth</h2>
+      <h2>Cognito-style Auth</h2>
       <div id="cognito-auth-container"></div>
     </div>
 
-    <!-- OidcAuth -->
+    <!-- OIDC (stub IdP) -->
     <div class="section">
       <h2>OIDC Auth (Stub IdP)</h2>
-      <div class="row">
-        <button onclick="oidcSignIn('google')">Sign in with Google</button>
-        <button onclick="oidcSignOut()">Sign Out</button>
-      </div>
+      <div id="oidc-auth-container"></div>
       <div class="row">
         <button onclick="oidcGetUser()">Get Current User</button>
-        <button onclick="oidcHandleCallback()">Handle Redirect Callback</button>
       </div>
       <div id="oidc-result" class="result"></div>
     </div>

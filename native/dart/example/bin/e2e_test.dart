@@ -13,15 +13,17 @@ void main() async {
     'realtime_test.dart',
     'auth_basic_test.dart',
     'auth_cognito_test.dart',
+    // Sign-up attributes through the Cognito-style block's `setAuthState`.
+    'auth_sign_up_attributes_test.dart',
+    // OIDC relay sign-in against `Auth`'s stub IdP. Against a deployed backend
+    // the suite runs only with RUN_OIDC=1 (the backend serves the stub with
+    // `unsafeAllowDeployed`, or a real IdP); otherwise it prints a visible SKIP
+    // (see oidc_test.dart).
+    'oidc_test.dart',
+    // The JSON-RPC wire contract: positional params, a left-out optional's
+    // slot kept as null (FX48).
+    'rpc_wire_test.dart',
   ];
-
-  // The OIDC relay suite needs a deployed HTTPS sandbox (the stub IdP rejects
-  // non-HTTPS redirect_uris) AND the server-relay OidcClient (signInRelay /
-  // PersistentSessionStore), which ships in PR #824 (feat/dart-oidc-server-relay),
-  // not yet on main. Opt in with RUN_OIDC=1 once both are available.
-  if (Platform.environment['RUN_OIDC'] == '1') {
-    tests.add('oidc_test.dart');
-  }
 
   var allPassed = true;
 
