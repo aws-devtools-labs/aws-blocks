@@ -462,10 +462,15 @@ export const VIEWER_URI_JS = `var vu = request.uri.indexOf('/builds/') === 0 && 
  * literal `*` into `Location` (`/new/*`). The emitted code carries no
  * comments: it ships inside the CloudFront Function, under its 10 KB limit.
  *
- * A spliced destination that starts with a slash keeps exactly one leading
- * slash: the captured tail of `/old//evil.example` (or `/old/\\evil.example`)
- * would otherwise produce a protocol-relative `Location: //evil.example`,
- * which a browser follows off-site. Every door emits the same rows code, so a
+ * A spliced destination that isn't absolute stays on the site: leading
+ * slashes, backslashes and whitespace (browsers drop tab, CR and LF) collapse
+ * to one slash, so the captured tail of `/old//evil.example` (or
+ * `/old/\\evil.example`, `/old/%09/evil.example` once decoded) never yields a
+ * protocol-relative `Location: //evil.example`, which a browser follows
+ * off-site; and a bare `*` destination never turns a tail such as
+ * `https://evil.example` into an absolute URL (it becomes
+ * `/https://evil.example`). An absolute destination (`https://example.org/*`)
+ * is spliced as written. Every door emits the same rows code, so a
  * redirect gives the same `Location` on each.
  *
  * @param rows the JS expression holding the rows.
@@ -479,8 +484,9 @@ export const redirectRowsJs = (rows: string, indent: string): string =>
     '  if (m) {',
     `    var dest = ${rows}[j][1];`,
     "    if (dest.charAt(dest.length - 1) === '*') {",
+    "      var abs = /^[a-z][a-z0-9+.-]*:/i.test(dest);",
     "      dest = dest.substring(0, dest.length - 1) + (m.tail || '');",
-    "      if (dest.charAt(0) === '/' || dest.charAt(0) === '\\\\') { dest = '/' + dest.replace(/^[\\/\\\\]+/, ''); }",
+    "      if (!abs) { var t = dest.replace(/^[\\/\\\\\\s]+/, ''); if (t !== dest || /^[a-z][a-z0-9+.-]*:/i.test(t)) dest = '/' + t; }",
     '    }',
     `    return { statusCode: ${rows}[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };`,
     '  }',

@@ -1008,6 +1008,8 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
         { source: '/legacy/*', destination: '/modern/*', statusCode: 301 },
         { source: '/temp', destination: '/home', statusCode: 302 },
         { source: '/go/*', destination: '/*', statusCode: 301 },
+        { source: '/any/*', destination: '*', statusCode: 301 },
+        { source: '/ext/*', destination: 'https://example.org/*', statusCode: 301 },
       ],
     }),
     buildId: 'b1',
@@ -1050,6 +1052,22 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
     }
     const { output } = await runRequestFn(reqCode, entries, req('/go/docs/a'));
     assert.equal(output.headers.location.value, '/docs/a');
+  });
+
+  // Browsers drop tab, CR and LF while parsing a URL, so `/\t/evil.example`
+  // would be followed as `//evil.example`; and a bare `*` destination must not
+  // turn the tail into an absolute URL.
+  void it('collapses whitespace too, and keeps a bare-* splice on the site; an absolute destination splices as written', async () => {
+    for (const uri of ['/go/\t/evil.example', '/go/\r\n//evil.example', '/go/ /evil.example']) {
+      const { output } = await runRequestFn(reqCode, entries, req(uri));
+      assert.match(output.headers.location.value, /^\/evil\.example/, JSON.stringify(uri));
+    }
+    const bare = await runRequestFn(reqCode, entries, req('/any/https://evil.example'));
+    assert.equal(bare.output.headers.location.value, '/https://evil.example');
+    const plain = await runRequestFn(reqCode, entries, req('/any/docs'));
+    assert.equal(plain.output.headers.location.value, 'docs');
+    const ext = await runRequestFn(reqCode, entries, req('/ext/a/b'));
+    assert.equal(ext.output.headers.location.value, 'https://example.org/a/b');
   });
 
   void it('splices a single-segment tail after the wildcard prefix', async () => {
