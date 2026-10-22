@@ -5,9 +5,9 @@
 //
 // Run: node --test scripts/ci/_proc.test.mjs
 //
-// CI runs this on Linux only. On Windows (`shell: true`) cmd.exe reports a
-// missing command as a non-zero status rather than a spawn error; the status
-// check covers both.
+// CI runs this on Linux. On Windows the driver spawns with `shell: true`, where
+// cmd.exe reports a missing command as a non-zero status (covered by the
+// status check) and a node path containing a space would split (see runSpawn).
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
