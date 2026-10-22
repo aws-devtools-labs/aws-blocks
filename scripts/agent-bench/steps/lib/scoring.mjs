@@ -26,6 +26,9 @@ export const HARNESS_FAIL_REASONS = {
 // still an infra abort — see classifyCell.)
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
+// Reason for a cell whose agent, judge or app phase refused to run because the agent-user
+// isolation could not be established (classifyCell, `isolation_failure`).
+export const ISOLATION_UNAVAILABLE_REASON = 'isolation_unavailable';
 
 // A 2-agent failure whose terminal `builder_error` is a PROVIDER-SIDE 5xx SERVER FAULT (Bedrock
 // `ServiceUnavailableException`/`InternalServerException`, a `$fault=server`, or an `httpStatusCode:5xx`)
@@ -222,6 +225,12 @@ export function classifyCell(result) {
 	}
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
+	}
+	// The agent/judge/app processes refuse to run without the agent-user boundary under CI (see
+	// isolation.mjs); a phase that refused stamps `isolation_failure`. That is a runner/infra fault,
+	// never the agent's, so it is EXCLUDED wherever it landed.
+	if (typeof result?.isolation_failure === 'string' && result.isolation_failure !== '') {
+		return { klass: 'harness_error', reason: ISOLATION_UNAVAILABLE_REASON };
 	}
 	// PRIMARY, causal PGlite-init-trap carve-out. Once bb-data keeps the dev server ALIVE through a
 	// migration init trap, the trap no longer kills the server: the front door serves, Playwright runs,

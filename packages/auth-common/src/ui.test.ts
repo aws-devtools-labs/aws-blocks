@@ -51,7 +51,7 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, AccountMenuBar, onAuthChange, broadcastAuthChange, submitAuthAction } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, AccountMenuBar, StatusMessage, onAuthChange, broadcastAuthChange, submitAuthAction } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1075,5 +1075,83 @@ describe('test hooks', () => {
 		await flush();
 		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
 		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
+	});
+});
+
+describe('StatusMessage', () => {
+	function testId(root: ParentNode, id: string) {
+		return root.querySelector(`[data-testid="${id}"]`);
+	}
+
+	test('defaults to an empty idle polite live region', () => {
+		const status = StatusMessage();
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'status-message');
+		assert.strictEqual(status.element.getAttribute('role'), 'status');
+		assert.strictEqual(status.element.getAttribute('aria-live'), 'polite');
+		assert.ok(status.element.className.includes('bb-status-idle'), 'idle modifier applied');
+		assert.strictEqual(status.element.textContent, '', 'no text by default');
+	});
+
+	test('renders initial kind + text from options', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Loading…');
+	});
+
+	test('loading state renders a decorative spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		const spinner = status.element.querySelector('.bb-spinner');
+		assert.ok(spinner, 'spinner present in loading state');
+		assert.strictEqual(spinner?.getAttribute('aria-hidden'), 'true', 'spinner hidden from AT');
+	});
+
+	test('set transitions kind, swaps the modifier class, and drops the spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		status.set('success', 'Done.');
+		assert.ok(status.element.className.includes('bb-status-success'));
+		assert.ok(!status.element.className.includes('bb-status-loading'), 'old modifier removed');
+		assert.strictEqual(status.element.querySelector('.bb-spinner'), null, 'spinner gone');
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Done.');
+
+		status.set('error', 'Boom');
+		assert.ok(status.element.className.includes('bb-status-error'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Boom');
+	});
+
+	test('empty text leaves the message blank', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('idle', '');
+		assert.strictEqual(status.element.textContent, '');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node when blank');
+	});
+
+	test('custom testId scopes both the root and its text node', () => {
+		const status = StatusMessage({ testId: 'app-status', kind: 'error', text: 'Nope' });
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'app-status');
+		assert.strictEqual(testId(status.element, 'app-status-text')?.textContent, 'Nope');
+	});
+
+	test('set text is optional: a bare spinner and a reset need no text', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('loading');
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.ok(status.element.querySelector('.bb-spinner'), 'bare spinner rendered');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node');
+		status.set('idle');
+		assert.strictEqual(status.element.textContent, '', 'cleared');
+	});
+
+	test('set mutates the text node in place rather than replacing it', () => {
+		const status = StatusMessage({ kind: 'success', text: 'Saved' });
+		const first = testId(status.element, 'status-message-text');
+		assert.ok(first, 'text node present');
+		status.set('error', 'Boom');
+		const second = testId(status.element, 'status-message-text');
+		// assert.ok(identity) rather than assert.strictEqual(second, first): on a
+		// mismatch, strictEqual tries to inspect and diff the two happy-dom nodes,
+		// which hangs the whole test file until the suite timeout instead of
+		// reporting a clean failure.
+		assert.ok(second === first, 'same text node reused across a text change');
+		assert.strictEqual(second?.textContent, 'Boom', 'text updated in place');
 	});
 });

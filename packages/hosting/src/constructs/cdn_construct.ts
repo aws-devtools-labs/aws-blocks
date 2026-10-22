@@ -256,6 +256,16 @@ export class CdnConstruct extends Construct {
   readonly invalidationId?: string;
 
   /**
+   * The security-headers / CSP {@link IResponseHeadersPolicy} applied to the
+   * static, SSR and image cache behaviors. Exposed so a construct that adds
+   * more behaviors to this same distribution later — notably the API/auth
+   * proxy behaviors `core.Hosting` attaches when it fronts the backend — can
+   * attach the identical policy instead of leaving those responses without
+   * security headers.
+   */
+  readonly securityHeadersPolicy: IResponseHeadersPolicy;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -282,6 +292,10 @@ export class CdnConstruct extends Construct {
     super(scope, id);
 
     const { manifest, bucket } = props;
+
+    // Expose the policy so additional behaviors added to this distribution by
+    // other constructs (e.g. the API/auth proxy behaviors) can reuse it.
+    this.securityHeadersPolicy = props.securityHeadersPolicy;
 
     if (!manifest.buildId) {
       throw new HostingError('MissingBuildIdError', {
