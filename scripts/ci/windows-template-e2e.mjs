@@ -52,6 +52,9 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
     if (await ready()) return child;
     await sleep(2000);
   }
+  // Stop it before the caller's teardown runs, so a still-deploying sandbox
+  // can't race (or be redeployed by watch after) the destroy.
+  killTree(child.pid);
   throw new Error(`${cmd} ${args.join(' ')} did not become ready within ${timeoutMs / 1000}s`);
 }
 
@@ -137,4 +140,12 @@ async function main() {
 
 main()
   .then(() => { shutdown(); process.exit(0); })
-  .catch((err) => { console.error(`\nFAIL: ${err?.message ?? err}`); shutdown(); process.exit(1); });
+  .catch((err) => {
+    console.error(`\nFAIL: ${err?.message ?? err}`);
+    // A phase error replaces the end-of-run teardown check; still name the leak.
+    if (teardownFailures.length > 0 && !String(err?.message).startsWith('teardown failed')) {
+      console.error(`Also, teardown failed, stack(s) may be left deployed:\n  ${teardownFailures.join('\n  ')}`);
+    }
+    shutdown();
+    process.exit(1);
+  });

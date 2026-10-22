@@ -6,9 +6,9 @@
 //
 // Run: node --test scripts/ci/_scaffold-tag.test.mjs
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,9 @@ const BACKEND_CDK_ENTRY = repoFile('packages/create-blocks-app/templates/backend
 const CLEANUP_WORKFLOW = readFileSync(repoFile('.github/workflows/cleanup-stacks.yml'), 'utf-8');
 const WINDOWS_DRIVER = readFileSync(repoFile('scripts/ci/windows-template-e2e.mjs'), 'utf-8');
 
-const tmpFile = (name) => join(mkdtempSync(join(tmpdir(), 'scaffold-tag-')), name);
+const TMP = mkdtempSync(join(tmpdir(), 'scaffold-tag-'));
+after(() => rmSync(TMP, { recursive: true, force: true }));
+const tmpFile = (name) => join(mkdtempSync(join(TMP, 'case-')), name);
 
 describe('addPurposeTag', () => {
 	it('tags the backend template stack the Windows E2E scaffolds', () => {
