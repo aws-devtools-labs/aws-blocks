@@ -7,3 +7,8 @@
 // the `StatusMessage` status-line primitive, plus `Auth`'s typed UI vocabulary (`authOverrides`, `AuthActionName`, …) and the
 // framework-neutral design-token layer (`injectTheme` + the `--bb-*` tokens).
 export * from '@aws-blocks/bb-auth/ui';
+
+// The browser redirect client: federated sign-in for a frontend served from
+// another origin than the API (`createAuthClient`, from
+// `@aws-blocks/bb-auth/browser-client`).
+export * from '@aws-blocks/bb-auth/browser-client';

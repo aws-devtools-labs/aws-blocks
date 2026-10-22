@@ -18,9 +18,10 @@
  * |---|---|---|---|
  * | `auth-signin-<id>` | GET | `<base>/signin/<id>` | `302` to the IdP + pending cookie |
  * | `auth-callback` | GET | `<base>/callback` | the {@link dispatchCallback} → `302` landing / relay, or 4xx JSON |
- * | `auth-signout` | POST | `<base>/signout` | ends the session; a browser form gets `303` to the IdP logout (or `postSignOutPath`), an API client `204` |
+ * | `auth-signout` | POST | `<base>/signout` | ends the session; a browser form gets `303` to the IdP logout (or `postSignOutPath`), an API client `204` (`?format=json`: `200 { logoutUrl? }`) |
  * | `auth-signout-landing` | GET | `<base>/signout` | where Cognito's `/logout` returns (with a GET): `302` to `postSignOutPath`; changes no state |
  * | `auth-exchange` | POST | `<base>/exchange` | browser-PKCE / native code exchange → `{ user, …tokens }` |
+ * | `auth-session` | GET | `<base>/session` | the signed-in user (`{ user }`, as `getAuthState()` sends it) or `401` — for the browser redirect client |
  * | `auth-authorize-params-<id>` | GET | `<base>/authorize-params/<id>` | public authorize parameters |
  * | `auth-authorize-params-post-<id>` | POST | `<base>/authorize-params/<id>` | + a signed relay `state` and a `nonce` |
  * | `auth-refresh` | POST | `<base>/refresh` | bearer refresh — only with `allowBearerAuth` |
@@ -45,6 +46,10 @@
  *    allow-listed `relayTo` (e.g. `myapp://auth`). The app then POSTs it to
  *    `exchange`.
  *
+ * The browser redirect client (`browser-client.ts`, for a web frontend on
+ * another origin) uses the relay transport, with `relayTo` = its return page
+ * on an allow-listed origin, then reads `session` and POSTs `signout`.
+ *
  * The callback's wire error codes (`invalid_state`, `sdk_outdated`,
  * `invalid_relay`, `invalid_callback`) and every JSON body shape are the
  * `AuthOIDC` ones; the native SDKs match on them.
@@ -68,7 +73,7 @@ import { AuthErrors } from './errors.js';
 import { safeRedirectPath } from './redirect-path.js';
 import { validateRelay } from './relay.js';
 import { decodeState, encodeState, relayStateKey, type StatePayload } from './state-envelope.js';
-import type { AuthenticatedUser, AuthOptions, SignInUrlOptions } from './types.js';
+import type { AuthenticatedUser, AuthOptions, BrowserUser, SignInUrlOptions } from './types.js';
 
 const DEFAULT_CALLBACK_PATH = `${BLOCKS_AUTH_PREFIX}/callback`;
 const DEFAULT_SIGN_OUT_PATH = `${BLOCKS_AUTH_PREFIX}/signout`;
@@ -101,6 +106,8 @@ export interface FederationRouteHost {
 		providerId: string,
 		input: CodeExchangeInput,
 	): Promise<{ user: AuthenticatedUser; identity: FederatedIdentity }>;
+	/** The signed-in user as the browser may see it (`getAuthState()`'s user), or `null`. */
+	currentUser(context: BlocksContext): Promise<BrowserUser | null>;
 	/** `auth.signOut()`; returns the provider's logout URL when it keeps its own session. */
 	signOut(context: BlocksContext): Promise<string | undefined>;
 	/** The block's error policy (`toAuthApiError`). */
@@ -114,6 +121,8 @@ export interface FederationRoutePaths {
 	signOut: string;
 	exchange: string;
 	refresh: string;
+	/** `<base>/session` — the browser redirect client's session read. */
+	session: string;
 	/** `<exchange>/refresh` — the Swift and Dart SDKs' default refresh path. */
 	refreshCompat: string;
 	signIn(providerId: string): string;
@@ -168,6 +177,7 @@ export function federationRoutePaths(options: AuthOptions): FederationRoutePaths
 		exchange: `${base}/exchange`,
 		refresh: `${base}/refresh`,
 		refreshCompat: `${base}/exchange/refresh`,
+		session: `${base}/session`,
 		signIn: (id) => `${base}/signin/${encodeURIComponent(id)}`,
 		authorizeParams: (id) => `${base}/authorize-params/${encodeURIComponent(id)}`,
 		postSignIn,
@@ -486,6 +496,13 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 				sendRedirect(ctx, logoutUrl ?? postSignOut, 303);
 				return;
 			}
+			// The browser redirect client cannot read `Location` on a cross-origin
+			// response (it is not a CORS-safelisted response header), so it asks
+			// for the logout URL in the body instead.
+			if (ctx.request.url.searchParams.get('format') === 'json') {
+				sendJson(ctx, 200, logoutUrl ? { logoutUrl } : {});
+				return;
+			}
 			ctx.response.status = 204;
 			if (logoutUrl) ctx.response.headers.set('Location', logoutUrl);
 			ctx.response.send('');
@@ -551,6 +568,26 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 				// `claims` and `federatedIdentity` are server-side only: never on the wire.
 				const { claims: _claims, federatedIdentity: _federated, ...wireUser } = user;
 				sendJson(ctx, 200, { user: wireUser, ...tokens });
+			} catch (e) {
+				sendError(host, ctx, e);
+			}
+		},
+	});
+
+	// ── Session read (the browser redirect client) ─────────────────────────
+	// Read-only, so a GET; a cross-origin page can read it only when the stack's
+	// CORS allowlist admits its origin, with credentials.
+	new RawRoute(scope, 'auth-session', {
+		method: 'GET',
+		path: paths.session,
+		handler: async (ctx) => {
+			try {
+				const user = await host.currentUser(ctx);
+				if (!user) {
+					sendJson(ctx, 401, { error: 'Not signed in', name: AuthErrors.NotAuthenticated });
+					return;
+				}
+				sendJson(ctx, 200, { user });
 			} catch (e) {
 				sendError(host, ctx, e);
 			}
