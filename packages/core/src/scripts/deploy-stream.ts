@@ -357,8 +357,9 @@ export interface CdkDeployArgsOptions {
  *   deploy does not have, and a half-rendered bar is not a usable progress
  *   signal in a log file.
  *
- * `--all` deploys every top-level stack of the app, the same selection as the
- * sandbox deploy (`buildSandboxDeployArgs`) and as `npm run destroy`. Without
+ * `--all` deploys every top-level stack of the app (not stacks inside a CDK
+ * `Stage`), the same selection as the sandbox deploy (`buildSandboxDeployArgs`)
+ * and as `npm run destroy`. Without
  * it, CDK refuses an app with more than one stack ("specify which stacks to
  * use"), such as one with `Hosting` and a Lambda@Edge function (an edge-runtime
  * route or Next.js middleware) outside us-east-1, which adds an
@@ -382,18 +383,36 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
   ];
 }
 
+/** The app's stack in a `cdk deploy --outputs-file` JSON object; see {@link selectAppStack}. */
+export interface AppStackOutputs {
+  /** Name of the selected stack; `undefined` when the outputs file has no stack. */
+  stackName?: string;
+  /** The selected stack's outputs (`{}` when there is none). */
+  outputs: Record<string, string>;
+}
+
 /**
- * Pick the app's stack outputs from a `cdk deploy --outputs-file` JSON object
+ * Pick the app's stack from a `cdk deploy --outputs-file` JSON object
  * (`{ [stackName]: { [outputKey]: value } }`).
  *
- * The deploys select every stack (`--all`), and CDK writes one entry per
- * deployed stack that has outputs, in deploy order, so the app's stack is not
- * always the first entry. Picks the stack that carries the `ApiUrl` output,
- * else the first stack, else `{}`.
+ * The deploys select every top-level stack (`--all`), and CDK writes one entry
+ * per deployed stack that has outputs, in completion order, so the app's stack
+ * is not always the first entry (Hosting's us-east-1 monitoring stack, for
+ * one, has outputs of its own). Picks the first stack that carries the
+ * `ApiUrl` output, else the first stack. Warns when several stacks carry
+ * `ApiUrl`, since only one of them is the app's API.
  */
-export function selectAppStackOutputs(outputs: Record<string, Record<string, string>>): Record<string, string> {
-  const stacks = Object.values(outputs);
-  return stacks.find((stack) => typeof stack?.ApiUrl === 'string') ?? stacks[0] ?? {};
+export function selectAppStack(outputs: Record<string, Record<string, string>>): AppStackOutputs {
+  const entries = Object.entries(outputs);
+  const withApiUrl = entries.filter(([, stack]) => typeof stack?.ApiUrl === 'string');
+  if (withApiUrl.length > 1) {
+    console.warn(
+      `⚠️  Several stacks have an ApiUrl output (${withApiUrl.map(([name]) => name).join(', ')}); ` +
+        `using ${withApiUrl[0][0]}. Rename the ApiUrl output of the stacks that are not the app's API.`,
+    );
+  }
+  const [stackName, stackOutputs] = withApiUrl[0] ?? entries[0] ?? [undefined, {}];
+  return { stackName, outputs: stackOutputs ?? {} };
 }
 
 /** Unref'd sleep: a pending flush grace must never keep the process alive. */

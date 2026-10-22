@@ -43,13 +43,14 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
 /**
  * Production teardown behind `npm run destroy`: `cdk destroy --all --force`,
  * which deletes every top-level stack of the app (the stacks `npm run deploy`
- * creates), dependent stacks first, without a confirmation prompt. Resources
+ * creates; not stacks inside a CDK `Stage`), dependent stacks first, without a
+ * confirmation prompt. Resources
  * with a `RETAIN` removal policy are kept. Retries transient teardown failures
  * (see {@link runDestroyWithRetries}).
  */
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
-    console.log('🗑️  Destroying production stack...');
+    console.log('🗑️  Destroying production stacks...');
 
     // Fail fast on a missing/expired credential BEFORE entering the retry loop:
     // a credential error is deterministic, so retrying it only burns the full
@@ -86,7 +87,7 @@ export async function destroy(options: DestroyOptions) {
       listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
       emptyBuckets: emptySandboxBuckets,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      successLabel: 'Production stack',
+      successLabel: 'Production stacks',
     });
   });
 }

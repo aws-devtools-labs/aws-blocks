@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, before, after } from 'node:test';
+import { createRequire } from 'node:module';
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildCdkDeployArgs, selectAppStackOutputs } from './deploy-stream.js';
-import { buildSandboxDeployArgs, buildSandboxWatchArgs } from './sandbox.js';
+import { buildCdkDeployArgs, selectAppStack } from './deploy-stream.js';
+import { buildSandboxDeployArgs, buildSandboxWatchArgs, topLevelStackPaths } from './sandbox.js';
 
 // Every CDK command the scripts run must select every top-level stack of the
 // app. With no selector, `cdk deploy` and `cdk destroy` refuse an app with more
@@ -118,29 +119,175 @@ describe('deploy and watch select every stack', () => {
     assert.ok(args.includes('--all'), `expected --all in: ${args.join(' ')}`);
   });
 
-  it('the sandbox `cdk watch` selects every top-level stack with the `*` wildcard', () => {
-    const args = buildSandboxWatchArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts' });
-    assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'watch']);
-    // `cdk watch` declares no `--all` option: the CLI warns it "will be ignored".
-    assert.strictEqual(args[2], '*', `expected the '*' stack pattern right after 'watch': ${args.join(' ')}`);
+  it('the sandbox `cdk watch` names the given stacks right after `watch`', () => {
+    const args = buildSandboxWatchArgs({
+      outDir: '.blocks-sandbox',
+      projectRoot: '/app',
+      backendPath: 'a.ts',
+      stacks: ['my-app', 'Parent/Nested'],
+    });
+    assert.deepStrictEqual(args.slice(0, 4), ['cdk', 'watch', 'my-app', 'Parent/Nested']);
+    // `cdk watch` does not declare `--all`: the CLI warns about it as unknown.
     assert.ok(!args.includes('--all'), `expected no --all in: ${args.join(' ')}`);
+  });
+
+  it('the sandbox `cdk watch` passes no selector when no stack is known', () => {
+    const args = buildSandboxWatchArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts', stacks: [] });
+    assert.strictEqual(args[2], '--outputs-file', `expected no stack pattern: ${args.join(' ')}`);
   });
 });
 
-describe('selectAppStackOutputs', () => {
+/**
+ * A synthesized cloud assembly with three top-level stacks, one of them below a
+ * plain construct (`Parent/Nested`), plus a CDK Stage holding a fourth stack.
+ * All stacks are pinned to the never-issued all-zeros account.
+ */
+function writeMultiStackAssembly(dir: string): void {
+  mkdirSync(join(dir, 'assembly-Stage'), { recursive: true });
+  const template = JSON.stringify({ Resources: { H: { Type: 'AWS::CloudFormation::WaitConditionHandle' } } });
+  const stack = (displayName: string, templateFile: string) => ({
+    type: 'aws:cloudformation:stack',
+    environment: 'aws://000000000000/us-east-1',
+    displayName,
+    properties: { templateFile },
+  });
+  for (const file of ['app.template.json', 'nested.template.json', 'edge.template.json']) {
+    writeFileSync(join(dir, file), template);
+  }
+  writeFileSync(join(dir, 'assembly-Stage', 'staged.template.json'), template);
+  writeFileSync(
+    join(dir, 'manifest.json'),
+    JSON.stringify({
+      version: '22.0.0',
+      artifacts: {
+        'my-app': stack('my-app', 'app.template.json'),
+        ParentNestedABCD1234: stack('Parent/Nested', 'nested.template.json'),
+        'edge-lambda-stack-x': stack('edge-lambda-stack-x', 'edge.template.json'),
+        'assembly-Stage': {
+          type: 'cdk:cloud-assembly',
+          properties: { directoryName: 'assembly-Stage', displayName: 'Stage' },
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(dir, 'assembly-Stage', 'manifest.json'),
+    JSON.stringify({ version: '22.0.0', artifacts: { 'Stage-Staged': stack('Stage/Staged', 'staged.template.json') } }),
+  );
+}
+
+describe('topLevelStackPaths', () => {
+  it('lists the top-level stacks by construct path, not stacks inside a Stage', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-asm-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    writeMultiStackAssembly(dir);
+    assert.deepStrictEqual(topLevelStackPaths(dir), ['my-app', 'Parent/Nested', 'edge-lambda-stack-x']);
+  });
+
+  it('returns [] when there is no assembly', () => {
+    assert.deepStrictEqual(topLevelStackPaths(join(tmpdir(), 'bb-no-such-assembly')), []);
+  });
+});
+
+// The argv above, run through the pinned CDK CLI on the multi-stack assembly.
+// Hermetic: no credentials for the all-zeros account, so a command whose stack
+// selection succeeds stops at the credential check, before any AWS call.
+describe('the real CDK CLI selects every top-level stack with these argv', () => {
+  const cdkBin = (() => {
+    try {
+      return createRequire(import.meta.url).resolve('aws-cdk/bin/cdk');
+    } catch {
+      return undefined;
+    }
+  })();
+  // A missing CLI fails in CI (npm ci installs it); elsewhere the block skips.
+  const skipCli = !cdkBin && !process.env.CI ? 'aws-cdk CLI is not installed in this workspace' : false;
+  const MULTI_STACK_REFUSAL = /Since this app includes more than a single stack, specify which stacks to use/;
+  const CREDENTIAL_CHECK = /Need to perform AWS calls for account 000000000000, but no credentials have been configured/;
+  let asm: string;
+
+  before(() => {
+    asm = mkdtempSync(join(tmpdir(), 'bb-cdk-select-'));
+    writeMultiStackAssembly(asm);
+  });
+  after(() => {
+    if (asm) rmSync(asm, { recursive: true, force: true });
+  });
+
+  function cdk(args: string[]): { out: string; status: number | null } {
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      HOME: asm,
+      USERPROFILE: asm,
+      AWS_EC2_METADATA_DISABLED: 'true',
+      AWS_SHARED_CREDENTIALS_FILE: join(asm, 'no-credentials'),
+      AWS_CONFIG_FILE: join(asm, 'no-config'),
+      CDK_DISABLE_VERSION_CHECK: '1',
+    };
+    assert.ok(cdkBin, 'the aws-cdk CLI must be resolvable here (run `npm ci` at the repo root)');
+    const r = spawnSync(process.execPath, [cdkBin, ...args, '--app', asm, '--no-notices'], {
+      cwd: asm,
+      env,
+      encoding: 'utf-8',
+      timeout: 120_000,
+    });
+    return { out: `${r.stdout ?? ''}${r.stderr ?? ''}`, status: r.status };
+  }
+
+  it('the production deploy argv: refused without --all, selected with it', { skip: skipCli }, () => {
+    const args = buildCdkDeployArgs({ projectRoot: asm, outputsFile: join(asm, 'outputs.json') }).slice(1);
+    const withoutAll = cdk(args.filter((a) => a !== '--all'));
+    assert.match(withoutAll.out, MULTI_STACK_REFUSAL);
+    const withAll = cdk(args);
+    assert.doesNotMatch(withAll.out, MULTI_STACK_REFUSAL);
+    assert.match(withAll.out, CREDENTIAL_CHECK, `expected the deploy to pass stack selection: ${withAll.out.slice(0, 600)}`);
+  });
+
+  it('the production destroy argv: refused without --all, selected with it', { skip: skip || skipCli }, () => {
+    const call = `mod.destroy({ cdkAppPath: ${JSON.stringify(join(root, 'index.cdk.ts'))}, projectRoot: ${JSON.stringify(root)} })`;
+    const args = recordDestroyArgv('./destroy.js', call).slice(1);
+    const withoutAll = cdk(args.filter((a) => a !== '--all'));
+    assert.match(withoutAll.out, MULTI_STACK_REFUSAL);
+    const withAll = cdk(args);
+    assert.doesNotMatch(withAll.out, MULTI_STACK_REFUSAL);
+    assert.match(withAll.out, CREDENTIAL_CHECK, `expected the destroy to pass stack selection: ${withAll.out.slice(0, 600)}`);
+  });
+
+  it('the watch stack names select the same top-level stacks as --all, not the staged one', { skip: skipCli }, () => {
+    const names = topLevelStackPaths(asm);
+    // `cdk ls` matches stack patterns the same way `cdk watch` does.
+    const listed = cdk(['ls', ...names]);
+    assert.strictEqual(listed.status, 0, listed.out);
+    const ids = listed.out.split('\n').map((l) => l.trim()).filter(Boolean);
+    assert.deepStrictEqual(ids.sort(), ['Parent/Nested', 'edge-lambda-stack-x', 'my-app'].sort());
+    // The `*` wildcard would miss the stack below a construct.
+    const star = cdk(['ls', '*']).out.split('\n').map((l) => l.trim()).filter(Boolean);
+    assert.ok(!star.includes('Parent/Nested'), `expected '*' to miss Parent/Nested: ${star.join(', ')}`);
+  });
+});
+
+describe('selectAppStack', () => {
   it('picks the stack that carries ApiUrl when another stack is listed first', () => {
     const outputs = {
-      'my-app-helper': { HelperArn: 'arn:helper' },
+      'my-app-CfMonitoring-1': { MonitoringTopicArnUsEast1: 'arn:topic' },
       'my-app': { ApiUrl: 'https://api.example/aws-blocks/api', HostingUrlABC123: 'https://d1.example' },
     };
-    assert.deepStrictEqual(selectAppStackOutputs(outputs), outputs['my-app']);
+    assert.deepStrictEqual(selectAppStack(outputs), { stackName: 'my-app', outputs: outputs['my-app'] });
   });
 
   it('falls back to the first stack when none carries ApiUrl', () => {
-    assert.deepStrictEqual(selectAppStackOutputs({ a: { X: '1' }, b: { Y: '2' } }), { X: '1' });
+    assert.deepStrictEqual(selectAppStack({ a: { X: '1' }, b: { Y: '2' } }), { stackName: 'a', outputs: { X: '1' } });
   });
 
-  it('returns an empty object when no stack has outputs', () => {
-    assert.deepStrictEqual(selectAppStackOutputs({}), {});
+  it('returns no stack and empty outputs when the file has no stack', () => {
+    assert.deepStrictEqual(selectAppStack({}), { stackName: undefined, outputs: {} });
+  });
+
+  it('warns and keeps the first when several stacks carry ApiUrl', (t) => {
+    const warn = t.mock.method(console, 'warn', () => {});
+    const picked = selectAppStack({ one: { ApiUrl: 'https://1' }, two: { ApiUrl: 'https://2' } });
+    assert.strictEqual(picked.stackName, 'one');
+    assert.strictEqual(warn.mock.callCount(), 1);
+    assert.match(String(warn.mock.calls[0].arguments[0]), /one, two/);
   });
 });
