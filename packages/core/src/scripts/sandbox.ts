@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -42,6 +42,16 @@ export interface SandboxOptions {
   deployOnly?: boolean;
   /** Custom dev server command. Defaults to 'npx vite'. For Next.js use 'npx next dev'. */
   devCommand?: string;
+  /**
+   * The app deploys hosting in preview mode (`Hosting` `preview: true`). Only
+   * then does a RE-deploy use `--hotswap-fallback`: a code-only change is
+   * applied straight to the Lambda functions in seconds, falling back to a
+   * CloudFormation deploy for anything that can't be hotswapped. Hotswap
+   * leaves the stack drifted from its template, which is acceptable for a
+   * throwaway preview only, so every other sandbox keeps the CloudFormation
+   * deploy.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -74,6 +84,11 @@ export interface SandboxDeployArgsOptions {
    * the framework build runs only once.
    */
   assemblyDir?: string;
+  /**
+   * Use `--hotswap-fallback` instead of `--method direct`. `startSandbox` sets
+   * it only for a preview re-deploy (see {@link SandboxOptions.preview}).
+   */
+  hotswap?: boolean;
 }
 
 /**
@@ -137,6 +152,13 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
  *   `express: false` drops it (still `--method direct`, with rollback) for a
  *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
  *   Web Function endpoint (`compute.type: 'web-function'`).
+ * - `--hotswap-fallback` (`hotswap`, a preview re-deploy only): in place of
+ *   `--method direct`, apply a code-only change straight to the Lambda
+ *   functions and S3 assets, falling back to a CloudFormation deploy (still
+ *   in Express Mode) for a change that can't be hotswapped. A true hotswap
+ *   needs a deterministic template: a tag or name whose value changes per
+ *   synth (a date, a git SHA, a per-deploy build id) forces the fallback
+ *   every time. Preview mode pins its build id for this reason.
  */
 export function buildSandboxDeployArgs({
   outDir,
@@ -144,11 +166,12 @@ export function buildSandboxDeployArgs({
   backendPath,
   express = true,
   assemblyDir,
+  hotswap = false,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
-    "--method", "direct",
+    ...(hotswap ? ["--hotswap-fallback"] : ["--method", "direct"]),
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
@@ -187,7 +210,7 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
+  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand, preview = false } = options;
   const sandboxStartTime = Date.now();
 
   // Load .env.local so CDK can read secret ARNs and other config.
@@ -237,8 +260,18 @@ export async function startSandbox(options: SandboxOptions) {
   // Framework resolves in the cdk synth child; it writes the value here so the
   // parent can attach it to the sandbox telemetry event.
   const frameworkSink = createFrameworkSink();
+
+  // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
+  // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
+  // destroyed since, `--hotswap-fallback` falls back to a full deploy.
+  const hotswap = preview && existsSync(join(process.cwd(), outDir, "outputs.json"));
+
   console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+  console.log(
+    hotswap
+      ? "   (preview re-deploy: hotswapping code changes; other changes fall back to a full deploy)"
+      : "   (This may take a few minutes on first deploy)",
+  );
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
@@ -266,7 +299,7 @@ export async function startSandbox(options: SandboxOptions) {
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir, hotswap }),
       { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {

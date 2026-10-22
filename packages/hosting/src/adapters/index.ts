@@ -17,6 +17,7 @@ export {
   targetComputeArch,
   withComputeTarget,
 } from './shared/compute_target.js';
+export { type BuildProfile, buildProfile, withBuildProfile } from './shared/build_profile.js';
 export type { SpaAdapterOptions } from './spa.js';
 export { nextjsAdapter } from './nextjs.js';
 export type { NextjsAdapterOptions } from './nextjs.js';

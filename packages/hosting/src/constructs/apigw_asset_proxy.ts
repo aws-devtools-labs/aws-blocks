@@ -31,6 +31,7 @@ import { type AssetProxyOptions, assetProxyCoreJs } from './asset_proxy_core.js'
  * @param opts.redirects     the app's redirects (first match wins), answered before any S3 read
  * @param opts.headers       the app's per-pattern response headers, applied to a successful response
  * @param opts.errorPages    the app's error pages (`404.html` / `500.html` keys under the build prefix)
+ * @param opts.imageFallback answer the framework image endpoints with the source image (no image function)
  */
 export const generateApiGwAssetProxyCode = (opts: AssetProxyOptions): string => `${assetProxyCoreJs(opts)}
 exports.handler = async (event) => {
@@ -39,6 +40,11 @@ exports.handler = async (event) => {
   // both — the response shape below ({statusCode, headers, isBase64Encoded, body})
   // is valid for a v1 and a v2 proxy integration alike.
   const uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';
-  return blocksServe(uri, event.headers);
+  const image = blocksImageSource(uri, event.queryStringParameters);
+  if (image && image.redirect) {
+    return secure({ statusCode: 302, headers: { location: image.redirect, 'cache-control': 'no-cache' }, body: '', isBase64Encoded: false });
+  }
+  if (image && image.status) return secure(await errorResponse(image.status));
+  return blocksServe(image ? image.uri : uri, event.headers);
 };
 `;

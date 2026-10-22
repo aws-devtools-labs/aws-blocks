@@ -904,6 +904,9 @@ jobs:
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+          - framework: preview
+            app-dir: test-apps/hosting-preview
+            script: test:e2e:hosting-preview
           # Same suite with the SSR server on AWS Lambda Web Functions
           # (compute.type: 'web-function'); the app reads HOSTING_COMPUTE_TYPE.
           - framework: sveltekit-web-function

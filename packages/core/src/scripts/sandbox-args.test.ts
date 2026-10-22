@@ -228,3 +228,21 @@ describe('buildDevServerSpawn', () => {
     });
   });
 });
+
+
+describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+
+  it('replaces --method direct with --hotswap-fallback, keeping Express Mode for the fallback', () => {
+    const args = buildSandboxDeployArgs({ ...base, hotswap: true });
+    assert.ok(args.includes('--hotswap-fallback'));
+    assert.ok(!args.includes('--method'), 'no --method direct alongside the hotswap');
+    assert.ok(args.includes('--express'), 'a fallback CloudFormation deploy still runs in Express Mode');
+  });
+
+  it('is off by default', () => {
+    const args = buildSandboxDeployArgs(base);
+    assert.ok(!args.includes('--hotswap-fallback'));
+    assert.strictEqual(valueAfter(args, '--method'), 'direct');
+  });
+});

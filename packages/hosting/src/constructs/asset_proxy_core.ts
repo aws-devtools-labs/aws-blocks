@@ -100,6 +100,16 @@ export type AssetProxyOptions = ProxyRules & {
    * `serverError` (status 500) when S3 fails.
    */
   errorPages?: { notFound?: string; serverError?: string };
+  /**
+   * Answer the framework image endpoints (`/_next/image?url=…`, Nuxt
+   * `/_ipx/<modifiers>/<src>`, Astro `/_image?href=…`) when the deploy has no
+   * image function: a local source is served as stored (unoptimized); a remote
+   * source is redirected (302) to itself when its host is in `hosts`, else
+   * 404. The proxy never fetches a remote URL, so it can't be used to reach
+   * internal endpoints. Only the API Gateway door's proxy reads the request
+   * query, so only it answers these.
+   */
+  imageFallback?: { hosts: readonly string[] };
 };
 
 /**
@@ -120,6 +130,8 @@ const KEY_PREFIX = process.env.ASSET_KEY_PREFIX || '';
 const STRIP_PREFIX = ${JSON.stringify(opts.stripPrefix ?? '')};
 const SPA_FALLBACK = ${opts.spaFallback ? 'true' : 'false'};
 const NOT_FOUND_PAGE = ${pageKey(opts.errorPages?.notFound)};
+const IMAGE_FALLBACK = ${opts.imageFallback ? 'true' : 'false'};
+const IMAGE_REMOTE_HOSTS = ${JSON.stringify(opts.imageFallback?.hosts ?? [])};
 const SERVER_ERROR_PAGE = ${pageKey(opts.errorPages?.serverError)};
 
 ${proxyRulesJs(opts)}
@@ -277,6 +289,46 @@ function gzipOnce(key, version, buf) {
     GZIP_CACHE.set(id, gz);
   }
   return gz;
+}
+
+// A remote image host is allowed when it equals an allowlisted host, or
+// matches a '*.' / '**.' wildcard entry (Next.js remotePatterns hostnames).
+function imageHostAllowed(host) {
+  host = host.toLowerCase();
+  for (var i = 0; i < IMAGE_REMOTE_HOSTS.length; i++) {
+    var entry = IMAGE_REMOTE_HOSTS[i].toLowerCase();
+    if (entry === host) return true;
+    var star = entry.indexOf('**.') === 0 ? 3 : entry.indexOf('*.') === 0 ? 2 : 0;
+    if (star && host.length > entry.length - star && host.slice(-(entry.length - star + 1)) === '.' + entry.slice(star)) return true;
+  }
+  return false;
+}
+
+// The source behind a framework image endpoint when the deploy has no image
+// function: { uri } for a local file (served as stored), { redirect } for an
+// allowed remote source, { status: 404 } otherwise; null when the request is
+// not an image endpoint.
+function blocksImageSource(requestUri, query) {
+  if (!IMAGE_FALLBACK) return null;
+  var rel = stripBasePath(requestUri, STRIP_PREFIX);
+  var src;
+  if (rel.indexOf('/_ipx/') === 0) {
+    // '/_ipx/<modifiers>/<src>'; a remote source is inlined ('https://host/…'),
+    // and API Gateway may collapse its '//'.
+    var rest = rel.substring('/_ipx/'.length);
+    var slash = rest.indexOf('/');
+    src = slash === -1 ? '' : rest.substring(slash + 1).replace(/^(https?):\\/+/i, '$1://');
+  } else if (rel === '/_next/image' || rel === '/_image') {
+    src = (query && (query.url || query.href)) || '';
+  } else {
+    return null;
+  }
+  if (/^https?:\\/\\//i.test(src)) {
+    var host = src.replace(/^https?:\\/\\//i, '').split(/[\\/?#:]/)[0];
+    return imageHostAllowed(host) ? { redirect: src } : { status: 404 };
+  }
+  if (!src || src.indexOf('//') === 0) return { status: 404 };
+  return { uri: src.charAt(0) === '/' ? src : '/' + src };
 }
 
 async function blocksServe(requestUri, requestHeaders) {

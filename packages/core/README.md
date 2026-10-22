@@ -422,6 +422,21 @@ Switching `frontDoor` on a deployed app replaces the front door: the URL changes
 The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
+#### Preview mode
+
+`preview: true` deploys a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes). It is opt-in and a decision in code: an app that wants a preview in some environments sets it from its own signal.
+
+```typescript
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  preview: process.env.DEPLOY_ENV === 'preview',
+});
+```
+
+A preview is served by the API Gateway HTTP API door (no CloudFront; buffered server responses; about 6 MB per response). `frontDoor` may be omitted or set to an `apiGateway` door, for example with a custom domain; any other door fails synth (`PreviewFrontDoorError`). It also builds Next.js without incremental regeneration (prerendered pages still come from the build's snapshot), skips image optimization (the image endpoints serve the source image; `preview: { enabled: true, imageOptimization: true }` keeps it), runs Next.js `runtime: 'edge'` routes as regional functions, and fixes the build id so `startSandbox({ preview: true })` can hotswap a code-only re-deploy.
+
+
 ## Building Blocks
 
 Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):

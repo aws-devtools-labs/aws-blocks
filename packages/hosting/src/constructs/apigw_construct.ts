@@ -75,6 +75,20 @@ export type ApiGatewayConstructProps = {
    * when S3 fails.
    */
   errorPages?: { notFound?: string; serverError?: string };
+  /**
+   * Routes that a compute other than the server serves (e.g. a Next.js
+   * `runtime: 'edge'` route built as a regional function), most-specific
+   * first. Each pattern (basePath-prefixed) gets a route to that function.
+   */
+  computeRoutes?: readonly { pattern: string; computeName: string }[];
+  /**
+   * The deploy has no image function: route the framework image endpoints
+   * (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to the asset
+   * proxy, which serves the source image unoptimized. A remote source is
+   * redirected to itself only when its host is in `hosts` (the app's image
+   * allowlist); the proxy never fetches it.
+   */
+  imageFallback?: { hosts: readonly string[] };
 };
 
 
@@ -145,6 +159,7 @@ export class ApiGatewayConstruct extends Construct {
           redirects: plan.routes.redirects,
           headers: plan.routes.headers,
           errorPages: props.errorPages,
+          ...(props.imageFallback && !imageFn ? { imageFallback: props.imageFallback } : {}),
         }),
       ),
       timeout: Duration.seconds(15),
@@ -212,6 +227,31 @@ export class ApiGatewayConstruct extends Construct {
 
     // Route table → routes (deduped; catch-all handled by defaultIntegration).
     const seen = new Set<string>();
+    // Routes served by a compute other than the server go straight to it; the
+    // route table lists them as server routes, so they are claimed first.
+    const computeIntegrations = new Map<string, HttpLambdaIntegration>();
+    for (const r of props.computeRoutes ?? []) {
+      const fn = compute.get(r.computeName);
+      const path = globToProxyPath(r.pattern);
+      if (!fn || path === null || seen.has(path) || backendPaths.has(path)) continue;
+      let integration = computeIntegrations.get(r.computeName);
+      if (!integration) {
+        integration = new HttpLambdaIntegration(`ComputeInt-${r.computeName}`, fn);
+        computeIntegrations.set(r.computeName, integration);
+      }
+      seen.add(path);
+      this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration });
+    }
+    // No image function: the framework image endpoints go to the asset proxy,
+    // which answers them with the source image.
+    if (props.imageFallback && !imageFn) {
+      const base = (plan.policies.basePath ?? '').replace(/\/+$/, '');
+      for (const path of [`${base}/_next/image`, `${base}/_ipx/{proxy+}`, `${base}/_image`]) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
+      }
+    }
     // Redirect sources first: each routes to the asset proxy, which answers the
     // redirect with the CloudFront door's semantics (first match, wildcard tail
     // spliced). A source with an inner wildcard has no route form.

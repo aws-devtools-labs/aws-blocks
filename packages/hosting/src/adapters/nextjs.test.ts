@@ -20,9 +20,11 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  pinNextBuildId,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import { withComputeTarget } from './shared/compute_target.js';
+import { withBuildProfile } from './shared/build_profile.js';
 import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
@@ -2341,5 +2343,149 @@ void describe('installLinuxSharpForImageOptimizer — sharp floor (GHSA-wq5f-xc8
     seedSharp('0.35.5', 'x64');
     installLinuxSharpForImageOptimizer(openNextDir);
     assert.strictEqual(installs.length, 0);
+  });
+});
+
+void describe('nextjsAdapter — build profile (HTTP API door, preview trims)', () => {
+  let tmpDir: string;
+  let lenientBackup: string | undefined;
+  let configDuringBuild: string | undefined;
+  let output: Record<string, unknown>;
+
+  const writeOutput = (): void => {
+    const openNextDir = path.join(tmpDir, '.open-next');
+    for (const fn of output.edgeFunctions ? ['default', 'edge1'] : ['default']) {
+      fs.mkdirSync(path.join(openNextDir, 'server-functions', fn), { recursive: true });
+      fs.writeFileSync(path.join(openNextDir, 'server-functions', fn, 'index.mjs'), 'export const handler = async () => {};');
+    }
+    fs.mkdirSync(path.join(openNextDir, 'assets'), { recursive: true });
+    fs.mkdirSync(path.join(openNextDir, 'cache'), { recursive: true });
+    fs.mkdirSync(path.join(openNextDir, 'revalidation-function'), { recursive: true });
+    fs.writeFileSync(path.join(openNextDir, 'open-next.output.json'), JSON.stringify(output));
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-profile-'));
+    configDuringBuild = undefined;
+    output = {
+      origins: { default: { type: 'function', handler: 'index.handler', bundle: '.open-next/server-functions/default', streaming: true } },
+      edgeFunctions: { edge1: { bundle: '.open-next/server-functions/edge1', handler: 'index.handler' } },
+      behaviors: [
+        { pattern: '/api/edge', origin: 'edge1' },
+        { pattern: '/*', origin: 'default' },
+      ],
+      additionalProps: {},
+    };
+    mock.method(spawn, 'sync', () => {
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeOutput();
+    });
+    lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
+    delete process.env.HOSTING_LENIENT_PATCHES;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+    if (lenientBackup === undefined) delete process.env.HOSTING_LENIENT_PATCHES;
+    else process.env.HOSTING_LENIENT_PATCHES = lenientBackup;
+  });
+
+  void it('behind an HTTP API: payload 2.0 converter, buffered wrapper, a buffered server', () => {
+    // No HOSTING_LENIENT_PATCHES: the streaming-wrapper patch must be skipped
+    // (there is no streaming wrapper to patch) rather than throw.
+    delete output.edgeFunctions;
+    output.behaviors = [{ pattern: '/*', origin: 'default' }];
+    const manifest = withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /converter: 'aws-apigw-v2',\s+wrapper: 'aws-lambda',/);
+    assert.doesNotMatch(configDuringBuild ?? '', /aws-apigw-v1|aws-lambda-streaming/);
+    assert.strictEqual(manifest.compute['default'].streaming, false);
+  });
+
+  void it('`skipIsr`: no tag cache and the dummy queue; the cache and its seed stay', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = withBuildProfile({ skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /dangerous: \{\s+disableTagCache: true,/);
+    assert.match(configDuringBuild ?? '', /queue: 'dummy',/);
+    assert.ok(manifest.cache, 'the incremental cache stays');
+    assert.strictEqual(manifest.cache?.revalidationQueue, false);
+    assert.strictEqual(manifest.cache?.revalidationFunction, undefined);
+    assert.ok(manifest.cache?.seedDirectory, 'the build snapshot still seeds the cache');
+  });
+
+  void it('`edgeToRegional`: an edge route is a regional handler, not Lambda@Edge', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = withBuildProfile({ edgeToRegional: true, serverInvoke: 'http-api' }, () =>
+      nextjsAdapter({ projectDir: tmpDir }),
+    );
+    const edge = manifest.compute['edge1'];
+    assert.strictEqual(edge.type, 'handler');
+    assert.strictEqual(edge.placement, 'regional');
+    assert.strictEqual(edge.streaming, false, 'buffered behind the HTTP API');
+    assert.ok(manifest.routes.some((r) => r.pattern === '/api/edge' && r.target === 'edge1'));
+  });
+
+  void it('the default profile keeps the REST (payload 1.0, streaming) build and Lambda@Edge', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const manifest = nextjsAdapter({ projectDir: tmpDir });
+    assert.match(configDuringBuild ?? '', /converter: 'aws-apigw-v1',\s+wrapper: 'aws-lambda-streaming',/);
+    assert.doesNotMatch(configDuringBuild ?? '', /disableTagCache|dummy/);
+    assert.strictEqual(manifest.compute['edge1'].type, 'edge');
+    assert.strictEqual(manifest.cache?.revalidationQueue, true);
+  });
+
+  void it('behind an HTTP API, accepts a user config with the payload 2.0 overrides and rejects the REST ones', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const cfg = path.join(tmpDir, 'open-next.config.ts');
+    fs.writeFileSync(cfg, "export default { default: { override: { converter: 'aws-apigw-v1', wrapper: 'aws-lambda-streaming' } } };\n");
+    assert.throws(() => withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir })), {
+      code: 'IncompatibleOpenNextConfigError',
+    });
+    fs.writeFileSync(cfg, "export default { default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' } } };\n");
+    assert.doesNotThrow(() => withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir })));
+  });
+
+  void it('`deterministicBuildId`: next.config is wrapped with generateBuildId during the build, then restored', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const configFile = path.join(tmpDir, 'next.config.mjs');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    let nextConfigDuringBuild: string | undefined;
+    mock.restoreAll();
+    mock.method(spawn, 'sync', () => {
+      nextConfigDuringBuild = fs.readFileSync(configFile, 'utf-8');
+      writeOutput();
+    });
+    withBuildProfile({ deterministicBuildId: 'preview' }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(nextConfigDuringBuild ?? '', /generateBuildId: cfg\.generateBuildId \?\? \(async \(\) => "preview"\)/);
+    assert.match(nextConfigDuringBuild ?? '', /import blocksBase from "\.\/next\.config\.blocks-base"/);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original, 'restored after the build');
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.mjs')));
+  });
+});
+
+void describe('pinNextBuildId', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-next-buildid-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('is a no-op without a next.config, or when the app defines generateBuildId', () => {
+    assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
+    fs.writeFileSync(path.join(tmpDir, 'next.config.js'), 'module.exports = { generateBuildId: async () => "mine" };');
+    assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
+  });
+
+  void it('writes a CommonJS wrapper for a CommonJS project', () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.js'), 'module.exports = {};');
+    const restore = pinNextBuildId(tmpDir, 'preview');
+    assert.ok(restore);
+    assert.match(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), /module\.exports = async/);
+    restore();
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), 'module.exports = {};');
   });
 });

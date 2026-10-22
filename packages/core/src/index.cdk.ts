@@ -100,6 +100,7 @@ export {
 	type HostingDomainConfig,
 	type HostingProps,
 	type HostingWafConfig,
+	type PreviewOptions,
 } from './hosting.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export {

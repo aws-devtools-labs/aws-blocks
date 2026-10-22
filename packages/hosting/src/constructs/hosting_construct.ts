@@ -56,6 +56,8 @@ import {
 import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
+import { routeSpecificity } from '../plan/route-table.js';
+import { prependBasePath } from '../adapters/shared/basepath.js';
 import { albDoor } from './alb_door.js';
 import { AlbConstruct } from './alb_construct.js';
 import {
@@ -533,6 +535,18 @@ export type HostingConstructProps = {
      */
     paths?: readonly string[];
   };
+
+  /**
+   * Build no image-optimization function, even when the manifest declares
+   * one. On the API Gateway HTTP door the framework image endpoints
+   * (`/_next/image`, `/_ipx/*`, `/_image`) are then answered by the asset
+   * proxy with the source image, unoptimized; a remote source is redirected
+   * to itself when its host is in the manifest's image allowlist
+   * (`imageOptimization.domains` / `remotePatterns`), else 404. Set by core
+   * `Hosting` in preview mode.
+   * @default false
+   */
+  skipImageOptimization?: boolean;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -1139,7 +1153,7 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    if (manifest.imageOptimization && !props.skipImageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {
@@ -1944,6 +1958,8 @@ export class HostingConstruct extends Construct {
             apiGateway: {
               ...common,
               errorPages: this.doorInput.app.errorPages,
+              computeRoutes: directComputeRoutes(manifest, this.computeFunctions, serverName),
+              ...(props.skipImageOptimization ? { imageFallback: { hosts: imageRemoteHosts(manifest) } } : {}),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -2696,6 +2712,46 @@ export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor'
       return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
   }
 };
+
+/**
+ * The routes a regional door sends straight to a compute other than the
+ * server and the image function (e.g. a Next.js `runtime: 'edge'` route built
+ * as a regional function): the route table lists them as server routes.
+ * Lambda@Edge functions are reached only through CloudFront and are skipped.
+ *
+ * @param manifest the deploy manifest.
+ * @param computeFunctions the functions built for the manifest's compute.
+ * @param serverName the server compute's name, if any.
+ * @returns `{ pattern, computeName }` (basePath-prefixed), most-specific first.
+ */
+const directComputeRoutes = (
+  manifest: DeployManifest,
+  computeFunctions: ReadonlyMap<string, unknown>,
+  serverName: string | undefined,
+): { pattern: string; computeName: string }[] =>
+  manifest.routes
+    .filter(
+      (r) =>
+        r.target !== serverName &&
+        r.target !== 'image-optimization' &&
+        computeFunctions.has(r.target) &&
+        manifest.compute[r.target]?.type !== 'edge',
+    )
+    .map((r) => ({ pattern: prependBasePath(manifest.basePath, r.pattern), computeName: r.target }))
+    .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+/**
+ * The remote image hosts the app allows its image optimizer to fetch: the
+ * manifest's `imageOptimization.domains` and `remotePatterns` hostnames.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the hosts (may carry a `*.` / `**.` wildcard prefix).
+ */
+const imageRemoteHosts = (manifest: DeployManifest): string[] => [
+  ...(manifest.imageOptimization?.domains ?? []),
+  ...(manifest.imageOptimization?.remotePatterns ?? []).map((p) => p.hostname),
+];
+
 
 /**
  * How the selected front door invokes the server-rendering compute. Known
