@@ -5,9 +5,10 @@
 //   1. Local developer sandbox (`npm run deploy`) — the Dart Flutter example
 //      and OIDC relay testing target the fixed-name `bb-test-native-bindings-dart`
 //      stack (the relay needs a real HTTPS callback).
-//   2. CI (native-sdk-e2e.yml `dart-e2e-sandbox` job) — deploys then tears down a
-//      per-run stack. It sets BLOCKS_STACK_SUFFIX to a unique value so concurrent
-//      runs get isolated stacks and never collide with the developer sandbox.
+//   2. CI (the `*-e2e-sandbox` jobs in native-sdk-e2e.yml, four sandbox deploys
+//      per run) — each deploys then tears down a per-run stack. They set
+//      BLOCKS_STACK_SUFFIX to a unique value so concurrent runs get isolated
+//      stacks and never collide with the developer sandbox.
 // Minimal variant of the comprehensive app's index.cdk.ts (no sandbox-id salt).
 
 import * as cdk from 'aws-cdk-lib';
@@ -17,7 +18,17 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const app = new cdk.App();
+// Default the `sandboxMode` context to on, so `npm run deploy` (both uses above)
+// builds DistributedTable GSIs the way `npm run sandbox` does. Here that is the
+// `todos` table and the Realtime connections table: the GSI custom resource
+// recreates each empty table with all its indexes at once (about a minute)
+// instead of adding them one at a time and waiting for each to backfill (about
+// 17 minutes for `todos`). This stack is disposable (see `defaults` below); on
+// the long-lived developer stack it also means a later index change drops and
+// recreates the table. The serial production GSI path is covered by the
+// comprehensive app's production deploy. A direct
+// `cdk synth/deploy --context sandboxMode=false` still overrides the default.
+const app = new cdk.App({ context: { sandboxMode: 'true' } });
 
 // BLOCKS_STACK_NAME wins if set. Otherwise: the fixed developer-sandbox name when
 // no suffix is present, or a compact suffixed name in CI (BLOCKS_STACK_SUFFIX is

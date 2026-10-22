@@ -362,11 +362,12 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    # Deploy sandbox alone is ~21 min (sequential DynamoDB GSI custom-resource
-    # backfill), plus npm ci (~2m) + build (~4m) ≈ 27 min before any test runs.
-    # 30 left too little headroom (test squeaked in but the job tripped the
-    # wall / Destroy could be skipped → leaked stacks). Stop-gap until
-    # deploy-once-per-run lands.
+    # Deploy sandbox used to take ~21 min (sequential DynamoDB GSI custom-resource
+    # backfill); 30 min left too little headroom (the job tripped the wall and
+    # Destroy could be skipped -> leaked stacks).
+    # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
+    # on, so the GSIs are built with the table and the deploy should take a few
+    # minutes. 45 is kept until that has a run history.
     timeout-minutes: 45
     environment: e2e
     env:
@@ -507,9 +508,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
-    # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
-    # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
-    # Stop-gap until deploy-once-per-run lands.
+    # Same deploy history as dart-e2e-sandbox; with the old ~27-min deploy+build
+    # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
+    # 45 is kept until the faster sandboxMode deploy has a run history.
     timeout-minutes: 45
     environment: e2e
     env:
@@ -609,8 +610,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
-    # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
-    # Swift iOS sandbox job and the non-sandbox Kotlin job above.
+    # Per-leg: iOS deploy + simulator build exceeded a flat 30 min with the
+    # serial GSI deploy. Matches the Swift iOS sandbox job and the non-sandbox
+    # Kotlin job above.
     timeout-minutes: ${{ matrix.timeout }}
     environment: e2e
     strategy:
@@ -621,8 +623,9 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
-            # resources), so 30 min left no room for the build, tests and destroy.
+            # The sandbox deploy took 19-25 min before sandboxMode (serial GSI
+            # custom resources), so 30 min left no room for the build, tests and
+            # destroy. 45 is kept until the faster deploy has a run history.
             timeout: 45
           - label: iOS
             suffix: ios
