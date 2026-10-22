@@ -321,6 +321,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 			// entirely (delete the row) so a 6-digit OTP can't be brute-forced within
 			// its validity window — the attempt cap, not the code entropy, is the
 			// bound. Otherwise persist the incremented count for the next request.
+			// The counter is a best-effort read-modify-write (KVStore has no atomic
+			// increment): concurrent wrong guesses for the same code can interleave
+			// and lose an increment, so an attacker may get somewhat more than
+			// MAX_CODE_ATTEMPTS tries. The code TTL still bounds the window, so this
+			// is a bounded weakening, not a hard cap — see DESIGN.md D-AB-4.
 			const nextAttempts = attempts + 1;
 			if (nextAttempts >= MAX_CODE_ATTEMPTS) {
 				await this.codes.delete(key);

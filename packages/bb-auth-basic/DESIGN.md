@@ -115,7 +115,7 @@ This allows the Authenticator UI component to display errors without losing trac
 - **Security** — if the KVStore is compromised, codes cannot be extracted. The attacker would need both the stored HMAC and the JWT secret.
 - **Constant-time comparison** — `constantTimeEquals` from `@aws-blocks/core/bb-utils` prevents timing attacks during verification.
 - **10-minute TTL** — codes expire after 600 seconds, limiting the attack window.
-- **Bounded by an attempt cap, not entropy** — a 6-digit code is only ~900,000 values (~19.8 bits), which is exhaustively guessable within the 10-minute window at any reasonable request rate, so the TTL alone does **not** make brute-force impractical. The bound is an always-on attempt cap: after `MAX_CODE_ATTEMPTS` (5) consecutive wrong guesses the code row is deleted, invalidating the code so even the correct value no longer works and the user must request a fresh one. The counter (`attempts`) lives inside the code record, so it is reaped with the code's own TTL (no separate key). A wrong guess re-persists the counter under the code's **original** expiry, so an attacker cannot extend the window by guessing. This is always on — distinct from the opt-in sign-in `lockout` policy (D-AB-11) — because unlimited OTP guesses is a flat security hole regardless of sign-in-throttling config. The error is the same generic `InvalidCodeException` on a wrong guess and on an exhausted code, so no oracle reveals whether the cap was hit.
+- **Bounded by an attempt cap, not entropy** — a 6-digit code is only ~900,000 values (~19.8 bits), which is exhaustively guessable within the 10-minute window at any reasonable request rate, so the TTL alone does **not** make brute-force impractical. The bound is an always-on attempt cap: after `MAX_CODE_ATTEMPTS` (5) consecutive wrong guesses the code row is deleted, invalidating the code so even the correct value no longer works and the user must request a fresh one. The counter (`attempts`) lives inside the code record, so it is reaped with the code's own TTL (no separate key). A wrong guess re-persists the counter under the code's **original** expiry, so an attacker cannot extend the window by guessing. This is always on — distinct from the opt-in sign-in `lockout` policy (D-AB-11) — because unlimited OTP guesses is a flat security hole regardless of sign-in-throttling config. The error is the same generic `InvalidCodeException` on a wrong guess and on an exhausted code, so no oracle reveals whether the cap was hit. The counter is a **best-effort** read-modify-write (KVStore has no atomic increment), the same trade-off D-AB-11 records for the sign-in lockout: concurrent wrong guesses for one code — including across many Lambda instances sharing one DynamoDB row — can interleave and lose an increment, so an attacker may get somewhat more than `MAX_CODE_ATTEMPTS` tries. The code's own TTL still closes the window, so this is a bounded weakening of the cap rather than an unbounded hole — not a hard, exactly-N guarantee. An atomic conditional-write-with-retry path would remove the slack if a hard cap were ever needed, but is not warranted here.
 
 ### D-AB-5: Cookie attributes (HttpOnly; SameSite=Lax default, cross-domain opt-in)
 
@@ -195,7 +195,7 @@ None directly — AuthBasic is a composite Building Block with no CDK construct.
 | Composed BB | Creates | Purpose |
 |-------------|---------|---------|
 | `KVStore(this, 'users')` | DynamoDB table (PAY_PER_REQUEST) | User records: username → `{ hash, createdAt, unconfirmed? }` |
-| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires }` |
+| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires, attempts }` |
 | `AppSetting(this, 'jwt-secret')` | SSM Parameter (SecureString) | JWT signing secret |
 
 All permissions (DynamoDB read/write, SSM GetParameter) are managed by the composed BBs via the standard Blocks grant mechanism. No additional IAM configuration is needed.
@@ -284,7 +284,7 @@ Legacy code rows written before attempt-limiting have no `attempts` field and de
 | Token replay after sign-out | Revocation list keyed by `jti` — `signOut` records the token id (self-expiring at the token's `exp`), and every auth check rejects a revoked `jti`, so a copied/replayed cookie stops working at sign-out rather than at `exp` |
 | Timing attacks on code verification | `constantTimeEquals` for HMAC comparison |
 | User enumeration (resetPassword) | Silent success for non-existent users |
-| Code brute-force | 10-minute TTL + 900,000 possible values |
+| Code brute-force | `MAX_CODE_ATTEMPTS` (5) failed-guess cap that invalidates the code, plus the 10-minute TTL — the cap, not the 6-digit entropy, is the bound (D-AB-4); best-effort under concurrency |
 | Secret exposure | Stored in SSM SecureString (encrypted at rest) |
 | Cross-site request forgery | SameSite=Lax by default (CSRF-resistant); SameSite=None + Partitioned when crossDomain: true (CHIPS isolation) |
 | Unconfirmed user access | signIn rejects users with `unconfirmed: true` |
