@@ -143,7 +143,7 @@ jobs:
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their ampx holds the cdk.out lock), and reports a failed delete
       # as a warning. It runs only once AWS credentials were set up: before that
-      # nothing was deployed (and a trailer-blocked job has no checkout).
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Cleanup sandbox
         if: always() && steps.aws-creds.outcome == 'success'
         run: |
@@ -201,7 +201,7 @@ jobs:
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their ampx holds the cdk.out lock), and reports a failed delete
       # as a warning. It runs only once AWS credentials were set up: before that
-      # nothing was deployed (and a trailer-blocked job has no checkout).
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Cleanup sandbox
         if: always() && steps.aws-creds.outcome == 'success'
         run: |
