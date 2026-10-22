@@ -18,7 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -30,6 +30,9 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 const outputsPath = join(__dirname, '..', '.blocks-sandbox', 'outputs.json');
 
 let apiUrl: string;
+// The deployed main stack, read from the deploy outputs (its vpc-ref sibling is
+// `${stackName}-vpc-ref`). Unset when the deploy wrote no outputs.
+let stackName: string | undefined;
 
 /** Call an API method via the Blocks JSON-RPC protocol. */
 async function rpc(method: string, ...args: unknown[]): Promise<unknown> {
@@ -83,6 +86,7 @@ test('Compute Smoke Tests', async (t) => {
     console.log('\n✅ Deployed\n');
 
     const outputs = JSON.parse(readFileSync(outputsPath, 'utf-8'));
+    stackName = Object.keys(outputs).find((k) => outputs[k]?.ApiUrl || outputs[k]?.apiUrl);
     apiUrl = outputs.ApiUrl || outputs.apiUrl;
     if (!apiUrl) {
       const stackKey = Object.keys(outputs)[0];
@@ -103,7 +107,19 @@ test('Compute Smoke Tests', async (t) => {
         });
         console.log('✅ Stack destroyed');
       } catch {
-        console.log('⚠️  Stack destroy failed (non-fatal — cleanup will be retried next run)');
+        // Not fatal: the test results above stand, and cleanup-stacks.yml
+        // reclaims bb-test-* stacks (a DELETE_FAILED one on its next run, a
+        // completed one once it is 2 hours old). The stack names are unique per
+        // run, so no later run of this job retries the destroy. Surface it as an
+        // annotation and in the job summary.
+        const stacks = stackName ? `${stackName} and ${stackName}-vpc-ref` : 'this run\'s stacks (see the log)';
+        const message = `Destroying ${stacks} failed; cleanup-stacks.yml reclaims them once they are DELETE_FAILED or 2 hours old.`;
+        // Leading newline: a workflow command only counts at the start of a line,
+        // and the destroy's output may not end with one.
+        console.log(`\n::warning title=Compute Smoke teardown::${message}`);
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Compute Smoke teardown failed\n\n${message}\n`);
+        }
       }
     }
   });
