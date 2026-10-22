@@ -4,6 +4,10 @@
 // Unit tests for the teardown helper in scripts/ci/_proc.mjs.
 //
 // Run: node --test scripts/ci/_proc.test.mjs
+//
+// CI runs this on Linux only. On Windows (`shell: true`) cmd.exe reports a
+// missing command as a non-zero status rather than a spawn error; the status
+// check covers both.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
