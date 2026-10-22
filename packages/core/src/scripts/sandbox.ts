@@ -163,7 +163,8 @@ export function buildSandboxDeployArgs({
  *   of `cdk watch` (the CLI warns about it as unknown), and the `*` wildcard
  *   misses a top-level stack whose construct path contains a `/`, so the
  *   stacks are named exactly. An empty list passes no selector (CDK then
- *   watches the app's only stack).
+ *   watches the app's only stack). The set is fixed when the session starts:
+ *   a stack added while it runs is deployed by the next `npm run sandbox`.
  */
 export function buildSandboxWatchArgs({
   outDir,
@@ -179,6 +180,18 @@ export function buildSandboxWatchArgs({
     `--context`, `sandboxMode=true`,
     `--app`, `npm exec tsx -- -C cdk ${backendPath}`
   ];
+}
+
+/**
+ * The stack patterns the sandbox passes to `cdk watch` (see
+ * {@link buildSandboxWatchArgs}): the top-level stack paths only when there
+ * are several. With one stack (or an unreadable assembly) it passes none, so a
+ * single-stack app keeps the argv it always had: CDK treats each name as a
+ * glob pattern, and a construct path with a glob character such as `(` would
+ * otherwise match nothing and silently stop the watch.
+ */
+export function sandboxWatchStacks(topLevelPaths: readonly string[]): string[] {
+  return topLevelPaths.length > 1 ? [...topLevelPaths] : [];
 }
 
 /**
@@ -363,7 +376,7 @@ export async function startSandbox(options: SandboxOptions) {
     outDir,
     projectRoot: process.cwd(),
     backendPath,
-    stacks: topLevelStackPaths(assemblyDir),
+    stacks: sandboxWatchStacks(topLevelStackPaths(assemblyDir)),
   }), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
