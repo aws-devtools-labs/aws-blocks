@@ -13,7 +13,7 @@ enum WidgetKind {
   a$b,
   x$$y,
   b$c,
-  d$e
+  d_$e
 ;
 
   static const _jsonMap = <String, WidgetKind>{
@@ -21,14 +21,14 @@ enum WidgetKind {
     'a\$b': a$b,
     'x\$\$y': x$$y,
     'b-\$c': b$c,
-    'd_\$e': d$e,
+    'd_\$e': d_$e,
   };
   static const _toJsonMap = <WidgetKind, String>{
     cost$: 'cost\$',
     a$b: 'a\$b',
     x$$y: 'x\$\$y',
     b$c: 'b-\$c',
-    d$e: 'd_\$e',
+    d_$e: 'd_\$e',
   };
   String toJson() => _toJsonMap[this]!;
   static WidgetKind fromJson(String json) => _jsonMap[json]!;
@@ -232,17 +232,17 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<Widget> get$x({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.get\$x', params);
     return Widget.fromJson(result as Map<String, dynamic>);
   }
 
   Future<DoActionResult> doAction({required ApiDoActionInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.doAction', params);
     return DoActionResult.fromJson(result as Map<String, dynamic>);
   }

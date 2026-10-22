@@ -48,15 +48,15 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SearchResult> search({required dynamic query}) async {
-    final params = <String, dynamic>{
-      'query': query,
-    };
+    final params = <dynamic>[
+      query,
+    ];
     final result = await _client.call('api.search', params);
     return SearchResult.fromJson(result as Map<String, dynamic>);
   }
 
   Future<dynamic> getValue() async {
-    final result = await _client.call('api.getValue', <String, dynamic>{});
+    final result = await _client.call('api.getValue', const <dynamic>[]);
     return result as dynamic;
   }
 }

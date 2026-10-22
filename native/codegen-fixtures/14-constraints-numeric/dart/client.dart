@@ -96,9 +96,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SetScoreResult> setScore({required ApiSetScoreInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.setScore', params);
     return SetScoreResult.fromJson(result as Map<String, dynamic>);
   }
