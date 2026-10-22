@@ -147,17 +147,17 @@ Set on the scope during `initializeVpc()`. BBs like `bb-data` read this via `get
 
 ## Testing Strategy
 
-### Persistent Test VPC (Bare Minimum)
+### Persistent Test VPCs
 
-The persistent test VPC stack (`test-infra/vpc-test-stack.ts`) contains only:
+The persistent test VPC stacks (`test-infra/vpc-test-stack.ts`) each contain:
 
 - VPC with public / private / isolated subnets (2 AZs)
 - 1 NAT gateway
 - VPC ID output
 
-No pre-provisioned endpoints. No Aurora cluster. No security groups beyond defaults.
+No Aurora cluster. `BlocksTestVpc` (vpc-smoke) has no pre-provisioned endpoints: the test app provisions its own via `provisionEndpoints: true`, testing the real auto-detection path end-to-end.
 
-The test app provisions its own endpoints via `provisionEndpoints: true`, testing the real auto-detection path end-to-end.
+`BlocksComputeTestVpc` (compute-smoke) has permanent S3, DynamoDB, SQS and CloudWatch Logs endpoints in a separate stack, so concurrent Compute Smoke runs can share it; compute-smoke deploys there with `provisionEndpoints: false`. compute-smoke's template test checks the endpoints the framework would create for it, and the `E2E Compute Endpoints` workflow deploys it with `provisionEndpoints: true` in `BlocksTestVpc`.
 
 ### Per-Test Aurora
 

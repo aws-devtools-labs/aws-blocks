@@ -1,0 +1,149 @@
+name: E2E Compute Endpoints
+
+# Deploys test-apps/compute-smoke with provisionEndpoints: true, so the app
+# stack creates its own S3, DynamoDB, SQS and Logs endpoints, and runs its tests
+# (Lambda and Fargate reaching those services through them). E2E Compute Smoke
+# in pr-checks.yml no longer does this on every PR: it runs in
+# BlocksComputeTestVpc, whose endpoints are permanent and admit the whole VPC,
+# so it can't catch a stack-created endpoint that AWS rejects, or a runtime in a
+# security group the framework's endpoint security group doesn't admit.
+#
+# This runs in BlocksTestVpc, which has no endpoints, one run per account at a
+# time (a VPC takes only one private-DNS endpoint per service, so two stacks
+# creating them can't overlap). It has its own lock, not E2E VPC Smoke's
+# blocks-test-vpc-<n>: VPC Smoke deploys nothing into the VPC while its tests
+# are off, and sharing a lock with this 50-70 minute job would make VPC Smoke
+# wait that long and have GitHub cancel its pending jobs. Once VPC Smoke's tests
+# create endpoints again, both jobs must use one group. It runs nightly, and on
+# PRs that change the VPC or compute code. Not a required check.
+
+on:
+  schedule:
+    - cron: '40 5 * * *'
+  pull_request:
+    branches: ['*']
+    paths:
+      - 'packages/core/src/cdk/vpc*.ts'
+      - 'packages/bb-async-job/src/**'
+      - 'packages/bb-compute/src/**'
+      - 'packages/bb-container-compute/src/**'
+      - 'packages/bb-lambda-compute/src/**'
+      - 'test-apps/compute-smoke/**'
+      - 'test-infra/vpc-test-*.ts'
+      - 'test-infra/cdk.json'
+      - '.github/workflows/e2e-compute-endpoints.yml'
+  workflow_dispatch:
+
+# A new push queues behind the running deploy instead of cancelling it: a
+# cancelled deploy can leave a stack whose endpoints block the next run.
+concurrency:
+  group: e2e-compute-endpoints-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+# Grant OIDC tokens only to the role-assuming job.
+permissions:
+  contents: read
+
+env:
+  NODE_OPTIONS: '--test-reporter=spec'
+
+jobs:
+  e2e-slot:
+    name: E2E account
+    runs-on: ubuntu-latest
+    outputs:
+      # E2E account for this run (see .github/actions/e2e-slot): the PR's, or
+      # account 1 for scheduled and manual runs.
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/actions
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
+
+  e2e-compute-endpoints:
+    name: E2E Compute Endpoints
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
+    needs: [e2e-slot]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Setup ~10 minutes, the suite ~40 (55 at most), the teardown up to 30.
+    timeout-minutes: 105
+    environment: e2e
+    # One stack creating endpoints in BlocksTestVpc per account (see the top of
+    # this file for why this is not VPC Smoke's group). Queue rather than cancel
+    # so an in-flight deploy/destroy isn't interrupted; GitHub keeps one pending
+    # job per group, so a third run in the same account cancels the waiting one.
+    concurrency:
+      group: blocks-test-vpc-endpoints-${{ needs.e2e-slot.outputs.e2e-index }}
+      cancel-in-progress: false
+    env:
+      COMPUTE_SMOKE_PROVISION_ENDPOINTS: 'true'
+      # Short: the app's bucket name, `<stack>-compute-smoke-artifacts`, is
+      # capped at 63 characters.
+      BLOCKS_STACK_SUFFIX: ep-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || 'manual' }}-${{ github.run_attempt }}
+      # The suite keeps its stacks; the teardown below deletes them, also when
+      # the job fails, times out or is cancelled.
+      BLOCKS_SANDBOX_KEEP: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.e2e-slot.outputs.e2e-index }}
+
+      - name: Ensure persistent test VPC
+        run: cd test-infra && npx cdk deploy BlocksTestVpc --require-approval never --outputs-file outputs.json
+
+      - name: Export VPC ID
+        run: |
+          VPC_ID=$(cat test-infra/outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksTestVpc']['VpcId'])")
+          echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
+
+      - name: E2E Compute Smoke with stack-created endpoints
+        timeout-minutes: 55
+        run: npm run test:e2e:sandbox:compute
+
+      # Fresh credentials, since the first session can expire before a long or
+      # timed-out job gets here. Skipped when nothing was synthesized.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 3
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.e2e-slot.outputs.e2e-index }}
+
+      # Deletes this checkout's app stack and its -vpc-ref (cdk destroy --all;
+      # a no-op for stacks that don't exist). Lambda ENIs in the VPC can hold
+      # the delete for up to ~20 minutes.
+      - name: Tear down
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 30
+        working-directory: test-apps/compute-smoke
+        env:
+          NODE_OPTIONS: ''
+        run: npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts

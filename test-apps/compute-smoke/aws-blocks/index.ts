@@ -14,7 +14,14 @@
  * `defaults.vpc.network`), so it adds zero new VPCs per run — the reason
  * container compute lives here rather than in the VPC-free `comprehensive`
  * suite (where forcing a VPC would double the per-run VPC count).
+ *
+ * The Lambda and the container both report what the SQS and CloudWatch Logs
+ * hostnames resolve to, so the test can check those names point at the VPC's
+ * private-DNS interface endpoints (and not, through the NAT gateway, at the
+ * public service).
  */
+
+import { lookup } from 'node:dns/promises';
 
 import { ApiNamespace, Scope } from '@aws-blocks/core';
 import { Compute } from '@aws-blocks/blocks';
@@ -28,6 +35,25 @@ const scope = new Scope('compute-smoke');
 // signals the smoke test reads back.
 const jobResults = new KVStore(scope, 'job-results');
 const bucket = new FileBucket(scope, 'artifacts');
+
+// With the VPC's interface endpoints (private DNS on), these hostnames resolve
+// to the endpoints' private IPs inside the VPC; without them, to public ones. A
+// failed lookup is reported as `error: <message>` instead of thrown, so it shows
+// up in the test's assertion rather than as a handler that never wrote its result.
+async function interfaceEndpointAddresses(): Promise<Record<string, string[]>> {
+  const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
+  const entries = await Promise.all(
+    ['sqs', 'logs'].map(async (service) => {
+      try {
+        const addresses = await lookup(`${service}.${region}.amazonaws.com`, { all: true });
+        return [service, addresses.map((a) => a.address)] as const;
+      } catch (err) {
+        return [service, [`error: ${err instanceof Error ? err.message : String(err)}`]] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(entries);
+}
 
 // ── Container compute — long-running AsyncJobs on Fargate ───────────────────
 
@@ -57,6 +83,7 @@ const containerJob = new AsyncJob(scope, 'container-job', {
         // Distinguish the container runtime from Lambda so the test can assert
         // where the handler actually ran when deployed.
         runtime: process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
+        endpointAddresses: await interfaceEndpointAddresses(),
       }),
     );
     await bucket.put(`container-artifacts/${payload.key}.txt`, payload.value);
@@ -121,5 +148,10 @@ export const api = new ApiNamespace(scope, 'api', (_context) => ({
   async containerTimeoutJobGetResult(key: string) {
     const raw = await jobResults.get(`container-timeout:${key}`);
     return raw ? { value: raw } : null;
+  },
+
+  async lambdaEndpointAddresses() {
+    // Runs on the API Lambda: what the interface endpoint hostnames resolve to there.
+    return await interfaceEndpointAddresses();
   },
 }));
