@@ -395,7 +395,7 @@ public struct CodegenModelBuilder {
             let resolvedArgs = blocksType == "oidc/client"
                 ? oidcProviderArgs(
                     typeArgs, name: name, operationLevel: parentSchemaName == nil && currentParentId == nil,
-                    inlineTypes: inlineTypes, declaredNames: declaredNames
+                    inlineTypes: inlineTypes
                 )
                 : typeArgs.map { arg in
                     resolveType(
@@ -419,25 +419,58 @@ public struct CodegenModelBuilder {
         _ typeArgs: [TypeRef],
         name: String,
         operationLevel: Bool,
-        inlineTypes: [InlineTypeEntry],
-        declaredNames: Set<String>
+        inlineTypes: [InlineTypeEntry]
     ) -> [ResolvedType] {
         guard operationLevel, case .unionLiteral(let values)? = typeArgs.first else { return [] }
-        // The operation enum's types, which a root union's variant structs join. With any of them, also the
-        // models they may name, which the enum would shadow.
-        let roots = inlineTypes.filter { $0.parentId == nil }
-        var taken = roots.isEmpty ? [] : declaredNames
-        for entry in roots {
+        // The operation enum's types, which a root union's variant structs join, and the models its types name,
+        // which the enum would shadow.
+        var taken: Set<String> = []
+        for entry in inlineTypes {
+            taken.formUnion(referencedTypeNames(entry.type))
+            guard entry.parentId == nil else { continue }
             taken.insert(entry.shortName)
             if case .union(_, let variants, _) = entry.type {
                 taken.formUnion(variants.map(\.name))
             }
         }
         var enumName = "Provider"
+        var attempt = 1
         while taken.contains(enumName) {
-            enumName = pascalCase(name) + enumName
+            attempt += 1
+            let prefix = pascalCase(name)
+            enumName = prefix.isEmpty ? "Provider\(attempt)" : prefix + enumName
         }
         return [.enum(name: enumName, values: values)]
+    }
+
+    /// The names a type reaches by name: the models it references and its union payloads.
+    private func referencedTypeNames(_ type: ResolvedType) -> Set<String> {
+        switch type {
+        case .typeReference(let name):
+            return [name]
+        case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
+            return referencedTypeNames(in: fields.map(\.type) + [additionalPropertiesType, embeddedUnion].compactMap { $0 })
+        case .union(_, let variants, _):
+            return variants.reduce(into: Set<String>()) { names, variant in
+                names.formUnion(variant.payloadTypeName.map { [$0] } ?? [])
+                let types = variant.fields.map(\.type) + [variant.additionalPropertiesType, variant.embeddedUnion].compactMap { $0 }
+                names.formUnion(referencedTypeNames(in: types))
+            }
+        case .list(let elementType, _):
+            return referencedTypeNames(elementType)
+        case .map(let valueType):
+            return referencedTypeNames(valueType)
+        case .nullable(let inner):
+            return referencedTypeNames(inner)
+        case .transferable(_, let typeArgs):
+            return referencedTypeNames(in: typeArgs)
+        case .primitive, .formattedType, .enum:
+            return []
+        }
+    }
+
+    private func referencedTypeNames(in types: [ResolvedType]) -> Set<String> {
+        types.reduce(into: Set<String>()) { $0.formUnion(referencedTypeNames($1)) }
     }
 
     // Overload for component-schema resolution (Step 1) which doesn't track inline nesting

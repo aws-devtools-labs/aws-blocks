@@ -14,36 +14,25 @@ public final nonisolated class Auth: Sendable {
     }
 
     /// Calls `auth.getClient`.
-    public func getClient() async throws -> OIDCClient {
+    public func getClient() async throws -> OIDCClient<GetClient.Provider> {
         let request = BlocksRequest(method: "auth.getClient", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for auth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
             throw RPCError(message: "Invalid OIDC client descriptor for auth.getClient")
         }
-        return try OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
+        return try OIDCClient<GetClient.Provider>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }
 
     public enum GetClient {
 
         /// The providers `auth.getClient` signs in with.
-        public enum Provider: String, CaseIterable, Codable, Sendable {
+        public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
             case google
             case github
             case mySso = "my-sso"
             case loginGov = "login.gov"
         }
-    }
-}
-
-extension BlocksRuntime.OIDCClient {
-    /// Signs in with one of the providers `auth.getClient` returns a client for.
-    public func signIn(
-        provider: Auth.GetClient.Provider,
-        relayTo: String,
-        launcher: any BlocksRuntime.BrowserLauncher
-    ) async throws -> BlocksRuntime.OIDCUser {
-        try await signIn(provider: provider.rawValue, relayTo: relayTo, launcher: launcher)
     }
 }
 
@@ -60,14 +49,14 @@ public final nonisolated class LegacyAuth: Sendable {
     }
 
     /// Calls `legacyAuth.getClient`.
-    public func getClient() async throws -> OIDCClient {
+    public func getClient() async throws -> OIDCClient<String> {
         let request = BlocksRequest(method: "legacyAuth.getClient", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for legacyAuth.getClient") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
             throw RPCError(message: "Invalid OIDC client descriptor for legacyAuth.getClient")
         }
-        return try OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
+        return try OIDCClient<String>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)
     }
 }
 
