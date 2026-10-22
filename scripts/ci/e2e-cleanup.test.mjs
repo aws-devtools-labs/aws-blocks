@@ -84,6 +84,7 @@ describe('always() cleanup steps', () => {
 		const wf = parse(readFileSync(join(ROOT, '.github/workflows', file), 'utf8'));
 		return Object.entries(wf.jobs).flatMap(([job, def]) =>
 			(def.steps ?? [])
+				.map((s, index) => ({ ...s, index }))
 				.filter((s) => /always\(\)|cancelled\(\)|failure\(\)/.test(String(s.if ?? '')) && s.run)
 				.flatMap((s) =>
 					s.run
@@ -94,6 +95,7 @@ describe('always() cleanup steps', () => {
 							line: line.trim(),
 							if: String(s.if),
 							steps: def.steps,
+							index: s.index,
 						})),
 				),
 		);
@@ -104,12 +106,11 @@ describe('always() cleanup steps', () => {
 	});
 
 	it('run only once the job has AWS credentials', () => {
-		for (const { where, if: cond, steps } of teardownLines) {
-			assert.match(cond, /steps\.aws-creds\.outcome == 'success'/, where);
-			assert.ok(
-				steps.some((s) => s.id === 'aws-creds' && /e2e-aws-credentials/.test(s.uses ?? '')),
-				`${where}: no aws-creds step`,
-			);
+		for (const { where, if: cond, steps, index } of teardownLines) {
+			assert.equal(cond, "always() && steps.aws-creds.outcome == 'success'", where);
+			const creds = steps.findIndex((s) => /e2e-aws-credentials|configure-aws-credentials/.test(s.uses ?? ''));
+			assert.ok(creds >= 0 && creds < index, `${where}: credentials step must come before the cleanup`);
+			assert.equal(steps[creds].id, 'aws-creds', `${where}: the first credentials step must have id aws-creds`);
 		}
 	});
 
