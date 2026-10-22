@@ -174,6 +174,19 @@ export interface BlocksStackApi {
    * @internal Framework-only.
    */
   claimApiFrontDoor?(distributionUrl: string): void;
+  /**
+   * Record that this `Hosting` door publishes the browser-facing origin
+   * (`BLOCKS_PUBLIC_ORIGIN`), so the backend's managed `cloudfront`
+   * distribution doesn't overwrite it. `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  publishPublicOrigin?(): void;
+  /**
+   * The RPC URL clients call: the managed `cloudfront` distribution's when it
+   * fronts the API, else `apiUrl`. `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  readonly publicApiUrl?: string;
 }
 
 /**
@@ -1059,7 +1072,7 @@ export class Hosting extends Construct {
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
       this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
-    } else if (props.api && props.frontDoor !== 'none' && !publicUrl.startsWith('http://')) {
+    } else if (props.api && props.frontDoor !== 'none' && !isPlainHttpUrl(this, publicUrl)) {
       // Every other door that proxies the API same-origin (ALB, API Gateway, the
       // stacked door, a custom door) routes it inside its own router. It is
       // still the app's public origin for the API, so claim the API front-door
@@ -1201,7 +1214,13 @@ export class Hosting extends Construct {
       // domain — where the session cookie is scoped — instead of the raw
       // execute-api host (which strips the viewer Host header). Kept a literal
       // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
-      registerConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', publicUrl);
+      // Only a door that serves `/aws-blocks/*` to browsers owns it: `'none'` (an
+      // S3 website) serves none, so it publishes nothing — the managed
+      // `cloudfront` distribution's URL, or the request's own host, is the origin.
+      if (props.frontDoor !== 'none') {
+        props.api.publishPublicOrigin?.();
+        registerConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', publicUrl);
+      }
       // CORS_HOSTING_ORIGINS: registered RAW (the unresolved front-door URL token —
       // the CloudFront domain, or the composed edge's) — never escaped here at synth.
       // `publicUrl` is a CDK token whose real value only exists post-deploy, so
@@ -1706,11 +1725,32 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
  */
 export function buildConfigJson(props: HostingProps, buildId: string): Record<string, unknown> {
   // `frontDoor: 'none'` (S3 website) cannot proxy the API same-origin, so the
-  // client calls the backend cross-origin at its absolute RPC URL.
+  // client calls the backend cross-origin at its absolute RPC URL — the one
+  // `ApiUrl` names (the managed `cloudfront` distribution's under that tier), so
+  // the RPCs, the session cookie and the OIDC callback share one API host.
   const crossOrigin = props.frontDoor === 'none';
   return {
     ...(props.backendConfig ?? {}),
-    ...(props.api ? { apiUrl: crossOrigin ? props.api.apiUrl : BLOCKS_RPC_PREFIX } : {}),
+    ...(props.api ? { apiUrl: crossOrigin ? (props.api.publicApiUrl ?? props.api.apiUrl) : BLOCKS_RPC_PREFIX } : {}),
     [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
   };
+}
+
+/**
+ * Whether a door's public URL is plain HTTP. A literal URL is read directly; a
+ * token (`Fn.join('', ['http://', host])`, or a template string around one) is
+ * resolved in its stack and read from its leading literal. A URL whose scheme
+ * can't be read is taken as HTTPS, as `originHandleFromUrl` does.
+ *
+ * @internal Framework-only.
+ */
+function isPlainHttpUrl(scope: Construct, url: string): boolean {
+  if (url.startsWith('http://')) return true;
+  if (!cdk.Token.isUnresolved(url)) return false;
+  const leading = (value: unknown): string | undefined => {
+    if (typeof value === 'string') return value;
+    const join = (value as { 'Fn::Join'?: [string, unknown[]] } | null)?.['Fn::Join'];
+    return join && join[0] === '' ? leading(join[1][0]) : undefined;
+  };
+  return leading(cdk.Stack.of(scope).resolve(url))?.startsWith('http://') ?? false;
 }

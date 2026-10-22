@@ -2614,7 +2614,10 @@ describe('Hosting', () => {
             `${label}: ${json} is built from ${origin.type}.${origin.attr}`,
           );
         };
-        expected(stack.resolve(entries?.get('BLOCKS_PUBLIC_ORIGIN')));
+        // The trusted origin is the door's only when it serves `/aws-blocks/*`:
+        // an S3 website doesn't, so `'none'` publishes none.
+        if (frontDoor === 'none') assert.strictEqual(entries?.has('BLOCKS_PUBLIC_ORIGIN'), false);
+        else expected(stack.resolve(entries?.get('BLOCKS_PUBLIC_ORIGIN')));
         expected(stack.resolve(entries?.get('CORS_HOSTING_ORIGINS')));
         const outputs = t.findOutputs('*');
         expected(Object.entries(outputs).find(([k]) => k.includes('HostingUrl'))?.[1]?.Value);
