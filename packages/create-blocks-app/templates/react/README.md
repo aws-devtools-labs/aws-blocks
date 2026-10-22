@@ -38,6 +38,7 @@ Open http://localhost:3000 after `npm run dev`. The dev server serves the React 
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
 
 ## Stack naming

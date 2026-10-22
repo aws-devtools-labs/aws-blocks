@@ -12,6 +12,8 @@ import {
   buildDevServerSpawn,
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
+  findHostingUrl,
+  PREVIEW_MODE_CONTEXT,
   findExpressUnsafeStacks,
   sandboxFailureRecoveryHint,
   stacksWithExpressUnsafeResources,
@@ -244,5 +246,40 @@ describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
     const args = buildSandboxDeployArgs(base);
     assert.ok(!args.includes('--hotswap-fallback'));
     assert.strictEqual(valueAfter(args, '--method'), 'direct');
+  });
+});
+
+describe('preview sandbox — the previewMode context', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
+  const contexts = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '--context' ? [a] : []));
+
+  it('synth and deploy both pass previewMode=true next to sandboxMode=true', () => {
+    for (const args of [buildSandboxSynthArgs({ ...base, preview: true }), buildSandboxDeployArgs({ ...base, preview: true })]) {
+      assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true', 'previewMode=true']);
+    }
+  });
+
+  it('a plain sandbox passes no previewMode context', () => {
+    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base)]) {
+      assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true']);
+    }
+  });
+
+  it('exports the context key the app reads', () => {
+    assert.strictEqual(PREVIEW_MODE_CONTEXT, 'previewMode');
+  });
+});
+
+describe('findHostingUrl — the URL a preview sandbox prints', () => {
+  it('reads the Hosting construct output whatever its hash suffix, adding a scheme when missing', () => {
+    assert.strictEqual(
+      findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api', HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com' }),
+      'https://abc.execute-api.us-west-2.amazonaws.com',
+    );
+    assert.strictEqual(findHostingUrl({ HostingHostingUrl99: 'd111.cloudfront.net' }), 'https://d111.cloudfront.net');
+  });
+
+  it('is undefined for a backend-only sandbox', () => {
+    assert.strictEqual(findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api' }), undefined);
   });
 });

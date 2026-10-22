@@ -12,6 +12,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = new cdk.App();
 
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+// Set by `startSandbox({ preview: true })` (`npm run sandbox:preview` in a scaffolded app).
+const previewMode = app.node.tryGetContext('previewMode') === 'true';
 const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
@@ -29,16 +31,20 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
-// Hosting — preview mode: served by the API Gateway HTTP API door (no
-// CloudFront), no incremental regeneration, no image optimization.
-new Hosting(blocksStack, 'Hosting', {
-  root: join(__dirname, '..'),
-  buildCommand: 'npm run build',
-  buildOutputDir: 'dist',
-  framework: 'spa',
-  api: blocksStack,
-  preview: true,
-});
+// Hosting the way the templates add it: on deploy, and to a preview sandbox in
+// preview shape (served by the API Gateway HTTP API door, no CloudFront). The
+// e2e deploys through `startSandbox({ preview: true })`, so this exercises the
+// command-line path end to end.
+if (!sandboxMode || previewMode) {
+  new Hosting(blocksStack, 'Hosting', {
+    root: join(__dirname, '..'),
+    buildCommand: 'npm run build',
+    buildOutputDir: 'dist',
+    framework: 'spa',
+    api: blocksStack,
+    preview: previewMode,
+  });
+}
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-preview');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
