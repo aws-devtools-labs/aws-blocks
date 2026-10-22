@@ -342,6 +342,8 @@ Under **`BlocksPresets.sandbox`** these flip the other way — PITR off, `Remova
 
 > **`protection: 'locked'`/`'retained'` orphans the table on stack delete.** Because the removal policy is `RETAIN`, deleting the stack leaves the table behind (by design — your data survives). But the table name is derived deterministically from the block's id, so **redeploying the same app afterward fails with `Table already exists`** until you delete the orphaned table (`aws dynamodb delete-table`, after disabling deletion protection if `'locked'`) or import it into the new stack. This is inherent to retain-on-delete; use `protection: 'disposable'` for tables you expect to recreate freely.
 
+> **Indexes follow the config while the table is in the stack.** Removing an index (or the whole `indexes` option) from your config and redeploying drops it from the table. When the table itself leaves the stack (you delete the stack, or remove the `DistributedTable` from your app) its indexes are left alone: an orphaned `'locked'`/`'retained'` table keeps all of them, so importing it into a new stack needs no index rebuild.
+
 Every stack default is overridable per table (a per-block option always wins over `defaults`):
 
 ```typescript
