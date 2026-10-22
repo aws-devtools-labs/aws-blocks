@@ -219,7 +219,16 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // awaited at the end of this file. See ./background-suites.ts for why a child
 // process and what a suite must not share to belong there.
 const background = backgroundSuites(['agent', 'async-job', 'async-job-status']);
-test('Background suites - start Agent, AsyncJob, AsyncJob status', () => background.start());
+test('Background suites - start Agent, AsyncJob, AsyncJob status', async () => {
+  try {
+    // Sweep delivered-code records left by earlier runs (they persist in
+    // .bb-data/ locally) while nothing else is running: once the suites
+    // overlap, a full purge could delete a code one is waiting to read.
+    await api.authPurgeDeliveredCodes();
+  } finally {
+    background.start();
+  }
+});
 
 // KVStore tests (separate file)
 kvStoreTests(() => api);

@@ -18,13 +18,13 @@
  * state the suites share is kept apart with per-suite keys and resources
  * instead (see the AppSetting and delivered-code notes in aws-blocks/index.ts).
  *
- * A new suite belongs here only if it shares no server-side state with the
- * suites in e2e.test.ts that a test asserts on: no fixed keys another suite
- * writes, no scan of a store or table another suite writes to without a prefix
- * filter, no global purge.
+ * A new suite belongs here only if it shares no server-side state that a test
+ * asserts on with the suites in e2e.test.ts or with the other background
+ * suites: no fixed keys another suite writes, no scan of a store or table
+ * another suite writes to without a prefix filter, no global purge.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -45,14 +45,26 @@ const SUITE_BUDGET_MS = 20 * 60_000;
 
 export interface BackgroundSuite {
   readonly name: BackgroundSuiteName;
-  /** Resolves when the child exits 0; rejects on any failure, hang or spawn error. */
+  /**
+   * Resolves when the child exits 0; rejects on any failure, hang or spawn
+   * error. Starts the child first if start() has not (for example when a
+   * --test-name-pattern filtered the start test out).
+   */
   done(): Promise<void>;
 }
 
 export interface BackgroundSuites {
   readonly suites: readonly BackgroundSuite[];
-  /** Spawn every child. Call once, after the server is ready. */
+  /** Spawn every child not yet started. Call after the server is ready. */
   start(): void;
+}
+
+/**
+ * This process's flags minus the inspector ones: three children would fight
+ * over the debug port (and with --inspect-brk wait for a debugger forever).
+ */
+function childExecArgv(): string[] {
+  return process.execArgv.filter((flag) => !flag.startsWith('--inspect'));
 }
 
 /**
@@ -67,6 +79,12 @@ function reporterArgs(): string[] {
 
 export function backgroundSuites(names: readonly BackgroundSuiteName[]): BackgroundSuites {
   const results = new Map<BackgroundSuiteName, Promise<void>>();
+  const live = new Set<ChildProcess>();
+  // A child outliving this process (a crash, the open-handle backstop in
+  // e2e.test.ts) would keep calling a server or stack that is going away.
+  process.once('exit', () => {
+    for (const child of live) child.kill('SIGKILL');
+  });
 
   const run = (name: BackgroundSuiteName): Promise<void> =>
     new Promise<void>((resolve, reject) => {
@@ -75,9 +93,10 @@ export function backgroundSuites(names: readonly BackgroundSuiteName[]): Backgro
       // `import 'aws-blocks'` resolves to the same generated client.
       const child = spawn(
         process.execPath,
-        [...process.execArgv, ...reporterArgs(), entry, name],
+        [...childExecArgv(), ...reporterArgs(), entry, name],
         { cwd: process.cwd(), env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
       );
+      live.add(child);
       createInterface({ input: child.stdout }).on('line', (line) => process.stdout.write(`${prefix}${line}\n`));
       createInterface({ input: child.stderr }).on('line', (line) => process.stderr.write(`${prefix}${line}\n`));
 
@@ -91,26 +110,29 @@ export function backgroundSuites(names: readonly BackgroundSuiteName[]): Backgro
         reject(new Error(`Background suite "${name}" could not start: ${err.message}`));
       });
       child.on('close', (code, signal) => {
+        live.delete(child);
         clearTimeout(timer);
         if (code === 0) resolve();
         else reject(new Error(`Background suite "${name}" failed (exit ${code ?? signal}). Its results are in the ${prefix.trim()} lines above.`));
       });
     });
 
+  const ensureStarted = (name: BackgroundSuiteName): Promise<void> => {
+    let result = results.get(name);
+    if (!result) {
+      result = run(name);
+      // Observed by done(); keep an early failure from surfacing as an
+      // unhandled rejection before the suite's own test awaits it.
+      result.catch(() => {});
+      results.set(name, result);
+    }
+    return result;
+  };
+
   return {
-    suites: names.map((name) => ({
-      name,
-      done: () => results.get(name) ?? Promise.reject(new Error(`Background suite "${name}" was never started`)),
-    })),
+    suites: names.map((name) => ({ name, done: () => ensureStarted(name) })),
     start() {
-      for (const name of names) {
-        if (results.has(name)) continue;
-        const result = run(name);
-        // Observed by done(); keep an early failure from surfacing as an
-        // unhandled rejection before the suite's own test awaits it.
-        result.catch(() => {});
-        results.set(name, result);
-      }
+      for (const name of names) ensureStarted(name);
     },
   };
 }
