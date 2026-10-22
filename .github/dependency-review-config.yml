@@ -65,6 +65,26 @@ allow_dependencies_licenses:
   - "pkg:npm/%40img/sharp-win32-ia32"
   - "pkg:npm/%40img/sharp-win32-x64"
 
+  # lightningcss and its prebuilt binaries (MPL-2.0), a hard dependency of
+  # Vite 8. They reach the lockfile only through the hosting test apps (astro 7
+  # in test-apps/hosting-ssr-astro*, nuxt in test-apps/hosting-ssr-nuxt). They
+  # are dev/test-only: no published package or create-blocks-app template
+  # depends on them (the templates use Vite 6, where lightningcss is an
+  # optional peer and is not installed). Without these entries, every
+  # lightningcss version bump fails the check.
+  - "pkg:npm/lightningcss"
+  - "pkg:npm/lightningcss-android-arm64"
+  - "pkg:npm/lightningcss-darwin-arm64"
+  - "pkg:npm/lightningcss-darwin-x64"
+  - "pkg:npm/lightningcss-freebsd-x64"
+  - "pkg:npm/lightningcss-linux-arm-gnueabihf"
+  - "pkg:npm/lightningcss-linux-arm64-gnu"
+  - "pkg:npm/lightningcss-linux-arm64-musl"
+  - "pkg:npm/lightningcss-linux-x64-gnu"
+  - "pkg:npm/lightningcss-linux-x64-musl"
+  - "pkg:npm/lightningcss-win32-arm64-msvc"
+  - "pkg:npm/lightningcss-win32-x64-msvc"
+
 # Advisory IDs skipped during the vulnerability check. Add a one-line reason
 # per entry (or per contiguous group) explaining why it's exempt and when to
 # drop it — keep it short.
