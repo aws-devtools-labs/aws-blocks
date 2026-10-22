@@ -519,6 +519,103 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 });
 
 /**
+ * Verification-code attempt-limiting tests (issue #911). A 6-digit OTP is
+ * brute-forceable within its validity window, so `verifyCode` caps the number
+ * of wrong guesses per code and invalidates the code on exhaustion. Always on
+ * (not gated behind the opt-in sign-in `lockout` policy).
+ */
+describe('AuthBasic verification-code attempt limiting', () => {
+	/** Capture the code `codeDelivery` hands out so a test can present it. */
+	function captureAuth(): { auth: AuthBasic; lastCode: () => string } {
+		let code = '';
+		const auth = makeAuth({
+			codeDelivery: async (_username, c) => {
+				code = c;
+			},
+		});
+		return { auth, lastCode: () => code };
+	}
+
+	test('invalidates a reset code after MAX_CODE_ATTEMPTS wrong guesses', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('alice', 'password123');
+		await auth.resetPassword('alice');
+		const realCode = lastCode();
+
+		// Five wrong guesses (the cap): each rejects, and the fifth burns the code.
+		for (let i = 0; i < 5; i++) {
+			await assert.rejects(
+				auth.confirmResetPassword('alice', '000000', 'newpassword123'),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+				`wrong guess #${i + 1} is rejected`,
+			);
+		}
+
+		// The code row is gone — the counter was bound to the code's lifecycle.
+		assert.strictEqual(await codesStore(auth).get('reset:alice'), null, 'the code was invalidated on exhaustion');
+
+		// Even the CORRECT code is now rejected: the code no longer exists.
+		await assert.rejects(
+			auth.confirmResetPassword('alice', realCode, 'newpassword123'),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			'the correct code is rejected after the code was invalidated',
+		);
+	});
+
+	test('counts attempts per code and resets the count after a fresh code is issued', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('bob', 'password123');
+		await auth.confirmSignUp('bob', lastCode()); // confirm so the final sign-in can succeed
+		await auth.resetPassword('bob');
+
+		// Two wrong guesses — below the cap, so the code survives.
+		await assert.rejects(auth.confirmResetPassword('bob', '000000', 'newpassword123'));
+		await assert.rejects(auth.confirmResetPassword('bob', '111111', 'newpassword123'));
+		const afterTwo = await codesStore(auth).get('reset:bob');
+		assert.ok(afterTwo, 'the code survives below the cap');
+		assert.strictEqual(JSON.parse(afterTwo!).attempts, 2, 'two failed attempts are recorded on the code');
+
+		// Issuing a fresh code resets the attempt count to 0.
+		await auth.resetPassword('bob');
+		const fresh = await codesStore(auth).get('reset:bob');
+		assert.strictEqual(JSON.parse(fresh!).attempts, 0, 'a freshly issued code starts with zero attempts');
+
+		// The fresh correct code still works (count was not inherited from the old one).
+		await auth.confirmResetPassword('bob', lastCode(), 'newpassword123');
+		const user = await auth.signIn('bob', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'bob');
+	});
+
+	test('a correct guess before the cap succeeds and consumes the code', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('carol', 'password123');
+		await auth.confirmSignUp('carol', lastCode()); // confirm so the final sign-in can succeed
+		await auth.resetPassword('carol');
+
+		// One wrong guess, then the right one before hitting the cap.
+		await assert.rejects(auth.confirmResetPassword('carol', '000000', 'newpassword123'));
+		await auth.confirmResetPassword('carol', lastCode(), 'newpassword123');
+
+		assert.strictEqual(await codesStore(auth).get('reset:carol'), null, 'the code is consumed on success');
+		const user = await auth.signIn('carol', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'carol');
+	});
+
+	test('attempt limiting also applies to sign-up confirmation codes', async () => {
+		const { auth } = captureAuth();
+		await auth.signUp('dave', 'password123'); // unconfirmed; a signup code was sent
+
+		for (let i = 0; i < 5; i++) {
+			await assert.rejects(
+				auth.confirmSignUp('dave', '000000'),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			);
+		}
+		assert.strictEqual(await codesStore(auth).get('signup:dave'), null, 'the signup code was invalidated too');
+	});
+});
+
+/**
  * Telemetry-registration tests for AuthBasic.
  *
  * `Scope.getRegisteredBlocks()` only names a block whose `bbName` is in

@@ -115,7 +115,7 @@ This allows the Authenticator UI component to display errors without losing trac
 - **Security** — if the KVStore is compromised, codes cannot be extracted. The attacker would need both the stored HMAC and the JWT secret.
 - **Constant-time comparison** — `constantTimeEquals` from `@aws-blocks/core/bb-utils` prevents timing attacks during verification.
 - **10-minute TTL** — codes expire after 600 seconds, limiting the attack window.
-- **Non-enumerable** — 6-digit codes have 900,000 possible values. Combined with TTL, brute-force is impractical.
+- **Bounded by an attempt cap, not entropy** — a 6-digit code is only ~900,000 values (~19.8 bits), which is exhaustively guessable within the 10-minute window at any reasonable request rate, so the TTL alone does **not** make brute-force impractical. The bound is an always-on attempt cap: after `MAX_CODE_ATTEMPTS` (5) consecutive wrong guesses the code row is deleted, invalidating the code so even the correct value no longer works and the user must request a fresh one. The counter (`attempts`) lives inside the code record, so it is reaped with the code's own TTL (no separate key). A wrong guess re-persists the counter under the code's **original** expiry, so an attacker cannot extend the window by guessing. This is always on — distinct from the opt-in sign-in `lockout` policy (D-AB-11) — because unlimited OTP guesses is a flat security hole regardless of sign-in-throttling config. The error is the same generic `InvalidCodeException` on a wrong guess and on an exhausted code, so no oracle reveals whether the cap was hit.
 
 ### D-AB-5: Cookie attributes (HttpOnly; SameSite=Lax default, cross-domain opt-in)
 
@@ -240,9 +240,12 @@ The mock behavior is identical to AWS behavior with the following environment di
 ```json
 {
   "hmac": "a1b2c3...",       // HMAC-SHA256 of "purpose:username:code" with JWT secret
-  "expires": 1700000000000   // Unix timestamp (ms) when code expires (10 min TTL)
+  "expires": 1700000000000,  // Unix timestamp (ms) when code expires (10 min TTL)
+  "attempts": 0              // failed-guess count; at MAX_CODE_ATTEMPTS (5) the row is deleted
 }
 ```
+
+Legacy code rows written before attempt-limiting have no `attempts` field and default to `0` on read.
 
 **Legacy user record handling:** If a raw value is stored (starts with a non-`{` character), it's treated as a bare bcrypt hash with epoch creation date. This supports migration from an earlier format.
 

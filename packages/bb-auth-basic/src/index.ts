@@ -147,6 +147,17 @@ interface UserRecord {
 const CODE_TTL = 600; // 10 minutes
 
 /**
+ * Maximum number of failed verification attempts allowed for a single
+ * verification code before it is invalidated. A 6-digit code (~19.8 bits) is
+ * exhaustively guessable within its {@link CODE_TTL} lifetime at any reasonable
+ * request rate, so the attempt cap — not the code entropy — is what bounds a
+ * brute-force reset/sign-up confirmation. Always on (not gated behind the
+ * opt-in sign-in `lockout` policy): unlimited OTP guesses is a flat security
+ * hole regardless of sign-in-throttling configuration.
+ */
+const MAX_CODE_ATTEMPTS = 5;
+
+/**
  * bcrypt cost factor. 12 is a sensible default aligned with current OWASP
  * guidance; raise it for higher-value credentials.
  */
@@ -278,28 +289,49 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		// Reap abandoned sign-up/reset codes via the store's TTL: the DynamoDB row
 		// self-expires at the code's own expiry, so unused codes don't pile up.
 		const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL;
-		await this.codes.put(`${purpose}:${username}`, JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000 }), {
-			expiresAt,
-		});
+		await this.codes.put(
+			`${purpose}:${username}`,
+			JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000, attempts: 0 }),
+			{ expiresAt },
+		);
 		return code;
 	}
 
 	private async verifyCode(purpose: string, username: string, code: string): Promise<void> {
-		const raw = await this.codes.get(`${purpose}:${username}`);
+		const key = `${purpose}:${username}`;
+		const raw = await this.codes.get(key);
 		if (!raw) {
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		const { hmac, expires } = JSON.parse(raw) as { hmac: string; expires: number };
+		// `attempts` counts failed guesses so far; legacy rows written before
+		// attempt-limiting default to 0.
+		const { hmac, expires, attempts = 0 } = JSON.parse(raw) as {
+			hmac: string;
+			expires: number;
+			attempts?: number;
+		};
 		if (Date.now() > expires) {
-			await this.codes.delete(`${purpose}:${username}`);
+			await this.codes.delete(key);
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
 		const secret = await this.getSecret();
 		const expected = crypto.createHmac('sha256', secret).update(`${purpose}:${username}:${code}`).digest('hex');
 		if (!constantTimeEquals(hmac, expected)) {
+			// Wrong guess: burn one attempt. On the Nth failure, invalidate the code
+			// entirely (delete the row) so a 6-digit OTP can't be brute-forced within
+			// its validity window — the attempt cap, not the code entropy, is the
+			// bound. Otherwise persist the incremented count for the next request.
+			const nextAttempts = attempts + 1;
+			if (nextAttempts >= MAX_CODE_ATTEMPTS) {
+				await this.codes.delete(key);
+			} else {
+				await this.codes.put(key, JSON.stringify({ hmac, expires, attempts: nextAttempts }), {
+					expiresAt: Math.floor(expires / 1000),
+				});
+			}
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		await this.codes.delete(`${purpose}:${username}`);
+		await this.codes.delete(key);
 	}
 
 	// ── Validation ───────────────────────────────────────────────────────
