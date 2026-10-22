@@ -118,9 +118,12 @@ public final class BlocksClient: Sendable {
     ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        let rpcURL = BlocksClient.rpcURL(base: url, method: request.method)
-        guard let requestURL = URL(string: rpcURL) else {
-            throw RPCError(message: "Invalid URL: \(rpcURL)")
+        // Validate the base first: appending the namespace can turn an invalid base (e.g. "")
+        // into a relative URL that only fails later, as a transport error.
+        guard URL(string: url) != nil,
+              let requestURL = URL(string: BlocksClient.rpcURL(base: url, method: request.method))
+        else {
+            throw RPCError(message: "Invalid URL: \(url)")
         }
 
         var urlRequest = URLRequest(url: requestURL)
@@ -207,7 +210,9 @@ public final class BlocksClient: Sendable {
         let namespace = String(method[..<dot])
         let segment = namespace.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? namespace
         var trimmed = Substring(base)
-        while trimmed.hasSuffix("/") { trimmed = trimmed.dropLast() }
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
         return "\(trimmed)/\(segment)"
     }
 
