@@ -692,20 +692,36 @@ jobs:
     environment: e2e
     strategy:
       fail-fast: false
+      # teardown-delay (seconds) spreads the legs' stack deletes. All nine run
+      # in one account, which allows one REST API delete every 30 seconds;
+      # spa, astro, astro-default404, sveltekit and nuxt otherwise start
+      # deleting within about two minutes of each other, and CloudFormation
+      # marks the stack DELETE_FAILED when it can't delete a REST API within
+      # about 4.5 minutes. Only legs that usually finish well before the
+      # slowest E2E job of the run (usually E2E Production or E2E Compute
+      # Smoke) get a delay, and a leg that has already run 30 minutes skips
+      # it. Replayed over 23 recent runs, these values about halve the time
+      # the matrix's deletes wait on each other, and in none of those runs do
+      # they move the end of the slowest E2E job. Keep 0 for a leg that is
+      # often the run's slowest.
       matrix:
         include:
           - framework: spa
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
+            teardown-delay: 240
           - framework: nextjs
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
+            teardown-delay: 150
           - framework: nuxt
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
+            teardown-delay: 240
           - framework: astro
             app-dir: test-apps/hosting-ssr-astro
             script: test:e2e:hosting-ssr-astro
+            teardown-delay: 180
           - framework: astro-default404
             app-dir: test-apps/hosting-ssr-astro-default404
             script: test:e2e:hosting-ssr-astro-default404
@@ -726,11 +742,13 @@ jobs:
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
             compute-type: web-function
+            teardown-delay: 240
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
-      # Web Function jobs keep the sandbox after the suite for the redeploy check.
-      BLOCKS_SANDBOX_KEEP: ${{ matrix.compute-type == 'web-function' && '1' || '' }}
+      # The suite keeps its sandbox; Destroy sandbox below deletes it (after the
+      # Web Function redeploy check, which needs it).
+      BLOCKS_SANDBOX_KEEP: '1'
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - name: Check the E2E trailer
@@ -738,6 +756,10 @@ jobs:
         run: |
           echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
           exit 1
+
+      # For Destroy sandbox, which skips its delay on a leg that is already slow.
+      - name: Record the job start
+        run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -767,6 +789,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: E2E Test Hosting (${{ matrix.framework }})
+        id: e2e
         run: npm run ${{ matrix.script }}
 
       # Sandbox deploys use Express Mode (rollback disabled), which rejects
@@ -775,6 +798,26 @@ jobs:
       - name: Redeploy with a new Web Function revision
         if: matrix.compute-type == 'web-function'
         run: npx tsx scripts/ci/web-function-redeploy.ts ${{ matrix.app-dir }}
+
+      # Runs whenever the suite ran, passed or failed, like the suite's own
+      # afterAll destroy did. A failed destroy fails a lambda job, as it did
+      # from the afterAll; Web Function jobs only report it (before, only
+      # Cleanup sandbox destroyed theirs, and ignored a failure). It waits this
+      # leg's teardown-delay first (see the matrix), but only when every step
+      # so far passed and the job has run less than 30 minutes. Cleanup sandbox
+      # retries either way.
+      - name: Destroy sandbox
+        if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
+        continue-on-error: ${{ matrix.compute-type == 'web-function' }}
+        env:
+          TEARDOWN_DELAY: ${{ job.status == 'success' && matrix.teardown-delay || 0 }}
+        run: |
+          if (( TEARDOWN_DELAY > 0 && $(date +%s) - JOB_STARTED_AT < 1800 )); then
+            echo "Waiting ${TEARDOWN_DELAY}s to spread the matrix's stack deletes"
+            sleep "$TEARDOWN_DELAY"
+          fi
+          cd ${{ matrix.app-dir }}
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
       - name: Cleanup sandbox
         if: always()
