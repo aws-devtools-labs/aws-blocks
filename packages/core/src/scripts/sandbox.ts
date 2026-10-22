@@ -51,7 +51,8 @@ export interface SandboxOptions {
    *
    * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
    * applied straight to the Lambda functions in seconds, falling back to a
-   * CloudFormation deploy for anything that can't be hotswapped. Hotswap
+   * CloudFormation deploy (direct, no change set) for anything that can't be
+   * hotswapped. Hotswap
    * leaves the stack drifted from its template, which is acceptable for a
    * throwaway preview only, so every other sandbox keeps the CloudFormation
    * deploy.
@@ -109,8 +110,9 @@ export interface SandboxDeployArgsOptions {
    */
   assemblyDir?: string;
   /**
-   * Use `--hotswap-fallback` instead of `--method direct`. `startSandbox` sets
-   * it only for a preview re-deploy (see {@link SandboxOptions.preview}).
+   * Add `--hotswap-fallback` (next to `--method direct`, which its fallback
+   * CloudFormation deploy uses). `startSandbox` sets it only for a preview
+   * re-deploy (see {@link SandboxOptions.preview}).
    */
   hotswap?: boolean;
   /**
@@ -200,10 +202,13 @@ export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath, previe
  *   `express: false` drops it (still `--method direct`, with rollback) for a
  *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
  *   Web Function endpoint (`compute.type: 'web-function'`).
- * - `--hotswap-fallback` (`hotswap`, a preview re-deploy only): in place of
+ * - `--hotswap-fallback` (`hotswap`, a preview re-deploy only): next to
  *   `--method direct`, apply a code-only change straight to the Lambda
  *   functions and S3 assets, falling back to a CloudFormation deploy (still
- *   in Express Mode) for a change that can't be hotswapped. A true hotswap
+ *   direct and in Express Mode) for a change that can't be hotswapped. The
+ *   CDK CLI deploys the fallback with the `--method` given; without one, the
+ *   fallback creates and executes a change set, which adds its own wait
+ *   (about 13 s on a preview stack). A true hotswap
  *   needs a deterministic template: a tag or name whose value changes per
  *   synth (a date, a git SHA, a per-deploy build id) forces the fallback
  *   every time. Preview mode pins its build id for this reason.
@@ -220,7 +225,8 @@ export function buildSandboxDeployArgs({
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
-    ...(hotswap ? ["--hotswap-fallback"] : ["--method", "direct"]),
+    ...(hotswap ? ["--hotswap-fallback"] : []),
+    "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,

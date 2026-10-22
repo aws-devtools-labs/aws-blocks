@@ -215,10 +215,12 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
 describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
   const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
 
-  it('replaces --method direct with --hotswap-fallback, keeping Express Mode for the fallback', () => {
+  it('adds --hotswap-fallback; the fallback CloudFormation deploy stays direct and in Express Mode', () => {
     const args = buildSandboxDeployArgs({ ...base, hotswap: true });
     assert.ok(args.includes('--hotswap-fallback'));
-    assert.ok(!args.includes('--method'), 'no --method direct alongside the hotswap');
+    // The CDK CLI deploys a fallback with the `--method` given; without one it
+    // creates and executes a change set, which adds its own wait to the deploy.
+    assert.strictEqual(valueAfter(args, '--method'), 'direct', 'the fallback calls UpdateStack directly, no change set');
     assert.ok(args.includes('--express'), 'a fallback CloudFormation deploy still runs in Express Mode');
   });
 
