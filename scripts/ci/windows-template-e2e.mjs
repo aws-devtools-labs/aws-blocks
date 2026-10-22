@@ -10,7 +10,8 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isWin, killTree, runOrThrow, runSpawn, httpUp, startRegistry } from './_proc.mjs';
+import { isWin, killTree, runOrThrow, runTeardown, httpUp, startRegistry } from './_proc.mjs';
+import { WINDOWS_E2E_PURPOSE, addPurposeTag } from './_scaffold-tag.mjs';
 
 const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
@@ -32,21 +33,8 @@ const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 /** Teardown commands that failed; a failed teardown leaves a stack deployed. */
 const teardownFailures = [];
 
-/**
- * Run a teardown command without throwing, so a failed destroy can't mask the
- * phase's own result or skip the next teardown. Failures are recorded and fail
- * the job at the end: a silently ignored destroy leaked one stack per run.
- */
-function runTeardown(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? ROOT})`);
-  try {
-    runSpawn(cmd, args, opts, ROOT, { log: false });
-  } catch (e) {
-    const failure = `${cmd} ${args.join(' ')}: ${e?.message ?? e}`;
-    teardownFailures.push(failure);
-    console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
-  }
-}
+/** Run a teardown command; a failure is recorded and fails the job at the end. */
+const teardown = (cmd, args, opts = {}) => runTeardown(cmd, args, opts, ROOT, teardownFailures);
 
 /**
  * Spawn a long-running command and poll `ready()` until it returns true.
@@ -105,6 +93,10 @@ async function main() {
   const app = join(work, 'bb-test-win');
   // `backend` template is backend-only (no DynamoDB/GSI/Aurora) → fast deploy.
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
+  // The prefix alone isn't enough: cleanup-stacks.yml only deletes a `bb-test-*`
+  // stack whose `blocks:purpose` tag is an e2e marker. Tag the scaffold so a
+  // stack a failed teardown leaves behind is reclaimed instead of skipped.
+  addPurposeTag(join(app, 'aws-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
 
   const inApp = { cwd: app, env };
 
@@ -126,7 +118,7 @@ async function main() {
     killTree(sb.pid);
     console.log('OK: npm run sandbox deployed');
   } finally {
-    runTeardown('npm', ['run', 'sandbox:destroy'], inApp);
+    teardown('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
   // Phase 3: production deploy → destroy.
@@ -134,7 +126,7 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    runTeardown('npm', ['run', 'destroy'], inApp);
+    teardown('npm', ['run', 'destroy'], inApp);
   }
 
   if (teardownFailures.length > 0) {
