@@ -16,7 +16,7 @@ import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js
 import { BlocksPresets } from './cdk/blocks-defaults.js';
 import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
@@ -625,6 +625,43 @@ describe('Hosting', () => {
         ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'],
         'API wildcard behavior should allow all HTTP methods',
       );
+    });
+
+    it('attaches the distribution security-headers policy to the API and auth behaviors', () => {
+      // The static root behavior carries a security-headers / CSP policy; the
+      // API, auth and raw-route proxy behaviors must carry the same one, so no
+      // behavior on the distribution serves responses without security headers.
+      createSpaBuildOutput(tmpDir);
+
+      // A raw route outside /aws-blocks/* gets its own behavior too; register
+      // one so this test guards the raw-route tagging path, not just the
+      // fixed /aws-blocks/* patterns.
+      registerRoute({ method: 'GET', path: '/health', handler: async () => {} });
+
+      const app = new App();
+      const stack = new Stack(app, 'ApiHeadersStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const template = Template.fromStack(stack);
+      const distributions = template.findResources('AWS::CloudFront::Distribution');
+      const distConfig = (distributions[Object.keys(distributions)[0]] as any).Properties.DistributionConfig;
+      const defaultPolicy = distConfig.DefaultCacheBehavior.ResponseHeadersPolicyId;
+      assert.ok(defaultPolicy, 'default behavior should have a ResponseHeadersPolicy');
+
+      const cacheBehaviors = distConfig.CacheBehaviors ?? [];
+      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`, '/health']) {
+        const behavior = cacheBehaviors.find((b: any) => b.PathPattern === pattern);
+        assert.ok(behavior, `expected a behavior for ${pattern}`);
+        assert.deepStrictEqual(
+          behavior.ResponseHeadersPolicyId,
+          defaultPolicy,
+          `${pattern} should reuse the distribution's security-headers policy`,
+        );
+      }
     });
 
     it(`does not create ${BLOCKS_RPC_PREFIX}/* behavior when api prop is omitted`, () => {

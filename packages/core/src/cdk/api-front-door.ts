@@ -31,6 +31,7 @@ import {
 	Distribution,
 	type IOrigin,
 	OriginRequestPolicy,
+	ResponseHeadersPolicy,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -213,6 +214,15 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		if (!this.gatewayUrl) return;
 
 		const origin = httpOriginFromEndpoint(this.gatewayUrl);
+		// Security headers for the API responses. Use the AWS-managed
+		// `SECURITY_HEADERS` policy (HSTS, X-Content-Type-Options, X-Frame-Options,
+		// X-XSS-Protection, Referrer-Policy): without it the API responses reach the
+		// viewer with no security headers. The managed policy consumes no account
+		// quota, so a cloudfront-tier app never fails a deploy against the 20-per-
+		// account ResponseHeadersPolicy limit, and it matches what the Hosting-
+		// fronted path ships by default. No CSP — the API subtree serves JSON and
+		// redirects, not documents, so a document CSP would add nothing here.
+		const securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
 		// Under the owner, not the stack: a `BlocksBackend` is a construct inside
 		// someone else's stack, and two of them in one stack would otherwise collide
 		// on this construct id.
@@ -222,7 +232,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 			// today, so a single default behavior routes RPC, auth, and raw routes
 			// alike. Per-path behaviors would only carry traffic once a namespace
 			// resolves to a distinct origin.
-			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS },
+			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy },
 		});
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`

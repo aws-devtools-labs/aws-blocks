@@ -23,6 +23,7 @@ import {
   type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
+import type { AddBehaviorOptions } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
@@ -1060,8 +1061,18 @@ export class Hosting extends Construct {
     // `originPath` (see httpOriginFromEndpoint).
     const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    // Attach the same security-headers / CSP policy the distribution's static,
+    // SSR and image behaviors carry. Without it the API and auth responses go
+    // to the viewer with no security headers, while the static root has them —
+    // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
+    // behaviors.
+    const apiBehaviorOptions: AddBehaviorOptions = {
+      ...API_BEHAVIOR_OPTIONS,
+      responseHeadersPolicy: hosting.securityHeadersPolicy,
+    };
+
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -1070,7 +1081,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -1101,7 +1112,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, apiBehaviorOptions);
     }
   }
 }
