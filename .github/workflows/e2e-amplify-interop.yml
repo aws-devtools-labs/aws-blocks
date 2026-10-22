@@ -140,11 +140,11 @@ jobs:
           cd /tmp/amplify-interop-test
           node $GITHUB_WORKSPACE/scripts/smoke-test-amplify-interop.mjs
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its ampx
-      # holds the cdk.out lock), then runs the teardown, which retries a delete
-      # that fails because CloudFormation gave up on a throttled REST API
-      # delete; see scripts/ci/amplify-sandbox-teardown.mjs. timeout-minutes
-      # stays as a backstop for the teardown's own budget.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), then runs the teardown,
+      # which retries a delete that fails because CloudFormation gave up on a
+      # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
+      # timeout-minutes stays as a backstop for the teardown's own budget.
       - name: Cleanup sandbox
         if: always()
         timeout-minutes: 12
@@ -206,11 +206,11 @@ jobs:
           cd test-apps/amplify-gen2
           npm run test:e2e
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its ampx
-      # holds the cdk.out lock), then runs the teardown, which retries a delete
-      # that fails because CloudFormation gave up on a throttled REST API
-      # delete; see scripts/ci/amplify-sandbox-teardown.mjs. timeout-minutes
-      # stays as a backstop for the teardown's own budget.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), then runs the teardown,
+      # which retries a delete that fails because CloudFormation gave up on a
+      # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
+      # timeout-minutes stays as a backstop for the teardown's own budget.
       - name: Cleanup sandbox
         if: always()
         timeout-minutes: 12

@@ -95,21 +95,23 @@ export function parsePsLines(text) {
  * The pids to stop: every process with `trackingId`, except `selfPid`, its
  * ancestors (the step's shell, the runner) and the processes the cleanup step
  * started (descendants of the step's shell, e.g. a `| tee`). Returns [] when
- * `selfPid` is not in the listing, rather than guess at its ancestry.
+ * the listing does not show `selfPid` with `trackingId`, rather than guess.
  */
 export function findOrphans(processes, { selfPid, trackingId }) {
 	const byPid = new Map(processes.map((p) => [p.pid, p]));
 	const self = byPid.get(selfPid);
-	if (!trackingId || !self) return [];
+	// This process carries the id; if the listing doesn't show it, it can't see anyone's.
+	if (!trackingId || self?.trackingId !== trackingId) return [];
 	const keep = new Set([selfPid]);
 	for (let p = self; p && !keep.has(p.ppid); p = byPid.get(p.ppid)) keep.add(p.ppid);
 	// The parent is the cleanup step's own shell when it carries the job's id;
 	// the runner itself does not, and orphans may have been reparented to it.
 	const stepShell = byPid.get(self.ppid)?.trackingId === trackingId ? self.ppid : selfPid;
 	const startedByStep = (p) => {
-		for (let q = p; q; q = byPid.get(q.ppid)) {
+		const seen = new Set();
+		for (let q = p; q && !seen.has(q.pid); q = byPid.get(q.ppid)) {
 			if (q.ppid === stepShell) return true;
-			if (q.ppid === q.pid) return false;
+			seen.add(q.pid);
 		}
 		return false;
 	};
@@ -143,28 +145,33 @@ async function waitGone(pids, ms) {
 }
 
 /**
- * SIGTERM the orphans (re-listing, so a child started during the grace period
- * is caught too), then SIGKILL what a fresh listing still finds, and wait for
- * them to go.
+ * SIGTERM the orphans, re-listing so a child started meanwhile is caught too,
+ * for up to `graceMs` in all; then SIGKILL what a fresh listing still finds,
+ * and wait for them to go.
  */
-export async function stopOrphans({ trackingId = process.env[TRACKING_VAR], graceMs = 5000 } = {}) {
+export async function stopOrphans({ trackingId = process.env[TRACKING_VAR], graceMs = 8000 } = {}) {
 	if (!trackingId) {
 		console.log(`${TRACKING_VAR} is not set; not looking for processes left by an earlier step.`);
 		return { stopped: [], survivors: [] };
 	}
+	const all = listProcesses();
+	if (all.find((p) => p.pid === process.pid)?.trackingId !== trackingId) {
+		console.log('Could not read process environments; not stopping leftover processes.');
+		return { stopped: [], survivors: [] };
+	}
 	const find = () => findOrphans(listProcesses(), { selfPid: process.pid, trackingId });
 	const stopped = new Set();
-	for (let round = 0; round < 3; round++) {
-		const pids = find();
-		if (pids.length === 0) break;
+	const deadline = Date.now() + graceMs;
+	for (let pids = find(); pids.length > 0 && Date.now() < deadline; pids = find()) {
 		console.log(`Stopping ${pids.length} process(es) left by an earlier step: ${pids.join(' ')}`);
 		for (const pid of pids) stopped.add(pid);
 		signal(pids, 'SIGTERM');
-		await waitGone(pids, graceMs);
+		await waitGone(pids, Math.min(2000, deadline - Date.now()));
 	}
 	const left = find();
+	if (left.length > 0) console.log(`SIGKILL: ${left.join(' ')}`);
 	signal(left, 'SIGKILL');
-	await waitGone(left, 5000);
+	await waitGone(left, 2000);
 	const survivors = left.filter(alive);
 	if (survivors.length > 0) console.log(`Still present after SIGKILL: ${survivors.join(' ')}`);
 	return { stopped: [...stopped], survivors };
@@ -182,11 +189,14 @@ export function reportFailure(command, status, seconds) {
 		`::warning title=E2E cleanup failed::${escapeData(what.replaceAll('`', "'"))}. This job's stacks may be left behind.`,
 	);
 	const summary = process.env.GITHUB_STEP_SUMMARY;
-	if (summary) {
+	if (!summary) return;
+	try {
 		appendFileSync(
 			summary,
 			`### E2E cleanup failed\n\n${what}. This job's stacks may be left behind; the stack-cleanup sweeper deletes leftover E2E stacks.\n`,
 		);
+	} catch (e) {
+		console.log(`Could not write the step summary: ${e.message}`);
 	}
 }
 
