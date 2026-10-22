@@ -40,6 +40,13 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
   }
 }
 
+/**
+ * Production teardown behind `npm run destroy`: `cdk destroy --all --force`,
+ * which deletes every top-level stack of the app (the stacks `npm run deploy`
+ * creates), dependent stacks first, without a confirmation prompt. Resources
+ * with a `RETAIN` removal policy are kept. Retries transient teardown failures
+ * (see {@link runDestroyWithRetries}).
+ */
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
     console.log('🗑️  Destroying production stack...');
@@ -58,6 +65,11 @@ export async function destroy(options: DestroyOptions) {
     };
     const cdkArgs = [
       'cdk', 'destroy',
+      // `--all`, like the deploy (see buildCdkDeployArgs): without it CDK
+      // refuses an app with more than one stack, so the destroy could never
+      // succeed. It deletes every top-level stack of the app, dependent
+      // stacks first; a stack deployed from this app by hand is included.
+      '--all',
       '--force',
       '--context', `projectRoot=${options.projectRoot}`,
     ];
