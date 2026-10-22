@@ -5,7 +5,7 @@ import { isManagedValue } from '@aws-blocks/hosting';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { API_NAMESPACE_MARKER } from '../api.js';
+import { isApiNamespace, isScopeLike } from '../rpc-dispatch.js';
 
 /**
  * Generate browser-safe client code from backend exports.
@@ -46,16 +46,16 @@ export async function generateClientCode(foundationPath: string): Promise<string
 	for (const [name, value] of Object.entries(backend)) {
 		if (name.startsWith('_')) continue;
 
-		const isApiNamespace = typeof (value as any)?.[API_NAMESPACE_MARKER] === 'string';
-		if (isApiNamespace) {
+		if (isApiNamespace(value)) {
 			lines.push(`export const ${name} = __BLOCKS_ApiNamespaceClient__('${name}');`);
 			namespaceNames.push(name);
 			continue;
 		}
 
 		// Fallback: any exported function/object that isn't a Scope gets a proxy.
-		const isScope = typeof (value as any)?.id === 'string' && typeof (value as any)?.fullId === 'string';
-		if (isScope) continue;
+		// Same Scope test the RPC dispatcher uses, so the server never serves a
+		// namespace the client has no proxy for (and vice versa).
+		if (isScopeLike(value)) continue;
 
 		// A secret()/config() marker is a deferred value, not an API — skip it, or
 		// `export const k = secret('K')` in index.ts would become a bogus HTTP namespace.
