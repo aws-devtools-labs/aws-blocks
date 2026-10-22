@@ -5,10 +5,10 @@
  * The CloudFront EDGE of the stacked door (`{ kind: 'stacked', edge: 'cloudfront',
  * router: 'alb' }`), written as a free-form door.
  *
- * A thin distribution whose single default behavior forwards EVERYTHING to the
- * door it sits in front of — the ALB router, handed over as `input.upstream`:
- * CloudFront's one origin is the router, and the router routes to the rest of
- * the infra. The viewer hop is HTTPS at the edge. The edge → router hop
+ * A distribution in front of the door it stacks on — the ALB router, handed
+ * over as `input.upstream`: its default behavior forwards to the router, and
+ * the router routes to the rest of the infra; the static routes are its own S3
+ * behaviors (below). The viewer hop is HTTPS at the edge. The edge → router hop
  * follows the router: HTTPS :443 when it has a certificate (and a domain the
  * certificate covers), else plain HTTP :80 — unencrypted, on the AWS network
  * through a VPC origin (internal router), to the ALB's public addresses
@@ -68,7 +68,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { IApplicationLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
-import { ASSET_BEHAVIOR_OPTIONS, assetsS3Origin, cf, inlineFunction } from './cf_helpers.js';
+import { ASSET_BEHAVIOR_OPTIONS, assetsS3Origin, cf, inlineFunction, trimSlashes } from './cf_helpers.js';
 import { customErrorResponses } from './error_responses.js';
 import { type DoorInput, type DoorUpstream, defineFrontDoor, type FrontDoorResult } from './front_door.js';
 import { proxyRulesJs } from './proxy_rules.js';
@@ -463,4 +463,4 @@ function handler(event) {
 };
 
 /** The build's key prefix in the bucket, as a URI path (`/builds/<buildId>`). */
-const buildPrefix = (input: DoorInput): string => `/${input.origins.assets.prefix.replace(/^\/+|\/+$/g, '')}`;
+const buildPrefix = (input: DoorInput): string => `/${trimSlashes(input.origins.assets.prefix)}`;

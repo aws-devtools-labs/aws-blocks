@@ -3247,7 +3247,7 @@ describe('Hosting', () => {
       t.resourceCountIs('AWS::CloudFront::VpcOrigin', 0);
     });
 
-    it('public router: the listener answers 403 unless the edge sent the per-deploy origin-verify secret', () => {
+    it('public router: the listener answers 403 unless the edge sent the generated origin-verify secret', () => {
       const t = stackedSynth('CfOverAlbLockedHeader');
       assertListenerRequiresSecret(t, secretOf(t));
     });

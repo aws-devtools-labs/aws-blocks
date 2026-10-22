@@ -48,6 +48,13 @@
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
 
+/** `value` without its trailing slashes (a linear scan; a `/\/+$/` regex backtracks on a long slash run). */
+const trimTrailingSlashes = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+};
+
 /**
  * The environment an asset-proxy function reads: the bucket (`ASSET_BUCKET`)
  * and the build's key prefix (`ASSET_KEY_PREFIX`). Set it on the function
@@ -68,7 +75,7 @@ import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
  */
 export const assetProxyEnvironment = (assets: { readonly bucket: IBucket; readonly prefix: string }): Record<string, string> => ({
   ASSET_BUCKET: assets.bucket.bucketName,
-  ASSET_KEY_PREFIX: assets.prefix.replace(/\/+$/, ''),
+  ASSET_KEY_PREFIX: trimTrailingSlashes(assets.prefix),
 });
 
 /**
