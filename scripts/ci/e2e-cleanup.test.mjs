@@ -85,13 +85,32 @@ describe('always() cleanup steps', () => {
 		return Object.entries(wf.jobs).flatMap(([job, def]) =>
 			(def.steps ?? [])
 				.filter((s) => /always\(\)|cancelled\(\)|failure\(\)/.test(String(s.if ?? '')) && s.run)
-				.flatMap((s) => s.run.split('\n').filter((l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l)))
-				.map((line) => ({ where: `${file} ${job}`, line: line.trim() })),
+				.flatMap((s) =>
+					s.run
+						.split('\n')
+						.filter((l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l))
+						.map((line) => ({
+							where: `${file} ${job}`,
+							line: line.trim(),
+							if: String(s.if),
+							steps: def.steps,
+						})),
+				),
 		);
 	});
 
 	it('finds the teardown steps of the hosting, telemetry, amplify and native jobs', () => {
 		assert.ok(teardownLines.length >= 8, JSON.stringify(teardownLines, null, 2));
+	});
+
+	it('run only once the job has AWS credentials', () => {
+		for (const { where, if: cond, steps } of teardownLines) {
+			assert.match(cond, /steps\.aws-creds\.outcome == 'success'/, where);
+			assert.ok(
+				steps.some((s) => s.id === 'aws-creds' && /e2e-aws-credentials/.test(s.uses ?? '')),
+				`${where}: no aws-creds step`,
+			);
+		}
 	});
 
 	it('run through e2e-cleanup.mjs, without || true', () => {

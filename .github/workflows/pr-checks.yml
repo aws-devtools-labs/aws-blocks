@@ -1128,6 +1128,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1170,9 +1171,10 @@ jobs:
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning.
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup sandbox
-        if: always() && steps.destroy.outcome != 'success'
+        if: always() && steps.aws-creds.outcome == 'success' && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
           node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
@@ -1211,6 +1213,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1227,9 +1230,10 @@ jobs:
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning.
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup stacks
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         run: |
           cd test-apps/telemetry
           node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/sandbox-destroy.ts

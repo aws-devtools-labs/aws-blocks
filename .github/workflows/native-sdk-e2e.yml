@@ -403,6 +403,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -497,9 +498,10 @@ jobs:
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning.
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
         run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
@@ -543,6 +545,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -604,9 +607,10 @@ jobs:
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning.
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
         run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
@@ -672,6 +676,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -735,9 +740,10 @@ jobs:
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning.
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
         run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
