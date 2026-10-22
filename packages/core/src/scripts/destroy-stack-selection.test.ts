@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildCdkDeployArgs, selectAppStack } from './deploy-stream.js';
-import { buildSandboxDeployArgs, buildSandboxWatchArgs, topLevelStackPaths } from './sandbox.js';
+import { buildSandboxDeployArgs, buildSandboxWatchArgs, sandboxWatchStacks, topLevelStackPaths } from './sandbox.js';
 
 // Every CDK command the scripts run must select every top-level stack of the
 // app. With no selector, `cdk deploy` and `cdk destroy` refuse an app with more
@@ -131,7 +131,14 @@ describe('deploy and watch select every stack', () => {
     assert.ok(!args.includes('--all'), `expected no --all in: ${args.join(' ')}`);
   });
 
-  it('the sandbox `cdk watch` passes no selector when no stack is known', () => {
+  it('the sandbox names stacks for `cdk watch` only when the app has several', () => {
+    assert.deepStrictEqual(sandboxWatchStacks(['my-app', 'edge-lambda-stack-x']), ['my-app', 'edge-lambda-stack-x']);
+    // One stack (whatever its path) or none: no selector, the argv a single-stack app always had.
+    assert.deepStrictEqual(sandboxWatchStacks(['Api (dev)']), []);
+    assert.deepStrictEqual(sandboxWatchStacks([]), []);
+  });
+
+  it('the sandbox `cdk watch` passes no selector when no stack is named', () => {
     const args = buildSandboxWatchArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts', stacks: [] });
     assert.strictEqual(args[2], '--outputs-file', `expected no stack pattern: ${args.join(' ')}`);
   });
@@ -224,6 +231,10 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
       AWS_CONFIG_FILE: join(asm, 'no-config'),
       CDK_DISABLE_VERSION_CHECK: '1',
     };
+    // Windows needs these for Node and the CLI to start at all.
+    if (process.platform === 'win32') {
+      for (const key of ['SystemRoot', 'TEMP', 'TMP']) env[key] = process.env[key];
+    }
     assert.ok(cdkBin, 'the aws-cdk CLI must be resolvable here (run `npm ci` at the repo root)');
     const r = spawnSync(process.execPath, [cdkBin, ...args, '--app', asm, '--no-notices'], {
       cwd: asm,
@@ -253,7 +264,7 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     assert.match(withAll.out, CREDENTIAL_CHECK, `expected the destroy to pass stack selection: ${withAll.out.slice(0, 600)}`);
   });
 
-  it('the watch stack names select the same top-level stacks as --all, not the staged one', { skip: skipCli }, () => {
+  it('the watch stack names select every top-level stack, not the staged one', { skip: skipCli }, () => {
     const names = topLevelStackPaths(asm);
     // `cdk ls` matches stack patterns the same way `cdk watch` does.
     const listed = cdk(['ls', ...names]);
