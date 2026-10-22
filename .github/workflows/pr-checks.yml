@@ -40,12 +40,16 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       source-changed: ${{ steps.check.outputs.source-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
@@ -140,6 +144,32 @@ jobs:
 
           echo "❌ This PR changes @aws-blocks/blocks packaged content (e.g. synced docs from sibling READMEs) vs the base branch, but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to a changeset."
           exit 1
+
+  # Mirrors the Release job's install (publish-packages.yml): no dependency
+  # install scripts, then build. Release only runs on main after the Version
+  # Packages PR merges, so without this a dependency that needs its install
+  # script to build would pass every PR check and block the next release.
+  release-install-check:
+    name: Release Install Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
 
   build-and-test-local:
     name: Build, Unit Tests, E2E Local
@@ -311,7 +341,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -335,10 +365,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
@@ -352,14 +382,14 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     # Serialize across PRs: the smoke app provisions private-DNS interface
     # endpoints into the shared persistent test VPC, and AWS permits only one
     # per service per VPC. Without this, two open PRs collide on the endpoints
     # (and the shared stack) and CloudFormation fails the second run. Queue
     # rather than cancel so an in-flight deploy/destroy isn't interrupted.
     concurrency:
-      group: blocks-test-vpc
+      group: blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -384,10 +414,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Ensure persistent test VPC
         run: cd test-infra && npx cdk deploy BlocksTestVpc --require-approval never --outputs-file outputs.json
@@ -409,7 +439,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     # Serialize this suite across PRs: it provisions private-DNS interface
     # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
     # from the VPC smoke job's BlocksTestVpc), and AWS permits only one per
@@ -420,7 +450,7 @@ jobs:
     # two suites don't collide across groups because they target *different*
     # persistent VPCs, so they can run in parallel.
     concurrency:
-      group: blocks-test-compute
+      group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -444,10 +474,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Ensure persistent compute test VPC
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
@@ -469,7 +499,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
@@ -493,10 +523,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: E2E Test Production
         run: npm run test:e2e:production
@@ -510,13 +540,14 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: publish
+    environment: e2e
     env:
       # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
       # connection in this suite runs verify-full — exercising the TLS verification
       # feature end-to-end instead of connecting unverified. externalDbSsl() reads
       # this; the explicit-engine tests read it too.
       DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
+    # One Supabase project serves every E2E account, so this group stays global.
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false
@@ -560,10 +591,10 @@ jobs:
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Fetch Supabase secrets
         run: |
@@ -587,7 +618,7 @@ jobs:
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     strategy:
       fail-fast: false
       matrix:
@@ -650,10 +681,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
@@ -680,7 +711,7 @@ jobs:
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: publish
+    environment: e2e
     permissions:
       contents: read
       id-token: write
@@ -702,10 +733,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Seed fixed e2e telemetry installation ID
         shell: bash
@@ -729,7 +760,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -737,6 +768,11 @@ jobs:
         run: |
           if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
             echo "blocks-integrity failed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.release-install-check.result }}" != "success" ]]; then
+            echo "release-install-check failed"
             exit 1
           fi
 

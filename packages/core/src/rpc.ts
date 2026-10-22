@@ -10,6 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
+import { BLOCKS_RPC_PREFIX, rpcNamespaceFromPath } from './constants.js';
 import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
 
 /**
@@ -35,6 +36,17 @@ export interface RpcParsedRequest {
 export type RpcParseResult =
   | { ok: true; request: RpcParsedRequest }
   | { ok: false; response: string };
+
+/** Options for `parseRpcRequest`. */
+export interface RpcParseOptions {
+  /**
+   * The request path, without query string. When it is a per-namespace RPC path
+   * it must be exactly `/aws-blocks/api/{namespace}` (an optional trailing slash
+   * aside), and the namespace it names must match the body's `namespace.method`
+   * prefix, or the request is rejected as invalid.
+   */
+  pathname?: string;
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -117,8 +129,15 @@ export function decodeRpcResponse(body: unknown): unknown {
  * Returns `{ ok: false, response }` with a ready-to-send JSON string when
  * the request is malformed, so callers can short-circuit without knowing
  * anything about the JSON-RPC spec.
+ *
+ * The body's `namespace.method` prefix is always the namespace dispatched. A
+ * per-namespace path (`options.pathname`) only addresses the request — a gateway
+ * routes on it, since it can't read the body — so a path that names a different
+ * namespace than the body is rejected rather than silently preferring either.
+ * The typed client never sends a mismatch; this only surfaces hand-written
+ * requests that would otherwise run on a different namespace than intended.
  */
-export function parseRpcRequest(bodyText: string): RpcParseResult {
+export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {}): RpcParseResult {
   // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
   // for the limit and its rationale.
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
@@ -167,6 +186,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const apiNamespace = parsed.method.substring(0, dotIndex);
+  const pathProblem = options.pathname === undefined ? undefined : rpcPathProblem(options.pathname, apiNamespace);
+  if (pathProblem) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, `Invalid Request: ${pathProblem}`, id, { name: 'InvalidRequest' }),
+    };
+  }
+
   const hasParams = Object.hasOwn(parsed, 'params');
   if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
     return {
@@ -188,7 +216,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
   return {
     ok: true,
     request: {
-      apiNamespace: parsed.method.substring(0, dotIndex),
+      apiNamespace,
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
       args,
@@ -305,6 +333,34 @@ export function methodNotFoundResponse(detail: string, id: string | number | nul
 }
 
 // ── Internal ────────────────────────────────────────────────────────────────
+
+/** Longest caller-supplied name echoed back in an error message. */
+const MAX_ECHOED_NAME_LENGTH = 64;
+
+function clipName(name: string): string {
+  return name.length > MAX_ECHOED_NAME_LENGTH ? `${name.slice(0, MAX_ECHOED_NAME_LENGTH)}…` : name;
+}
+
+/**
+ * Why `pathname` can't carry a call into `bodyNamespace`, or `undefined` when it
+ * can. The bare endpoint carries any namespace. A per-namespace path must be
+ * exactly `/aws-blocks/api/{namespace}` — one segment, so a deeper path is
+ * rejected the same way whichever compute serves it — and must name the body's
+ * namespace exactly (export names are case-sensitive). Names are clipped before
+ * they are echoed, so the error stays small whatever the caller sent.
+ */
+function rpcPathProblem(pathname: string, bodyNamespace: string): string | undefined {
+  if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+  const rest = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).replace(/\/$/, '');
+  if (rest.includes('/')) {
+    return `an RPC call goes to ${BLOCKS_RPC_PREFIX} or ${BLOCKS_RPC_PREFIX}/<namespace>, not a deeper path`;
+  }
+  const pathNamespace = rpcNamespaceFromPath(pathname);
+  if (pathNamespace !== undefined && pathNamespace !== bodyNamespace) {
+    return `the path addresses namespace "${clipName(pathNamespace)}" but the method is in namespace "${clipName(bodyNamespace)}"`;
+  }
+  return undefined;
+}
 
 export function errorResponse(
   code: number,

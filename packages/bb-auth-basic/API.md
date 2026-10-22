@@ -66,12 +66,14 @@ export const AuthBasicErrors: {
     readonly SessionRevoked: "SessionRevokedException";
     readonly SignOutIncomplete: "SignOutIncompleteException";
     readonly InvalidPassword: "InvalidPasswordException";
+    readonly AccountLocked: "AccountLockedException";
 };
 
 // @public
 export interface AuthBasicOptions {
     codeDelivery?: CodeDeliveryFn;
     crossDomain?: boolean;
+    lockout?: LockoutPolicy;
     logger?: ChildLogger;
     passwordPolicy?: PasswordPolicy;
     sessionDuration?: number;
@@ -92,6 +94,13 @@ export { BlocksAuth }
 
 // @public
 export type CodeDeliveryFn = (username: string, code: string) => Promise<void>;
+
+// @public
+export interface LockoutPolicy {
+    lockoutSeconds?: number;
+    maxAttempts?: number;
+    windowSeconds?: number;
+}
 
 // @public
 export interface PasswordPolicy {

@@ -25,6 +25,8 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       # Per-platform flags so a change to one language's SDK doesn't fan out to
       # the others. `any-changed` gates the shared setup/gate jobs.
       dart-changed: ${{ steps.check.outputs.dart-changed }}
@@ -36,6 +38,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -364,7 +368,7 @@ jobs:
     # wall / Destroy could be skipped → leaked stacks). Stop-gap until
     # deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -395,10 +399,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
@@ -507,7 +511,7 @@ jobs:
     # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
     # Stop-gap until deploy-once-per-run lands.
     timeout-minutes: 45
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -530,10 +534,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
@@ -608,7 +612,7 @@ jobs:
     # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
     # Swift iOS sandbox job and the non-sandbox Kotlin job above.
     timeout-minutes: ${{ matrix.timeout }}
-    environment: publish
+    environment: e2e
     strategy:
       fail-fast: false
       matrix:
@@ -617,7 +621,9 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            timeout: 30
+            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
+            # resources), so 30 min left no room for the build, tests and destroy.
+            timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
@@ -645,10 +651,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings

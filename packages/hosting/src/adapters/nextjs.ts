@@ -1857,6 +1857,33 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   const args = ['@opennextjs/aws', 'build'];
   if (configPath) args.push('--config-path', configPath);
 
+  // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
+  // the Next.js team's 2-year support window: `checkNextVersionSupport` prints
+  // `Next.js version X is not supported by the Next.js team` and calls
+  // `process.exit(1)` unless `--dangerously-use-unsupported-next-version` is
+  // set. That window is a wall-clock deadline, so a deploy that worked
+  // yesterday starts hard-failing the day the major expires — with no change
+  // on the user's side. We'd rather let the deploy proceed (the app still runs
+  // fine; the policy is about upstream security patches) than break it on a
+  // date.
+  //
+  // We pass the flag UNCONDITIONALLY rather than mirror OpenNext's release-date
+  // table and decide ourselves (which we'd have to keep in sync). It is inert
+  // on a supported version — OpenNext only reads the flag inside its
+  // `if (!isSupported)` branch, so a supported build ignores it entirely — and
+  // on an unsupported version it downgrades OpenNext's `exit(1)` to a
+  // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
+  // own `isNextVersionSupported` stays the single source of truth for the
+  // supported/unsupported decision, and its warning is the one the user sees.
+  //
+  // The explicit `'true'` value is REQUIRED, not cosmetic: OpenNext's CLI
+  // `parseArgs` only records a `--flag` when a following non-`-` token exists
+  // (otherwise it stores `undefined`), and `build()` then applies the override
+  // only when the value `!== undefined`. A bare trailing `--flag` would parse
+  // as `undefined` and the override would silently NOT apply, so the value
+  // token is what makes it take effect.
+  args.push('--dangerously-use-unsupported-next-version', 'true');
+
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,
   );

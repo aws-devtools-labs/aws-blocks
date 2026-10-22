@@ -26,7 +26,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the string you passed as the **second** argument to `new ApiNamespace(scope, '<name>', …)`. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
 
 ### Auth on the frontend
 
@@ -76,7 +76,7 @@ const res = await api.ping('world');   // { message: 'hi world' }
 
 ### Calling the API directly (troubleshooting only)
 
-If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace shares one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field, not the URL: there are no per-namespace paths like `/aws-blocks/authApi`, and anything after `/aws-blocks/api` in the path is ignored. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`), not the 2nd `ApiNamespace` argument.
+If you do need to hit the API without the typed client (e.g. checking a deployed app without a browser): **every namespace is served at one endpoint**, `POST <origin>/aws-blocks/api` (locally `http://localhost:3000/aws-blocks/api`). The namespace goes in the JSON-RPC `method` field: there are no per-namespace paths like `/aws-blocks/authApi`. (The typed client also appends the namespace to the URL — `/aws-blocks/api/<namespace>` — so a gateway can route it; if you use that form, the namespace in the path must match the one in `method`, or the call fails with `-32600` Invalid Request.) The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`), not the 2nd `ApiNamespace` argument.
 
 ```bash
 curl -X POST http://localhost:3000/aws-blocks/api \

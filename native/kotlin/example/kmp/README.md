@@ -36,7 +36,7 @@ Sign-in goes through the shared backend's Google provider, which needs a real OA
 
 Three things are specific to this app:
 
-- **Switching between local and sandbox needs no code change.** The spec carries a single server, and the generated `Api()` / `AuthApi()` constructors default to it. Re-run `npm run dev` or `npm run sandbox`, regenerate the spec, and rebuild.
+- **Switching between local and sandbox needs no code change.** The spec carries a single server, named after whichever command ran last, and `App` constructs `Blocks()` — a generated accessor that follows that server whatever it is called. Re-run `npm run dev` or `npm run sandbox`, regenerate the spec, and rebuild.
 - **The same OAuth client serves all three targets.** The client derives the OAuth redirect URI from the server it is pointed at, not from the platform, so one registered URI per environment covers Android, iOS, and desktop.
 - **On the Android emulator, forward the port rather than rewriting the host.** Google only accepts `http://` redirect URIs on `localhost` / `127.0.0.1`, so keep the spec's `localhost:3001` and run `adb reverse tcp:3001 tcp:3001`; pointing the app at `http://10.0.2.2:3001` instead produces a redirect URI Google won't register. The iOS simulator and desktop reach `localhost` directly.
 

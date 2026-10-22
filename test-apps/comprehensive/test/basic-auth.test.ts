@@ -71,6 +71,7 @@ const SessionExpired = 'SessionExpiredException';
 const SessionRevoked = 'SessionRevokedException';
 const InvalidPassword = 'InvalidPasswordException';
 const InvalidCode = 'InvalidCodeException';
+const AccountLocked = 'AccountLockedException';
 
 function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -323,6 +324,41 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           SessionRevoked,
           'the revoked session surfaces as SessionRevokedException over the wire',
         );
+      });
+    });
+
+    // ── Sign-in throttling / lockout (#766) ──────────────────────────────
+
+    describe('sign-in throttling', () => {
+      test('locks out after too many failed attempts — AccountLockedException over the wire', async () => {
+        const baseUrl = getBaseUrl();
+        const username = uniqueUser();
+
+        // The throttle pool confirms immediately (no codeDelivery).
+        await rpcRaw(baseUrl, 'authThrottleSignUp', [username, 'password123']);
+
+        // maxAttempts is 2 on this pool: two wrong-password attempts are plain
+        // InvalidCredentials…
+        for (let i = 0; i < 2; i++) {
+          const err = await rpcRawExpectError(baseUrl, 'authThrottleSignIn', [username, 'wrong-pass']);
+          assert.strictEqual(
+            err.data?.name,
+            InvalidCredentials,
+            `attempt ${i + 1} is a credential failure, not yet locked`,
+          );
+        }
+
+        // …then the account is locked: even the CORRECT password is rejected
+        // with AccountLockedException (429) THROUGH the JSON-RPC serializer.
+        const locked = await rpcRawExpectError(baseUrl, 'authThrottleSignIn', [username, 'password123']);
+        assert.strictEqual(locked.code, 429, 'locked sign-in rejects with 429');
+        assert.strictEqual(
+          locked.data?.name,
+          AccountLocked,
+          'the lockout surfaces as AccountLockedException over the wire',
+        );
+        // The message must not leak the username or any SDK metadata.
+        assert.doesNotMatch(locked.message, new RegExp(username, 'i'), 'lockout message does not echo the username');
       });
     });
 
