@@ -185,8 +185,9 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
 
   // cleanup-stacks.yml sweeps that keep account quotas in check: orphaned REST
   // APIs (120 EDGE APIs), API Gateway CloudWatch roles (3000 roles) and
-  // CloudFront response headers policies. Its calls swallow errors, so a missing
-  // grant here shows up as an empty sweep, not a failed job.
+  // CloudFront response headers policies. A REST API listing it can't read fails
+  // the job; its other calls swallow errors, so a missing grant there shows up
+  // as an empty sweep, not a failed job.
   // These list calls have no resource-level scoping; '*' is the only valid resource.
   role.addToPolicy(
     new iam.PolicyStatement({

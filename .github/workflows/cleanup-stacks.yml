@@ -55,10 +55,12 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
+      # Every leg: the REST API sweep runs scripts/ci/rest-api-quota.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: matrix.environment == 'e2e'
         with:
-          sparse-checkout: .github/actions/e2e-aws-credentials
+          sparse-checkout: |
+            .github/actions/e2e-aws-credentials
+            scripts/ci
           persist-credentials: false
 
       - name: Configure AWS credentials (E2E account)
@@ -565,12 +567,18 @@ jobs:
           # describe errors, we record it and SKIP all REST-API deletes this run
           # (the summary still prints; the next scheduled run retries with a complete
           # ownership set). Correctness over throughput on a shared account.
-          LIVE_STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
-            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
-
           OWNED_IDS=""
           OWNERSHIP_INCOMPLETE=0
+          # The same fail-safe covers the stack listing itself: if it fails, no
+          # stack is known to own anything, so nothing may be deleted this run.
+          if ! LIVE_STACKS=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
+            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u); then
+            echo "  list-stacks failed, so the ownership set is incomplete this run"
+            LIVE_STACKS=""
+            OWNERSHIP_INCOMPLETE=1
+          fi
+
           for S in $LIVE_STACKS; do
             [ -z "$S" ] && continue
             # Capture stderr/exit separately so a throttled/errored describe on a live
@@ -591,11 +599,16 @@ jobs:
           # All custom REST APIs with id, name and creation epoch.
           # Surface a failed listing instead of reading it as "no APIs": a silent
           # failure here hid both the orphan sweep and the EDGE-quota warning
-          # below while the account filled up.
+          # below while the account filled up. It fails the step once the
+          # summary has printed. The CLI's error starts with a blank line, so
+          # take the first non-blank one, with account ids masked (public log).
+          LIST_FAILED=0
           if ! APIS=$(aws apigateway get-rest-apis \
             --query "items[].[id,name,createdDate]" --output text 2>/tmp/get-rest-apis.err); then
-            echo "::warning::apigateway get-rest-apis failed, orphaned REST APIs were not swept: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
+            REASON=$(grep -m 1 -v '^[[:space:]]*$' /tmp/get-rest-apis.err | head -c 500 | sed -E 's/[0-9]{12}/<account>/g' || true)
+            echo "::error::apigateway get-rest-apis failed, orphaned REST APIs were not swept: ${REASON:-no error output}"
             APIS=""
+            LIST_FAILED=1
           fi
 
           # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
@@ -706,27 +719,22 @@ jobs:
             fi
           done <<< "$APIS"
 
-          # Report current headroom against the 120-EDGE cap so quota pressure is visible.
-          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/tmp/get-rest-apis.err || echo "?")
-          EDGE=$(aws apigateway get-rest-apis \
-            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>>/tmp/get-rest-apis.err || echo "?")
-          if [ "$EDGE" = "?" ]; then
-            echo "::warning::could not count REST APIs, so the EDGE-quota check is blind: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
-          fi
-
           echo ""
           echo "## API Gateway REST API Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Orphaned REST APIs deleted: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (non-test name): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- Deferred to next run (15-min budget reached): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- REST APIs remaining: $TOTAL total, $EDGE EDGE (cap 120)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to next run (incomplete ownership set or 15-min budget): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Headroom against the 120-EDGE cap, every run, with a warning from 80.
+          # A count it cannot read fails the step instead of printing "?".
+          QUOTA_FAILED=0
+          bash scripts/ci/rest-api-quota.sh || QUOTA_FAILED=1
           if [ "$DEFERRED" -gt 0 ] 2>/dev/null; then
-            echo "::warning::REST-API sweep hit its 15-min budget with $DEFERRED candidate(s) left — remainder defers to the next scheduled run"
+            echo "::warning::REST-API sweep deferred $DEFERRED candidate(s) to the next scheduled run (incomplete ownership set or 15-min budget)"
           fi
-          if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
-            echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"
+          if [ "$LIST_FAILED" -ne 0 ] || [ "$QUOTA_FAILED" -ne 0 ]; then
+            exit 1
           fi
 
       - name: Cleanup orphaned API Gateway CloudWatch IAM roles
