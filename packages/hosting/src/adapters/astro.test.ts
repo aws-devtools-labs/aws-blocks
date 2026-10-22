@@ -5,11 +5,13 @@
 // logic added for issue #3 (`/_image` → `content-type: image/null` on the
 // noop passthrough service).
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import semver from 'semver';
+import { spawn } from './spawn.js';
 import {
   astroAdapter,
   astroUsesSharpService,
@@ -63,12 +65,21 @@ void describe('installSharpForAstroSsr — idempotency + guard', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('is a no-op when a linux-x64 sharp is already present (no npm install)', () => {
-    // Pre-seed the marker package so the installer short-circuits BEFORE it
-    // would shell out to npm — proves idempotency without network/npm.
+  // Lay down what a real install leaves behind: sharp's package.json plus the
+  // `@img/sharp-linux-x64` prebuilt marker package.
+  const seedSharp = (version: string): void => {
+    const sharpDir = path.join(tmp, 'node_modules', 'sharp');
+    fs.mkdirSync(sharpDir, { recursive: true });
+    fs.writeFileSync(path.join(sharpDir, 'package.json'), JSON.stringify({ name: 'sharp', version }));
     const marker = path.join(tmp, 'node_modules', '@img', 'sharp-linux-x64');
     fs.mkdirSync(marker, { recursive: true });
-    fs.writeFileSync(path.join(marker, 'package.json'), '{}');
+    fs.writeFileSync(path.join(marker, 'package.json'), JSON.stringify({ name: '@img/sharp-linux-x64', version }));
+  };
+
+  it('is a no-op when a patched linux-x64 sharp is already present (no npm install)', () => {
+    // Pre-seed the marker package so the installer short-circuits BEFORE it
+    // would shell out to npm — proves idempotency without network/npm.
+    seedSharp('0.35.5');
     // Must not throw and must not have created a package.json (short-circuit
     // returns before writing one).
     assert.doesNotThrow(() => installSharpForAstroSsr(tmp));
@@ -77,6 +88,39 @@ void describe('installSharpForAstroSsr — idempotency + guard', () => {
       false,
       'short-circuit must happen before any package.json is written',
     );
+  });
+
+  // GHSA-wq5f-xc86-pv6w: every sharp below 0.35.5 bundles a librsvg with a
+  // use-after-free that can lead to RCE on glibc Linux (the Lambda runtime).
+  it('installs a sharp range that excludes every vulnerable version', () => {
+    const installs: (readonly string[])[] = [];
+    mock.method(spawn, 'sync', (_bin: string, args: readonly string[]) => {
+      installs.push(args);
+    });
+    try {
+      installSharpForAstroSsr(tmp);
+    } finally {
+      mock.restoreAll();
+    }
+    assert.strictEqual(installs.length, 1);
+    const spec = installs[0].find((a) => a.startsWith('sharp@'));
+    assert.ok(spec, 'npm install must name sharp explicitly');
+    const range = spec.slice('sharp@'.length);
+    assert.ok(semver.subset(range, '>=0.35.5'), `sharp range ${range} admits versions below 0.35.5`);
+  });
+
+  it('reinstalls when the bundle already holds a vulnerable linux-x64 sharp', () => {
+    seedSharp('0.34.5');
+    let installs = 0;
+    mock.method(spawn, 'sync', () => {
+      installs++;
+    });
+    try {
+      installSharpForAstroSsr(tmp);
+    } finally {
+      mock.restoreAll();
+    }
+    assert.strictEqual(installs, 1, 'a bundled sharp 0.34.5 must not satisfy the idempotency check');
   });
 
   it('throws AstroSharpInstallError when npm install exits non-zero (fails loudly, not silently)', () => {
