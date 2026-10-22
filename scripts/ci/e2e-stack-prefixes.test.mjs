@@ -178,3 +178,40 @@ describe('deployed test apps', () => {
 		});
 	}
 });
+
+// A cancelled, timed-out or crashed job never runs the suite's own destroy, so
+// the job's last steps delete what the checkout deployed. Compute Smoke needs
+// it most: a leaked stack keeps its VPC endpoints in the shared compute test
+// VPC and every later run in that account fails to deploy.
+describe('pr-checks.yml e2e-compute-smoke', () => {
+	const yml = read('.github/workflows/pr-checks.yml');
+	const job = yml.split(/^(?=  [a-z][\w-]*:$)/m).find((block) => block.startsWith('  e2e-compute-smoke:'));
+	const steps = job.slice(job.indexOf('    steps:\n')).split(/^(?=      - )/m).slice(1);
+	const ifOf = (step) => step.match(/^ {8}if: (.+)$/m)?.[1];
+	const minutes = (step) => Number(step.match(/timeout-minutes: (\d+)/)?.[1]);
+	const guard = "always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''";
+
+	it('ends with a bounded always() teardown of the stacks it deployed', () => {
+		const [refresh, teardown] = steps.slice(-2);
+		assert.match(refresh, /uses: \.\/\.github\/actions\/e2e-aws-credentials\n/);
+		assert.equal(ifOf(refresh), guard);
+		assert.match(teardown, /run: node scripts\/ci\/e2e-teardown\.mjs test-apps\/compute-smoke\n/);
+		assert.equal(ifOf(teardown), guard);
+		assert.match(teardown, /JOB_STATUS: \$\{\{ job\.status \}\}/);
+		assert.doesNotMatch(teardown, /continue-on-error/);
+		// GitHub force-stops a cancelled job 5 minutes after the cancel.
+		assert.ok(minutes(refresh) >= 1 && minutes(teardown) >= 1, 'both teardown steps need timeout-minutes');
+		assert.ok(minutes(refresh) + minutes(teardown) <= 4, 'the teardown steps may take at most 4 minutes together');
+	});
+
+	it('names every stack with the sandbox id the teardown matches', () => {
+		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
+		assert.match(src, /const id = getSandboxId\(projectRoot\);/);
+		const m = src.match(/const stackName =([\s\S]*?);\n/);
+		// One top-level literal per mode (sandbox, production), each with ${id}.
+		assert.equal(literalPrefixes(m[1]).length, 2);
+		// The teardown matches the id as a dash-delimited token.
+		assert.equal(m[1].match(/-\$\{id\}(?=\$\{|-|`)/g)?.length, 2, 'both stack names must contain -${id} as a token');
+		assert.match(src, /new cdk\.Stack\(app, `\$\{stackName\}-vpc-ref`/);
+	});
+});

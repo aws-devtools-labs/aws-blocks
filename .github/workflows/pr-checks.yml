@@ -554,6 +554,31 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
+      # The suite destroys its stacks in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes. A
+      # leaked stack keeps its VPC endpoints in the shared compute test VPC, so
+      # every later run in the same account fails to deploy. Delete what this
+      # checkout deployed (the app stack and its -vpc-ref, both named with the
+      # sandbox id): skipped when nothing was synthesized, one ListStacks call
+      # when the suite cleaned up. Fresh credentials, since the first session
+      # can expire before a long or timed-out job gets here. GitHub force-stops
+      # a cancelled job 5 minutes after the cancel, so the two steps get 3
+      # minutes together.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/compute-smoke
+
   e2e-production:
     permissions:
       contents: read
