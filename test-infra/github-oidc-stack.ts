@@ -50,6 +50,23 @@ const E2E_PREFIXES = [
 // Amplify Gen 2 sandbox stacks (amplify-interop suite). cleanup-stacks.yml
 // empties their buckets before deleting them.
 const AMPLIFY_SANDBOX_PREFIXES = ['amplify-amplifygen2-', 'amplify-amplifyinteroptest-'];
+// Function and DB cluster name prefixes whose orphaned log groups
+// cleanup-stacks.yml deletes ("Cleanup orphaned Lambda and RDS log groups";
+// scripts/ci/sweep-log-groups.test.mjs checks the two lists match).
+// CloudFormation cuts the stack-name part of a generated function name, so the
+// interop prefix is cut too. `my-app-` is left out: it may be a developer's
+// ad-hoc deploy.
+const LOG_GROUP_LAMBDA_PREFIXES = [
+  'amplify-amplifygen2-',
+  'amplify-amplifyinteroptes',
+  'bb-compute-smoke-',
+  'bb-telemetry-',
+  'bb-test-',
+  'bb-vpc-smoke-',
+  'blocks-hosting-',
+  'blocks-test-',
+];
+const LOG_GROUP_RDS_PREFIXES = ['bb-test-'];
 
 export interface GithubE2eOidcStackProps {
   account: string;
@@ -222,6 +239,28 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
       sid: 'CleanupResponseHeadersPolicies',
       actions: ['cloudfront:DeleteResponseHeadersPolicy', 'cloudfront:GetResponseHeadersPolicy'],
       resources: [`arn:aws:cloudfront::${account}:response-headers-policy/*`],
+    }),
+  );
+  // Lambda creates a function's log group itself, outside CloudFormation, so it
+  // outlives the stack; RDS engine log groups outlive their cluster. The sweep
+  // deletes a test-prefixed group only when its function or cluster is gone, so
+  // it lists all three. Read-only, in an account that holds only test stacks;
+  // lambda:ListFunctions takes only '*', and scoping the other two buys nothing.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLogGroupsList',
+      actions: ['logs:DescribeLogGroups', 'lambda:ListFunctions', 'rds:DescribeDBClusters'],
+      resources: ['*'],
+    }),
+  );
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLogGroupsDelete',
+      actions: ['logs:DeleteLogGroup'],
+      resources: [
+        ...LOG_GROUP_LAMBDA_PREFIXES.map((p) => `arn:aws:logs:${region}:${account}:log-group:/aws/lambda/${p}*`),
+        ...LOG_GROUP_RDS_PREFIXES.map((p) => `arn:aws:logs:${region}:${account}:log-group:/aws/rds/cluster/${p}*`),
+      ],
     }),
   );
 
