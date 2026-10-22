@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ import { parse } from 'yaml';
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCRIPT = join(ROOT, 'scripts/ci/e2e-cleanup.mjs');
 const CDK = join(ROOT, 'node_modules/.bin/cdk');
-const WORKFLOWS = ['pr-checks.yml', 'e2e-amplify-interop.yml', 'native-sdk-e2e.yml'];
+const WORKFLOWS = readdirSync(join(ROOT, '.github/workflows')).filter((f) => /\.ya?ml$/.test(f));
 
 describe('findOrphans', () => {
 	const procs = [
@@ -29,6 +29,7 @@ describe('findOrphans', () => {
 		{ pid: 11, ppid: 10, trackingId: 'job' }, // the cleanup step's shell
 		{ pid: 12, ppid: 11, trackingId: 'job' }, // this script
 		{ pid: 13, ppid: 12, trackingId: 'job' }, // a child of this script (ps)
+		{ pid: 14, ppid: 11, trackingId: 'job' }, // started by the cleanup step too (| tee)
 		{ pid: 20, ppid: 1, trackingId: 'job' }, // the cancelled step's npm, reparented
 		{ pid: 21, ppid: 20, trackingId: 'job' }, // ... and its cdk
 		{ pid: 30, ppid: 1, trackingId: 'other' }, // another job's process
@@ -44,16 +45,47 @@ describe('findOrphans', () => {
 		const { findOrphans } = await import('./e2e-cleanup.mjs');
 		assert.deepEqual(findOrphans(procs, { selfPid: 12, trackingId: undefined }), []);
 	});
+
+	it('returns nothing when this process is not in the listing', async () => {
+		const { findOrphans } = await import('./e2e-cleanup.mjs');
+		assert.deepEqual(findOrphans(procs, { selfPid: 99, trackingId: 'job' }), []);
+	});
+
+	it('keeps the ancestry when the parent is not a step shell', async () => {
+		const { findOrphans } = await import('./e2e-cleanup.mjs');
+		const runnerParent = [
+			{ pid: 10, ppid: 1 }, // runner worker, without the id
+			{ pid: 12, ppid: 10, trackingId: 'job' }, // this script
+			{ pid: 20, ppid: 10, trackingId: 'job' }, // an orphan reparented to the runner
+		];
+		assert.deepEqual(findOrphans(runnerParent, { selfPid: 12, trackingId: 'job' }), [20]);
+	});
+});
+
+describe('parsePsLines', () => {
+	it('reads pid, ppid and the tracking id from macOS ps -E output', async () => {
+		const { parsePsLines } = await import('./e2e-cleanup.mjs');
+		const text = [
+			'    1     0 /sbin/launchd',
+			'  812   640 node /w/node_modules/.bin/cdk deploy --all PATH=/usr/bin RUNNER_TRACKING_ID=github_abc HOME=/Users/runner',
+			'  900     1 ',
+		].join('\n');
+		assert.deepEqual(parsePsLines(text), [
+			{ pid: 1, ppid: 0, trackingId: undefined },
+			{ pid: 812, ppid: 640, trackingId: 'github_abc' },
+			{ pid: 900, ppid: 1, trackingId: undefined },
+		]);
+	});
 });
 
 describe('always() cleanup steps', () => {
-	// Every line of an always() step that tears a stack down.
+	// Every command line of an always() step, in any workflow, that tears a stack down.
 	const teardownLines = WORKFLOWS.flatMap((file) => {
 		const wf = parse(readFileSync(join(ROOT, '.github/workflows', file), 'utf8'));
 		return Object.entries(wf.jobs).flatMap(([job, def]) =>
 			(def.steps ?? [])
 				.filter((s) => String(s.if ?? '').includes('always()') && s.run)
-				.flatMap((s) => s.run.split('\n').filter((l) => /destroy|sandbox:delete/.test(l)))
+				.flatMap((s) => s.run.split('\n').filter((l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l)))
 				.map((line) => ({ where: `${file} ${job}`, line: line.trim() })),
 		);
 	});
@@ -209,7 +241,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 		try {
 			const r = await run(dir, 'bash', ['-c', `${destroy.map((a) => `'${a}'`).join(' ')} || true`], id);
 			assert.equal(r.status, 0);
-			assert.match(r.output, /currently reading from/);
+			assert.match(r.output, /lock|currently (reading|synthing)/i);
 			assert.deepEqual(deleted, []);
 		} finally {
 			cleanup();
@@ -222,7 +254,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 		try {
 			const r = await run(dir, process.execPath, [SCRIPT, '--', ...destroy], id);
 			assert.equal(r.status, 0, r.output);
-			assert.doesNotMatch(r.output, /currently reading from|currently synthing|E2E cleanup failed/);
+			assert.doesNotMatch(r.output, /currently (reading|synthing)|E2E cleanup failed/);
 			assert.equal(deleted.length, 1, r.output);
 			assert.match(deleted[0], /CleanupTest/);
 			assert.throws(() => process.kill(holder.pid, 0), /ESRCH/);
