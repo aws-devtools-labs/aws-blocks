@@ -55,10 +55,12 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
+      # Every leg: the REST API sweep runs scripts/ci/rest-api-quota.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: matrix.environment == 'e2e'
         with:
-          sparse-checkout: .github/actions/e2e-aws-credentials
+          sparse-checkout: |
+            .github/actions/e2e-aws-credentials
+            scripts/ci
           persist-credentials: false
 
       - name: Configure AWS credentials (E2E account)
@@ -390,8 +392,15 @@ jobs:
           # budget and let the timeout kill the sweep before its summary prints. Cap
           # at 40 min and defer the remainder to the next scheduled run.
           DEADLINE=$((SECONDS + 2400)) # 40 minutes
+          # A DELETE_FAILED sandbox created more than 6 h ago gets the nested
+          # retain below (the same gate as the e2e step's retain path). What proves
+          # it stuck is the event signature amplify-stuck-delete.sh checks.
+          STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
           TRIGGERED=0
           TRIGGER_FAILED=0
+          DEFERRED=0
+          SCRIPT_FAILED=0
+          RETAINED_FILE=$(mktemp)
 
           # Empty every S3 bucket in a stack and its nested children. Amplify
           # sandboxes stick in DELETE_FAILED on a non-empty versioned bucket that
@@ -468,6 +477,7 @@ jobs:
               continue
             fi
 
+            CREATED_TS=0
             if [ -n "$CREATION_TIME" ] && [ "$CREATION_TIME" != "None" ]; then
               CREATED_TS=$(date -d "$CREATION_TIME" +%s 2>/dev/null || echo "0")
               # DELETE_FAILED stacks are always stale (already torn down once); delete regardless of age.
@@ -482,7 +492,7 @@ jobs:
             # draining a backlog; CloudFormation deletes asynchronously and anything
             # that doesn't finish is retried on the next scheduled run.
             #
-            # We intentionally do NOT retry with --retain-resources here: at the
+            # We intentionally do NOT retry the ROOT with --retain-resources: at the
             # root level the only stuck child is the nested data stack, which
             # *contains* the AppSync GraphQLApi we are trying to reclaim — retaining
             # it would orphan that API (and the managed DynamoDB table), leaking the
@@ -490,10 +500,34 @@ jobs:
             # nested buckets above so the plain delete succeeds; a persistent failure
             # after that is usually the Amplify managed DynamoDB table (its
             # table-manager Lambda role lacks dynamodb:DescribeTable) — a real
-            # upstream bug surfaced by the warning below, not orphaned away.
+            # upstream bug surfaced by the warning below. The one shape of it that
+            # never clears is handled by the nested retain that follows.
+            #
+            # That shape: the deploy failed while the table was being created, so
+            # CloudFormation holds a placeholder id that the table manager may not
+            # describe. For such a stack, amplify-stuck-delete.sh deletes the nested
+            # model stack retaining only that table resource, and the root is
+            # deleted on the next run. The real table survives the retain and no
+            # sweep deletes tables, so it is named in a warning and the step summary
+            # for deletion by hand. The script runs from the job's checkout, which
+            # includes scripts/ci on every leg.
             echo "🧹 Emptying nested buckets for $STACK"
             _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
+
+            if [ "$STATUS" = "DELETE_FAILED" ] && [ "$CREATED_TS" -ne 0 ] && [ "$CREATED_TS" -lt "$STUCK_CUTOFF" ]; then
+              RC=0
+              AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh "$STACK" || RC=$?
+              if [ "$RC" -eq 3 ]; then
+                # Not deleting the root now: its delete would race the nested one.
+                echo "Nested stack delete started for $STACK; root delete deferred to the next run"
+                DEFERRED=$((DEFERRED + 1))
+                continue
+              elif [ "$RC" -ne 0 ]; then
+                echo "::warning::amplify-stuck-delete.sh exited $RC for $STACK; plain retry only"
+                SCRIPT_FAILED=$((SCRIPT_FAILED + 1))
+              fi
+            fi
 
             if aws cloudformation delete-stack --stack-name "$STACK"; then
               echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
@@ -516,7 +550,17 @@ jobs:
           echo "## Amplify Sandbox Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Root delete deferred (nested stack delete started): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Nested retain script failed: $SCRIPT_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          # What amplify-stuck-delete.sh retained (with the DynamoDB table to
+          # delete by hand) and the failed resources it left in place.
+          if [ -s "$RETAINED_FILE" ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Retained, left-in-place and bucket-blocked resources of stuck sandboxes:" | tee -a "$GITHUB_STEP_SUMMARY"
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RETAINED_FILE"
+          fi
+          rm -f "$RETAINED_FILE"
           if [ "$TRIGGER_FAILED" -gt 0 ]; then
             # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
             # prefix the CI role can't delete) never self-heals, and every such
@@ -526,7 +570,7 @@ jobs:
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
-            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
+            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup, nested ones included ($DEFERRED root(s) deferred after a nested retain); AppSync API quota may be at risk"
           fi
 
       - name: Cleanup orphaned API Gateway REST APIs
