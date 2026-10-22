@@ -10,8 +10,8 @@ import Foundation
 // MARK: - OIDC Providers
 //
 // An operation's `oidc/client` result with a string-enum type argument gets a
-// provider enum in its operation enum and a `signIn` overload on `OIDCClient`
-// that takes it. `OIDCClient` itself stays untyped.
+// provider enum in its operation enum, and the operation returns an `OIDCClient`
+// typed by it, whose `signIn` then takes only those providers.
 
 extension SwiftCodeGenerator {
     /// The provider enum of an operation whose direct or optional result is an `oidc/client` with a string-enum type argument.
@@ -26,7 +26,8 @@ extension SwiftCodeGenerator {
         guard let provider = oidcProviderEnum(operation) else { return }
         lines.append("")
         lines.append("\(indent)/// The providers `\(fullMethodName(operation, namespace: namespace))` signs in with.")
-        emitDeclaration(provider.name, line: "\(indent)public enum \(provider.name): String, CaseIterable, Codable, Sendable {", lines: &lines)
+        let conformances = "String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName"
+        emitDeclaration(provider.name, line: "\(indent)public enum \(provider.name): \(conformances) {", lines: &lines)
         for (caseName, value) in providerCases(provider.values) {
             let unescaped = caseName.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
             lines.append(unescaped == value
@@ -34,24 +35,6 @@ extension SwiftCodeGenerator {
                 : "\(indent)    case \(caseName) = \(swiftStringLiteral(value))")
         }
         lines.append("\(indent)}")
-    }
-
-    /// A `signIn` overload on `OIDCClient` that takes the operation's provider enum. Runtime names are qualified,
-    /// since a model or an app type may take them.
-    func emitOIDCProviderSignIn(_ operation: Operation, namespace: String, className: String, lines: inout [String]) {
-        guard let provider = oidcProviderEnum(operation) else { return }
-        let providerType = "\(className).\(pascalCase(operation.name)).\(provider.name)"
-        lines.append("extension BlocksRuntime.OIDCClient {")
-        lines.append("    /// Signs in with one of the providers `\(fullMethodName(operation, namespace: namespace))` returns a client for.")
-        lines.append("    public func signIn(")
-        lines.append("        provider: \(providerType),")
-        lines.append("        relayTo: String,")
-        lines.append("        launcher: any BlocksRuntime.BrowserLauncher")
-        lines.append("    ) async throws -> BlocksRuntime.OIDCUser {")
-        lines.append("        try await signIn(provider: provider.rawValue, relayTo: relayTo, launcher: launcher)")
-        lines.append("    }")
-        lines.append("}")
-        lines.append("")
     }
 
     /// Names the enum when it isn't `Provider`, since the operation already declares or uses a type by that name.

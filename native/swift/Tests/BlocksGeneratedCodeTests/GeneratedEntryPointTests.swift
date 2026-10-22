@@ -132,7 +132,8 @@ final class GeneratedEntryPointTests: XCTestCase {
 
     func testTypedSignInSendsTheProvidersWireName() async throws {
         let blocks = Blocks(server: Servers.local, session: mockSession())
-        let auth = try await blocks.auth.getClient()
+        // Typed by its own providers, so `auth.signIn(provider: Admin.GetClient.Provider.okta, ...)` doesn't compile.
+        let auth: OIDCClient<Auth.GetClient.Provider> = try await blocks.auth.getClient()
         XCTAssertEqual(Auth.GetClient.Provider.allCases.map(\.rawValue), ["google", "github", "my-sso"])
         XCTAssertEqual(Admin.GetClient.Provider.allCases, [.okta])
         do {

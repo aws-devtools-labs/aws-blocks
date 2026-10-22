@@ -104,6 +104,9 @@ public struct SwiftCodeGenerator {
                     }
                 }
                 walkNodes(operation.nestedTypes, parentPath: opName)
+                if let provider = oidcProviderEnum(operation) {
+                    nameMap[provider.name] = "\(opName).\(provider.name)"
+                }
                 operationQualifiedNames[opKey] = nameMap
             }
         }
@@ -154,7 +157,6 @@ public struct SwiftCodeGenerator {
             apiLines.append("")
 
             for operation in namespace.operations {
-                emitOIDCProviderSignIn(operation, namespace: namespace.name, className: names.className, lines: &apiLines)
                 if let warning = oidcProviderRenameWarning(operation, namespace: namespace.name, className: names.className) {
                     warnings.append(warning)
                 }
@@ -1303,8 +1305,9 @@ public struct SwiftCodeGenerator {
                     returnLines = ["        return try \(runtimePrefix)FileUploadHandle.fromJSON(descriptor)"]
                 case "oidc/client":
                     descriptorNoun = "OIDC client"
+                    let provider = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "String"
                     returnLines = [
-                        "        return try \(runtimePrefix)OIDCClient"
+                        "        return try \(runtimePrefix)OIDCClient<\(provider)>"
                             + ".fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"
                     ]
                 default:

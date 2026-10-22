@@ -2,16 +2,20 @@
 "aws-blocks-swift": minor
 ---
 
-feat(swift): generate an OIDC provider enum for typed sign-in
+feat(swift): type `OIDCClient` by the spec's provider names
 
-A direct or optional `oidc/client` result whose `x-blocks-type-args[0]` is a
-string enum now generates a `CaseIterable` `Provider` enum in the method's
-namespace (e.g. `OidcAuthApi.GetClient.Provider`) and an
-`OIDCClient.signIn(provider:relayTo:launcher:)` overload that takes it, so
-`signIn(provider: .google, ...)` checks the provider name at compile time. When
-the method's own types already use the name `Provider`, the enum is
-`ResultProvider` and codegen prints a `swift:` warning that names it.
-`getClient()` still returns `OIDCClient`, and the `String` overload stays for
-untyped specs. A nested `oidc/client` still decodes as `JSONValue` and gets no
-enum. A namespace that would generate a class named `CaseIterable` now takes an
-`Api` suffix.
+**Breaking:** `OIDCClient` is now generic over the providers
+`signIn(provider:relayTo:launcher:)` takes. A direct or optional `oidc/client`
+result whose `x-blocks-type-args[0]` is a string enum generates a `CaseIterable`
+`Provider` enum in the method's namespace and returns
+`OIDCClient<OidcAuthApi.GetClient.Provider>`, so `signIn(provider: .google, ...)`
+accepts only that client's own providers and a typo doesn't compile. An untyped
+spec returns `OIDCClient<String>`, whose `signIn` still takes a `String`. Write
+`OIDCClient<String>` (or the generated enum) where code names `OIDCClient`,
+including for its static members, as in `OIDCClient<String>.generateVerifier()`.
+The new `OIDCProviderName` protocol is what a provider type conforms to.
+
+When the method's own types already use the name `Provider`, the enum is
+`ResultProvider` and codegen prints a `swift:` warning that names it. A nested
+`oidc/client` still decodes as `JSONValue` and gets no enum. A namespace that
+would generate a class named `CaseIterable` now takes an `Api` suffix.

@@ -63,7 +63,7 @@ final nonisolated class MainActorDefaultTests: XCTestCase {
     func testMainActorCodeSignsInWithAProviderEnum() async {
         // Port 9 refuses the connection, so sign-in fails on its first request.
         let blocks = Blocks(server: BlocksServer(name: "refused", url: "http://127.0.0.1:9/aws-blocks/api"))
-        let oidc = OIDCClient(
+        let oidc = OIDCClient<Auth.GetClient.Provider>(
             exchangePath: "/auth/exchange", refreshPath: "/auth/exchange/refresh", signOutPath: "/auth/signout",
             providers: ["github"], providerConfigs: [:], baseUrl: blocks.client.baseUrl, client: blocks.client
         )
