@@ -98,6 +98,8 @@ This stack creates, in each of them:
 |----------|---------|
 | GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials (skipped if `GITHUB_OIDC_PROVIDER_ARN` is set) |
 | `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies), Cognito admin calls, Supabase test secret |
+| `blocks-github-bench` role | Account 1 only (`E2E_AGENT_BENCH=1`). Agent bench (`agent-bench.yml`), assumable only by jobs in this repo's `agent-bench` GitHub environment; Bedrock model invocation and `bench/*` in the bench bucket |
+| Agent bench bucket | Account 1 only (`E2E_AGENT_BENCH=1`). Per-cell bench results and the baseline the PR scoreboard compares against |
 
 The stack is pinned to `us-east-1`, the region every E2E workflow and
 `cleanup-stacks.yml` use. It is deployed **by hand, once per account**, not by
@@ -124,6 +126,26 @@ GITHUB_OIDC_PROVIDER_ARN=arn:aws:iam::<e2e-account-id>:oidc-provider/token.actio
 
 Add the `RoleArn` output to the `AWS_ROLE_ARNS` secret (see below). Deploy this
 stack only into dedicated E2E accounts.
+
+### Agent bench (account 1)
+
+The agent bench isn't spread over the pool. Account 1 also holds its role and
+results bucket. Deploy account 1 with `E2E_AGENT_BENCH=1`, every time: a deploy
+without it removes the bench role (the bucket is retained).
+
+```bash
+E2E_ACCOUNT_ID=<account-1-id> E2E_AGENT_BENCH=1 npm run deploy:oidc
+```
+
+Set the `BenchRoleArn` output as the `BENCH_ROLE_ARN` secret of the
+`agent-bench` GitHub environment (and as a Dependabot secret) and
+`BenchBucketName` as its `BENCH_BUCKET` variable. The bench calls Anthropic
+models on Bedrock, so enable model access in account 1 and check the Bedrock
+quotas for the bench model before its first run.
+
+Each role trusts only its own GitHub environment, so jobs in `agent-bench`
+can't assume `blocks-github-e2e` and jobs in `e2e` can't assume
+`blocks-github-bench`.
 
 ### More E2E accounts
 
@@ -169,5 +191,6 @@ includes it, no cleanup leg sweeps it.
 CDK deploys from E2E jobs run with the CDK bootstrap execution role. Keep every
 pool account limited to E2E test stacks.
 
-`npm test` checks that the trust policy stays pinned to this repo's `e2e`
-environment with `StringEquals` and no wildcards.
+`npm test` checks that each trust policy stays pinned to its own environment of
+this repo (`e2e` or `agent-bench`) with `StringEquals` and no wildcards, that
+the two roles never share one, and that the bench is only added on request.
