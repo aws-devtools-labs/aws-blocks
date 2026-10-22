@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, HostingPresets, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getStackName } from '@aws-blocks/blocks/scripts';
@@ -25,11 +25,11 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // shape (served by API Gateway, no CloudFront). A plain sandbox is backend-only.
 if (!sandboxMode || previewMode) {
   new Hosting(blocksStack, 'Hosting', {
+    ...(previewMode ? HostingPresets.preview : HostingPresets.production),
     root: join(__dirname, '..'),
     buildCommand: 'npm run build',
     framework: 'nextjs',
     api: blocksStack,
-    preview: previewMode,
     compute: {
       memorySize: 1024,
       timeout: 30,

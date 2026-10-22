@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, HostingPresets, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -37,12 +37,12 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // command-line path end to end.
 if (!sandboxMode || previewMode) {
   new Hosting(blocksStack, 'Hosting', {
+    ...(previewMode ? HostingPresets.preview : HostingPresets.production),
     root: join(__dirname, '..'),
     buildCommand: 'npm run build',
     buildOutputDir: 'dist',
     framework: 'spa',
     api: blocksStack,
-    preview: previewMode,
   });
 }
 
