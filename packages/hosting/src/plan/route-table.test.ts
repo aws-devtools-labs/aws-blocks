@@ -123,6 +123,28 @@ describe('buildRouteTable — coalescing, basePath, ordering', () => {
     // /blog/x/admin (3 literal segs) must sort before the coalesced /blog/* (1 seg).
     assert.equal(entries[0]?.pattern, '/blog/x/admin');
   });
+
+  it('does not coalesce children into a parent/* wildcard the table already routes to another kind', () => {
+    // The Next.js route set with no image origin: `/_next/image*` and
+    // `/_next/data/*` both classify as server. Coalescing them would emit a
+    // `/_next/*` SERVER wildcard that collides with the explicit `/_next/*`
+    // STATIC row, sending every `/_next/static/*` asset to the server (404).
+    const routes: RouteBehavior[] = [
+      { pattern: '/_next/image*', target: 'image-optimization' },
+      { pattern: '/_next/data/*', target: 'default' },
+      { pattern: '/*', target: 'default' },
+      { pattern: '/BUILD_ID', target: 's3' },
+      { pattern: '/_next/*', target: 's3' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern === '/_next/*'),
+      [{ pattern: '/_next/*', kind: 'static' }],
+    );
+    const byPattern = Object.fromEntries(entries.map((e) => [e.pattern, e.kind]));
+    assert.equal(byPattern['/_next/data/*'], 'server');
+    assert.equal(byPattern['/_next/image*'], 'server');
+  });
 });
 
 describe('coalesceRoutes / routeSpecificity (relocated, still exported here)', () => {
