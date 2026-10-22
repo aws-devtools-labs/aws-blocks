@@ -139,8 +139,9 @@ jobs:
           cd /tmp/amplify-interop-test
           node $GITHUB_WORKSPACE/scripts/smoke-test-amplify-interop.mjs
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its ampx
-      # holds the cdk.out lock), and reports a failed delete as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), and reports a failed delete
+      # as a warning.
       - name: Cleanup sandbox
         if: always()
         run: |
@@ -200,8 +201,9 @@ jobs:
           cd test-apps/amplify-gen2
           npm run test:e2e
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its ampx
-      # holds the cdk.out lock), and reports a failed delete as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), and reports a failed delete
+      # as a warning.
       - name: Cleanup sandbox
         if: always()
         run: |
