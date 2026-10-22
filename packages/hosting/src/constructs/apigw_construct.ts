@@ -271,7 +271,9 @@ export class ApiGatewayConstruct extends Construct {
     for (const entry of plan.routes.entries) {
       // A wildcard inside a segment (`/*.js`) has no route form: the default serves it.
       if (hasInnerWildcard(entry.pattern)) {
-        inexpressible.push(entry.pattern);
+        // `/_next/image*` with no image function: its endpoint is already
+        // routed to the asset proxy above, so nothing is left unrouted.
+        if (!seen.has(entry.pattern.replace(/\*$/, ''))) inexpressible.push(entry.pattern);
         continue;
       }
       const path = globToProxyPath(entry.pattern);

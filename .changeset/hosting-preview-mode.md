@@ -18,7 +18,7 @@ When on:
 
 - The app is served by the API Gateway HTTP API door (`frontDoor: { kind: 'apiGateway' }`): one regional origin, no CloudFront distribution to create or tear down. Server responses are buffered. `frontDoor` may be omitted or set to an `apiGateway` door; any other door fails synth with `PreviewFrontDoorError`.
 - Next.js builds without the tag cache and the revalidation queue (no DynamoDB table, SQS queue or revalidation function). Prerendered pages are still served from the build's cache snapshot.
-- No image optimization unless `imageOptimization: true`. The framework image endpoints (`/_next/image`, `/_ipx/*`, `/_image`) serve the source image, unoptimized. A remote source is redirected to itself only when its host is in the app's image allowlist, else 404; it is never fetched.
+- No image optimization unless `imageOptimization: true`. The framework image endpoints (`/_next/image`, `/_ipx/*`, `/_image`) serve the source image, unoptimized. A remote source is redirected to itself only when its host is in the app's image allowlist, else 404; it is never fetched. With no image function, Next.js `/_next/static/*` chunks are still served from the build's assets: the route table no longer folds `/_next/image*` and `/_next/data/*` into a `/_next/*` server route that would shadow them.
 - Next.js `runtime: 'edge'` routes run as regional Lambda functions, routed straight to their function, instead of Lambda@Edge.
 - The build id is fixed (`'preview'`), so an unchanged build produces the same assets. `startSandbox({ preview: true })` re-deploys with `--hotswap-fallback`, applying a code-only change to the functions directly.
 
