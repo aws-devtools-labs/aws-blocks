@@ -10,11 +10,14 @@
 //    only the step's shell; its children (npm -> playwright -> tsx -> cdk) keep
 //    running until the job ends. A live `cdk deploy` or `cdk destroy` holds the
 //    lock on cdk.out, so the cleanup's own `cdk destroy` failed with "Other CLIs
-//    are currently reading from cdk.out" / "Another CLI is currently synthing",
-//    and an orphaned deploy could still create the stack after the cleanup ran.
+//    are currently reading from cdk.out" / "Another CLI is currently synthing".
+//    An orphaned deploy that had not yet submitted its stack operation could
+//    also submit it after the cleanup ran (an operation CloudFormation already
+//    has runs to the end either way; the destroy's retries absorb that).
 //    This stops every process carrying this job's RUNNER_TRACKING_ID, the id
 //    the runner itself uses to terminate orphans at job end, except this
-//    process and its ancestors. CDK treats a lock held by a dead PID as stale.
+//    process, its ancestors, and everything the cleanup step itself started.
+//    CDK treats a lock held by a dead PID as stale.
 // 2. Runs the command. A failure is reported as a ::warning:: annotation and in
 //    the step summary, and this exits 0: a teardown failure is not a test
 //    result, and the stack-cleanup sweeper reclaims what is left behind.
@@ -43,26 +46,43 @@ function listLinuxProcesses() {
 	const out = [];
 	for (const name of readdirSync('/proc')) {
 		if (!/^\d+$/.test(name)) continue;
+		let ppid;
 		try {
 			// The command name in field 2 may contain spaces or parens; the fields
 			// after its closing paren are space-separated (state, then ppid).
 			const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
-			const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-			const env = readFileSync(`/proc/${name}/environ`, 'utf8').split('\0');
-			const entry = env.find((e) => e.startsWith(`${TRACKING_VAR}=`));
-			out.push({ pid: Number(name), ppid, trackingId: entry?.slice(TRACKING_VAR.length + 1) });
+			ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
 		} catch {
-			// exited meanwhile, or another user's process
+			continue; // exited meanwhile
 		}
+		let trackingId;
+		try {
+			const env = readFileSync(`/proc/${name}/environ`, 'utf8').split('\0');
+			trackingId = env.find((e) => e.startsWith(`${TRACKING_VAR}=`))?.slice(TRACKING_VAR.length + 1);
+		} catch {
+			// another user's process: keep it, so the ancestry walk has no gap
+		}
+		out.push({ pid: Number(name), ppid, trackingId });
 	}
 	return out;
 }
 
 function listDarwinProcesses() {
-	const r = spawnSync('ps', ['-E', '-ww', '-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8' });
-	if (r.status !== 0) return [];
+	const r = spawnSync('ps', ['-E', '-ww', '-A', '-o', 'pid=,ppid=,command='], {
+		encoding: 'utf8',
+		maxBuffer: 256 * 1024 * 1024,
+	});
+	if (r.error || r.status !== 0) {
+		console.log(`Could not list processes: ${r.error?.message ?? r.stderr}`);
+		return [];
+	}
+	return parsePsLines(r.stdout);
+}
+
+/** Parse `ps -E -o pid=,ppid=,command=` output (macOS). */
+export function parsePsLines(text) {
 	const out = [];
-	for (const line of r.stdout.split('\n')) {
+	for (const line of text.split('\n')) {
 		const m = line.match(/^\s*(\d+)\s+(\d+)\s(.*)$/);
 		if (!m) continue;
 		const id = m[3].match(new RegExp(`(?:^|\\s)${TRACKING_VAR}=(\\S+)`));
@@ -73,15 +93,28 @@ function listDarwinProcesses() {
 
 /**
  * The pids to stop: every process with `trackingId`, except `selfPid`, its
- * ancestors (the step's shell, the runner) and its children (e.g. `ps`).
+ * ancestors (the step's shell, the runner) and the processes the cleanup step
+ * started (descendants of the step's shell, e.g. a `| tee`). Returns [] when
+ * `selfPid` is not in the listing, rather than guess at its ancestry.
  */
 export function findOrphans(processes, { selfPid, trackingId }) {
-	if (!trackingId) return [];
 	const byPid = new Map(processes.map((p) => [p.pid, p]));
+	const self = byPid.get(selfPid);
+	if (!trackingId || !self) return [];
 	const keep = new Set([selfPid]);
-	for (let p = byPid.get(selfPid); p && !keep.has(p.ppid); p = byPid.get(p.ppid)) keep.add(p.ppid);
+	for (let p = self; p && !keep.has(p.ppid); p = byPid.get(p.ppid)) keep.add(p.ppid);
+	// The parent is the cleanup step's own shell when it carries the job's id;
+	// the runner itself does not, and orphans may have been reparented to it.
+	const stepShell = byPid.get(self.ppid)?.trackingId === trackingId ? self.ppid : selfPid;
+	const startedByStep = (p) => {
+		for (let q = p; q; q = byPid.get(q.ppid)) {
+			if (q.ppid === stepShell) return true;
+			if (q.ppid === q.pid) return false;
+		}
+		return false;
+	};
 	return processes
-		.filter((p) => p.trackingId === trackingId && !keep.has(p.pid) && p.ppid !== selfPid)
+		.filter((p) => p.trackingId === trackingId && !keep.has(p.pid) && !startedByStep(p))
 		.map((p) => p.pid);
 }
 
@@ -105,29 +138,48 @@ function signal(pids, sig) {
 	}
 }
 
-/** SIGTERM the orphans, SIGKILL what is left after `graceMs`, then wait for them to go. */
+async function waitGone(pids, ms) {
+	for (let waited = 0; waited < ms && pids.some(alive); waited += 250) await sleep(250);
+}
+
+/**
+ * SIGTERM the orphans (re-listing, so a child started during the grace period
+ * is caught too), then SIGKILL what a fresh listing still finds, and wait for
+ * them to go.
+ */
 export async function stopOrphans({ trackingId = process.env[TRACKING_VAR], graceMs = 5000 } = {}) {
 	if (!trackingId) {
 		console.log(`${TRACKING_VAR} is not set; not looking for processes left by an earlier step.`);
 		return { stopped: [], survivors: [] };
 	}
-	const pids = findOrphans(listProcesses(), { selfPid: process.pid, trackingId });
-	if (pids.length === 0) return { stopped: [], survivors: [] };
-	console.log(`Stopping ${pids.length} process(es) left by an earlier step: ${pids.join(' ')}`);
-	signal(pids, 'SIGTERM');
-	for (let waited = 0; waited < graceMs && pids.some(alive); waited += 250) await sleep(250);
-	signal(pids.filter(alive), 'SIGKILL');
-	for (let waited = 0; waited < 5000 && pids.some(alive); waited += 250) await sleep(250);
-	const survivors = pids.filter(alive);
+	const find = () => findOrphans(listProcesses(), { selfPid: process.pid, trackingId });
+	const stopped = new Set();
+	for (let round = 0; round < 3; round++) {
+		const pids = find();
+		if (pids.length === 0) break;
+		console.log(`Stopping ${pids.length} process(es) left by an earlier step: ${pids.join(' ')}`);
+		for (const pid of pids) stopped.add(pid);
+		signal(pids, 'SIGTERM');
+		await waitGone(pids, graceMs);
+	}
+	const left = find();
+	signal(left, 'SIGKILL');
+	await waitGone(left, 5000);
+	const survivors = left.filter(alive);
 	if (survivors.length > 0) console.log(`Still present after SIGKILL: ${survivors.join(' ')}`);
-	return { stopped: pids, survivors };
+	return { stopped: [...stopped], survivors };
+}
+
+/** Escape a workflow command's message (`%`, CR, LF). */
+function escapeData(s) {
+	return s.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 }
 
 /** Report a failed cleanup where a reviewer sees it: an annotation and the step summary. */
 export function reportFailure(command, status, seconds) {
 	const what = `\`${command.join(' ')}\` exited with ${status} after ${seconds}s`;
 	console.log(
-		`::warning title=E2E cleanup failed::${what.replaceAll('`', "'")}. This job's stacks may be left behind.`,
+		`::warning title=E2E cleanup failed::${escapeData(what.replaceAll('`', "'"))}. This job's stacks may be left behind.`,
 	);
 	const summary = process.env.GITHUB_STEP_SUMMARY;
 	if (summary) {
@@ -145,7 +197,12 @@ async function main(argv) {
 		console.error('Usage: node scripts/ci/e2e-cleanup.mjs -- <command> [args...]');
 		return 2;
 	}
-	await stopOrphans();
+	// The teardown must run even if the scan fails.
+	try {
+		await stopOrphans();
+	} catch (e) {
+		console.log(`::warning title=E2E cleanup::${escapeData(`Could not stop leftover processes: ${e.message}`)}`);
+	}
 	const start = Date.now();
 	const r = spawnSync(command[0], command.slice(1), { stdio: 'inherit' });
 	const seconds = Math.round((Date.now() - start) / 1000);
