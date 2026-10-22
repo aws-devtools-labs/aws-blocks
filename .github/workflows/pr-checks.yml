@@ -37,30 +37,27 @@ env:
 
 jobs:
   # Picks the E2E jobs to run. By default that is every E2E job when the PR
-  # changes packages/ or test-apps/, and none otherwise. A line in the PR
-  # description overrides it, so a PR that only changes CI (this workflow,
+  # changes packages/ or test-apps/, and none otherwise. An E2E trailer on the
+  # PR's head commit overrides it, so a PR that only changes CI (this workflow,
   # .github/actions/) or one E2E suite can run just the jobs it affects:
   #
-  #   E2E: all                    every E2E job
-  #   E2E: sandbox, hosting       only these (job ids without the e2e- prefix)
+  #   git commit --trailer 'E2E: all'               every E2E job
+  #   git commit --trailer 'E2E: sandbox, hosting'  only these (job ids without the e2e- prefix)
   #
-  # The description is read when the run starts, so after editing it push a
-  # commit or re-run all jobs. Each PR runs in its own E2E account (PR number
-  # mod the pool size), so parallel PRs spread across the pool. If the line
-  # skips a job the changes call for, the Build and Test gate fails: remove the
-  # line before merging.
+  # Only the head commit counts: a later commit without the trailer goes back
+  # to the default. Each PR runs in its own E2E account (PR number mod the pool
+  # size), so parallel PRs spread across the pool. If the trailer skips a job
+  # the changes call for, the Build and Test gate fails: push a commit without
+  # it before merging.
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read  # reads the E2E: line from the PR description
     outputs:
       # E2E account for this PR (see .github/actions/e2e-slot).
       e2e-index: ${{ steps.e2e-slot.outputs.index }}
       # JSON array of the E2E jobs to run, e.g. ["sandbox","hosting"]
       e2e: ${{ steps.check.outputs.e2e }}
-      # true when the E2E: line skipped a job the changes call for
+      # true when the E2E trailer skipped a job the changes call for
       e2e-narrowed: ${{ steps.check.outputs.narrowed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,8 +68,6 @@ jobs:
         uses: ./.github/actions/e2e-slot
       - id: check
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           E2E_ACCOUNT: ${{ steps.e2e-slot.outputs.account }}
         run: |
           set -euo pipefail
@@ -84,20 +79,20 @@ jobs:
             changed=''
           fi
 
-          line=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' \
-            | tr -d '\r' | grep -im1 '^E2E:' || true)
-          if [ -z "$line" ]; then
+          # Several E2E trailers are joined with commas.
+          trailer=$(git log -1 --format='%(trailers:key=E2E,valueonly,separator=%x2C)' HEAD)
+          if [ -z "$trailer" ]; then
             selected=$changed
           else
-            echo "PR description: $line"
+            echo "E2E trailer on the head commit: $trailer"
             selected=''
-            for key in $(echo "${line#*:}" | tr ',[:upper:]' ' [:lower:]'); do
+            for key in $(echo "$trailer" | tr ',[:upper:]' ' [:lower:]'); do
               if [ "$key" = all ]; then
                 selected=$all
               elif [[ " $all " == *" $key "* ]]; then
                 selected="$selected $key"
               else
-                echo "::error::Unknown E2E job '$key' in the PR description. Use 'all' or any of: $all"
+                echo "::error::Unknown E2E job '$key' in the head commit's E2E trailer. Use 'all' or any of: $all"
                 exit 1
               fi
             done
@@ -829,7 +824,7 @@ jobs:
           fi
 
           if [[ "${{ needs.detect-changes.outputs.e2e-narrowed }}" == "true" ]]; then
-            echo "The E2E: line in the PR description skips E2E jobs this PR's changes call for. Remove it before merging."
+            echo "The head commit's E2E trailer skips E2E jobs this PR's changes call for. Push a commit without it before merging."
             exit 1
           fi
 
