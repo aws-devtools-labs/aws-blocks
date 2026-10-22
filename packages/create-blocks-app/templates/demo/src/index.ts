@@ -12,19 +12,8 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// One persistent StatusMessage handle per status-only container (todo-error,
-// cookie-result, kv-result). Each mounts an empty idle region once at startup
-// (see the DOMContentLoaded handler), so every subsequent update mutates a
-// `role="status"` region that is ALREADY in the DOM — the thing that makes
-// screen-reader announcements reliable, versus inserting a region at the same
-// instant its text appears.
 const statusHandles = new WeakMap<HTMLElement, StatusMessageHandle>();
 
-// Render a themed status line (success/error/idle) into `el`, driven by the
-// shared StatusMessage primitive — themed `--bb-*` tokens + a polite ARIA live
-// region, and `textContent`-based so no manual escaping is needed. `kind` is
-// required (not defaulted) so a caller must state the intent rather than
-// silently implying success-green; use showError for the error case.
 function showMessage(el: HTMLElement, text: string, kind: 'success' | 'error' | 'idle') {
   const existing = statusHandles.get(el);
   if (existing) {
@@ -178,11 +167,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     authContainer.appendChild(Authenticator(authApi));
   }
 
-  // Mount an empty idle live region once for every status-only container, so the
-  // FIRST message into each surface mutates a `role="status"` region that is
-  // already in the DOM (reliably announced) rather than inserting a region with
-  // its text already set. todo-list and test-results are intentionally excluded:
-  // each renders non-status DOM (the todo list, the multi-line test summary).
   for (const id of ['todo-error', 'cookie-result', 'kv-result']) {
     const el = document.getElementById(id);
     if (el) showMessage(el, '', 'idle');
@@ -211,8 +195,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 (window as any).testGetCookie = async () => {
   const value = await api.getCookie();
   const out = document.getElementById('cookie-result')!;
-  // A missing cookie is an expected lookup result, not a failure — render it
-  // neutral (idle) rather than as a danger-red error.
   if (value) showMessage(out, `✓ Got cookie: ${value}`, 'success');
   else showMessage(out, '∅ Cookie not found', 'idle');
 };
@@ -243,8 +225,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     const value = await api.getValue(key);
-    // A missing key is an expected lookup result, not a failure — render it
-    // neutral (idle) rather than as a danger-red error.
     if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
     else showMessage(out, '∅ Key not found', 'idle');
   } catch (error: any) {
