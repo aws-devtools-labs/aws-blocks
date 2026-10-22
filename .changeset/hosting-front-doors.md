@@ -88,7 +88,11 @@ fails with `UnsupportedFrontDoorError`, `InvalidFrontDoorOptionError` or
 Use `frontDoor.features.<x>` instead: the names are the same, so migrating is a
 straight move. The aliases are merged into `frontDoor.features` at
 construction, and an app that sets them with no `frontDoor` (or `'cloudfront'`)
-synthesizes the same template. Setting a setting both ways fails synth with
+synthesizes the same template, with one exception for JavaScript callers of
+`geoRestriction` (TypeScript only accepted `'whitelist'` / `'blacklist'`): any
+type other than `'whitelist'` used to deny the listed countries, so
+`'allowlist'` now allows them as its name says, and a missing or unknown type
+(e.g. `'Whitelist'`) now fails synth instead of denying. Setting a setting both ways fails synth with
 `FrontDoorSettingConflictError`, naming both; a top-level prop the chosen kind
 doesn't implement fails synth with `UnsupportedFrontDoorSettingError`, naming
 the kind and the prop.

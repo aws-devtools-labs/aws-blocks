@@ -3016,6 +3016,9 @@ describe('Hosting', () => {
       const fns = t.findResources('AWS::CloudFront::Function');
       const staticFn = Object.keys(fns).find((id) => String(fns[id].Properties.FunctionCode).includes('resolveIndex'));
       assert.ok(staticFn && dependsOn.includes(staticFn), 'after the cutover');
+      // …and after the new server, so the edge never re-caches the previous build's pages.
+      const serverFn = Object.keys(t.findResources('AWS::Lambda::Function')).find((id) => /Computedefault/.test(id));
+      assert.ok(serverFn && dependsOn.includes(serverFn), `after the server function (${serverFn})`);
       // The post-deploy liveness poll waits on this invalidation, as on the CloudFront door.
       const out = Object.entries(t.findOutputs('*')).filter(([k]) => k.includes('HostingInvalidationId'));
       assert.strictEqual(out.length, 1, 'the stacked edge emits HostingInvalidationId');
