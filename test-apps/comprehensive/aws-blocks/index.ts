@@ -2074,7 +2074,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await agent.getPendingInterrupts(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { interrupts: await agent.getPendingInterrupts(conversationId, user?.userId ?? 'anonymous') };
   },
 
   async agentGetConversation(conversationId: string) {
@@ -2119,7 +2120,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { ok: true };
   },
   async cannedGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId) };
+    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId, 'test-user') };
   },
   async cannedGetConversation(conversationId: string) {
     return { messages: await cannedAgent.getConversation(conversationId) };
