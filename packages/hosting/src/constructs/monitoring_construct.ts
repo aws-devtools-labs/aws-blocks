@@ -185,8 +185,10 @@ export class MonitoringConstruct extends Construct {
           'so the alarm topic can enter ALARM but deliver to no one. Add at least ' +
           'one endpoint via `monitoring.subscriptions` (EmailSubscription / ' +
           'UrlSubscription), or subscribe the topic out-of-band using the ' +
-          'MonitoringTopicArn stack output. Set `monitoring: { enabled: false }` ' +
-          'to turn monitoring off deliberately.',
+          'MonitoringTopicArn stack output. Off-region deploys also expose a ' +
+          'second, equally undeliverable topic in the us-east-1 support stack ' +
+          '(the MonitoringTopicArnUsEast1 output), so subscribe both. Set ' +
+          '`monitoring: { enabled: false }` to turn monitoring off deliberately.',
       );
     }
     const action = new SnsAction(this.topic);

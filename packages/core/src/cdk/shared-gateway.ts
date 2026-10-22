@@ -30,6 +30,10 @@ const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
  * the integration timeout makes that boundary explicit (and lets the 504 surface
  * at 29s instead of API Gateway's silent default), without touching the function
  * timeout the async path depends on.
+ *
+ * This is the exact maximum `TimeoutInMillis` (29000 ms) API Gateway accepts for
+ * a REST integration — it is the service ceiling, not a tunable, so do not raise
+ * it (a larger value is rejected at synth/deploy).
  */
 const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
 
