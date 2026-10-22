@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "==> Regenerating Kotlin fixtures..."
+# The task is never up to date (`doNotTrackState` in native/kotlin/codegen/build.gradle.kts), so this
+# always runs the Kotlin generator; native/kotlin/scripts/regenerate-fixtures.test.sh checks it.
 (cd "$REPO_ROOT/native/kotlin" && ./gradlew :codegen:regenerateFixtures --quiet)
 
 echo "==> Regenerating Swift fixtures..."

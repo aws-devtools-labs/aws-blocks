@@ -8,59 +8,6 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 
 // --- Models ---
 
-class CognitoUser {
-  final String userSub;
-  final List<String> groups;
-  final Map<String, String?> attributes;
-  final String userId;
-  final String username;
-
-  const CognitoUser({
-    required this.userSub,
-    required this.groups,
-    required this.attributes,
-    required this.userId,
-    required this.username,
-  });
-
-  factory CognitoUser.fromJson(Map<String, dynamic> json) {
-    return CognitoUser(
-      userSub: json['userSub'] as String,
-      groups: (json['groups'] as List<dynamic>).cast<String>(),
-      attributes: (json['attributes'] as Map<String, dynamic>).map((k, v) => MapEntry(k, v as String?)),
-      userId: json['userId'] as String,
-      username: json['username'] as String,
-    );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'userSub': userSub,
-      'groups': groups,
-      'attributes': attributes,
-      'userId': userId,
-      'username': username,
-    };
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CognitoUser &&
-          userSub == other.userSub &&
-          blocksDeepEquals(groups, other.groups) &&
-          blocksDeepEquals(attributes, other.attributes) &&
-          userId == other.userId &&
-          username == other.username;
-
-  @override
-  int get hashCode => Object.hash(userSub, blocksDeepHash(groups), blocksDeepHash(attributes), userId, username);
-
-  @override
-  String toString() => 'CognitoUser(userSub: $userSub, groups: $groups, attributes: $attributes, userId: $userId, username: $username)';
-}
-
-
 enum CodeDeliveryDetailsDeliveryMedium {
   SMS,
   EMAIL,
@@ -112,6 +59,131 @@ class CodeDeliveryDetails {
 
   @override
   String toString() => 'CodeDeliveryDetails(destination: $destination, deliveryMedium: $deliveryMedium, attributeName: $attributeName)';
+}
+
+
+enum AuthenticatedUserGroups {
+  admins,
+  users
+;
+
+  String toJson() => name;
+  static AuthenticatedUserGroups fromJson(String json) => values.byName(json);
+}
+
+
+enum AuthenticatedUserSignInProvider {
+  password
+;
+
+  String toJson() => name;
+  static AuthenticatedUserSignInProvider fromJson(String json) => values.byName(json);
+}
+
+
+class AuthenticatedUser {
+  final String userSub;
+  final List<AuthenticatedUserGroups> groups;
+  final Map<String, String?> attributes;
+  final AuthenticatedUserSignInProvider signInProvider;
+  final Map<String, dynamic>? claims;
+  final FederatedIdentity? federatedIdentity;
+  final String userId;
+  final String username;
+
+  const AuthenticatedUser({
+    required this.userSub,
+    required this.groups,
+    required this.attributes,
+    required this.signInProvider,
+    this.claims,
+    this.federatedIdentity,
+    required this.userId,
+    required this.username,
+  });
+
+  factory AuthenticatedUser.fromJson(Map<String, dynamic> json) {
+    return AuthenticatedUser(
+      userSub: json['userSub'] as String,
+      groups: (json['groups'] as List<dynamic>).map((e) => AuthenticatedUserGroups.fromJson(e as String)).toList(),
+      attributes: (json['attributes'] as Map<String, dynamic>).map((k, v) => MapEntry(k, v as String?)),
+      signInProvider: AuthenticatedUserSignInProvider.fromJson(json['signInProvider'] as String),
+      claims: (json['claims'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as dynamic)),
+      federatedIdentity: json['federatedIdentity'] != null ? FederatedIdentity.fromJson(json['federatedIdentity'] as Map<String, dynamic>) : null,
+      userId: json['userId'] as String,
+      username: json['username'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'userSub': userSub,
+      'groups': groups.map((e) => e.toJson()).toList(),
+      'attributes': attributes,
+      'signInProvider': signInProvider.toJson(),
+      if (claims != null) 'claims': claims,
+      if (federatedIdentity != null) 'federatedIdentity': federatedIdentity?.toJson(),
+      'userId': userId,
+      'username': username,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthenticatedUser &&
+          userSub == other.userSub &&
+          blocksDeepEquals(groups, other.groups) &&
+          blocksDeepEquals(attributes, other.attributes) &&
+          signInProvider == other.signInProvider &&
+          blocksDeepEquals(claims, other.claims) &&
+          federatedIdentity == other.federatedIdentity &&
+          userId == other.userId &&
+          username == other.username;
+
+  @override
+  int get hashCode => Object.hash(userSub, blocksDeepHash(groups), blocksDeepHash(attributes), signInProvider, blocksDeepHash(claims), federatedIdentity, userId, username);
+
+  @override
+  String toString() => 'AuthenticatedUser(userSub: $userSub, groups: $groups, attributes: $attributes, signInProvider: $signInProvider, claims: $claims, federatedIdentity: $federatedIdentity, userId: $userId, username: $username)';
+}
+
+
+class FederatedIdentity {
+  final String providerId;
+  final String sub;
+
+  const FederatedIdentity({
+    required this.providerId,
+    required this.sub,
+  });
+
+  factory FederatedIdentity.fromJson(Map<String, dynamic> json) {
+    return FederatedIdentity(
+      providerId: json['providerId'] as String,
+      sub: json['sub'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'providerId': providerId,
+      'sub': sub,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FederatedIdentity &&
+          providerId == other.providerId &&
+          sub == other.sub;
+
+  @override
+  int get hashCode => Object.hash(providerId, sub);
+
+  @override
+  String toString() => 'FederatedIdentity(providerId: $providerId, sub: $sub)';
 }
 
 
@@ -1392,7 +1464,7 @@ class ContinueSignInCognitoConfirmSignInResult extends CognitoConfirmSignInResul
 }
 
 class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
-  final CognitoUser user;
+  final AuthenticatedUser user;
 
   const SignedInCognitoConfirmSignInResult({
     required this.user,
@@ -1400,7 +1472,7 @@ class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
 
   factory SignedInCognitoConfirmSignInResult.fromJson(Map<String, dynamic> json) {
     return SignedInCognitoConfirmSignInResult(
-      user: CognitoUser.fromJson(json['user'] as Map<String, dynamic>),
+      user: AuthenticatedUser.fromJson(json['user'] as Map<String, dynamic>),
     );
   }
 
@@ -1474,7 +1546,7 @@ class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
 }
 
 class SignedInCognitoSignInResult extends CognitoSignInResult {
-  final CognitoUser user;
+  final AuthenticatedUser user;
 
   const SignedInCognitoSignInResult({
     required this.user,
@@ -1482,7 +1554,7 @@ class SignedInCognitoSignInResult extends CognitoSignInResult {
 
   factory SignedInCognitoSignInResult.fromJson(Map<String, dynamic> json) {
     return SignedInCognitoSignInResult(
-      user: CognitoUser.fromJson(json['user'] as Map<String, dynamic>),
+      user: AuthenticatedUser.fromJson(json['user'] as Map<String, dynamic>),
     );
   }
 
