@@ -47,7 +47,7 @@ export interface SandboxOptions {
    * shape (`npm run sandbox:preview`). Synth and deploy get
    * `--context previewMode=true` (see {@link PREVIEW_MODE_CONTEXT}) next to
    * `sandboxMode=true`; the app reads it to add `Hosting` with
-   * `preview: true`. A plain sandbox stays backend-only.
+   * `HostingPresets.preview`. A plain sandbox stays backend-only.
    *
    * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
    * applied straight to the Lambda functions in seconds, falling back to a
@@ -66,7 +66,9 @@ export interface SandboxOptions {
  *
  * ```ts
  * const previewMode = app.node.tryGetContext('previewMode') === 'true';
- * if (!sandboxMode || previewMode) new Hosting(stack, 'Hosting', { root, api, preview: previewMode });
+ * if (!sandboxMode || previewMode) {
+ *   new Hosting(stack, 'Hosting', { ...(previewMode ? HostingPresets.preview : HostingPresets.production), root, api });
+ * }
  * ```
  */
 export const PREVIEW_MODE_CONTEXT = "previewMode";

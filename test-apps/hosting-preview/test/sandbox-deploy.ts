@@ -17,5 +17,5 @@ try {
 }
 
 // `preview: true`: a preview sandbox (sets the previewMode context, which adds
-// Hosting in preview shape); a re-deploy hotswaps code changes.
+// Hosting with HostingPresets.preview); a re-deploy hotswaps code changes.
 await startSandbox({ backendPath, deployOnly: true, preview: true });

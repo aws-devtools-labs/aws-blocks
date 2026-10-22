@@ -542,7 +542,7 @@ export type HostingConstructProps = {
    * proxy with the source image, unoptimized; a remote source is redirected
    * to itself when its host is in the manifest's image allowlist
    * (`imageOptimization.domains` / `remotePatterns`), else 404. Set by core
-   * `Hosting` in preview mode.
+   * `Hosting` for `imageOptimization: false` (`HostingPresets.preview`).
    * @default false
    */
   skipImageOptimization?: boolean;

@@ -10,7 +10,7 @@ import { type BuildProfile, buildProfile } from '@aws-blocks/hosting/adapters';
 import type { DeployManifest } from '@aws-blocks/hosting/constructs';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { type BlocksStackApi, Hosting, type HostingProps, resolvePreviewProfile } from './hosting.js';
+import { type BlocksStackApi, Hosting, type HostingProps, HostingPresets } from './hosting.js';
 import { clearRouteRegistry } from './raw-route.js';
 
 const MOCK_API: BlocksStackApi = {
@@ -72,35 +72,23 @@ function ssrFixture(root: string, seen: { profile?: BuildProfile }) {
 const newStack = (name: string) =>
   new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
 
-describe('resolvePreviewProfile', () => {
-  it('is off unless the app turns it on', () => {
-    for (const preview of [undefined, false, {}, { enabled: false }, { imageOptimization: true }] as const) {
-      assert.deepStrictEqual(resolvePreviewProfile(preview), {
-        enabled: false,
-        skipIsr: false,
-        skipImageOptimization: false,
-        edgeToRegional: false,
-      });
-    }
+describe('HostingPresets', () => {
+  it('production sets nothing: the full shape is the default', () => {
+    assert.deepStrictEqual(HostingPresets.production, {});
   });
 
-  it('`true` turns every trim on', () => {
-    assert.deepStrictEqual(resolvePreviewProfile(true), {
-      enabled: true,
-      skipIsr: true,
-      skipImageOptimization: true,
-      edgeToRegional: true,
+  it('preview picks the HTTP API door and every trim, as plain props', () => {
+    assert.deepStrictEqual(HostingPresets.preview, {
+      frontDoor: { kind: 'apiGateway' },
+      imageOptimization: false,
+      incrementalRegeneration: false,
+      edgeRoutes: 'regional',
+      buildId: 'fixed',
     });
-  });
-
-  it('`imageOptimization: true` keeps the image function', () => {
-    const profile = resolvePreviewProfile({ enabled: true, imageOptimization: true });
-    assert.strictEqual(profile.enabled, true);
-    assert.strictEqual(profile.skipImageOptimization, false);
   });
 });
 
-describe('Hosting preview mode', () => {
+describe('Hosting with HostingPresets.preview', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -115,7 +103,7 @@ describe('Hosting preview mode', () => {
   it('is served by the API Gateway HTTP API door: no CloudFront distribution', () => {
     createSpaBuildOutput(tmpDir);
     const stack = newStack('PreviewSpa');
-    const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, preview: true });
+    const hosting = new Hosting(stack, 'Hosting', { ...HostingPresets.preview, root: tmpDir, api: MOCK_API });
 
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::CloudFront::Distribution', 0);
@@ -135,7 +123,7 @@ describe('Hosting preview mode', () => {
     t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
   });
 
-  it('uses the fixed build id `preview`', () => {
+  it('uses the fixed build id', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewBuildId');
     new Hosting(stack, 'Hosting', {
@@ -143,12 +131,12 @@ describe('Hosting preview mode', () => {
       buildOutputDir: 'dist',
       api: MOCK_API,
       customAdapter: ssrFixture(tmpDir, seen),
-      preview: true,
+      ...HostingPresets.preview,
     });
 
     const t = Template.fromStack(stack);
     t.hasResourceProperties('AWS::Lambda::Function', {
-      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/preview' } },
+      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
     });
   });
 
@@ -159,7 +147,7 @@ describe('Hosting preview mode', () => {
       buildOutputDir: 'dist',
       api: MOCK_API,
       customAdapter: ssrFixture(tmpDir, seen),
-      preview: true,
+      ...HostingPresets.preview,
     });
 
     assert.deepStrictEqual(seen.profile, {
@@ -167,7 +155,7 @@ describe('Hosting preview mode', () => {
       edgeToRegional: true,
       skipIsr: true,
       skipImageOptimization: true,
-      deterministicBuildId: 'preview',
+      deterministicBuildId: 'fixed',
     });
   });
 
@@ -204,7 +192,7 @@ describe('Hosting preview mode', () => {
       buildOutputDir: 'dist',
       api: MOCK_API,
       customAdapter: ssrFixture(tmpDir, seen),
-      preview: true,
+      ...HostingPresets.preview,
     });
 
     const t = Template.fromStack(stack);
@@ -219,7 +207,7 @@ describe('Hosting preview mode', () => {
     });
   });
 
-  it('`imageOptimization: true` keeps the image function behind the door', () => {
+  it('`imageOptimization: true` after the spread keeps the image function', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewKeepImage');
     new Hosting(stack, 'Hosting', {
@@ -227,10 +215,11 @@ describe('Hosting preview mode', () => {
       buildOutputDir: 'dist',
       api: MOCK_API,
       customAdapter: ssrFixture(tmpDir, seen),
-      preview: { enabled: true, imageOptimization: true },
+      ...HostingPresets.preview,
+      imageOptimization: true,
     });
 
-    assert.strictEqual(seen.profile?.skipImageOptimization, false);
+    assert.strictEqual(seen.profile?.skipImageOptimization, undefined);
     const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function');
     assert.ok(Object.keys(fns).some((id) => id.includes('ImageOptimization')));
   });
@@ -243,7 +232,7 @@ describe('Hosting preview mode', () => {
       buildOutputDir: 'dist',
       api: MOCK_API,
       customAdapter: ssrFixture(tmpDir, seen),
-      preview: true,
+      ...HostingPresets.preview,
     });
 
     const t = Template.fromStack(stack);
@@ -254,26 +243,72 @@ describe('Hosting preview mode', () => {
     assert.match(target, /ComputeIntedge1/);
   });
 
-  it('accepts an explicit API Gateway door', () => {
+  it('an override after the spread wins: a custom-domain API Gateway door', () => {
     createSpaBuildOutput(tmpDir);
     const stack = newStack('PreviewExplicitDoor');
-    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, preview: true, frontDoor: { kind: 'apiGateway' } });
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, frontDoor: { kind: 'apiGateway' }, root: tmpDir, api: MOCK_API });
 
     Template.fromStack(stack).resourceCountIs('AWS::ApiGatewayV2::Api', 1);
   });
 
-  for (const [label, frontDoor] of [
-    ['cloudfront', 'cloudfront'],
-    ['none', 'none'],
-    ['alb', { kind: 'alb' }],
-    ['cloudfront with features', { features: { priceClass: undefined } }],
-  ] as const) {
-    it(`fails synth with another door (${label})`, () => {
+  it('without a preset, the same app deploys the CloudFront door', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('ProductionPreset');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.production, root: tmpDir, api: MOCK_API });
+
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+  });
+});
+
+describe('the trim settings on their own', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-settings-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearRouteRegistry();
+  });
+
+  it('`incrementalRegeneration: false` works behind the CloudFront door', () => {
+    const seen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('IsrOffCloudFront'), 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      incrementalRegeneration: false,
+    });
+    assert.deepStrictEqual(seen.profile, { serverInvoke: 'default', skipIsr: true });
+  });
+
+  it("`buildId: 'fixed'` works behind the ALB (no edge cache)", () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('FixedAlb');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
+    });
+  });
+
+  const rejected: Array<[string, Partial<HostingProps>, RegExp]> = [
+    ['imageOptimization: false behind CloudFront', { imageOptimization: false }, /imageOptimization: false.*'cloudfront' \(the default\)/],
+    ['imageOptimization: false behind the ALB', { imageOptimization: false, frontDoor: { kind: 'alb' } }, /imageOptimization: false.*kind: 'alb'/],
+    ["edgeRoutes: 'regional' behind CloudFront", { edgeRoutes: 'regional' }, /edgeRoutes: 'regional'/],
+    ["buildId: 'fixed' behind CloudFront", { buildId: 'fixed' }, /buildId: 'fixed'.*edge cache/],
+    ["buildId: 'fixed' behind the stacked door", { buildId: 'fixed', frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } }, /buildId: 'fixed'/],
+    ['the preview preset with a CloudFront door override', { ...HostingPresets.preview, frontDoor: 'cloudfront' }, /UnsupportedHostingSettingError|not available/],
+  ];
+  for (const [label, settings, message] of rejected) {
+    it(`fails synth: ${label}`, () => {
       createSpaBuildOutput(tmpDir);
-      const props: HostingProps = { root: tmpDir, api: MOCK_API, preview: true, frontDoor };
       assert.throws(
-        () => new Hosting(newStack(`PreviewDoor${label.replace(/\W/g, '')}`), 'Hosting', props),
-        (err: Error) => err.name === 'PreviewFrontDoorError' && /API Gateway door/.test(err.message),
+        () => new Hosting(newStack(`Rejected${label.replace(/\W/g, '')}`), 'Hosting', { ...settings, root: tmpDir, api: MOCK_API }),
+        (err: Error) => err.name === 'UnsupportedHostingSettingError' && message.test(`${err.name} ${err.message}`),
       );
     });
   }

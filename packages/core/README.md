@@ -422,28 +422,47 @@ Switching `frontDoor` on a deployed app replaces the front door: the URL changes
 The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
-#### Preview mode
+#### Preview mode and `HostingPresets`
 
-`preview: true` deploys a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes). It is opt-in and a decision in code: an app that wants a preview in some environments sets it from its own signal.
+`HostingPresets` are the hosting counterpart of `BlocksPresets`: plain bundles of `Hosting` props. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` is the full shape (it sets nothing). Spread one first and override settings after it:
 
 ```typescript
+import { Hosting, HostingPresets } from '@aws-blocks/core/cdk';
+
 new Hosting(stack, 'Web', {
+  ...(process.env.DEPLOY_ENV === 'preview' ? HostingPresets.preview : HostingPresets.production),
   root: join(__dirname, '..'),
   api: blocksStack,
-  preview: process.env.DEPLOY_ENV === 'preview',
 });
+
+// a preview that keeps image optimization
+new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, root, api: blocksStack });
 ```
 
-A preview is served by the API Gateway HTTP API door (no CloudFront; buffered server responses; about 6 MB per response). `frontDoor` may be omitted or set to an `apiGateway` door, for example with a custom domain; any other door fails synth (`PreviewFrontDoorError`). It also builds Next.js without incremental regeneration (prerendered pages still come from the build's snapshot), skips image optimization (the image endpoints serve the source image; `preview: { enabled: true, imageOptimization: true }` keeps it), runs Next.js `runtime: 'edge'` routes as regional functions, and fixes the build id so `startSandbox({ preview: true })` can hotswap a code-only re-deploy.
+`HostingPresets.preview` sets:
 
-From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app hosted in preview shape, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`) and hotswaps re-deploys. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only:
+| Prop | Value | Effect |
+|---|---|---|
+| `frontDoor` | `{ kind: 'apiGateway' }` | The API Gateway HTTP API door: no CloudFront; buffered server responses, about 6 MB each |
+| `imageOptimization` | `false` | No image function; the image endpoints serve the source image (a remote one is redirected only when its host is in the app's image allowlist, else 404) |
+| `incrementalRegeneration` | `false` | Next.js builds without the tag cache and revalidation queue; prerendered pages come from the build's snapshot |
+| `edgeRoutes` | `'regional'` | Next.js `runtime: 'edge'` routes run as regional Lambda functions, not Lambda@Edge |
+| `buildId` | `'fixed'` | One build id, overwritten in place, so re-deploys skip unchanged assets and can hotswap |
+
+Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door, and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
+
+From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`) and hotswaps re-deploys. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only:
 
 ```typescript
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
 const previewMode = app.node.tryGetContext('previewMode') === 'true';
 
 if (!sandboxMode || previewMode) {
-  new Hosting(blocksStack, 'Hosting', { root: join(__dirname, '..'), api: blocksStack, preview: previewMode });
+  new Hosting(blocksStack, 'Hosting', {
+    ...(previewMode ? HostingPresets.preview : HostingPresets.production),
+    root: join(__dirname, '..'),
+    api: blocksStack,
+  });
 }
 ```
 

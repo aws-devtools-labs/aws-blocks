@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "E2E test app for Blocks Hosting — preview mode (preview: true)",
+  "description": "E2E test app for Blocks Hosting — preview mode (HostingPresets.preview)",
   "workspaces": [
     "aws-blocks"
   ],
