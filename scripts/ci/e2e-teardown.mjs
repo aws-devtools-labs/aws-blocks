@@ -23,21 +23,28 @@
 //
 // It waits until each delete has started, not until it finishes: GitHub
 // force-stops a cancelled job 5 minutes after the cancel, and a production
-// stack takes ~12 minutes to delete. A delete that fails later is left to
-// cleanup-stacks.yml. What it can see fails the step: an unexpected sandbox id,
-// stacks it cannot list, a delete that is denied, or one that has not started
-// within the budget. A stack cancelled mid-create may keep reporting
-// CREATE_IN_PROGRESS while CloudFormation finishes in-flight resources before
-// the accepted delete; that is a warning.
+// stack takes ~12 minutes to delete. A delete that fails later is reported by
+// E2E Teardown Verify (see below) and reclaimed by cleanup-stacks.yml. What it
+// can see fails the step: an unexpected sandbox id, stacks it cannot list, a
+// delete that is denied, or one that has not started within the budget. A
+// stack cancelled mid-create may keep reporting CREATE_IN_PROGRESS while
+// CloudFormation finishes in-flight resources before the accepted delete; that
+// is a warning.
 // A passing job whose suite left a stack (its test.after destroy failed, which
 // node:test does not turn into a failed run) gets a warning and a new delete.
 //
+// With BLOCKS_SANDBOX_KEEP set the suite keeps its stacks on purpose, so this
+// step is the job's teardown: the job no longer waits ~12-22 minutes for the
+// delete, and E2E Teardown Verify waits for it instead. The stacks not yet gone
+// go to the `stacks` step output (space-separated) for that job.
+//
 // Env: JOB_STATUS (`job.status`), BLOCKS_STACK_SUFFIX (the job's, optional),
+// BLOCKS_SANDBOX_KEEP, GITHUB_OUTPUT,
 // E2E_TEARDOWN_BUDGET_SECONDS (default 85: with the calls a deadline lets
 // finish, under the step's 2-minute timeout).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -83,6 +90,7 @@ if (!appDir) {
 }
 const jobStatus = process.env.JOB_STATUS || 'unknown';
 const suffix = process.env.BLOCKS_STACK_SUFFIX || '';
+const kept = Boolean(process.env.BLOCKS_SANDBOX_KEEP);
 const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 85) * 1000;
 const pollMs = Number(process.env.E2E_TEARDOWN_POLL_MS ?? 10_000);
 
@@ -164,12 +172,21 @@ async function main() {
 	}
 
 	let failed = false;
+	// Every stack not yet gone, for E2E Teardown Verify (it also reports the
+	// ones this step already failed on). Written after each stack, so a step cut
+	// off by its timeout still hands over what it got to; the last line wins.
+	const left = [];
+	const hand = (name) => {
+		left.push(name);
+		if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `stacks=${left.join(' ')}\n`);
+	};
 	for (const { StackName: name, StackStatus: was } of mine) {
 		if (was !== 'DELETE_IN_PROGRESS') {
 			const res = await awsRetry(name, 'delete-stack', '--stack-name', name);
 			if (!res.ok) {
 				error(`DeleteStack ${name} (was ${was}) failed: ${res.err}`);
 				failed = true;
+				hand(name);
 				continue;
 			}
 		}
@@ -181,6 +198,7 @@ async function main() {
 			await sleep(pollMs);
 			now = statusOf(name);
 		}
+		if (now !== 'gone') hand(name);
 		if (now === 'CREATE_IN_PROGRESS' || now === 'REVIEW_IN_PROGRESS') {
 			warning(`DeleteStack ${name} accepted; still ${now}, CloudFormation deletes it once the create stops.`);
 			continue;
@@ -188,6 +206,10 @@ async function main() {
 		if (now !== 'DELETE_IN_PROGRESS' && now !== 'gone') {
 			error(`${name} (was ${was}) is ${now} after DeleteStack; cleanup-stacks.yml retries it.`);
 			failed = true;
+			continue;
+		}
+		if (kept) {
+			console.log(`Deleting ${name} (was ${was}, now ${now}); E2E Teardown Verify waits for the delete.`);
 			continue;
 		}
 		const why = jobStatus === 'success' ? "the tests passed but the suite's own destroy left it" : `this ${jobStatus} job left it`;

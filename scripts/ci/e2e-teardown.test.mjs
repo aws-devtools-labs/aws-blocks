@@ -61,7 +61,7 @@ switch (args[1]) {
 }
 `;
 
-function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suffix = '', ...extra } = {}) {
+function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suffix = '', keep = '', ...extra } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'e2e-teardown-'));
 	const app = join(dir, 'app');
 	mkdirSync(app);
@@ -77,6 +77,8 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suff
 	const logPath = join(dir, 'calls.log');
 	writeFileSync(statePath, JSON.stringify({ stacks, ...extra }));
 	writeFileSync(logPath, '');
+	const outputPath = join(dir, 'github-output');
+	writeFileSync(outputPath, '');
 	const r = spawnSync(process.execPath, [SCRIPT, app], {
 		encoding: 'utf8',
 		env: {
@@ -86,6 +88,8 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suff
 			FAKE_AWS_LOG: logPath,
 			JOB_STATUS: jobStatus,
 			BLOCKS_STACK_SUFFIX: suffix,
+			BLOCKS_SANDBOX_KEEP: keep,
+			GITHUB_OUTPUT: outputPath,
 			E2E_TEARDOWN_BUDGET_SECONDS: budget,
 			E2E_TEARDOWN_POLL_MS: '10',
 		},
@@ -95,7 +99,8 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suff
 		.filter(Boolean)
 		.map((l) => JSON.parse(l));
 	const state = JSON.parse(readFileSync(statePath, 'utf8'));
-	return { ...r, out: r.stdout + r.stderr, calls, state };
+	const output = readFileSync(outputPath, 'utf8');
+	return { ...r, out: r.stdout + r.stderr, calls, state, output };
 }
 
 const deletes = (calls) => calls.filter((c) => c[1] === 'delete-stack').map((c) => c[c.indexOf('--stack-name') + 1]);
@@ -334,6 +339,46 @@ describe('e2e-teardown.mjs', () => {
 		assert.deepEqual(r.calls, []);
 		assert.match(r.out, /::error title=E2E teardown::Unexpected BLOCKS_STACK_SUFFIX 'pr-\.\*'/);
 	});
+
+	it('deletes a stack the suite kept (BLOCKS_SANDBOX_KEEP) without a warning, and outputs it', () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name)], jobStatus: 'success', keep: '1' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [name]);
+		assert.doesNotMatch(r.out, /::warning/);
+		assert.match(r.out, /E2E Teardown Verify waits for the delete/);
+		assert.equal(r.output, `stacks=${name}\n`);
+	});
+
+	it('hands the kept production stack, named with the salt only, to E2E Teardown Verify', () => {
+		// E2E Production's shape: KEEP, the job's suffix, bb-test-prod-<suffix>-<salt>.
+		const name = `bb-test-prod-pr-9-1-${SALT}`;
+		const r = run({ suffix: 'pr-9-1', stacks: [stack(name)], jobStatus: 'success', keep: '1' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [name]);
+		assert.equal(r.output, `stacks=${name}\n`);
+	});
+
+	it('outputs every stack that is not gone, including one it failed on, for E2E Teardown Verify', () => {
+		const [denied, deleting, quick] = [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${SALT}`, `bb-test-${ID}-pr-9-1-vpc-ref`];
+		const r = run({
+			suffix: 'pr-9-1',
+			stacks: [stack(denied), stack(deleting, 'DELETE_IN_PROGRESS'), stack(quick)],
+			deleteErrors: { [denied]: ['An error occurred (AccessDenied) when calling the DeleteStack operation: denied'] },
+			// The delete of `quick` finishes before the first poll.
+			statusAfterDelete: 'DELETE_COMPLETE',
+			keep: '1',
+		});
+		assert.equal(r.status, 1, r.out);
+		// One line per stack handed over; GitHub keeps the last.
+		assert.equal(r.output.trim().split('\n').at(-1), `stacks=${denied} ${deleting}`);
+	});
+
+	it('outputs no stack when the suite cleaned up', () => {
+		const r = run({ stacks: [], jobStatus: 'success', keep: '1' });
+		assert.equal(r.status, 0, r.out);
+		assert.doesNotMatch(r.output, /stacks=\S/);
+	});
 });
 
 describe('pr-checks.yml', () => {
@@ -358,6 +403,7 @@ describe('pr-checks.yml', () => {
 	const NO_STACK = {
 		'e2e-supabase': 'reads a secret; the database is external',
 		'e2e-sandbox-vpc': 'deploys only the persistent shared VPC, which must survive; its suite is a skip today',
+		'teardown-verify': 'deploys nothing; waits for the deletes the E2E jobs started',
 	};
 
 	it('lists only real jobs as stack-free', () => {
@@ -393,6 +439,61 @@ describe('pr-checks.yml', () => {
 			assert.ok(creds >= 0 && creds < steps.length - 1, `${id}: the teardown must come after the credentials step`);
 		});
 	}
+
+	// The jobs whose suite keeps its stacks and whose teardown doesn't wait for
+	// the delete: E2E Teardown Verify must wait for each of them.
+	const ASYNC = ['e2e-sandbox', 'e2e-production', 'e2e-compute-smoke'];
+	const teardownStep = (id) => stepsOf(jobs[id]).find((st) => /run: node scripts\/ci\/e2e-teardown\.mjs /.test(st));
+
+	it('finds every job that leaves its delete to E2E Teardown Verify', () => {
+		const keeping = deploying.filter((id) => /^ {6}BLOCKS_SANDBOX_KEEP: '1'$/m.test(jobs[id]) && teardownStep(id));
+		assert.deepEqual(keeping.sort(), [...ASYNC].sort());
+	});
+
+	for (const id of ASYNC) {
+		it(`${id} keeps its stacks and hands the teardown's stacks to E2E Teardown Verify`, () => {
+			const head = jobs[id].slice(0, jobs[id].indexOf('\n    steps:\n'));
+			assert.match(head, /^ {4}env:\n(?: {6}.*\n)*? {6}BLOCKS_SANDBOX_KEEP: '1'$/m, `${id}: set BLOCKS_SANDBOX_KEEP in the job env`);
+			assert.match(head, /^ {4}outputs:\n {6}teardown-stacks: \$\{\{ steps\.teardown\.outputs\.stacks \}\}$/m);
+			assert.match(teardownStep(id), /^ {8}id: teardown$/m);
+		});
+	}
+
+	describe('teardown-verify', () => {
+		const job = jobs['teardown-verify'];
+		const steps = stepsOf(job);
+
+		it('waits for the stacks of every job that leaves its delete to it', () => {
+			const needs = job.match(/^ {4}needs: \[(.*)\]$/m)[1].split(/,\s*/);
+			for (const id of ['detect-changes', ...ASYNC]) assert.ok(needs.includes(id), `needs ${id}`);
+			const wait = steps.at(-1);
+			assert.match(wait, /run: node scripts\/ci\/e2e-stack-wait\.mjs \$STACKS\n/);
+			for (const id of ASYNC) {
+				assert.ok(wait.includes(`\${{ needs.${id}.outputs.teardown-stacks }}`), `passes ${id}'s stacks`);
+				assert.ok(job.includes(`needs.${id}.outputs.teardown-stacks != ''`), `runs when ${id} left stacks`);
+			}
+		});
+
+		it('runs unless the run is cancelled, only for same-repo PRs, in the e2e environment', () => {
+			const cond = job.match(/^ {4}if: >-\n((?: {6}.*\n)+)/m)[1].replace(/\s+/g, ' ').trim();
+			assert.ok(cond.startsWith("!cancelled() && github.event.pull_request.head.repo.full_name == github.repository && ("), cond);
+			assert.match(job, /^ {4}environment: e2e$/m);
+			assert.match(job, /^ {4}permissions:\n {6}contents: read\n {6}id-token: write {2}# .*\n/m);
+			assert.ok(steps.some((st) => st.includes(CREDENTIALS)));
+		});
+
+		it('passes stack names through env, never into the shell text', () => {
+			for (const st of steps) {
+				const run = st.match(/^ {8}run: (.*)$/m)?.[1] ?? '';
+				assert.doesNotMatch(run, /\$\{\{/);
+			}
+		});
+
+		it('is not part of the Build and Test gate', () => {
+			const gate = jobs['build-and-test'].match(/^ {4}needs: \[(.*)\]$/m)[1];
+			assert.doesNotMatch(gate, /teardown-verify/);
+		});
+	});
 
 	for (const id of ['e2e-sandbox', 'e2e-production']) {
 		it(`${id} refreshes credentials for the teardown, skips it when nothing was synthesized, and bounds it`, () => {
