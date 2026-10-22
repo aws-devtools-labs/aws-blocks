@@ -65,6 +65,28 @@ export function runOrThrow(cmd, args, opts = {}, root) {
 }
 
 /**
+ * Run a teardown command without throwing, so a failed destroy can't mask the
+ * phase's own result or skip the next teardown. A spawn error or a non-zero
+ * exit is pushed onto `failures` so the caller can fail the job at the end.
+ *
+ * {@link runSpawn} returns the spawnSync result and never throws on a non-zero
+ * exit, so the result must be checked here: wrapping it in try/catch alone
+ * missed every failed `sandbox:destroy` and the job stayed green with a stack
+ * left deployed.
+ */
+export function runTeardown(cmd, args, opts = {}, root, failures) {
+	console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? root})`);
+	const r = runSpawn(cmd, args, opts, root, { log: false });
+	let reason = null;
+	if (r.error) reason = r.error.message;
+	else if (r.status !== 0) reason = r.status === null ? `terminated by signal ${r.signal}` : `exited with ${r.status}`;
+	if (reason === null) return;
+	const failure = `${cmd} ${args.join(' ')}: ${reason}`;
+	failures.push(failure);
+	console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
+}
+
+/**
  * Probe a URL once. Returns false on any network error (never throws).
  *
  * @param okOnly when true, only a 2xx response counts as up (matches the old

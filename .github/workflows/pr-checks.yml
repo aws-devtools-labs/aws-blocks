@@ -290,6 +290,11 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      # The Windows E2E driver's teardown failure reporting and the stack tag
+      # cleanup-stacks.yml needs to reclaim a stack it leaks.
+      - name: Test the CI template driver helpers
+        run: node --test scripts/ci/_proc.test.mjs scripts/ci/_scaffold-tag.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
