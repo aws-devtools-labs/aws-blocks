@@ -252,6 +252,11 @@ jobs:
       - name: Check packed Lambda assets
         run: npm run check:packed-assets
 
+      # The Windows E2E driver's rewrite that keeps its production deploy from
+      # leaking retained resources (it runs on a schedule, not on PRs).
+      - name: Test the Windows E2E scaffold teardown helper
+        run: node --test scripts/ci/_scaffold-teardown.test.mjs
+
       - name: Check API backward compatibility
         run: npm run check:api
 
