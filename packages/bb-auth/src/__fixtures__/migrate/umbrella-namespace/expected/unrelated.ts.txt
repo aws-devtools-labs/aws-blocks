@@ -1,0 +1,4 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+export const notes = new blocks.KVStore(scope, 'notes');
