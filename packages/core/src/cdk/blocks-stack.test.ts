@@ -399,3 +399,18 @@ describe('a namespace bound to another backend is not routed (multi-backend synt
 		assert.ok(!routedPathParts(Template.fromStack(parent)).includes('reports'), "no route for 'reports'");
 	});
 });
+
+describe('AWSBlocks template metadata (BlocksStack.create)', () => {
+	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
+
+	test('writes AWSBlocks by default', async () => {
+		const stack = await makeStack(new cdk.App(), 'MetadataOnStack', sideEffectBackendPath);
+		assert.match(toolsMetrics(stack)?.AWSBlocks, /^1;core=[^;]+;mode=production;bb=[^;]*;custom=\d+$/);
+	});
+
+	test('omits AWSBlocks when context blocks:template-metadata is false', async () => {
+		const app = new cdk.App({ context: { 'blocks:template-metadata': false } });
+		const stack = await makeStack(app, 'MetadataOffStack', sideEffectBackendPath);
+		assert.strictEqual(toolsMetrics(stack), undefined);
+	});
+});
