@@ -111,7 +111,6 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
     readonly options: O;
     rememberDevice(context: BlocksContext): Promise<void>;
     requireAuth(context: BlocksContext): Promise<CognitoUser<O>>;
-    // (undocumented)
     requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>>;
     resendSignUpCode(username: string): Promise<void>;
     resetPassword(username: string): Promise<ResetPasswordResult>;

@@ -13,7 +13,10 @@
  * **Why use this over self-hosted?**
  * - Cognito owns the security surface (SOC 2, HIPAA-eligible)
  * - No `openid-client` / JWKS / PKCE code runs in your Lambda
- * - Cognito handles token rotation, MFA (if configured), and brute-force protection
+ * - Cognito handles token rotation
+ * - Note: Cognito does NOT apply MFA, device tracking, or adaptive authentication
+ *   to federated users — it delegates all authentication to the IdP. MFA must be
+ *   enforced at the IdP.
  *
  * **Tradeoffs:**
  * - Adds a Cognito User Pool to your stack (1-3 min deploy time)

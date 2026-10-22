@@ -1213,6 +1213,8 @@ export const AuthCognitoErrors = {
  *     input shape was rejected before the session was consumed. Envelope
  *     is still valid; caller just has to submit a better input. Covers
  *     the BB's own pre-flight checks too.
+ *   - `InternalErrorException` — a transient Cognito service fault, not a
+ *     verdict on the input; the same request is safe to retry with backoff.
  *
  * Non-retriable (session is gone, caller must restart):
  *
@@ -1230,6 +1232,7 @@ export function isRetriableAuthError(name: string): boolean {
 		case AuthCognitoErrors.EnableSoftwareTokenMFA:
 		case AuthCognitoErrors.InvalidParameter:
 		case AuthCognitoErrors.InvalidPassword:
+		case AuthCognitoErrors.InternalError:
 			return true;
 		default:
 			return false;
