@@ -35,9 +35,11 @@
  *     `x-forwarded-host`, so the server builds absolute URLs on the public
  *     host, not the router's;
  *   - for the API paths, no caching at all (as on the CloudFront door);
- *   - for static and image routes the router serves (beyond the behavior
- *     budget, or image optimization), the origin's TTLs with no cookies in the
- *     key, so visitors with different cookies share one cached object;
+ *   - for image routes, and for the router default of a site without a server
+ *     (the static routes beyond the behavior budget go there), the origin's
+ *     TTLs with no cookies in the key, so visitors with different cookies
+ *     share one cached object. With a server, those static routes share the
+ *     server's default (cookies keyed, the origin's `Cache-Control` honored);
  *   - the security headers (HSTS, X-Frame-Options, …) the ALB can't inject;
  *   - the BYO CLOUDFRONT-scoped web ACL (`webAclArn`), when the app brings one —
  *     the router carries its own regional WAF separately. Building a web ACL and
@@ -234,7 +236,11 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     for (const [pattern, target] of plan.behaviors) additionalBehaviors[pattern] = behaviorFor(target);
     const distribution = new Distribution(scope, 'CfOverAlb', {
       comment: 'Blocks composed CF → ALB edge (static from S3, the rest through the ALB router)',
-      defaultBehavior: behaviorFor(plan.defaultTarget),
+      // A site without a server has nothing per-visitor behind the router
+      // default (static files the behavior budget left out, and the API, which
+      // sends no `Cache-Control` so is never cached): no cookies in its key.
+      defaultBehavior:
+        plan.defaultTarget === 'router' && !origins.server ? routerAssetBehavior() : behaviorFor(plan.defaultTarget),
       // The S3 default (a site without a server) is listable; the function
       // turns every path into a file key (a trailing `/` gets `index.html`), and
       // the root object keeps the bare `/` off the bucket listing too.

@@ -662,9 +662,11 @@ session cookie is then set by the API's own HTTPS response.
   for the build's uploads, the resolved runtime config included. The app's
   header rules and error pages apply at the edge to every response.
 - **Caching.** The API is never cached at the edge. Server-rendered routes
-  honor the server's `Cache-Control` and key on cookies; image routes and
-  static routes the router serves honor the origin's TTLs without cookies in
-  the key. An app with a server gets a CloudFront invalidation on each deploy
+  honor the server's `Cache-Control` and key on cookies; image routes honor
+  the origin's TTLs without cookies in the key, and so does the router default
+  of a site without a server (where static routes beyond the behavior budget
+  go). With a server, those static routes share the server's default (cookies
+  in the key). An app with a server gets a CloudFront invalidation on each deploy
   (`manifest.invalidationPaths`, else `/*`), after the new build and server are
   live. The router sees the public host in `x-forwarded-host`.
 - **Behavior budget.** A distribution allows 25 behaviors, the default
