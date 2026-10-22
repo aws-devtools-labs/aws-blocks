@@ -204,6 +204,7 @@ export interface AuthOptions {
     admin?: AdminOptions;
     allowBearerAuth?: boolean | BearerAuthOptions;
     deletionProtection?: boolean;
+    email?: EmailSenderOptions;
     emailPassword?: boolean | EmailPasswordOptions;
     featurePlan?: 'lite' | 'essentials' | 'plus';
     hostedUi?: HostedUiOptions;
@@ -397,6 +398,16 @@ export interface EmailPasswordOptions {
     passwordPolicy?: PasswordPolicy;
     revealExistingUsers?: boolean;
     selfSignUp?: boolean;
+}
+
+// @public
+export interface EmailSenderOptions {
+    configurationSetName?: string;
+    fromAddress: string;
+    fromName?: string;
+    replyTo?: string;
+    sesRegion?: string;
+    sesVerifiedDomain?: string;
 }
 
 // @public

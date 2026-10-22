@@ -432,9 +432,9 @@ export const SOCIAL_IDPS: Readonly<Record<string, 'google' | 'facebook' | 'amazo
 /** Printed once at the end of a run, for anything that can delete user data on deploy. */
 export const SUMMARY_WARNINGS = {
 	emailOtpOwnPool: [
-		"WARNING: preferredChallenge 'EMAIL_OTP' (see the TODO). Do not wrap the block's own user pool with",
-		'  userPool: Auth.fromExisting(<its pool id>) to keep it: that removes the pool from the stack, and the deploy',
-		'  deletes it and every user in it. Drop preferredChallenge for the first deploy instead (MIGRATION.md, "AuthCognito").',
+		"WARNING: preferredChallenge 'EMAIL_OTP' (see the TODO). Give the pool an Amazon SES sender with email: { fromAddress }.",
+		"  Do not wrap the block's own user pool with userPool: Auth.fromExisting(<its pool id>) to keep it: that removes",
+		'  the pool from the stack, and the deploy deletes it and every user in it (MIGRATION.md, "AuthCognito").',
 	],
 } as const;
 
@@ -484,12 +484,12 @@ export const TODOS = {
 	socialRenamed: (from: string, to: string): string =>
 		`the provider id changes from '${from}' to '${to}' (social provider ids are fixed): update signIn:${from} / getSignInUrl(…, '${from}') references.`,
 	emailOtpNeedsSes: [
-		"preferredChallenge 'EMAIL_OTP' needs a pool with an Amazon SES sender: Auth refuses it at synth on a pool it creates.",
+		"preferredChallenge 'EMAIL_OTP' needs an Amazon SES sender: Auth refuses it at synth on a pool it creates without one.",
+		"Add email: { fromAddress: '<a verified SES address>' } to these options (an in-place pool update; see the README,",
+		'"Sign-up and email delivery"). No verified SES identity yet? Drop preferredChallenge for the first deploy instead.',
 		"WARNING: do NOT wrap this block's OWN pool with userPool: Auth.fromExisting(<its pool id>). The block then no longer",
 		"owns `pool`, so it leaves the template, and this deploy DELETES the pool and every user in it (AuthCognito's pool was",
-		"destroy unless removalPolicy: 'retain'). Nothing refuses that on the first Auth synth. For the first deploy, drop",
-		'preferredChallenge (or pick another first factor), deploy, and commit aws-blocks/baselines/. To wrap an SES pool',
-		'later, see MIGRATION.md ("AuthCognito") and the retain + cdk import runbook in the @aws-blocks/bb-auth DESIGN.md.',
+		"destroy unless removalPolicy: 'retain'). Nothing refuses that on the first Auth synth.",
 	],
 	authFlowUnsupported:
 		"Auth supports authFlow 'USER_PASSWORD_AUTH' and 'USER_AUTH' only (AuthCognito rejected this value at synth too).",

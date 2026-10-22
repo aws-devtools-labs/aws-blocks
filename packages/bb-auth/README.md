@@ -12,7 +12,7 @@ Every sign-in method is a key on the same options object, and you can combine th
 
 | Option | Configure with | What it's for | Cognito pricing | Works offline in `npm run dev` | Cognito groups / `auth.admin` | MFA | PKCE-only IdPs |
 |---|---|---|---|---|---|---|---|
-| **Email + password** | `emailPassword` (on by default) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes — a local user pool in `.bb-data/` | Yes | Yes — Cognito MFA through `mfa` (TOTP or SMS; email MFA needs an SES-configured pool via `Auth.fromExisting`) | — |
+| **Email + password** | `emailPassword` (on by default) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes — a local user pool in `.bb-data/` | Yes | Yes — Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | — |
 | **Social** | `socialProviders` (`google`, `apple`, `facebook`, `amazon`) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No — sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — |
 | **Generic OIDC, `federateVia: 'direct'`** (the default) | `oidcProviders` (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge — these users never touch Cognito | Yes — with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes — omit `clientSecret` |
 | **Generic OIDC, `federateVia: 'cognito'`** | `oidcProviders` entry with `federateVia: 'cognito'` | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | No — Cognito requires a client secret |
@@ -127,7 +127,22 @@ The option groups and the method surface are documented in the JSDoc of the expo
 
 Every self-service sign-up confirms the email address with an emailed code. With `emailPassword.autoSignIn` (on by default), the user is then signed in without typing their password again — the code itself is still required.
 
-Cognito's default email sender is limited to 50 emails per day (confirmation, password-reset and email-MFA codes all count). That is enough for development, not for production. `AuthOptions` does not configure Amazon SES yet; to send at volume today, configure SES on a pool you manage and wrap it with `userPool: Auth.fromExisting(userPoolId, clientId)`.
+Cognito's default email sender is limited to 50 emails per day (confirmation, password-reset and email-MFA codes all count). That is enough for development, not for production. Before launch, send through your own Amazon SES identity with `email`:
+
+```ts
+import { Auth } from '@aws-blocks/bb-auth';
+
+const auth = new Auth(scope, 'auth', {
+  email: { fromAddress: 'no-reply@example.com', fromName: 'Example App' },
+});
+```
+
+- **Verify the sender in SES first,** in the pool's Region (or set `sesRegion`): the address itself, or its domain with `sesVerifiedDomain: 'example.com'`. A new SES account is in the sandbox and only delivers to verified recipients, so request SES production access before real users sign up. The same verified address can serve an `EmailClient` (its `fromAddress`).
+- **Optional:** `replyTo`, and `configurationSetName` for SES event publishing or a dedicated IP pool.
+- **It also unlocks the email factors:** email MFA (`mfa: { types: ['EMAIL', …] }`) and `users.preferredChallenge: 'EMAIL_OTP'` need an SES sender, and synth refuses them on a pool this block creates without one.
+- **Safe to add later:** it updates the pool in place, and no user, session or token is affected. On that first deploy Cognito creates its email service-linked role, so the deploying role needs `iam:CreateServiceLinkedRole` (CDK's default deployment role has it).
+- Only for a pool this block creates. With `userPool: Auth.fromExisting(…)`, configure SES on that pool yourself.
+- Locally (`npm run dev`) nothing changes: codes are delivered as before (`codeDelivery`), without SES.
 
 ## One sign-up and sign-in policy: `validateUser`
 

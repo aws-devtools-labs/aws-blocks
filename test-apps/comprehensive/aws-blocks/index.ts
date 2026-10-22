@@ -244,8 +244,8 @@ const authC = new Auth(scope, 'authC', {
 // issue a TOTP challenge once the user enrolls.
 //
 // Only `TOTP` in `types` (stated explicitly: `Auth` would otherwise default to
-// SMS + TOTP) — AWS Cognito Email MFA requires an SES-backed sender which the
-// BB doesn't expose. TOTP has no such external dependency and exercises the
+// SMS + TOTP) — AWS Cognito Email MFA requires an SES-backed sender (`email`),
+// which this test app doesn't set up. TOTP has no such external dependency and exercises the
 // full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn round-trip.
 const authCMfa = new Auth(scope, 'authCMfa', {
   emailPassword: {

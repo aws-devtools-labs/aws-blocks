@@ -48,6 +48,7 @@ import {
 	stubIdpConfigKeys,
 } from './cdk/contract.js';
 import { lazyBackendApiUrl } from './cdk/api-url.js';
+import { assertEmailSender, mapEmailSender } from './cdk/email-sender.js';
 import { provisionHostedUiFederation } from './cdk/federation.js';
 import { guardUserPool } from './cdk/immutability-guard.js';
 import {
@@ -148,6 +149,8 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		const preSignUpTrigger = ownsPreSignUpTrigger(opts);
 
 		validateOptions(opts, { needsPool, mfaMode: mfa.mode, mfaTypes: mfa.types, emailPassword });
+		// The SES sender (L75): only for a pool this block creates, and well-formed.
+		assertEmailSender(this.fullId, opts, needsPool);
 		// Extra bearer clients: literal Cognito client ids, and only with a pool to issue them.
 		assertBearerClientIds(this.fullId, opts);
 		if (!needsPool && bearerClientIds(opts).length > 0) {
@@ -170,19 +173,19 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		}
 
 		if (needsPool) {
-			// Email MFA on a BB-created pool needs an SES sender, which AuthOptions
-			// does not expose. Only trips when EMAIL would actually be advertised.
-			if (mfa.mode !== 'off' && mfa.types.includes('EMAIL') && !opts.userPool) {
+			// Email MFA on a BB-created pool needs an SES sender (`email`, L75).
+			// Only trips when EMAIL would actually be advertised.
+			if (mfa.mode !== 'off' && mfa.types.includes('EMAIL') && !opts.userPool && !opts.email) {
 				throw new Error(
-					"Auth: Email MFA on a BB-created pool requires an SES `email` configuration, which AuthOptions does not expose. Workarounds: (a) omit 'EMAIL' from `mfa.types` and use TOTP / SMS, or (b) bring a pre-configured pool via `Auth.fromExisting(userPoolId)`.",
+					"Auth: Email MFA on a BB-created pool requires an SES sender: set `email: { fromAddress }` to a verified SES identity. Alternatives: (a) omit 'EMAIL' from `mfa.types` and use TOTP / SMS, or (b) bring a pool you configure yourself via `Auth.fromExisting(userPoolId)`.",
 				);
 			}
 			// The same rule for the passwordless email one-time code (L22): Cognito
 			// sends a USER_AUTH `EMAIL_OTP` first factor only through SES. Only trips
 			// when the factor would actually be enabled (USER_AUTH on a created pool).
-			if (preferredChallenge === 'EMAIL_OTP' && authFlow === 'USER_AUTH' && !opts.userPool) {
+			if (preferredChallenge === 'EMAIL_OTP' && authFlow === 'USER_AUTH' && !opts.userPool && !opts.email) {
 				throw new Error(
-					"Auth: `users.preferredChallenge: 'EMAIL_OTP'` on a BB-created pool requires an SES `email` configuration, which AuthOptions does not expose. Workarounds: (a) use 'PASSWORD', 'SMS_OTP' or 'WEB_AUTHN' as the preferred first factor, or (b) bring a pre-configured pool via `Auth.fromExisting(userPoolId)`.",
+					"Auth: `users.preferredChallenge: 'EMAIL_OTP'` on a BB-created pool requires an SES sender: set `email: { fromAddress }` to a verified SES identity. Alternatives: (a) use 'PASSWORD', 'SMS_OTP' or 'WEB_AUTHN' as the preferred first factor, or (b) bring a pool you configure yourself via `Auth.fromExisting(userPoolId)`.",
 				);
 			}
 
@@ -217,6 +220,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 							: undefined,
 						// Pinned explicitly — see `mapFeaturePlan`.
 						featurePlan: mapFeaturePlan(opts.featurePlan),
+						// L75: SES sender. Unset emits no `EmailConfiguration` (Cognito's
+						// default sender), so the zero-config pool stays `AuthCognito`'s.
+						email: mapEmailSender(opts.email, cdk.Stack.of(this).region),
 						// USER_AUTH first factors. As in `AuthCognito`, the OTP factors
 						// follow the second factors the caller *listed* (not the defaulted
 						// `mfa.types`), plus the pool's `users.preferredChallenge` (L22,
