@@ -3,10 +3,6 @@
 
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { spawnSync } from 'node:child_process';
-import { rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -14,6 +10,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { clearRouteRegistry } from '@aws-blocks/core';
 import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { AuthCognito } from './index.cdk.js';
+import { synthUnderCdkConditions } from './test-support/cdk-synth.js';
 
 beforeEach(() => {
 	clearRouteRegistry();
@@ -57,83 +54,43 @@ function scope(stack: cdk.Stack): ScopeParent {
 	return stack as unknown as ScopeParent;
 }
 
+/** Synth `new AuthCognito(stack, 'auth')` under `--conditions=cdk`; see `test-support/cdk-synth.ts`. */
+function synthDefaultUnderCdkConditions() {
+	return synthUnderCdkConditions({
+		imports: "import { AuthCognito } from '@aws-blocks/bb-auth-cognito';",
+		build: "new AuthCognito(stack, 'auth');",
+	});
+}
+
 /**
- * Synth `AuthCognito` in a child process started with `--conditions=cdk` and
- * return every DynamoDB table in the resulting template.
- *
- * Needed because this test file imports `./index.cdk.js` directly, which leaves
- * nested blocks (`KVStore`, `AppSetting`) resolving to their mock entry points —
- * those emit no CloudFormation. Only the real condition-based resolution shows
- * the nested infrastructure a customer actually deploys.
- *
- * Runs against the built `dist/`, which the package's own test script requires
- * anyway (`node --test dist/**\/*.test.js`).
- *
- * Passing `sessionStore` exercises the standalone SessionStore constructor instead.
+ * Synth `new AuthCognito(stack, 'auth')`, or a standalone `SessionStore` when
+ * `sessionStore` is given, and return every DynamoDB table with its TTL setting.
  */
-function synthUnderCdkConditions(sessionStore?: { ttlSeconds?: number }): { id: string; timeToLive: unknown }[] {
-	const construct =
-		sessionStore === undefined
-			? "new AuthCognito(stack, 'auth');"
-			: `new SessionStore(stack, 'standalone-sessions', ${sessionStore.ttlSeconds});`;
-	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
-	writeFileSync(probe, `
-import * as cdk from 'aws-cdk-lib';
-import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Template } from 'aws-cdk-lib/assertions';
-import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AuthCognito, SessionStore } from '@aws-blocks/bb-auth-cognito';
-
-const app = new cdk.App();
-const stack = new cdk.Stack(app, 'TestStack');
-const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
-	assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
-});
-const handler = new lambda.Function(stack, 'Handler', {
-	runtime: DEFAULT_NODE_RUNTIME,
-	handler: 'index.handler',
-	code: lambda.Code.fromInline('exports.handler = async () => {};'),
-	role: executionRole,
-});
-stack.handler = handler;
-stack.executionRole = executionRole;
-globalThis.CURRENT_BLOCKS_STACK = stack;
-${construct}
-finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
-
-const resources = Template.fromStack(stack).toJSON().Resources;
-const tables = Object.entries(resources)
-	.filter(([, r]) => r.Type === 'AWS::DynamoDB::Table')
-	.map(([id, r]) => ({ id, timeToLive: r.Properties.TimeToLiveSpecification }));
-console.log('__TABLES__' + JSON.stringify(tables));
-`);
-	try {
-		const result = spawnSync(process.execPath, ['--conditions=cdk', probe], { encoding: 'utf8' });
-		assert.strictEqual(
-			result.status,
-			0,
-			`real-CDK probe failed (build dist first: npm run build -w packages/bb-auth-cognito)\n${result.stderr}`,
-		);
-		const marker = result.stdout.split('__TABLES__')[1];
-		assert.ok(marker, `probe produced no table report\n${result.stdout}\n${result.stderr}`);
-		return JSON.parse(marker.trim());
-	} finally {
-		rmSync(probe, { force: true });
-	}
+function synthTablesUnderCdkConditions(sessionStore?: { ttlSeconds?: number }): { id: string; timeToLive: unknown }[] {
+	const { template } = synthUnderCdkConditions({
+		imports: "import { AuthCognito, SessionStore } from '@aws-blocks/bb-auth-cognito';",
+		build:
+			sessionStore === undefined
+				? "new AuthCognito(stack, 'auth');"
+				: `new SessionStore(stack, 'standalone-sessions', ${sessionStore.ttlSeconds});`,
+	});
+	return Object.entries(template.Resources)
+		.filter(([, r]) => r.Type === 'AWS::DynamoDB::Table')
+		.map(([id, r]) => ({ id, timeToLive: (r.Properties as Record<string, unknown> | undefined)?.TimeToLiveSpecification }));
 }
 
 // ─── Standalone session retention ───────────────────────────────────────────
 
 describe('SessionStore (CDK) — retention', () => {
 	test('a positive session lifetime enables DynamoDB TTL on the standalone table', () => {
-		const tables = synthUnderCdkConditions({ ttlSeconds: 3600 });
+		const tables = synthTablesUnderCdkConditions({ ttlSeconds: 3600 });
 		assert.strictEqual(tables.length, 1);
 		assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: 'ttl', Enabled: true });
 	});
 
 	for (const ttlSeconds of [undefined, 0, -1]) {
 		test(`session lifetime ${ttlSeconds} leaves DynamoDB TTL disabled`, () => {
-			const tables = synthUnderCdkConditions({ ttlSeconds });
+			const tables = synthTablesUnderCdkConditions({ ttlSeconds });
 			assert.strictEqual(tables.length, 1);
 			assert.strictEqual(tables[0].timeToLive, undefined);
 		});
@@ -316,7 +273,10 @@ describe('AuthCognito (CDK) — session store', () => {
 	// use (see the note above) — so synth it in a child process started with
 	// `--conditions=cdk`, exactly how a customer's `cdk synth` resolves it.
 	test('sessions table is provisioned with DynamoDB TTL enabled (real CDK resolution)', () => {
-		const tables = synthUnderCdkConditions();
+		const { template } = synthDefaultUnderCdkConditions();
+		const tables = Object.entries(template.Resources)
+			.filter(([, r]) => r.Type === 'AWS::DynamoDB::Table')
+			.map(([id, r]) => ({ id, timeToLive: r.Properties?.TimeToLiveSpecification }));
 		assert.strictEqual(tables.length, 1, `expected exactly one DynamoDB table, got ${JSON.stringify(tables)}`);
 		assert.deepStrictEqual(
 			tables[0].timeToLive,

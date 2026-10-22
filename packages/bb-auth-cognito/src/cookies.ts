@@ -30,6 +30,24 @@ function cookieName(fullId: string): string {
 }
 
 /**
+ * Write one cookie's `Set-Cookie` line without disturbing the others on the
+ * response. `Headers.set('Set-Cookie', …)` replaces EVERY `Set-Cookie` value,
+ * so a plain `set` here would silently drop a cookie written earlier in the
+ * same request — e.g. the auto-sign-in bridge clear that `autoSignIn` appends
+ * just before the session cookie is issued. Only an earlier line for the same
+ * cookie name is replaced (the newest write wins, as a browser would apply it).
+ *
+ * The new line is written with `set` and the survivors re-appended after it,
+ * so callers that only observe `set` still see this cookie.
+ */
+function putSetCookie(ctx: BlocksContext, name: string, line: string): void {
+	const headers = ctx.response.headers;
+	const others = headers.getSetCookie().filter((l) => !l.startsWith(`${name}=`));
+	headers.set('Set-Cookie', line);
+	for (const l of others) headers.append('Set-Cookie', l);
+}
+
+/**
  * HMAC-sign an opaque session ID so tampering with the cookie is detectable.
  * Output format: `<sessionId>.<base64url(hmac)>`.
  *
@@ -63,6 +81,9 @@ export function verifySessionId(signed: string, secret: string): string | null {
  * `crossDomain: true` for the `SameSite=None; Secure; Partitioned`
  * cross-domain recipe.
  *
+ * Other cookies already set on the response (e.g. the auto-sign-in bridge
+ * clear) are preserved.
+ *
  * @internal
  */
 export function setSessionCookie(
@@ -72,22 +93,21 @@ export function setSessionCookie(
 	maxAgeSeconds: number,
 	crossDomain = false,
 ): void {
-	ctx.response.headers.set(
-		'Set-Cookie',
+	putSetCookie(
+		ctx,
+		cookieName(fullId),
 		`${cookieName(fullId)}=${signedSessionId}; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=${maxAgeSeconds}`,
 	);
 }
 
 /**
- * Clear the session cookie (sets `Max-Age=0`).
+ * Clear the session cookie (sets `Max-Age=0`). Other cookies already set on
+ * the response are preserved.
  *
  * @internal
  */
 export function clearSessionCookie(ctx: BlocksContext, fullId: string, crossDomain = false): void {
-	ctx.response.headers.set(
-		'Set-Cookie',
-		`${cookieName(fullId)}=; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=0`,
-	);
+	putSetCookie(ctx, cookieName(fullId), `${cookieName(fullId)}=; ${cookieAttrsForRequest(ctx, crossDomain)}; Max-Age=0`);
 }
 
 /**
