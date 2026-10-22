@@ -29,9 +29,10 @@
  * payload / ~6 MB response cap. Stage-level config (TLS/domain, throttle)
  * applies to the whole API, not per route.
  */
-import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
-import { ApiMapping, DomainName, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { Annotations, CfnOutput, Duration, Names, Stack } from 'aws-cdk-lib';
+import { ApiMapping, DomainName, HttpApi, HttpMethod, type HttpRouteIntegrationBindOptions } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, HttpUrlIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { AaaaRecord, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { ApiGatewayv2DomainProperties } from 'aws-cdk-lib/aws-route53-targets';
@@ -76,6 +77,43 @@ export type ApiGatewayConstructProps = {
   errorPages?: { notFound?: string; serverError?: string };
 };
 
+
+/** The functions already allowed to be invoked by an API, by function. */
+const invokePermitted = new WeakMap<IFunction, Set<string>>();
+
+/**
+ * A Lambda integration with one invoke permission per (function, API), for
+ * every route and stage of the API (`<apiId>/*`). CDK's own API-scoped
+ * permission (`scopePermissionToRoute: false`) wants three segments after the
+ * API id (stage, method, path), which the `$default` route's source ARN
+ * (`<apiId>/$default/$default`) doesn't have: API Gateway could not invoke the
+ * catch-all (server-rendered pages, SPA deep links) and answered 500.
+ *
+ * @internal Framework-only.
+ */
+class ApiWideLambdaIntegration extends HttpLambdaIntegration {
+  constructor(
+    id: string,
+    private readonly target: IFunction,
+  ) {
+    super(id, target);
+  }
+
+  protected override completeBind(options: HttpRouteIntegrationBindOptions): void {
+    const api = options.route.httpApi;
+    const apiKey = Names.nodeUniqueId(api.node);
+    const permitted = invokePermitted.get(this.target) ?? new Set<string>();
+    invokePermitted.set(this.target, permitted);
+    if (permitted.has(apiKey)) return;
+    permitted.add(apiKey);
+    this.target.addPermission(`InvokeFromApi-${apiKey}`, {
+      scope: options.scope,
+      principal: new ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: Stack.of(api).formatArn({ service: 'execute-api', resource: api.apiId, resourceName: '*' }),
+    });
+  }
+}
+
 export class ApiGatewayConstruct extends Construct {
   readonly api: HttpApi;
   readonly url: string;
@@ -116,11 +154,10 @@ export class ApiGatewayConstruct extends Construct {
     bucket.grantRead(assetProxy);
     this.assetProxy = assetProxy;
 
-    // One API-scoped invoke permission per function, not one per route: a
+    // One API-wide invoke permission per function, not one per route: a
     // per-route permission per path would grow each function's resource policy
     // toward Lambda's 20 KB limit. The trust boundary is the same (this API).
-    const lambdaIntegration = (id: string, fn: IFunction) =>
-      new HttpLambdaIntegration(id, fn, { scopePermissionToRoute: false });
+    const lambdaIntegration = (id: string, fn: IFunction) => new ApiWideLambdaIntegration(id, fn);
     const assetIntegration = lambdaIntegration('AssetInt', assetProxy);
     const serverIntegration = serverFn ? lambdaIntegration('SsrInt', serverFn) : undefined;
     const imageIntegration = imageFn ? lambdaIntegration('ImageInt', imageFn) : undefined;

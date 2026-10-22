@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { HostingPlan } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
@@ -53,6 +54,39 @@ describe('ApiGatewayConstruct — static plan', () => {
   it('creates a route per (deduped) static entry plus the $default route', () => {
     // /assets/{proxy+} + /about + the $default catch-all route = 3
     t.resourceCountIs('AWS::ApiGatewayV2::Route', 3);
+  });
+});
+
+describe('ApiGatewayConstruct — invoke permissions', () => {
+  it("one permission per function, for every route and stage of the API (the $default route's ARN has two segments)", () => {
+    const stack = new Stack(new App(), 'Perm', { env: { account: '111111111111', region: 'us-west-2' } });
+    const bucket = new Bucket(stack, 'Assets');
+    const server = new LambdaFunction(stack, 'Server', {
+      runtime: Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: Code.fromInline('exports.handler = async () => ({})'),
+    });
+    const plan: HostingPlan = {
+      ...staticPlan,
+      origins: [...staticPlan.origins, { id: 'blocks-server', kind: 'server' }],
+      routes: { ...staticPlan.routes, entries: [...staticPlan.routes.entries, { pattern: '/ssr/*', kind: 'server' }] },
+      policies: { ...staticPlan.policies, hasServer: true },
+    };
+    new ApiGatewayConstruct(stack, 'ApiGw', { plan, bucket, computeFunctions: new Map([['server', server]]), serverComputeName: 'server' });
+    const perms = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Permission')).filter(
+      (p) => p.Properties.Principal === 'apigateway.amazonaws.com',
+    );
+    const byFn = new Map<string, string[]>();
+    for (const p of perms) {
+      const fn = JSON.stringify(p.Properties.FunctionName);
+      byFn.set(fn, [...(byFn.get(fn) ?? []), JSON.stringify(p.Properties.SourceArn)]);
+    }
+    assert.equal(byFn.size, 2, 'the asset proxy and the server');
+    for (const [fn, arns] of byFn) {
+      assert.equal(arns.length, 1, `one permission for ${fn}`);
+      // `…:<apiId>/*`: matches `<apiId>/$default/$default` as well as `<apiId>/$default/GET/ssr/x`.
+      assert.match(arns[0], /\{"Ref":"ApiGwHttpApi[0-9A-F]+"\},"\/\*"\]\]\}$/, arns[0]);
+    }
   });
 });
 
