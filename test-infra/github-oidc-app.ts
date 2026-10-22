@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK app for the GitHub OIDC role in the dedicated E2E account. Deployed by
- * hand, once per account (not by CI), with credentials for that account:
+ * CDK app for the GitHub OIDC role in each E2E account. Deployed by hand, once
+ * per account (not by CI), with credentials for that account:
  *
  *   E2E_ACCOUNT_ID=<e2e-account-id> npm run deploy:oidc
  *
- * Then set the `RoleArn` output as the `AWS_ROLE_ARN` secret of the `e2e`
- * environment (and as a Dependabot secret).
+ * Then add the `RoleArn` output to the `AWS_ROLE_ARNS` secret of the `e2e`
+ * environment (and the Dependabot secret of the same name). See README.md.
+ *
+ * For E2E account 1 only, also set E2E_AGENT_BENCH=1 to add the agent bench
+ * role and bucket.
  */
 
 import * as cdk from 'aws-cdk-lib';
@@ -30,5 +33,6 @@ const app = new cdk.App();
 buildGithubE2eOidcStack(app, {
   account: expectedAccount,
   oidcProviderArn: process.env.GITHUB_OIDC_PROVIDER_ARN || undefined,
+  agentBench: process.env.E2E_AGENT_BENCH === '1',
 });
 app.synth();

@@ -1,9 +1,11 @@
 package com.aws.blocks.kotlin.oidc
 
 import com.aws.blocks.kotlin.BlocksServer
+import com.aws.blocks.kotlin.exceptions.BlocksException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -161,6 +163,21 @@ class OidcClientTest {
         val element = Json.parseToJsonElement(testDescriptor)
         val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
         client.providers shouldBe listOf("google")
+    }
+
+    @Test
+    fun `signing out on a closed client reports that rather than cancelling the caller`() = runTest {
+        val httpClient = createMockClient()
+        val element = Json.parseToJsonElement(testDescriptor)
+        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        // The client shares the entry point's engine, so closing the entry point closes this too.
+        httpClient.close()
+
+        val failure = shouldThrow<BlocksException> { client.signOut() }
+
+        failure.message!! shouldContain "closed"
+        // A sign-out that could not reach the backend must not report itself as done.
+        client.authState.value shouldBe OidcAuthState.Loading
     }
 
     @Test

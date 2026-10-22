@@ -36,23 +36,51 @@ env:
   NODE_OPTIONS: '--test-reporter=spec'
 
 jobs:
+  # Picks the E2E jobs to run. By default that is every E2E job when the PR
+  # changes packages/ or test-apps/, and none otherwise. An E2E trailer on the
+  # PR's head commit overrides it, so a PR that only changes CI (this workflow,
+  # .github/actions/) or one E2E suite can run just the jobs it affects:
+  #
+  #   git commit --trailer 'E2E: all'               every E2E job
+  #   git commit --trailer 'E2E: sandbox, hosting'  only these (job ids without the e2e- prefix)
+  #
+  # Only the head commit counts: a later commit without the trailer goes back
+  # to the default. Each PR uses a fixed E2E account from the pool (PR number
+  # mod the pool size, see .github/actions/e2e-slot), so parallel PRs spread across it.
+  #
+  # A job the changes call for is never skipped: if the trailer leaves it out,
+  # or names an unknown job, it fails in its first step instead. E2E Sandbox
+  # and E2E Production are required checks, and GitHub counts a skipped job as
+  # passing, so a skip would let the trailer merge a PR past E2E. Push a
+  # commit without the trailer before merging.
+  #
+  # The logic lives in scripts/ci/e2e-selection.sh, tested by
+  # scripts/ci/e2e-selection.test.mjs (in Build, Unit Tests, E2E Local).
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
-      source-changed: ${{ steps.check.outputs.source-changed }}
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
+      # JSON array of the E2E jobs to run, e.g. ["sandbox","hosting"]
+      e2e: ${{ steps.check.outputs.e2e }}
+      # JSON array of the E2E jobs the changes call for but the trailer left
+      # out. Each fails in its first step.
+      e2e-blocked: ${{ steps.check.outputs.blocked }}
+      # e2e + e2e-blocked: the E2E jobs that start. Each E2E job's `if:` checks
+      # this one, so a blocked job can't be skipped by checking only `e2e`.
+      e2e-run: ${{ steps.check.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
-        run: |
-          if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "source-changed=false" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          E2E_ACCOUNT: ${{ steps.e2e-slot.outputs.account }}
+        run: scripts/ci/e2e-selection.sh origin/main
 
   blocks-integrity:
     name: Blocks Package Integrity
@@ -211,6 +239,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # Decides which E2E jobs run, and which a PR can't skip by leaving them
+      # out of its E2E trailer.
+      - name: Test the E2E job selection
+        run: node --test scripts/ci/e2e-selection.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -259,10 +292,16 @@ jobs:
   e2e-templates:
     name: E2E Templates
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -298,10 +337,16 @@ jobs:
   e2e-templates-windows:
     name: E2E Templates (Windows)
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates-windows')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -334,7 +379,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Sandbox
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -342,6 +387,12 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'sandbox')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -361,10 +412,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
@@ -375,7 +426,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox-vpc') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -385,12 +436,18 @@ jobs:
     # (and the shared stack) and CloudFormation fails the second run. Queue
     # rather than cancel so an in-flight deploy/destroy isn't interrupted.
     concurrency:
-      group: blocks-test-vpc
+      group: blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'sandbox-vpc')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -410,10 +467,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Ensure persistent test VPC
         run: cd test-infra && npx cdk deploy BlocksTestVpc --require-approval never --outputs-file outputs.json
@@ -432,7 +489,7 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -446,11 +503,17 @@ jobs:
     # two suites don't collide across groups because they target *different*
     # persistent VPCs, so they can run in parallel.
     concurrency:
-      group: blocks-test-compute
+      group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -470,10 +533,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Ensure persistent compute test VPC
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
@@ -492,7 +555,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'production') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: e2e
@@ -500,6 +563,12 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'production')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -519,10 +588,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: E2E Test Production
         run: npm run test:e2e:production
@@ -533,7 +602,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Supabase
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'supabase') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: e2e
@@ -543,10 +612,17 @@ jobs:
       # feature end-to-end instead of connecting unverified. externalDbSsl() reads
       # this; the explicit-engine tests read it too.
       DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
+    # One Supabase project serves every E2E account, so this group stays global.
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'supabase')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -586,10 +662,10 @@ jobs:
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Fetch Supabase secrets
         run: |
@@ -611,7 +687,7 @@ jobs:
     name: E2E Hosting (${{ matrix.framework }})
     timeout-minutes: 60
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'hosting') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: e2e
     strategy:
@@ -657,6 +733,12 @@ jobs:
       BLOCKS_SANDBOX_KEEP: ${{ matrix.compute-type == 'web-function' && '1' || '' }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'hosting')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -676,10 +758,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
@@ -703,7 +785,7 @@ jobs:
   e2e-telemetry:
     name: Telemetry E2E
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'telemetry') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -713,6 +795,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: telemetry-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'telemetry')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -728,10 +816,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Seed fixed e2e telemetry installation ID
         shell: bash
@@ -750,17 +838,23 @@ jobs:
           npx tsx aws-blocks/scripts/destroy.ts || true
 
   # Gate job — matches the branch protection required check name.
-  # Skipped E2E jobs (no source changes) are treated as passing.
+  # Skipped E2E jobs (not selected by detect-changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
+          # A failed detect-changes skips every E2E job, which would otherwise pass below.
+          if [[ "${{ needs.detect-changes.result }}" != "success" ]]; then
+            echo "detect-changes failed"
+            exit 1
+          fi
+
           if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
             echo "blocks-integrity failed"
             exit 1
@@ -776,7 +870,7 @@ jobs:
             exit 1
           fi
 
-          # E2E jobs must either succeed or be skipped (no source changes)
+          # E2E jobs must either succeed or be skipped (not selected)
           if [[ "${{ needs.e2e-templates.result }}" != "success" && "${{ needs.e2e-templates.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-templates-windows.result }}" != "success" && "${{ needs.e2e-templates-windows.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||

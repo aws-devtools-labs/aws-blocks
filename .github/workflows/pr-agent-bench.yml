@@ -5,16 +5,17 @@ name: PR Agent Bench
 # the reusable workflow .github/workflows/agent-bench.yml, invoked below so
 # GitHub renders a nested check hierarchy: PR Agent Bench / bench / <cell>.
 #
-# Required configuration (publish environment, consumed inside agent-bench.yml):
-#   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
+# Required configuration (agent-bench environment, consumed inside agent-bench.yml;
+# both created by test-infra/github-oidc-stack.ts):
+#   BENCH_ROLE_ARN secret   OIDC role with bedrock:InvokeModelWithResponseStream
 #                           on the bench model, plus s3:PutObject on bench/* in
-#                           the registry bucket (per-cell archive + the commit-
+#                           the bench bucket (per-cell archive + the commit-
 #                           keyed baseline aggregate). Reading the baseline back
 #                           for the PR-vs-baseline overview also needs
 #                           s3:GetObject on bench/* — if the role lacks it the
 #                           overview simply degrades to "no baseline" (never an
 #                           error). See agent-bench.yml.
-#   S3_BUCKET     variable  Registry bucket (existing).
+#   BENCH_BUCKET  variable  Bench results bucket.
 
 on:
   # Runs on same-repo PR open/update AND on push to main (a main run records the
@@ -67,7 +68,7 @@ jobs:
   bench:
     # Same-repo gate (and manual dispatch) lives HERE, on the calling job -- a
     # `uses:` job may carry `if:`/`permissions`. The OIDC steps and
-    # `environment: publish` stay inside the reusable workflow (a calling job
+    # `environment: agent-bench` stay inside the reusable workflow (a calling job
     # cannot set `environment`). Fork PRs get no secrets/OIDC under
     # `pull_request`, but defense-in-depth: also gate on same-repo. Push to main
     # is same-repo by definition. Mirrors pr-checks.yml.

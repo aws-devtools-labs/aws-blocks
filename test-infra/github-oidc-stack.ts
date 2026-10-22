@@ -8,7 +8,8 @@
  * credentials, so this stack lives in an AWS account that holds nothing but
  * test stacks.
  *
- * Only jobs in this repo's `e2e` GitHub environment can assume the role.
+ * Only jobs in this repo's `e2e` GitHub environment can assume the E2E role,
+ * and only jobs in its `agent-bench` environment can assume the bench role.
  * Deployed by hand from `github-oidc-app.ts` (see README), not by CI. This file
  * only builds the stack, so the trust policy can be unit tested.
  *
@@ -16,13 +17,21 @@
  * - GitHub OIDC identity provider (or an existing one, by ARN)
  * - `blocks-github-e2e` role with the permissions the E2E suites and
  *   cleanup-stacks.yml use
+ * - with `agentBench`, `blocks-github-bench` role and results bucket for the
+ *   agent bench (agent-bench.yml): Bedrock model invocation and `bench/*` in
+ *   the bucket. Only E2E account 1 sets it.
  */
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 
 export const GITHUB_REPO = 'aws-devtools-labs/aws-blocks';
 export const GITHUB_ENVIRONMENT = 'e2e';
+// The agent bench gets its own environment, so a token minted inside a bench
+// job (where an agent runs shell commands) can't assume the E2E role, and E2E
+// jobs can't assume the bench role.
+export const BENCH_GITHUB_ENVIRONMENT = 'agent-bench';
 // Every E2E workflow and cleanup-stacks.yml run in us-east-1. Pinned so the
 // region-scoped ARNs below can't follow the operator's profile elsewhere.
 export const E2E_REGION = 'us-east-1';
@@ -47,6 +56,9 @@ export interface GithubE2eOidcStackProps {
   // Reuse the account's existing GitHub OIDC provider instead of creating one
   // (it is a per-account singleton).
   oidcProviderArn?: string;
+  // Add the agent bench role and bucket. The bench isn't spread over the pool,
+  // so only account 1 gets them.
+  agentBench?: boolean;
 }
 
 export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStackProps): cdk.Stack {
@@ -71,18 +83,22 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
         clientIds: ['sts.amazonaws.com'],
       });
 
+  // Jobs in one GitHub environment of this repo, nothing else.
+  const githubPrincipal = (environment: string) =>
+    new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
+      StringEquals: {
+        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
+        'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${environment}`,
+      },
+    });
+
   // ── Role ────────────────────────────────────────────────────────────────────
 
   const role = new iam.Role(stack, 'GithubE2eRole', {
     roleName: 'blocks-github-e2e',
     description: `Assumed by ${GITHUB_REPO} jobs in the "${GITHUB_ENVIRONMENT}" GitHub environment`,
     maxSessionDuration: cdk.Duration.hours(2),
-    assumedBy: new iam.WebIdentityPrincipal(provider.oidcProviderArn, {
-      StringEquals: {
-        'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-        'token.actions.githubusercontent.com:sub': `repo:${GITHUB_REPO}:environment:${GITHUB_ENVIRONMENT}`,
-      },
-    }),
+    assumedBy: githubPrincipal(GITHUB_ENVIRONMENT),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationReadOnlyAccess'),
       // Amplify Gen 2 sandboxes in the amplify-interop suite.
@@ -230,11 +246,74 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
     }),
   );
 
+  // ── Agent bench ─────────────────────────────────────────────────────────────
+
+  if (props.agentBench) {
+    // Per-cell results and the baseline the PR scoreboard diffs against. Only
+    // written by agent-bench.yml; nothing else in the account reads it.
+    const benchBucket = new s3.Bucket(stack, 'AgentBenchBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Separate from the E2E role, and trusted by a separate environment: the
+    // bench needs Bedrock and its bucket, nothing else, and the E2E suites
+    // don't need Bedrock.
+    const benchRole = new iam.Role(stack, 'GithubBenchRole', {
+      roleName: 'blocks-github-bench',
+      description: `Agent bench for ${GITHUB_REPO} jobs in the "${BENCH_GITHUB_ENVIRONMENT}" GitHub environment`,
+      // agent-bench.yml requests 7200 s so a session outlives the slowest cell.
+      maxSessionDuration: cdk.Duration.hours(2),
+      assumedBy: githubPrincipal(BENCH_GITHUB_ENVIRONMENT),
+    });
+    // The actions the bench calls (see the inline session policy in
+    // agent-bench.yml). Inference profiles route across regions, so the ARNs
+    // keep a region wildcard.
+    benchRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockInvoke',
+        actions: ['bedrock:InvokeModelWithResponseStream', 'bedrock:Converse'],
+        resources: [
+          `arn:aws:bedrock:*:${account}:inference-profile/*`,
+          `arn:aws:bedrock:*:${account}:application-inference-profile/*`,
+          'arn:aws:bedrock:*::foundation-model/*',
+        ],
+      }),
+    );
+    benchRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BenchObjects',
+        actions: ['s3:GetObject', 's3:PutObject'],
+        resources: [benchBucket.arnForObjects('bench/*')],
+      }),
+    );
+    // Lets a missing baseline read back as 404 instead of 403.
+    benchRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BenchList',
+        actions: ['s3:ListBucket'],
+        resources: [benchBucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['bench/*'] } },
+      }),
+    );
+
+    new cdk.CfnOutput(stack, 'BenchRoleArn', {
+      value: benchRole.roleArn,
+      description: 'Set as the BENCH_ROLE_ARN secret of the agent-bench GitHub environment (and as a Dependabot secret).',
+    });
+    new cdk.CfnOutput(stack, 'BenchBucketName', {
+      value: benchBucket.bucketName,
+      description: 'Set as the BENCH_BUCKET variable of the agent-bench GitHub environment.',
+    });
+  }
+
   // ── Outputs ─────────────────────────────────────────────────────────────────
 
   new cdk.CfnOutput(stack, 'RoleArn', {
     value: role.roleArn,
-    description: 'Set as the AWS_ROLE_ARN secret of the e2e GitHub environment (and as a Dependabot secret).',
+    description: 'Add to the AWS_ROLE_ARNS secret of the e2e GitHub environment (and the Dependabot secret of the same name).',
   });
 
   cdk.Tags.of(stack).add('blocks:purpose', 'github-e2e-oidc');
