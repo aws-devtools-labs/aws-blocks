@@ -491,10 +491,12 @@ jobs:
           dart pub get
           dart run bin/e2e_test.dart
 
+      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
+      # holds the cdk.out lock), and reports a failed destroy as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run destroy
 
   swift-e2e-sandbox:
     permissions:
@@ -593,10 +595,12 @@ jobs:
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
+      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
+      # holds the cdk.out lock), and reports a failed destroy as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run destroy
 
   kotlin-e2e-sandbox:
     permissions:
@@ -712,10 +716,12 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
+      # holds the cdk.out lock), and reports a failed destroy as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run destroy
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated
