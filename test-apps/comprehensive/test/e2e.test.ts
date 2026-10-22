@@ -240,6 +240,13 @@ test('AuthBasic - full purge clears every code record and leaves other keys alon
   await api.kvDelete(bystander);
 });
 
+// AuthOIDC tests (separate file). They run before the background suites start:
+// the stub IdP keeps the refresh tokens it issues in memory per Lambda
+// instance, so a refresh only succeeds on the instance that issued the token.
+// Serial traffic keeps reusing one warm instance; the background suites' extra
+// load spreads requests across instances and the bearer refresh test fails.
+oidcAuthTests(() => api);
+
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
 // queues, Lambda and the model, so each runs in its own child process against
 // this server/stack while the suites below run here. They start now and are
@@ -289,9 +296,6 @@ authCognitoSandboxTests(() => api);
 
 // AuthCognito admin-surface sandbox tests (separate file)
 authCognitoAdminTests(() => api);
-
-// AuthOIDC tests (separate file)
-oidcAuthTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);

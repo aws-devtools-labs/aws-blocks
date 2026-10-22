@@ -22,6 +22,11 @@
  * asserts on with the suites in e2e.test.ts or with the other background
  * suites: no fixed keys another suite writes, no scan of a store or table
  * another suite writes to without a prefix filter, no global purge.
+ *
+ * The extra load also spreads the parent's requests across more Lambda
+ * instances. A parent suite whose flow keeps state in one instance's memory
+ * between requests must run before the background suites start (AuthOIDC, see
+ * e2e.test.ts).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
