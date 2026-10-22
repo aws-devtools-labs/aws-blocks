@@ -70,14 +70,14 @@ Every run used its own stack name, checked unused first, and touched nothing tha
 | L7 | **(a):** release the six unreleased old-package changesets as a final `bb-auth-cognito` / `bb-auth-oidc` patch before the cutover, then re-pin the upgrade harness. *Since R116:* `main`'s #696 already published `bb-auth-cognito` 0.1.12 and `bb-auth-oidc` 0.2.2 from `main`'s own changesets, without B6's fixes, so the final patch is now **0.1.13 / 0.2.3**; the harness is pinned to 0.1.12 | R100; release action 1 below; `STACKED-PRS.md` principle 4 and §5 R1 |
 | L71 | **(b), weak passwords only:** the message is built from the block's own `passwordPolicy`, never from Cognito's text; a wrapped pool keeps the fixed message | R101; built in IMPL3 |
 | L44 | **(c):** keep `stubIdp()` as shipped and document the env-switch pattern; no `{ local, deployed }` option unless users ask | R102; `bb-auth/README.md` |
-| L69 | **(b):** build a browser helper on the existing `/aws-blocks/auth/*` routes, in a separate PR | R103; follow-up F-L69 below |
+| L69 | **(b):** build a browser helper on the existing `/aws-blocks/auth/*` routes, in a separate PR | R103; built on `auth/browser-helper` (R121) |
 | D1 | `AuthBasic` users must sign up again: **signed off** (no AWS Blocks app runs in production yet) | R104; backlog L74 |
 | Q2 | Every deployed sign-up confirms with an emailed code: **signed off** | R104; follow-up L75 |
 | L54 | Raise it in the #blocks Slack channel | open, below |
 
 ## Follow-ups (not in this PR)
 
-- **F-L69 — browser sign-in helper** for a frontend on another origin than its API, on the existing `/aws-blocks/auth/*` routes, with its own tests (R103). `MIGRATION.md` and `DESIGN.md` → *Known gaps* say it's coming.
+- ~~**F-L69 — browser sign-in helper**~~ Built on `auth/browser-helper` (R121): `createAuthClient()` from `@aws-blocks/bb-auth/browser-client`. Its own PR, stacked on #711. Open from it: L79.
 - **L75 — an SES option on `AuthOptions`** (CDK `UserPoolEmail.withSES()`), before GA, so the default path can reach production without `Auth.fromExisting`.
 - **L74 — "import existing users on first sign-in"** through Cognito's User Migration trigger. Backlog.
 - **Client-driven apps (R105, additive):** an `appClients` option, an `auth` section in the generated frontend config (or an Amplify-outputs-compatible file), an Identity Pool option, a Cognito-tokens → session route for SSR, a Kotlin `AuthProvider`, and `phase: 'signIn'` through Cognito triggers (L77).
@@ -88,6 +88,7 @@ Every run used its own stack name, checked unused first, and touched nothing tha
 |---|---|---|
 | 🟡 L76 | `Auth`'s `userId` is the Cognito username; Amplify's `getCurrentUser().userId` is the `sub` (Blocks `userSub`) | keep the names, documented (FX-doors) |
 | 🟡 L77 | `phase: 'signIn'`, `onSignIn`, `onSignOut` don't run for a frontend that signs in directly against Cognito | documented now; Pre/PostAuthentication triggers later |
+| 🟡 L79 | After a provider sign-out, a cross-origin frontend lands on `postSignOutPath` on the API's origin | leave documented; an allow-listed absolute `postSignOutUrl` when asked |
 | ✅ L78 | `test-apps/amplify-gen2` converted to `Auth.fromExisting` with token ids and access tokens; interop browser e2e still to run on AWS. `templates/amplify` not converted yet | run `e2e-amplify-interop`; convert the template in its own PR |
 | 🟡 L70 | `main` was merged six times (R94, R98, R99, R107, R111, R116): #678 and #231 ported, fixtures now 29–37 (R128), the lockfile taken from `main`, the upgrade pin at 0.1.12, the `AuthCognito` fixture re-frozen. What's left: re-pin to 0.1.12 after R1 (R100), and repeat these per stacked PR | see `STACKED-PRS.md` |
 | 🟡 L71 (residual) | The native relay still forwards `error_description` to the signed `relayTo` target by design (the weak-password part is decided, R101) | leave it |

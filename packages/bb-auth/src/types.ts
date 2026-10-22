@@ -2556,3 +2556,139 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 */
 	readonly admin: AdminGetterOf<O>;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser redirect client (`@aws-blocks/bb-auth/browser-client`, L69)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The signed-in user as a browser sees it: the same fields `getAuthState()`
+ * already sends a signed-in browser. The server-only `claims` and
+ * `federatedIdentity` are never sent.
+ */
+export interface BrowserUser extends Omit<AuthenticatedUser, 'claims' | 'federatedIdentity'> {
+	/** A name to show the user, chosen as `getAuthState()` chooses it: a chosen username, else a verified email or phone, else `preferred_username`, else the username. */
+	displayName: string;
+}
+
+/** What {@link AuthClient.fetchAuthSession} returns. */
+export type BrowserAuthSession = { signedIn: true; user: BrowserUser } | { signedIn: false };
+
+/** Input to {@link AuthClient.signInWithRedirect}. */
+export interface SignInWithRedirectInput<P extends string = string> {
+	/** The provider's key in the `Auth` block's options, e.g. `'okta'` or `'google'`. */
+	provider: P;
+	/**
+	 * Opaque app state handed back by {@link AuthClient.handleSignInRedirect}
+	 * (for example the page to return to). It travels inside the signed `state`
+	 * envelope, so the provider and the address bar see it: put no secrets in it.
+	 */
+	customState?: string;
+	/** Overrides {@link AuthClientOptions.redirectUri} for this sign-in. */
+	redirectUri?: string;
+}
+
+/** What {@link AuthClient.handleSignInRedirect} returns after a successful sign-in. */
+export interface SignInRedirectResult {
+	/** The user who just signed in. */
+	user: BrowserUser;
+	/** The `customState` passed to `signInWithRedirect()`, if any. */
+	customState?: string;
+}
+
+/** What {@link AuthClient.signOut} returns. */
+export interface SignOutResult {
+	/**
+	 * The provider's logout URL, when the provider keeps its own session
+	 * (Cognito managed login, or an OIDC provider with an `end_session_endpoint`).
+	 * Navigate to it, or pass `endProviderSession: true`, so the provider's
+	 * session cannot sign the user straight back in. The provider then returns
+	 * the browser to `redirects.postSignOutPath` on the API's origin.
+	 */
+	logoutUrl?: string;
+}
+
+/**
+ * The browser APIs {@link createAuthClient} uses, replaceable for tests or
+ * non-browser runtimes. Each defaults to the browser's own (`fetch`,
+ * `sessionStorage`, `location`, `history`).
+ */
+export interface AuthClientEnvironment {
+	/** Send a request (`fetch`). The client passes `credentials: 'include'` where the session cookie must travel. */
+	fetch(input: string, init?: RequestInit): Promise<Response>;
+	/** Holds the pending sign-in (CSRF value, PKCE verifier) between the two page loads. */
+	storage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void };
+	/** The current page URL. */
+	currentUrl(): string;
+	/** Navigate the page (`location.assign`). */
+	navigate(url: string): void;
+	/** Rewrite the address bar without navigating (`history.replaceState`). */
+	replaceUrl(url: string): void;
+}
+
+/** Options for {@link createAuthClient}. */
+export interface AuthClientOptions {
+	/**
+	 * Where the `Auth` block's routes (`/aws-blocks/auth/*`) are served: the
+	 * API's origin, plus the API Gateway stage when you call the gateway URL
+	 * directly. For example `'https://api.example.com'` or
+	 * `'https://abc123.execute-api.us-east-1.amazonaws.com/prod'`. Defaults to
+	 * the page's own origin.
+	 */
+	baseUrl?: string;
+	/** The block's `redirects.callbackPath`. @default '/aws-blocks/auth/callback' */
+	callbackPath?: string;
+	/** The block's `redirects.signOutPath`. @default '/aws-blocks/auth/signout' */
+	signOutPath?: string;
+	/**
+	 * Where the provider's answer returns in this app: the page that calls
+	 * {@link AuthClient.handleSignInRedirect}. Its origin must be in the block's
+	 * `redirects.allowedRelayOrigins` (loopback `http://127.0.0.1` is always
+	 * allowed). Defaults to the current page, without its query and fragment.
+	 */
+	redirectUri?: string;
+	/** Replace the browser APIs the client uses (tests, other runtimes). */
+	environment?: Partial<AuthClientEnvironment>;
+}
+
+/**
+ * Redirect sign-in for a web frontend on another origin than the `Auth`
+ * block's API. Created by `createAuthClient()` from
+ * `@aws-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
+ */
+export interface AuthClient<P extends string = string> {
+	/**
+	 * Start a sign-in with a federated provider: fetch a signed `state` from the
+	 * block, then navigate to the provider. The provider returns to the block's
+	 * callback, which sends the browser to `redirectUri`.
+	 *
+	 * @throws `InvalidRelayException` when `redirectUri`'s origin is not in the
+	 * block's `redirects.allowedRelayOrigins`; `ProviderNotConfiguredException`
+	 * for an unknown provider.
+	 */
+	signInWithRedirect(input: SignInWithRedirectInput<P>): Promise<void>;
+	/**
+	 * Finish a sign-in on the return page. Returns `null` when the URL carries
+	 * no sign-in response, so it is safe to call on every page load. Removes the
+	 * one-time parameters from the address bar.
+	 *
+	 * @throws `InvalidStateException` when the response is not for the sign-in
+	 * this tab started; `InvalidCallbackException` when no sign-in was started
+	 * (or it is older than 10 minutes); `IdpErrorException` when the provider
+	 * refused the sign-in.
+	 */
+	handleSignInRedirect(): Promise<SignInRedirectResult | null>;
+	/**
+	 * The signed-in user.
+	 *
+	 * @throws `NotAuthenticatedException` when no one is signed in.
+	 */
+	getCurrentUser(): Promise<BrowserUser>;
+	/** Whether someone is signed in, and who. Never throws for a signed-out browser. */
+	fetchAuthSession(): Promise<BrowserAuthSession>;
+	/**
+	 * End the block's session. With `endProviderSession: true`, also navigate
+	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
+	 */
+	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}

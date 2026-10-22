@@ -267,6 +267,33 @@ Mounted only when a provider is configured. `<base>` is the directory of `redire
 
 **Not built in D6a:** accepting `Authorization: Bearer` in the guards (built in D6c — see [Bearer tokens](#bearer-tokens-allowbearerauth-d6c--bearerts)); the browser-side PKCE helper (the old `AuthOIDC` client); the hosted-UI engine and its local shim (D6b).
 
+### The browser redirect client (`browser-client.ts`, L69)
+
+`AuthOIDC`'s `getClient()` ran PKCE in the browser so a frontend on another origin could sign in. `Auth` replaces it with `createAuthClient()` from `@aws-blocks/bb-auth/browser-client` (re-exported from `@aws-blocks/blocks/ui`), decided by the maintainer as L69 option (b). It adds **no new sign-in protocol**: it is the native SDKs' relay transport, run by a browser tab.
+
+1. `signInWithRedirect({ provider })` POSTs `{ csrf, relayTo, appState? }` to `<base>/authorize-params/<provider>`, where `relayTo` is the frontend's return page. The route validates `relayTo` (`validateRelay`: loopback `http://127.0.0.1` / `[::1]`, the API's own origin, or an `allowedRelayOrigins` entry) and signs `{ v, csrf, relay, app }` into `state`. The tab keeps `{ provider, csrf, verifier, state, nonce }` in `sessionStorage` and navigates to the provider with `redirect_uri = <baseUrl><callbackPath>`, S256 PKCE and the nonce.
+2. The callback finds the relay envelope, re-validates `relayTo` against the current allowlist, and 302s `code`, `state` and `iss` to it.
+3. `handleSignInRedirect()` drops the pending entry and the one-time parameters from the address bar first, then requires a pending entry younger than 10 minutes, `state` byte-equal to the one it was given, and the envelope's `csrf` equal to its own. Only then does it POST `{ code, verifier, state, provider, callbackUrl, nonce, iss? }` to `<base>/exchange` with credentials, which sets the session cookie.
+
+Two **additive** server pieces, both mounted with the federation routes:
+
+- `GET <base>/session` answers `{ user }` (the `getAuthState()` user: `stateUser()`, so no `claims` or `federatedIdentity`) or `401 NotAuthenticatedException`. It backs `getCurrentUser()` / `fetchAuthSession()`. It lives with the federation routes rather than on every instance, because several email-and-password instances share the default `<base>`; email-and-password frontends read the session through `authApi`, as before.
+- `POST <signOutPath>?format=json` answers `200 { logoutUrl? }` instead of `204` + `Location`. A cross-origin page cannot read `Location` (it is not a CORS-safelisted response header), and the native SDKs' `204` contract is unchanged without the parameter.
+
+**Threat model.**
+
+| Threat | What stops it |
+|---|---|
+| Open redirect: a sign-in sent to an attacker's page with a valid code | `relayTo` is checked when the state is signed and again at the callback (`validateRelay`, the FX1/FX10 rules); plain HTTP only on loopback. The code alone is useless without the tab's PKCE verifier. |
+| Login CSRF: the victim's browser signed into the attacker's account | The tab only exchanges a response whose `state` is the one it requested and whose envelope carries its own CSRF value. `/exchange` accepts only `application/json`, which needs a CORS preflight from another origin. |
+| Code or token leakage through URLs | Only the one-time, PKCE-bound `code` is ever in a URL, and the return page removes it immediately. Tokens never reach JavaScript: the session is the `HttpOnly` cookie; bearer tokens in an `/exchange` response (`allowBearerAuth`) are ignored by the client. |
+| Another site reading the user through `/session` | Core's CORS policy: only allow-listed origins get `Access-Control-Allow-Origin` with credentials, and the Lambda answers a disallowed `Origin` with `403`. |
+| Forced sign-out | `POST signout` with JSON needs a preflight; a form post can still sign a user out, as before (L43: accepted). |
+| Replay of a stale response | The pending entry is single-use and expires after 10 minutes; the provider's code is single-use. |
+| Provider text injected into the page | An `error` response surfaces as `IdpErrorException` with the OAuth `error` code only, never `error_description` (FX60's rule). |
+
+**Not covered, by design:** after `signOut({ endProviderSession: true })` the provider returns the browser to `redirects.postSignOutPath` on the **API's** origin; returning to the frontend's origin would need an allow-listed absolute post-sign-out URL (a follow-up, L79). The client's `userId` is the block's (L76): Amplify's `getCurrentUser().userId` is `userSub` here.
+
 ### The hosted-UI engine (`engines/federation-hosted-ui.ts`, D6b)
 
 Social, SAML and `federateVia: 'cognito'` providers, on the AWS runtime. Cognito federates only through its Login / Authorize endpoints, so the engine is an OAuth 2.0 client of the pool's **domain**, using D3b's separate **hosted-UI app client** (public — no secret):
@@ -639,6 +666,6 @@ For the rare case where a pool's construct path must change (for example, a pool
 
 - **Remembered devices on AWS.** `rememberDevice` throws `501` on the AWS runtime (as `AuthCognito`'s did): Cognito needs the device key from `NewDeviceMetadata` at sign-in, a client-derived device verifier and `ConfirmDevice`, none of which the session layer captures. `scanDevices` / `forgetDevice` work. The local mock mints a synthetic device key.
 - **Account linking.** One person signing in with both a password and a social or OIDC provider gets two unrelated users; `Auth` does not link them.
-- **A browser sign-in helper for a frontend on another origin** (L69, R103). `AuthOIDC`'s `getClient()` ran PKCE in the browser; `Auth` signs in with a server redirect from a link to `/aws-blocks/auth/signin/<id>`, which assumes the frontend and the API share an origin (`Hosting`'s default). A helper on the same routes is planned as a separate change (follow-up F-L69); until then, serve both from one origin.
+- ~~**A browser sign-in helper for a frontend on another origin** (L69, R103).~~ Built: see *The browser redirect client* (R121).
 - **Client-driven sign-in hooks.** `validateUser`'s `phase: 'signIn'`, `onSignIn` and `onSignOut` run only on this block's own sign-in path. A frontend that signs in directly against Cognito (an Amplify client library) is not seen; the guards still accept its tokens through `allowBearerAuth: { clientIds }`. Cognito's PreAuthentication / PostAuthentication triggers could back `phase: 'signIn'` the way PreSignUp backs `phase: 'signUp'` (L77).
 - **First-class app clients and frontend config for client-driven apps.** Today a second public app client is added through the CDK escape hatch, and its id is passed as a literal to `allowBearerAuth.clientIds` after the first deploy. An `appClients` option, an `auth` section in the generated frontend config (or an Amplify-outputs-compatible file), an Identity Pool option, a route that turns client-held Cognito tokens into a server session (for SSR), and a Kotlin `AuthProvider` would all be additive.

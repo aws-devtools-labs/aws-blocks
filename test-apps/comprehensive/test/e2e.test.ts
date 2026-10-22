@@ -24,6 +24,7 @@ import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
+import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
@@ -272,6 +273,9 @@ authCognitoAdminTests(() => api);
 
 // Auth OIDC tests, formerly AuthOIDC (separate file)
 oidcAuthTests(() => api);
+
+// The browser redirect client: a frontend on another origin signs in (L69).
+browserClientTests();
 
 // Auth validateUser (Q10): one policy for every sign-up and sign-in
 authValidateUserTests(() => api);
