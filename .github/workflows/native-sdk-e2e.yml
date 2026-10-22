@@ -499,7 +499,7 @@ jobs:
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
       # as a warning. It runs only once AWS credentials were set up: before that
-      # nothing was deployed (and a trailer-blocked job has no checkout).
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
@@ -608,7 +608,7 @@ jobs:
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
       # as a warning. It runs only once AWS credentials were set up: before that
-      # nothing was deployed (and a trailer-blocked job has no checkout).
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
@@ -741,7 +741,7 @@ jobs:
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
       # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
       # as a warning. It runs only once AWS credentials were set up: before that
-      # nothing was deployed (and a trailer-blocked job has no checkout).
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
