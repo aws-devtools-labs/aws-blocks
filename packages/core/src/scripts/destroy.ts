@@ -6,7 +6,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
-import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import { emptySandboxBuckets, runDestroyWithRetries, sandboxDeleteThrottled } from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -68,11 +68,13 @@ export async function destroy(options: DestroyOptions) {
     // delete and the stack + its IAM roles leak) and back off before retrying.
     // The backoff also rides out a transient API Gateway control-plane throttle
     // (DeleteRestApi 429), which single-shot `cdk destroy` surfaced as a hard
-    // teardown failure with no recovery.
+    // teardown failure with no recovery. A failure whose stack events show such
+    // a throttle gets a longer, jittered backoff (see runDestroyWithRetries).
     await runDestroyWithRetries({
       runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
       listStackNames: () => listProductionStackNames(options, cdkEnv),
       emptyBuckets: emptySandboxBuckets,
+      isThrottled: sandboxDeleteThrottled,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       successLabel: 'Production stack',
     });

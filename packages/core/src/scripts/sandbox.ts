@@ -617,6 +617,103 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
 	}
 }
 
+/**
+ * Whether a CloudFormation resource status reason says an AWS API throttled
+ * the call, e.g. `Too Many Requests (Service: ApiGateway, Status Code: 429)`
+ * (DeleteRestApi is limited to one request every 30s per account) or
+ * `Rate exceeded` / `Throttling`.
+ */
+export function isThrottleReason(reason: string | undefined): boolean {
+	return /Too Many Requests|Status Code: 429|TooManyRequestsException|Throttling|Rate exceeded/i.test(reason ?? '');
+}
+
+/** Clock skew allowed between this machine and CloudFormation event timestamps. */
+const EVENT_CLOCK_SKEW_MS = 60_000;
+/** DescribeStackEvents pages read per stack before giving up on finding this attempt's start. */
+const MAX_EVENT_PAGES = 10;
+
+/**
+ * Whether the delete attempt that began at `sinceMs` failed because AWS
+ * throttled a resource delete in any of `stackNames`. Reads each stack's
+ * events newest-first back to this attempt's own stack-level
+ * `DELETE_IN_PROGRESS`, so a throttle left over from an earlier attempt is not
+ * counted. A stack that no longer exists is skipped; any other error is
+ * rethrown (after checking the remaining stacks) so the caller can warn and
+ * fall back to the ordinary retry schedule.
+ */
+export async function stackDeleteThrottled(
+	cfn: CloudFormationClient,
+	stackNames: string[],
+	sinceMs: number,
+): Promise<boolean> {
+	const { DescribeStackEventsCommand } = await import('@aws-sdk/client-cloudformation');
+	let firstError: unknown;
+	for (const stackName of stackNames) {
+		try {
+			let nextToken: string | undefined;
+			scan: for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+				const res = await cfn.send(new DescribeStackEventsCommand({ StackName: stackName, NextToken: nextToken }));
+				for (const ev of res.StackEvents ?? []) {
+					if (ev.Timestamp && ev.Timestamp.getTime() < sinceMs - EVENT_CLOCK_SKEW_MS) break scan;
+					if (ev.ResourceStatus === 'DELETE_FAILED' && isThrottleReason(ev.ResourceStatusReason)) return true;
+					if (
+						ev.ResourceType === 'AWS::CloudFormation::Stack' &&
+						ev.LogicalResourceId === stackName &&
+						ev.ResourceStatus === 'DELETE_IN_PROGRESS'
+					) {
+						break scan;
+					}
+				}
+				nextToken = res.NextToken;
+				if (!nextToken) break;
+			}
+		} catch (e) {
+			if (!/does not exist/i.test((e as Error).message ?? '')) firstError ??= e;
+		}
+	}
+	if (firstError !== undefined) throw firstError;
+	return false;
+}
+
+/**
+ * {@link stackDeleteThrottled} with a default-Region CloudFormation client —
+ * the real `isThrottled` for both destroy paths. Exported so the production
+ * destroy path ({@link ./destroy.ts}) reuses it.
+ */
+export async function sandboxDeleteThrottled(stackNames: string[], sinceMs: number): Promise<boolean> {
+	if (stackNames.length === 0) return false;
+	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+	return stackDeleteThrottled(new CloudFormationClient({}), stackNames, sinceMs);
+}
+
+/** Backoff for a destroy that failed on an AWS API throttle. */
+export interface ThrottleBackoff {
+	/** First backoff step, before jitter. Default: 1min. */
+	baseMs?: number;
+	/** Ceiling for one backoff step, before jitter. Default: 5min. */
+	maxDelayMs?: number;
+	/** Stop retrying a throttled destroy once a wait would end more than this long after the first failure. Default: 20min. */
+	budgetMs?: number;
+}
+
+const THROTTLE_BACKOFF_DEFAULTS: Required<ThrottleBackoff> = {
+	baseMs: 60_000,
+	maxDelayMs: 300_000,
+	budgetMs: 20 * 60_000,
+};
+
+/**
+ * The wait before throttle retry number `retry` (0-based): exponential
+ * (`baseMs * 2^retry`, capped at `maxDelayMs`) with equal jitter, i.e. a
+ * random point in `[step/2, step]`. The jitter spreads parallel destroys in
+ * one account apart, so they stop retrying DeleteRestApi in lockstep.
+ */
+export function throttleBackoffDelay(retry: number, backoff: ThrottleBackoff, random: () => number): number {
+	const { baseMs, maxDelayMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...backoff };
+	const step = Math.min(maxDelayMs, baseMs * 2 ** retry);
+	return Math.round(step / 2 + random() * (step / 2));
+}
+
 /** Injectable dependencies for {@link runDestroyWithRetries} — real ones in
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
@@ -633,6 +730,19 @@ export interface DestroyRetryDeps {
 	retryDelays?: number[];
 	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
 	successLabel?: string;
+	/**
+	 * Whether the attempt that started at `attemptStartedAt` (epoch ms) failed
+	 * on an AWS API throttle (e.g. DeleteRestApi 429). A throttled failure is
+	 * retried with {@link throttleBackoff} instead of `retryDelays`; a rejection
+	 * is logged and treated as "not throttled". Default: never throttled.
+	 */
+	isThrottled?: (stackNames: string[], attemptStartedAt: number) => Promise<boolean>;
+	/** Backoff for throttled failures. Default: jittered 1min, 2min, 4min, then 5min steps within 20min of the first failure. */
+	throttleBackoff?: ThrottleBackoff;
+	/** Jitter source in [0, 1). Default: `Math.random`. */
+	random?: () => number;
+	/** Clock (epoch ms). Default: `Date.now`. */
+	now?: () => number;
 }
 
 /**
@@ -646,30 +756,67 @@ export interface DestroyRetryDeps {
  * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
  * retries a transient teardown blocker. Factored out with injectable deps so
  * this behavior is unit-testable.
+ *
+ * A failure that `isThrottled` attributes to an AWS API throttle (typically
+ * API Gateway's DeleteRestApi quota of one request every 30s per account, hit
+ * when several stacks in one account tear down at once) is retried longer:
+ * jittered exponential backoff ({@link throttleBackoffDelay}) until
+ * `throttleBackoff.budgetMs` after the first failure is spent. Every other
+ * failure keeps the `retryDelays` schedule.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
 	const label = deps.successLabel ?? 'Sandbox';
+	const now = deps.now ?? Date.now;
+	const random = deps.random ?? Math.random;
+	const isThrottled = deps.isThrottled ?? (async () => false);
+	const { budgetMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...deps.throttleBackoff };
 	let stackNames: string[] | undefined;
+	let firstFailureAt: number | undefined;
+	let throttleRetries = 0;
 	for (let attempt = 0; ; attempt++) {
+		const attemptStartedAt = now();
 		try {
 			deps.runDestroy();
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
-			if (attempt < retryDelays.length) {
-				if (stackNames === undefined) stackNames = deps.listStackNames();
-				if (stackNames.length > 0) {
-					console.log('\n🧹 Emptying versioned S3 buckets before retry...');
-					await deps.emptyBuckets(stackNames);
-				}
-				const delaySec = retryDelays[attempt] / 1000;
-				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
-				await deps.sleep(retryDelays[attempt]);
-			} else {
+			firstFailureAt ??= now();
+			if (stackNames === undefined) stackNames = deps.listStackNames();
+			let throttled = false;
+			try {
+				throttled = await isThrottled(stackNames, attemptStartedAt);
+			} catch (e) {
+				console.warn(
+					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
+				);
+			}
+			let delayMs: number | undefined;
+			if (throttled) {
+				const next = throttleBackoffDelay(throttleRetries, deps.throttleBackoff ?? {}, random);
+				if (now() - firstFailureAt + next <= budgetMs) delayMs = next;
+			} else if (attempt < retryDelays.length) {
+				delayMs = retryDelays[attempt];
+			}
+			if (delayMs === undefined) {
 				console.error('\n❌ Destroy failed after retries.');
 				throw error;
 			}
+			if (stackNames.length > 0) {
+				console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+				await deps.emptyBuckets(stackNames);
+			}
+			const delaySec = Math.round(delayMs / 1000);
+			if (throttled) {
+				throttleRetries++;
+				console.log(
+					`\n⏳ Stack deletion was throttled by AWS (API rate limit). Retrying in ${delaySec}s ` +
+						`(throttle retry ${throttleRetries}; backing off for up to ${Math.round(budgetMs / 60_000)} min)...`,
+				);
+			} else {
+				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+			}
+			await deps.sleep(delayMs);
 		}
 	}
 }
@@ -702,6 +849,7 @@ export async function destroySandbox(backendPath: string) {
       runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
       listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
       emptyBuckets: emptySandboxBuckets,
+      isThrottled: sandboxDeleteThrottled,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     });
   });
