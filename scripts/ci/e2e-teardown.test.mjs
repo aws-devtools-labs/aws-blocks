@@ -192,9 +192,17 @@ describe('e2e-teardown.mjs', () => {
 
 	it('fails when an accepted delete never starts', () => {
 		const name = `bb-test-${ID}-pr-9-1`;
-		const r = run({ stacks: [stack(name, 'CREATE_IN_PROGRESS')], statusAfterDelete: 'CREATE_IN_PROGRESS', budget: '1' });
+		const r = run({ stacks: [stack(name, 'CREATE_COMPLETE')], statusAfterDelete: 'CREATE_COMPLETE', budget: '1' });
 		assert.equal(r.status, 1, r.out);
-		assert.match(r.out, /::error title=E2E teardown::.*is CREATE_IN_PROGRESS after DeleteStack/);
+		assert.match(r.out, /::error title=E2E teardown::.*is CREATE_COMPLETE after DeleteStack/);
+	});
+
+	it('warns when a stack cancelled mid-create is still finishing its create', () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name, 'CREATE_IN_PROGRESS')], statusAfterDelete: 'CREATE_IN_PROGRESS', budget: '1' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [name]);
+		assert.match(r.out, /::warning title=E2E teardown::DeleteStack .* accepted; still CREATE_IN_PROGRESS/);
 	});
 
 	it('reports a stack that moves to DELETE_FAILED', () => {
@@ -292,7 +300,14 @@ describe('pr-checks.yml', () => {
 			const steps = stepsOf(jobs[id]);
 			const last = steps.at(-1);
 			assert.match(ifOf(last), /^always\(\)/, `${id}: the last step must run with if: always()`);
-			assert.match(last, TEARDOWN, `${id}: the last step must run a teardown`);
+			// The command, without comments, and a failure it can't hide.
+			const command = last
+				.slice(last.search(/^ {8}run: /m))
+				.split('\n')
+				.map((l) => l.replace(/(^|\s)#.*$/, ''))
+				.join('\n');
+			assert.match(command, TEARDOWN, `${id}: the last step must run a teardown`);
+			assert.doesNotMatch(last, /continue-on-error/, `${id}: the teardown must not hide its failure`);
 			const creds = steps.findIndex((s) => s.includes(CREDENTIALS));
 			assert.ok(creds >= 0 && creds < steps.length - 1, `${id}: the teardown must come after the credentials step`);
 		});

@@ -18,8 +18,11 @@
 // It waits until each delete has started, not until it finishes: GitHub
 // force-stops a cancelled job 5 minutes after the cancel, and a production
 // stack takes ~12 minutes to delete. A delete that fails later is left to
-// cleanup-stacks.yml. What it can see fails the step: stacks it cannot list,
-// a delete that is denied, or one that has not started within the budget.
+// cleanup-stacks.yml. What it can see fails the step: an unexpected sandbox id,
+// stacks it cannot list, a delete that is denied, or one that has not started
+// within the budget. A stack cancelled mid-create may keep reporting
+// CREATE_IN_PROGRESS while CloudFormation finishes in-flight resources before
+// the accepted delete; that is a warning.
 // A passing job whose suite left a stack (its test.after destroy failed, which
 // node:test does not turn into a failed run) gets a warning and a new delete.
 //
@@ -80,7 +83,8 @@ const warning = (msg) => console.log(`::warning title=E2E teardown::${msg}`);
 
 function aws(...args) {
 	// No single call may outlive the budget.
-	const timeout = Math.max(1000, Math.min(60_000, deadline - Date.now()));
+	// The floor leaves the CLI time to start and send the request.
+	const timeout = Math.max(10_000, Math.min(60_000, deadline - Date.now()));
 	const r = spawnSync('aws', ['cloudformation', ...args, '--output', 'json', '--cli-read-timeout', '20'], {
 		encoding: 'utf8',
 		timeout,
@@ -156,6 +160,10 @@ async function main() {
 		while (now !== 'DELETE_IN_PROGRESS' && now !== 'gone' && Date.now() + pollMs < deadline) {
 			await sleep(pollMs);
 			now = statusOf(name);
+		}
+		if (now === 'CREATE_IN_PROGRESS' || now === 'REVIEW_IN_PROGRESS') {
+			warning(`DeleteStack ${name} accepted; still ${now}, CloudFormation deletes it once the create stops.`);
+			continue;
 		}
 		if (now !== 'DELETE_IN_PROGRESS' && now !== 'gone') {
 			error(`${name} (was ${was}) is ${now} after DeleteStack; cleanup-stacks.yml retries it.`);
