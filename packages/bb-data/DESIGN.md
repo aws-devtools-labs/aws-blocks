@@ -33,6 +33,8 @@ bb-data (this package)
 - Data persists in `.bb-data/{fullId}/`
 - Single-connection (no real concurrency)
 - Translates pg error codes to `DatabaseErrors` names
+- Never keeps the process alive by itself: PostgreSQL's timeouts run on an emulated `setitimer` (a `setTimeout` PGlite re-arms about every 10s), and the engine `unref()`s those timers (`pgliteUnrefTimersExtension` in `@aws-blocks/data-common`). A short-lived script that imports the backend exits once its own work is done; the dev server keeps running because its HTTP server holds the event loop.
+- Closes PGlite on `beforeExit` (`closeOnProcessExit`), so PostgreSQL shuts down cleanly and leaves no `postmaster.pid`. A query after that reopens the engine. `process.exit()` and signals (Ctrl-C on the dev server) skip `beforeExit`; the stale `postmaster.pid` they leave is removed on the next start, as before.
 
 ### DataApiEngine (AWS Runtime)
 

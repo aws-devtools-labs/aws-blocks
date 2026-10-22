@@ -37,7 +37,7 @@ The emitter uses three tiers, in order of precision:
 
 1. **Zod schemas** — if a method calls `.parse()` on an exported Zod schema, the emitter extracts full JSON Schema with constraints (`format: uuid`, `maxLength`, `minLength`, etc.)
 2. **TypeScript types** — if no Zod schema is found, the emitter uses the TypeScript type checker to extract types from method signatures and inferred return values
-3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates `Any` in native clients
+3. **`unknown`** — if both fail, the param or return type is emitted as `{ "type": "unknown" }`, which generates an untyped JSON value in native clients (`JsonElement` in Kotlin, `JSONValue` in Swift, `dynamic` in Dart)
 
 Most methods get good types from tier 2 automatically. Tier 1 is for when you need precision beyond what TypeScript can express.
 

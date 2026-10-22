@@ -43,8 +43,11 @@ class NarrowingAuth implements BlocksAuth {
 	}
 }
 
-/** Shaped like `AuthBasic`: no `requireRole` at all — still a `BlocksAuth`. */
-class NoRoleAuth implements BlocksAuth {
+/**
+ * Shaped like the removed `AuthBasic`: no `requireRole` at all. Not a
+ * `BlocksAuth` — `requireRole` is a required member since the cutover.
+ */
+class NoRoleAuth {
 	async requireAuth(_context: BlocksContext): Promise<AuthUser> {
 		return { userId: 'u', username: 'u' };
 	}
@@ -57,6 +60,7 @@ class NoRoleAuth implements BlocksAuth {
 }
 
 const narrowing: BlocksAuth = new NarrowingAuth();
+// @ts-expect-error — `requireRole` is required in `BlocksAuth`.
 const noRole: BlocksAuth = new NoRoleAuth();
 void narrowing;
 void noRole;
@@ -68,7 +72,7 @@ void noRole;
  * shorthand.
  */
 interface BlocksAuthWithPropertySyntax {
-	requireRole?: (context: BlocksContext, role: string) => Promise<AuthUser>;
+	requireRole: (context: BlocksContext, role: string) => Promise<AuthUser>;
 }
 // @ts-expect-error — `Role` is narrower than `string`; property syntax is contravariant.
 const propertySyntax: BlocksAuthWithPropertySyntax = new NarrowingAuth();

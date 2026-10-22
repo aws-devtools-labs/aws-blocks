@@ -49,7 +49,7 @@ function cleanEnvVars(fullId: string): void {
 
 class ParentAuthBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
-		super(id, { parent, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		super(id, { parent, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 	}
 }
 
@@ -85,7 +85,7 @@ describe('DistributedDatabase user-agent integration (DsqlEngine / pg.Pool appli
 		}
 	});
 
-	test('DistributedDatabase nested under AuthBasic includes parent BB in application_name', () => {
+	test('DistributedDatabase nested under Auth includes parent BB in application_name', () => {
 		const root = { id: 'my-app' };
 		const auth = new ParentAuthBB(root, 'auth');
 		const fullId = 'my-app/auth/dsql';
@@ -93,10 +93,10 @@ describe('DistributedDatabase user-agent integration (DsqlEngine / pg.Pool appli
 		try {
 			const dsql = new DistributedDatabase(auth, 'dsql');
 			const appName = effectiveApplicationName(dsql);
-			// `aws-blocks/<core> bb/AuthBasic/1.0.1 bb/DistributedDatabase/<ver>` is 64
+			// `aws-blocks/<core> bb/Auth/1.0.1-rc.1 bb/DistributedDatabase/<ver>` is 64
 			// bytes — one over the Postgres `application_name` limit (63). Left to the
 			// server it would be clipped by byte count, mid-token; formatUserAgentString
-			// elides the middle entry (the AuthBasic parent) instead.
+			// elides the middle entry (the Auth parent) instead.
 			assert.ok(Buffer.byteLength(appName ?? '', 'utf8') <= 63);
 			assert.strictEqual(appName, `aws-blocks/${CORE_VERSION} ... bb/${BB_NAME}/${BB_VERSION}`);
 		} finally {

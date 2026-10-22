@@ -194,7 +194,7 @@ export interface BlocksAuth {
     checkAuth(context: BlocksContext): Promise<boolean>;
     getCurrentUser(context: BlocksContext): Promise<AuthUser | null>;
     requireAuth(context: BlocksContext): Promise<AuthUser>;
-    requireRole?(context: BlocksContext, role: string): Promise<AuthUser>;
+    requireRole(context: BlocksContext, role: string): Promise<AuthUser>;
 }
 
 // @public
