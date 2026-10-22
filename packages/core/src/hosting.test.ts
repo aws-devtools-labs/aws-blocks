@@ -3166,6 +3166,24 @@ describe('Hosting', () => {
       assert.doesNotMatch(String(warnings[0]?.entry.data), /raise the quota/);
     });
 
+    it('the edge stamps the same security headers on the API, auth and raw-route behaviors as on the static site', () => {
+      createSpaBuildOutput(tmpDir);
+      registerRoute({ method: 'GET', path: '/health', handler: async () => {} });
+      const stack = new Stack(new App(), 'CfOverAlbApiHeaders', { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } });
+      const edge = edgeOf(Template.fromStack(stack));
+      const policy = (b: { ResponseHeadersPolicyId?: unknown }) => JSON.stringify(b.ResponseHeadersPolicyId);
+      const defaultPolicy = policy(edge.config.DefaultCacheBehavior as { ResponseHeadersPolicyId?: unknown });
+      assert.ok(defaultPolicy && defaultPolicy !== 'undefined', 'the default behavior has a headers policy');
+      const behaviors = (edge.config as { CacheBehaviors?: Array<{ PathPattern: string; ResponseHeadersPolicyId?: unknown }> }).CacheBehaviors ?? [];
+      for (const pattern of ['/aws-blocks/*', '/health']) {
+        const b = behaviors.find((x) => x.PathPattern === pattern);
+        if (!b) continue; // left to the router default, which carries the same policy
+        assert.strictEqual(policy(b), defaultPolicy, pattern);
+      }
+      assert.ok(behaviors.every((b) => policy(b) === defaultPolicy), 'every edge behavior carries the policy');
+    });
+
     it('the thin edge stamps security headers (HSTS / frame / content-type) — parity with the default CloudFront door', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();

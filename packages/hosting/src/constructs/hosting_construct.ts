@@ -633,19 +633,15 @@ export class HostingConstruct extends Construct {
    * The security-headers / CSP policy applied to this distribution's static,
    * SSR and image behaviors. Exposed so `core.Hosting` can attach the same
    * policy to the API/auth proxy behaviors it adds when it fronts the backend,
-   * keeping every behavior on the distribution covered by one policy. Only the
-   * CloudFront door has one.
+   * keeping every behavior on the distribution covered by one policy.
    *
-   * @throws HostingError('FrontDoorNotCloudFrontError') on any other door.
+   * Only the CloudFront door builds a distribution here, so it is `undefined`
+   * behind every other door: the stacked door's edge (built by `core.Hosting`)
+   * carries its own policy on every behavior, the API's included, and a
+   * bring-your-own door attaches its own.
    */
-  get securityHeadersPolicy(): IResponseHeadersPolicy {
-    if (!this.cdn) {
-      throw new HostingError('FrontDoorNotCloudFrontError', {
-        message: `HostingConstruct.securityHeadersPolicy is only available for the CloudFront front door; this deploy uses the '${this.frontDoorKind}' door.`,
-        resolution: 'Read it only when `frontDoorKind` is `cloudfront`.',
-      });
-    }
-    return this.cdn.securityHeadersPolicy;
+  get securityHeadersPolicy(): IResponseHeadersPolicy | undefined {
+    return this.cdn?.securityHeadersPolicy;
   }
   /**
    * Physical id of the `/*` CloudFront invalidation issued on a compute deploy

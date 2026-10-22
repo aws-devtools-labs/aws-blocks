@@ -378,6 +378,13 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.throws(() => hosting.distribution, (e: Error) => e.name === 'FrontDoorNotCloudFrontError');
     });
 
+    it('securityHeadersPolicy is the CloudFront door\'s policy, and undefined behind a door with no distribution', () => {
+      assert.ok(synth(spaManifest(), undefined).hosting.securityHeadersPolicy);
+      for (const door of ['none', { kind: 'alb' }, { kind: 'apiGateway' }, { kind: 'stackedRouter' }, { kind: 'custom', door: namedCloudFront }] as const) {
+        assert.equal(synth(spaManifest(), door).hosting.securityHeadersPolicy, undefined, JSON.stringify(door));
+      }
+    });
+
     it('the built-in kinds', () => {
       assert.equal(synth(spaManifest(), undefined).hosting.frontDoorKind, 'cloudfront');
       assert.equal(synth(spaManifest(), 'none').hosting.frontDoorKind, 'none');

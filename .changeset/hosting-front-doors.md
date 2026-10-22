@@ -167,6 +167,11 @@ before IPX's own prefix (`IPX_APP_BASE_URL`).
 The stacked door emits `HostingInvalidationId`, so the post-deploy liveness
 poll waits for the edge's invalidation.
 
+`HostingConstruct.securityHeadersPolicy` (the CloudFront door's security-headers
+policy, which `Hosting` reuses on the API and auth behaviors) is `undefined`
+behind a door with no CloudFront distribution here; the stacked door's edge
+carries its own policy on every behavior, the API's included.
+
 `HostingConstruct` exposes the resolved door as `frontDoorKind`, and takes the
 backend API to proxy same-origin as `backendApi: { url, paths? }` (the core
 `Hosting` sets it from `api`).
