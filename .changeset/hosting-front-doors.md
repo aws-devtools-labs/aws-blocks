@@ -145,6 +145,11 @@ route, so on an app with a server it warns
 the backend's catch-all raw route (`/*`) to the API, which would take every
 page and asset, and warn (`@aws-blocks/hosting:CatchAllApiPathNotRouted`). The
 stacked edge serves the framework build's own 404 page, as the other doors do.
+On the CloudFront door and the stacked door's edge, the app's header rules
+match the path the viewer asked for, as on the regional doors: the
+viewer-response function sees the URI rewritten to the build prefix, so the
+viewer-request function records the viewer's URI for it (`x-blocks-viewer-uri`,
+trusted only on a rewritten URI), and a rule such as `/assets/*` applies.
 The stacked door emits `HostingInvalidationId`, so the post-deploy liveness
 poll waits for the edge's invalidation.
 
