@@ -491,8 +491,9 @@ jobs:
           dart pub get
           dart run bin/e2e_test.dart
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
-      # holds the cdk.out lock), and reports a failed destroy as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings
@@ -595,8 +596,9 @@ jobs:
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
-      # holds the cdk.out lock), and reports a failed destroy as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings
@@ -716,8 +718,9 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
-      # holds the cdk.out lock), and reports a failed destroy as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning.
       - name: Destroy sandbox
         if: always()
         working-directory: test-apps/native-bindings

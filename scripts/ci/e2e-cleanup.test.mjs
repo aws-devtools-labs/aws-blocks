@@ -79,12 +79,12 @@ describe('parsePsLines', () => {
 });
 
 describe('always() cleanup steps', () => {
-	// Every command line of an always() step, in any workflow, that tears a stack down.
+	// Every command line of an always()/cancelled()/failure() step, in any workflow, that tears a stack down.
 	const teardownLines = WORKFLOWS.flatMap((file) => {
 		const wf = parse(readFileSync(join(ROOT, '.github/workflows', file), 'utf8'));
 		return Object.entries(wf.jobs).flatMap(([job, def]) =>
 			(def.steps ?? [])
-				.filter((s) => String(s.if ?? '').includes('always()') && s.run)
+				.filter((s) => /always\(\)|cancelled\(\)|failure\(\)/.test(String(s.if ?? '')) && s.run)
 				.flatMap((s) => s.run.split('\n').filter((l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l)))
 				.map((line) => ({ where: `${file} ${job}`, line: line.trim() })),
 		);
@@ -167,7 +167,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 	 * A CDK app dir whose cdk.out has a read lock held by a live process with
 	 * tracking id `trackingId`, as a cancelled `cdk deploy` leaves it.
 	 */
-	function setup(trackingId) {
+	function setup(trackingId, holderCode = 'setInterval(() => {}, 1e6)') {
 		deleted = [];
 		const dir = mkdtempSync(join(tmpdir(), 'e2e-cleanup-'));
 		const cdkLib = join(ROOT, 'node_modules/aws-cdk-lib/index.js');
@@ -181,14 +181,10 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 		);
 		// Started from a shell that exits at once, so the holder is reparented
 		// like the processes of a cancelled step.
-		const r = spawnSync(
-			'bash',
-			['-c', `'${process.execPath}' -e 'setInterval(() => {}, 1e6)' >/dev/null 2>&1 & echo $!`],
-			{
-				env: { ...process.env, RUNNER_TRACKING_ID: trackingId },
-				encoding: 'utf8',
-			},
-		);
+		const r = spawnSync('bash', ['-c', `'${process.execPath}' -e '${holderCode}' >/dev/null 2>&1 & echo $!`], {
+			env: { ...process.env, RUNNER_TRACKING_ID: trackingId },
+			encoding: 'utf8',
+		});
 		const holder = { pid: Number(r.stdout.trim()) };
 		assert.ok(holder.pid > 0, r.stderr);
 		mkdirSync(join(dir, 'cdk.out'));
@@ -241,7 +237,7 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 		try {
 			const r = await run(dir, 'bash', ['-c', `${destroy.map((a) => `'${a}'`).join(' ')} || true`], id);
 			assert.equal(r.status, 0);
-			assert.match(r.output, /lock|currently (reading|synthing)/i);
+			assert.match(r.output, /\block\b|currently (reading|synthing)/i);
 			assert.deepEqual(deleted, []);
 		} finally {
 			cleanup();
@@ -257,6 +253,20 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 			assert.doesNotMatch(r.output, /currently (reading|synthing)|E2E cleanup failed/);
 			assert.equal(deleted.length, 1, r.output);
 			assert.match(deleted[0], /CleanupTest/);
+			assert.throws(() => process.kill(holder.pid, 0), /ESRCH/);
+		} finally {
+			cleanup();
+		}
+	});
+
+	it('e2e-cleanup.mjs SIGKILLs a holder that ignores SIGTERM', async () => {
+		const id = `test-${process.pid}-e`;
+		const { dir, holder, cleanup } = setup(id, 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1e6)');
+		try {
+			const r = await run(dir, process.execPath, [SCRIPT, '--', 'true'], id);
+			assert.equal(r.status, 0, r.output);
+			assert.match(r.output, new RegExp(`SIGKILL: ${holder.pid}`));
+			assert.doesNotMatch(r.output, /Still present/);
 			assert.throws(() => process.kill(holder.pid, 0), /ESRCH/);
 		} finally {
 			cleanup();

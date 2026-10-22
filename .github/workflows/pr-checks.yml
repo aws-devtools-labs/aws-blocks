@@ -779,8 +779,9 @@ jobs:
         if: matrix.compute-type == 'web-function'
         run: npx tsx scripts/ci/web-function-redeploy.ts ${{ matrix.app-dir }}
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
-      # holds the cdk.out lock), and reports a failed destroy as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning.
       - name: Cleanup sandbox
         if: always()
         run: |
@@ -835,8 +836,9 @@ jobs:
       - name: Telemetry E2E Tests
         run: npm run test:telemetry
 
-      # e2e-cleanup.mjs first stops what a cancelled step left running (its cdk
-      # holds the cdk.out lock), and reports a failed destroy as a warning.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning.
       - name: Cleanup stacks
         if: always()
         run: |
