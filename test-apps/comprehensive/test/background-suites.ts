@@ -23,10 +23,10 @@
  * suites: no fixed keys another suite writes, no scan of a store or table
  * another suite writes to without a prefix filter, no global purge.
  *
- * The extra load also spreads the parent's requests across more Lambda
- * instances. A parent suite whose flow keeps state in one instance's memory
- * between requests must run before the background suites start (AuthOIDC, see
- * e2e.test.ts).
+ * The extra load also changes which Lambda instance serves each of the
+ * parent's requests. A parent suite whose flow relies on state one instance
+ * keeps in memory between requests must run before the background suites
+ * start (AuthOIDC's stub IdP refresh tokens, see e2e.test.ts).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';

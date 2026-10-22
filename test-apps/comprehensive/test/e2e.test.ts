@@ -241,10 +241,13 @@ test('AuthBasic - full purge clears every code record and leaves other keys alon
 });
 
 // AuthOIDC tests (separate file). They run before the background suites start:
-// the stub IdP keeps the refresh tokens it issues in memory per Lambda
-// instance, so a refresh only succeeds on the instance that issued the token.
-// Serial traffic keeps reusing one warm instance; the background suites' extra
-// load spreads requests across instances and the bearer refresh test fails.
+// the stub IdP keeps each refresh token in the memory of the Lambda instance
+// that served its /token call, which is never the instance serving
+// /extras/exchange (that one is busy waiting on the call). A later refresh only
+// succeeds if its own /token call lands on the issuing instance again. Serial
+// traffic happens to route it back there; the background suites' load breaks
+// that routing and the bearer refresh test fails. The stub IdP itself needs
+// self-contained refresh tokens to fix this.
 oidcAuthTests(() => api);
 
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
