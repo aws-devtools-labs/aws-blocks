@@ -70,6 +70,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -144,9 +145,11 @@ jobs:
       # cancel, their ampx holds the cdk.out lock), then runs the teardown,
       # which retries a delete that fails because CloudFormation gave up on a
       # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
-      # timeout-minutes stays as a backstop for the teardown's own budget.
+      # timeout-minutes stays as a backstop for the teardown's own budget. It
+      # runs only once AWS credentials were set up: before that nothing was
+      # deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         timeout-minutes: 12
         run: >
           node scripts/ci/e2e-cleanup.mjs --
@@ -182,6 +185,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -210,9 +214,11 @@ jobs:
       # cancel, their ampx holds the cdk.out lock), then runs the teardown,
       # which retries a delete that fails because CloudFormation gave up on a
       # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
-      # timeout-minutes stays as a backstop for the teardown's own budget.
+      # timeout-minutes stays as a backstop for the teardown's own budget. It
+      # runs only once AWS credentials were set up: before that nothing was
+      # deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         timeout-minutes: 12
         run: >
           node scripts/ci/e2e-cleanup.mjs --
