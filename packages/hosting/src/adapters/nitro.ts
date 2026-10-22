@@ -389,11 +389,17 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // Lambda bundle so sharp doesn't bloat the SSR Lambda. The bundle
   // is referenced via `manifest.imageOptimization` later on.
   // `skipImageOptimization`: no image function is deployed, so don't bundle one.
-  const imageOptBundle = buildProfile().skipImageOptimization ? undefined : buildImageOptBundleIfNeeded(projectDir);
+  const skipImageOptimization = buildProfile().skipImageOptimization === true;
+  const imageOptBundle = skipImageOptimization ? undefined : buildImageOptBundleIfNeeded(projectDir);
+  // Without an image function the app still requests its IPX endpoint: keep
+  // the endpoint's route (targeting `image-optimization`), so the door can
+  // answer it with the source image.
+  const imageEndpointWithoutFunction = skipImageOptimization && projectUsesNuxtImage(projectDir);
   // @nuxt/image's `runtimeConfig.ipx.baseURL` lets users serve IPX
   // from a path other than the default `/_ipx`. We need the same
-  // value so the CloudFront cache behavior + Lambda strip match.
-  const ipxBaseURL = imageOptBundle ? findIpxBaseURL(projectDir) : undefined;
+  // value so the CloudFront cache behavior + Lambda strip match (and,
+  // without an image function, so the door's fallback matches it).
+  const ipxBaseURL = imageOptBundle || imageEndpointWithoutFunction ? findIpxBaseURL(projectDir) : undefined;
   // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda.
   const imageDomains = imageOptBundle ? findNuxtImageDomains(projectDir) : [];
 
@@ -451,6 +457,7 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     routeRules: mergedRouteRules,
     awsLambdaStreaming,
     imageOptBundle,
+    imageEndpointWithoutFunction,
     ipxBaseURL,
     imageDomains,
     basePath,
@@ -1245,6 +1252,12 @@ const buildManifest = (input: {
   awsLambdaStreaming: boolean;
   imageOptBundle?: string;
   /**
+   * The app uses `@nuxt/image` but no image function is built
+   * (`skipImageOptimization`): the IPX route is still emitted, targeting
+   * `image-optimization`, so the door can answer the endpoint.
+   */
+  imageEndpointWithoutFunction?: boolean;
+  /**
    * Path the IPX Lambda is mounted at. Defaults to `/_ipx` when
    * `imageOptBundle` is set; user override comes from
    * `runtimeConfig.ipx.baseURL` in nuxt.config.
@@ -1262,6 +1275,7 @@ const buildManifest = (input: {
     routeRules,
     awsLambdaStreaming,
     imageOptBundle,
+    imageEndpointWithoutFunction,
     ipxBaseURL,
     imageDomains,
     basePath,
@@ -1289,7 +1303,7 @@ const buildManifest = (input: {
     routes: buildRoutes(
       publicDir,
       routeRules,
-      !!imageOptBundle,
+      !!imageOptBundle || imageEndpointWithoutFunction === true,
       effectiveIpxBaseURL,
     ),
   };

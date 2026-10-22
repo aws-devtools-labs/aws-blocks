@@ -1958,7 +1958,9 @@ export class HostingConstruct extends Construct {
               ...common,
               errorPages: this.doorInput.app.errorPages,
               computeRoutes: directComputeRoutes(manifest, this.computeFunctions, serverName),
-              ...(props.skipImageOptimization ? { imageFallback: { hosts: imageRemoteHosts(manifest) } } : {}),
+              ...(props.skipImageOptimization
+                ? { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }
+                : {}),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -2716,6 +2718,21 @@ const directComputeRoutes = (
     )
     .map((r) => ({ pattern: prependBasePath(manifest.basePath, r.pattern), computeName: r.target }))
     .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+/**
+ * The path-form image endpoints the manifest routes to the image function
+ * (Nuxt IPX: `/_ipx/*` by default, or a custom `runtimeConfig.ipx.baseURL`),
+ * as basePath-relative prefixes. The query-form endpoints (`/_next/image`,
+ * `/_image`) are matched by name.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the prefixes, e.g. `['/img']`.
+ */
+const imagePathEndpoints = (manifest: DeployManifest): string[] =>
+  manifest.routes
+    .filter((r) => r.target === 'image-optimization' && r.pattern.endsWith('/*'))
+    .map((r) => `/${r.pattern.slice(0, -2).replace(/^\/+/, '')}`)
+    .filter((p) => !p.startsWith('/_next/') && p !== '/_image');
 
 /**
  * The remote image hosts the app allows its image optimizer to fetch: the

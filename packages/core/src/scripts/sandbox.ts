@@ -154,6 +154,23 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
 }
 
 /**
+ * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
+ * It synthesizes with the same context as the deploy, so a preview sandbox
+ * keeps `previewMode=true` and a file change re-deploys the same shape (the
+ * app adds `Hosting` only when it sees the signal).
+ */
+export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
+  return [
+    "cdk", "watch",
+    "--outputs-file", `${outDir}/outputs.json`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
+}
+
+/**
  * Build the `npm exec cdk -- deploy …` argv used by the sandbox deploy.
  *
  * Kept pure (no I/O) so the argv contract — in particular the flags below — can
@@ -404,13 +421,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch",
-    `--outputs-file`, `${outDir}/outputs.json`,
-    `--context`, `projectRoot=${process.cwd()}`,
-    `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
-  ], {
+  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs(argOptions), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
