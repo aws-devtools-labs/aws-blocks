@@ -344,13 +344,32 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
 });
 
 describe('AlbConstruct — custom domain', () => {
-  const synthDomain = (domain: { names: string[]; hostedZone?: string; hostedZoneId?: string }) => {
+  const synthDomain = (domain: { names: string[]; hostedZone?: string; hostedZoneId?: string }, restrictToCloudFront = false) => {
     const stack = new Stack(new App(), 'D', { env: { account: '111111111111', region: 'us-west-2' } });
     const bucket = new Bucket(stack, 'Assets');
     const certificate = Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-west-2:111111111111:certificate/c');
-    const alb = new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, certificate, domain });
-    return { t: Template.fromStack(stack), alb };
+    const alb = new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket, certificate, domain, restrictToCloudFront });
+    const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('AlbDomainWithoutRecords'));
+    return { t: Template.fromStack(stack), alb, warnings };
   };
+
+  it('a certificate without a domain fails synth (it cannot cover the load balancer name)', () => {
+    const stack = new Stack(new App(), 'C', { env: { account: '111111111111', region: 'us-west-2' } });
+    const certificate = Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-west-2:111111111111:certificate/c');
+    assert.throws(
+      () => new AlbConstruct(stack, 'Alb', { plan: staticPlan, bucket: new Bucket(stack, 'Assets'), certificate }),
+      (e: Error) => e.name === 'AlbCertificateNeedsDomainError',
+    );
+  });
+
+  it('a domain without a hosted zone warns that nothing resolves it (and why it matters behind the stacked edge)', () => {
+    assert.equal(synthDomain({ names: ['app.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z123' }).warnings.length, 0);
+    const plain = synthDomain({ names: ['app.example.com'] }).warnings;
+    assert.equal(plain.length, 1);
+    assert.doesNotMatch(String(plain[0]?.entry.data), /stacked/);
+    const stacked = synthDomain({ names: ['router.example.com'] }, true).warnings;
+    assert.match(String(stacked[0]?.entry.data), /stacked door's edge connects to that name/);
+  });
 
   it('serves HTTPS (TLS 1.2+) at the domain, redirects port 80 to 443, and points the names at the ALB', () => {
     const { t, alb } = synthDomain({ names: ['app.example.com', 'www.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z123' });

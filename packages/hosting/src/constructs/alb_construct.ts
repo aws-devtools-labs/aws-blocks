@@ -315,6 +315,15 @@ export class AlbConstruct extends Construct {
     const defaultTg = serverTg ?? staticTg;
     // A custom domain: its certificate (the door's, the domain's, or a
     // DNS-validated one) and hosted zone.
+    // A certificate can't cover the load balancer's own name: it serves a domain.
+    if (props.certificate && !props.domain) {
+      throw new HostingError('AlbCertificateNeedsDomainError', {
+        message:
+          "AlbConstruct has a `certificate` but no `domain`. The certificate can't cover the load balancer's own " +
+          'name, so the HTTPS listener serves the names in `domain`.',
+        resolution: 'Add `domain` (`domainName`, plus `hostedZone` / `hostedZoneId` for the DNS records), or remove `certificate`.',
+      });
+    }
     const domain = props.domain
       ? resolveApiGwDomain(this, 'Domain', { ...props.domain, certificate: props.certificate ?? props.domain.certificate })
       : undefined;
@@ -580,6 +589,18 @@ export class AlbConstruct extends Construct {
 
     // A custom domain's records: each name → the ALB (alias A + AAAA).
     const zone = domain?.hostedZone;
+    if (domain && !zone) {
+      // No zone: nothing in the stack resolves the name to the ALB. Behind the
+      // stacked door the edge connects to that name, so it fails until a record exists.
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:AlbDomainWithoutRecords',
+        `The ALB serves ${domain.names.join(', ')} but has no hosted zone, so no DNS records are created. ` +
+          (originSecret
+            ? 'The stacked door\'s edge connects to that name, so requests fail until it resolves to the ALB. '
+            : '') +
+          'Give `hostedZone` / `hostedZoneId`, or point the name at the ALB (the `AlbDnsName` output) yourself.',
+      );
+    }
     if (domain && zone) {
       const target = RecordTarget.fromAlias(new LoadBalancerTarget(this.loadBalancer));
       domain.names.forEach((name, i) => {
