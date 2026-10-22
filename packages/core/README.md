@@ -436,6 +436,19 @@ new Hosting(stack, 'Web', {
 
 A preview is served by the API Gateway HTTP API door (no CloudFront; buffered server responses; about 6 MB per response). `frontDoor` may be omitted or set to an `apiGateway` door, for example with a custom domain; any other door fails synth (`PreviewFrontDoorError`). It also builds Next.js without incremental regeneration (prerendered pages still come from the build's snapshot), skips image optimization (the image endpoints serve the source image; `preview: { enabled: true, imageOptimization: true }` keeps it), runs Next.js `runtime: 'edge'` routes as regional functions, and fixes the build id so `startSandbox({ preview: true })` can hotswap a code-only re-deploy.
 
+From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app hosted in preview shape, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`) and hotswaps re-deploys. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only:
+
+```typescript
+const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+const previewMode = app.node.tryGetContext('previewMode') === 'true';
+
+if (!sandboxMode || previewMode) {
+  new Hosting(blocksStack, 'Hosting', { root: join(__dirname, '..'), api: blocksStack, preview: previewMode });
+}
+```
+
+Tear a preview sandbox down with `npm run sandbox:destroy`.
+
 
 ## Building Blocks
 

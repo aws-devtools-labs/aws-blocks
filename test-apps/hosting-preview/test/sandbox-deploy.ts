@@ -16,5 +16,6 @@ try {
   // Expected — no previous stack to clean up
 }
 
-// `preview: true`: a re-deploy of this preview stack hotswaps code changes.
+// `preview: true`: a preview sandbox (sets the previewMode context, which adds
+// Hosting in preview shape); a re-deploy hotswaps code changes.
 await startSandbox({ backendPath, deployOnly: true, preview: true });

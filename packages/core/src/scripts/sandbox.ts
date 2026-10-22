@@ -43,8 +43,13 @@ export interface SandboxOptions {
   /** Custom dev server command. Defaults to 'npx vite'. For Next.js use 'npx next dev'. */
   devCommand?: string;
   /**
-   * The app deploys hosting in preview mode (`Hosting` `preview: true`). Only
-   * then does a RE-deploy use `--hotswap-fallback`: a code-only change is
+   * Deploy a preview sandbox: a sandbox that includes hosting in preview
+   * shape (`npm run sandbox:preview`). Synth and deploy get
+   * `--context previewMode=true` (see {@link PREVIEW_MODE_CONTEXT}) next to
+   * `sandboxMode=true`; the app reads it to add `Hosting` with
+   * `preview: true`. A plain sandbox stays backend-only.
+   *
+   * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
    * applied straight to the Lambda functions in seconds, falling back to a
    * CloudFormation deploy for anything that can't be hotswapped. Hotswap
    * leaves the stack drifted from its template, which is acceptable for a
@@ -52,6 +57,33 @@ export interface SandboxOptions {
    * deploy.
    */
   preview?: boolean;
+}
+
+/**
+ * The CDK context key a preview sandbox sets (`--context previewMode=true`),
+ * next to `sandboxMode=true`. The app reads it to add `Hosting` in preview
+ * shape to the sandbox, which otherwise deploys the backend only:
+ *
+ * ```ts
+ * const previewMode = app.node.tryGetContext('previewMode') === 'true';
+ * if (!sandboxMode || previewMode) new Hosting(stack, 'Hosting', { root, api, preview: previewMode });
+ * ```
+ */
+export const PREVIEW_MODE_CONTEXT = "previewMode";
+
+/**
+ * The site URL from a stack's outputs: the `Hosting` construct's `HostingUrl`
+ * output, whose key CDK prefixes with the construct path and suffixes with a
+ * hash (e.g. `HostingHostingUrl4F2C…`).
+ *
+ * @param stackOutputs one stack's outputs from `outputs.json`.
+ * @returns the URL with a scheme, or `undefined` when the stack has no hosting.
+ */
+export function findHostingUrl(stackOutputs: Record<string, string>): string | undefined {
+  const key = Object.keys(stackOutputs).find((k) => /HostingUrl/.test(k));
+  const url = key ? stackOutputs[key] : undefined;
+  if (!url) return undefined;
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
 }
 
 export interface SandboxDeployArgsOptions {
@@ -79,6 +111,12 @@ export interface SandboxDeployArgsOptions {
    * it only for a preview re-deploy (see {@link SandboxOptions.preview}).
    */
   hotswap?: boolean;
+  /**
+   * Synthesize and deploy a preview sandbox: adds `--context previewMode=true`
+   * (see {@link PREVIEW_MODE_CONTEXT}). `startSandbox` sets it from
+   * {@link SandboxOptions.preview}.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -86,13 +124,14 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
     "--app", `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
@@ -157,6 +196,7 @@ export function buildSandboxDeployArgs({
   express = true,
   assemblyDir,
   hotswap = false,
+  preview = false,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
@@ -167,6 +207,7 @@ export function buildSandboxDeployArgs({
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
     "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
@@ -264,7 +305,7 @@ export async function startSandbox(options: SandboxOptions) {
   );
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
-  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
   try {
@@ -317,6 +358,8 @@ export async function startSandbox(options: SandboxOptions) {
 
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);
+  const hostingUrl = findHostingUrl(stackOutputs);
+  if (hostingUrl) console.log(`🌐 ${preview ? 'Preview' : 'Hosting'} URL: ${hostingUrl}`);
 
   buildAndSendEvent({
     command: 'sandbox',
