@@ -503,7 +503,8 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        // Exactly one key. An unkeyed "latest code" slot is what made this
+        // Exactly one key for this user, and no record keyed by anything but
+        // its own username. An unkeyed "latest code" slot is what made this
         // flaky in the first place: whoever delivered last owned it, so a
         // reader could be handed another user's code. Nothing reads one, so
         // nothing writes one — and that also halves the writes per delivery.
