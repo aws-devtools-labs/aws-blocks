@@ -318,6 +318,30 @@ export function fileBucketTests(getApi: () => typeof apiType) {
         assert.strictEqual(file.body, 'original');
       });
 
+      test('a presigned URL returns 404 after its version is permanently deleted', async () => {
+        const api = getApi();
+        const key = `v/deleted-download-${Date.now()}.txt`;
+        await api.vFilePut(key, 'old content', 'text/csv');
+        await api.vFilePut(key, 'current content', 'text/plain');
+        const versions = await api.vFileListVersions(key);
+        const old = versions[versions.length - 1];
+        const url = await api.vFileGetUrl(key, old.versionId);
+        const before = await fetch(url);
+        assert.strictEqual(before.status, 200);
+        assert.strictEqual(await before.text(), 'old content');
+
+        await api.vFileDelete(key, old.versionId);
+        assert.strictEqual(await api.vFileGet(key, old.versionId), null);
+        const deleted = await fetch(url);
+        assert.strictEqual(deleted.status, 404);
+        await deleted.text();
+
+        const current = await fetch(await api.vFileGetUrl(key));
+        assert.strictEqual(current.status, 200);
+        assert.strictEqual(current.headers.get('content-type'), 'text/plain');
+        assert.strictEqual(await current.text(), 'current content');
+      });
+
       test('scan skips deleted files', async () => {
         const api = getApi();
         await api.vFilePut('v/scan-a.txt', 'a');
