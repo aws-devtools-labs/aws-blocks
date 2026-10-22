@@ -207,6 +207,7 @@ export async function isCompleteHandler(event: any) {
 
 	// If a GSI operation is in progress, wait for it
 	if (isTableBusy(table)) {
+		if (event.RequestType !== 'Delete') await probeConcurrentCreate(TableName, table, desired);
 		console.log('Table busy, waiting...');
 		return { IsComplete: false };
 	}
@@ -220,6 +221,40 @@ export async function isCompleteHandler(event: any) {
 	// Table is idle but doesn't match — initiate the next change
 	await initiateNextChange(TableName, table, desired);
 	return { IsComplete: false };
+}
+
+// -- EXPERIMENT ONLY (do not merge) ------------------------------------------
+// While one GSI is CREATING, try to start the create of the next missing GSI
+// and log whether DynamoDB accepts it. Never throws: on rejection the normal
+// serial path continues unchanged.
+async function probeConcurrentCreate(tableName: string, table: any, desired: Record<string, IndexConfig>) {
+	const building = (table.GlobalSecondaryIndexes ?? []).find((g: any) => g.IndexStatus === 'CREATING');
+	const current = getCurrentGSIs(table);
+	const next = Object.entries(desired).find(([name]) => !current[name]);
+	if (!building || !next) return;
+	const [name, cfg] = next;
+	const phase = `table=${table.TableStatus} building=${building.IndexName} backfilling=${building.Backfilling}`;
+	const attrDefs = [{ AttributeName: cfg.partitionKey, AttributeType: (cfg.partitionKeyType ?? 'S') as ScalarAttributeType }];
+	if (cfg.sortKey) attrDefs.push({ AttributeName: cfg.sortKey, AttributeType: (cfg.sortKeyType ?? 'S') as ScalarAttributeType });
+	try {
+		await dynamodb.send(new UpdateTableCommand({
+			TableName: tableName,
+			AttributeDefinitions: attrDefs,
+			GlobalSecondaryIndexUpdates: [{
+				Create: {
+					IndexName: name,
+					KeySchema: [
+						{ AttributeName: cfg.partitionKey, KeyType: KeyType.HASH },
+						...(cfg.sortKey ? [{ AttributeName: cfg.sortKey, KeyType: KeyType.RANGE }] : []),
+					],
+					Projection: { ProjectionType: 'ALL' },
+				},
+			}],
+		}));
+		console.log(`GSI_PROBE accepted create '${name}' while ${phase}`);
+	} catch (e: any) {
+		console.log(`GSI_PROBE rejected create '${name}' while ${phase}: ${e?.name}: ${e?.message}`);
+	}
 }
 
 // ── Initiate next GSI change ────────────────────────────────────────────────
