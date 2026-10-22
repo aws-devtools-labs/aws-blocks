@@ -31,6 +31,7 @@ export {
 } from './common/compute-capabilities.js';
 export type { BlocksVpcOptions, ScopeOptions, SubnetRole, VpcContext, VpcRequirements } from './cdk/index.js';
 export {
+	type BaselineRemovalGuard,
 	BlocksBackend,
 	type BlocksBackendProps,
 	type BlocksDefaults,
@@ -38,10 +39,15 @@ export {
 	BlocksStack,
 	type BlocksThrottling,
 	BuildingBlockScope,
+	baselineDir,
 	blocksNodejsBundling,
 	type CoreBlocksBackendProps,
 	type CoreBlocksStackProps,
+	claimBaseline,
 	DEFAULT_NODE_RUNTIME,
+	type DeployTimeLambda,
+	deployTimeLambdaCode,
+	deployTimeLambdaEntry,
 	ensureApiGatewayAccount,
 	finalizeConfigRegistry,
 	finalizeDashboards,
@@ -52,6 +58,7 @@ export {
 	getConfigLocation,
 	getOrCreateOnRoot,
 	getVpcContext,
+	hasOrphanedBaselines,
 	registerConfig,
 	registerDashboardFinalizer,
 	registerTracer,

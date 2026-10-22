@@ -23,6 +23,11 @@ const CDK_ENTRY = `const __dirname = dirname(fileURLToPath(import.meta.url));
 new Function(stack, 'Fn', { code: Code.fromAsset(join(__dirname, 'my-lambda')) });
 `;
 
+const DEPLOY_TIME_ENTRY = `import { deployTimeLambdaCode } from '@aws-blocks/core/cdk';
+const LAMBDA = { moduleUrl: import.meta.url, bundleDir: '../my-lambda', source: './my-lambda' };
+new Function(stack, 'Fn', { code: deployTimeLambdaCode(LAMBDA) });
+`;
+
 /** A package.json shipping `dist`, plus the given package-relative files. */
 function pkg(name, files, manifest = {}) {
 	return {
@@ -95,6 +100,41 @@ describe('check-packed-assets', () => {
 		assert.match(output, /✓ @aws-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/index\.cdk\.js\)/);
 	});
 
+	it('checks the bundleDir of a deployTimeLambdaCode spec, relative to its module', () => {
+		const files = { 'dist/cdk/guard.js': DEPLOY_TIME_ENTRY };
+		const missing = runGuard(pkg('bb-thing', files));
+		assert.equal(missing.code, 1, missing.output);
+		assert.match(missing.output, /dist\/cdk\/guard\.js loads dist\/my-lambda\//);
+
+		const packed = runGuard(pkg('bb-thing', { ...files, 'dist/my-lambda/index.js': 'exports.handler = 1;' }));
+		assert.equal(packed.code, 0, packed.output);
+		assert.match(packed.output, /✓ @aws-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/guard\.js\)/);
+	});
+
+	it('ignores a bundleDir key in a file that never calls deployTimeLambdaCode', () => {
+		const { code, output } = runGuard(
+			pkg('bb-thing', {
+				'dist/index.cdk.js': CDK_ENTRY,
+				'dist/my-lambda/index.js': 'exports.handler = 1;',
+				'dist/other.js': "const options = { bundleDir: './elsewhere' };\n",
+			}),
+		);
+		assert.equal(code, 0, output);
+		assert.doesNotMatch(output, /elsewhere/);
+	});
+
+	it('ignores a bundleDir that only appears in a JSDoc example', () => {
+		const { code, output } = runGuard(
+			pkg('bb-thing', {
+				'dist/index.cdk.js': CDK_ENTRY,
+				'dist/my-lambda/index.js': 'exports.handler = 1;',
+				'dist/lambda-code.js': "/**\n * @example\n * deployTimeLambdaCode({ bundleDir: './example-lambda' })\n */\nexport function deployTimeLambdaCode(spec) {}\n",
+			}),
+		);
+		assert.equal(code, 0, output);
+		assert.doesNotMatch(output, /example-lambda/);
+	});
+
 	it('skips private packages, which are never published', () => {
 		const { code, output } = runGuard({
 			...pkg('bb-thing', { 'dist/index.cdk.js': CDK_ENTRY, 'dist/my-lambda/index.js': 'exports.handler = 1;' }),
@@ -107,6 +147,6 @@ describe('check-packed-assets', () => {
 	it('fails rather than passing when nothing is built', () => {
 		const { code, output } = runGuard(pkg('bb-thing', { 'src/index.cdk.ts': CDK_ENTRY }));
 		assert.equal(code, 1, output);
-		assert.match(output, /found no Code\.fromAsset/);
+		assert.match(output, /found no Code\.fromAsset\(join\(__dirname, \.\.\.\)\) or deployTimeLambdaCode/);
 	});
 });
