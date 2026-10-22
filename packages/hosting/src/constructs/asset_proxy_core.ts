@@ -246,6 +246,39 @@ async function errorResponse(statusCode) {
   return plainResponse(statusCode, statusCode === 404 ? 'Not Found' : 'Internal Server Error');
 }
 
+// Whether Accept-Encoding allows gzip: a \`gzip\` (or \`*\`) entry whose q is above 0
+// (\`gzip;q=0\` refuses it).
+function acceptsGzip(value) {
+  let star = false;
+  const parts = String(value || '').split(',');
+  for (let i = 0; i < parts.length; i++) {
+    const params = parts[i].split(';');
+    const name = params[0].trim().toLowerCase();
+    let q = 1;
+    for (let k = 1; k < params.length; k++) {
+      const kv = params[k].split('=');
+      if (kv[0].trim().toLowerCase() === 'q') q = Number(kv[1]);
+    }
+    if (name === 'gzip' || name === 'x-gzip') return q > 0;
+    if (name === '*') star = q > 0;
+  }
+  return star;
+}
+
+// Gzipped bodies, per object version, for this Lambda instance (bounded).
+const GZIP_CACHE = new Map();
+const GZIP_CACHE_MAX = 64;
+function gzipOnce(key, version, buf) {
+  const id = key + '|' + version;
+  let gz = GZIP_CACHE.get(id);
+  if (!gz) {
+    gz = zlib.gzipSync(buf);
+    if (GZIP_CACHE.size >= GZIP_CACHE_MAX) GZIP_CACHE.delete(GZIP_CACHE.keys().next().value);
+    GZIP_CACHE.set(id, gz);
+  }
+  return gz;
+}
+
 async function blocksServe(requestUri, requestHeaders) {
   return secure(await serveUri(requestUri, requestHeaders));
 }
@@ -259,7 +292,7 @@ async function serveUri(requestUri, requestHeaders) {
   if (path === null) return plainResponse(400, 'Bad Request');
   const req = lowerHeaders(requestHeaders);
   const key = keyFor(resolveIndex(stripBasePath(path, STRIP_PREFIX), SPA_FALLBACK));
-  const gzip = /\\bgzip\\b/i.test(req['accept-encoding'] || '');
+  const gzip = acceptsGzip(req['accept-encoding']);
   // A weak validator names the same object (a gzipped representation's).
   const ifNoneMatch = req['if-none-match'] ? req['if-none-match'].replace(/^W\\//, '') : undefined;
   const ifModifiedSince = req['if-modified-since'] ? new Date(req['if-modified-since']) : undefined;
@@ -271,8 +304,11 @@ async function serveUri(requestUri, requestHeaders) {
     });
   } catch (err) {
     if (isNotModified(err)) {
+      // The validator of the matched representation: the client's tag when it
+      // sent one (a list names several, and S3 doesn't say which matched).
       const headers = {};
-      if (req['if-none-match']) headers.etag = req['if-none-match'];
+      const sent = req['if-none-match'];
+      if (sent && sent.indexOf(',') === -1 && sent.trim() !== '*') headers.etag = sent.trim();
       return { statusCode: 304, headers, body: '', isBase64Encoded: false };
     }
     // A miss is a 404. Extensionless SPA paths already resolved to index.html
@@ -288,7 +324,7 @@ async function serveUri(requestUri, requestHeaders) {
   const compressible = COMPRESSIBLE.test(found.contentType);
   if (compressible) headers.vary = 'accept-encoding';
   if (compressible && gzip && body.length >= MIN_COMPRESS_BYTES) {
-    body = zlib.gzipSync(body);
+    body = found.etag || found.lastModified ? gzipOnce(key, found.etag || found.lastModified, body) : zlib.gzipSync(body);
     headers['content-encoding'] = 'gzip';
     if (found.etag) headers.etag = 'W/' + found.etag.replace(/^W\\//, '');
   } else if (found.etag) {

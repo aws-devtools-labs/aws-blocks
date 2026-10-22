@@ -30,7 +30,12 @@ type ProxyHandler = (event: Record<string, unknown>) => Promise<ProxyResponse>;
 const PREFIX = 'builds/b1';
 
 /** Load a generated handler with `@aws-sdk/client-s3` replaced by an in-memory bucket. */
-const loadHandler = (code: string, objects: Record<string, StoredObject>, reads: GetInput[] = []): ProxyHandler => {
+const loadHandler = (
+  code: string,
+  objects: Record<string, StoredObject>,
+  reads: GetInput[] = [],
+  zlibImpl: Pick<typeof zlib, 'gzipSync'> = zlib,
+): ProxyHandler => {
   class GetObjectCommand {
     constructor(readonly input: GetInput) {}
   }
@@ -42,7 +47,7 @@ const loadHandler = (code: string, objects: Record<string, StoredObject>, reads:
       if (obj.fails) {
         throw Object.assign(new Error('S3 failed'), { name: 'InternalError', $metadata: { httpStatusCode: obj.fails } });
       }
-      if (obj.etag && cmd.input.IfNoneMatch === obj.etag) {
+      if (obj.etag && cmd.input.IfNoneMatch?.split(',').some((tag) => tag.trim().replace(/^W\//, '') === obj.etag)) {
         throw Object.assign(new Error('Not Modified'), { name: '304', $metadata: { httpStatusCode: 304 } });
       }
       return {
@@ -57,7 +62,7 @@ const loadHandler = (code: string, objects: Record<string, StoredObject>, reads:
   const mod: { exports: { handler?: ProxyHandler } } = { exports: {} };
   const fakeRequire = (id: string) => {
     if (id === '@aws-sdk/client-s3') return { S3Client, GetObjectCommand };
-    if (id === 'node:zlib') return zlib;
+    if (id === 'node:zlib') return zlibImpl;
     throw new Error(`unexpected require: ${id}`);
   };
   const fakeProcess = { env: { ASSET_BUCKET: 'bucket', ASSET_KEY_PREFIX: PREFIX } };
@@ -267,7 +272,7 @@ for (const [label, generate, event] of variants) {
     it('rejects dot segments, encoded slashes and malformed escapes with a 400 (never reads S3)', async () => {
       const reads: GetInput[] = [];
       const proxy = loadHandler(generate({ spaFallback: true }), PATH_OBJECTS, reads);
-      for (const bad of ['/a/../index.html', '/%2e%2e/index.html', '/..%2findex.html', '/a%2Fb.js', '/a%5Cb.js', '/%E0%A4%A.js', '/a%00.js']) {
+      for (const bad of ['/a/../index.html', '/%2e%2e/index.html', '/..%2findex.html', '/a%2Fb.js', '/a%5Cb.js', '/a\\b.js', '/%E0%A4%A.js', '/a%00.js']) {
         const res = await proxy(event(bad));
         assert.equal(res.statusCode, 400, `${bad} → ${res.statusCode}`);
       }
@@ -304,6 +309,38 @@ for (const [label, generate, event] of variants) {
       assert.equal(decode(plain), BIG_JS);
       const font = await proxy(event('/fonts/a.woff2', { 'accept-encoding': 'gzip' }));
       assert.equal(font.headers['content-encoding'], undefined);
+    });
+
+    it('honors q-values: gzip;q=0 refuses gzip, a positive * accepts it', async () => {
+      const proxy = loadHandler(generate({ spaFallback: false }), PATH_OBJECTS);
+      for (const [accept, gz] of [
+        ['gzip;q=0, br', false],
+        ['gzip; q=0.0', false],
+        ['*;q=0.5', true],
+        ['*;q=0', false],
+        ['br, gzip;q=0.8', true],
+        ['identity', false],
+      ] as const) {
+        const res = await proxy(event('/assets/big-abc.js', { 'accept-encoding': accept }));
+        assert.equal(res.headers['content-encoding'], gz ? 'gzip' : undefined, accept);
+      }
+    });
+
+    it('gzips each object version once per Lambda instance', async () => {
+      let calls = 0;
+      const counting = { gzipSync: (buf: zlib.InputType) => { calls++; return zlib.gzipSync(buf); } };
+      const proxy = loadHandler(generate({ spaFallback: false }), PATH_OBJECTS, [], counting);
+      const a = await proxy(event('/assets/big-abc.js', { 'accept-encoding': 'gzip' }));
+      const b = await proxy(event('/assets/big-abc.js', { 'accept-encoding': 'gzip' }));
+      assert.equal(calls, 1);
+      assert.equal(a.body, b.body);
+    });
+
+    it("a 304 for an If-None-Match list doesn't echo the list as its ETag", async () => {
+      const proxy = loadHandler(generate({ spaFallback: false }), PATH_OBJECTS);
+      const res = await proxy(event('/fonts/a.woff2', { 'if-none-match': '"old", "font-etag"' }));
+      assert.equal(res.statusCode, 304);
+      assert.equal(res.headers.etag, undefined);
     });
 
     it('returns the validators and answers a matching If-None-Match with a body-less 304', async () => {
