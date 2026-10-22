@@ -111,6 +111,7 @@ export {
 	type HostingLoggingConfig,
 	type HostingMonitoringConfig,
 	type ResolvedFrontDoor,
+	pickKnownSettingKeys,
 	resolveFrontDoorFeatures,
 	type StackedDoorFeatures,
 } from './front_door_options.js';

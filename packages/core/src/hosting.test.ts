@@ -3418,6 +3418,34 @@ describe('Hosting — frontDoor.features', () => {
   const REGIONAL_ACL = 'arn:aws:wafv2:us-east-1:111111111111:regional/webacl/router/1';
   const newStack = (id: string) => new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } });
 
+  // The released top-level props never rejected an unknown key (it was
+  // ignored); the merge into `frontDoor.features` keeps that, and the
+  // template is the one without the key.
+  it('a deprecated top-level prop with an unknown inner key still synthesizes, as released', () => {
+    const synth = (id: string, props: Partial<HostingProps>) => {
+      const stack = newStack(id);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, ...props } as HostingProps);
+      return Template.fromStack(stack);
+    };
+    // JavaScript callers (or a TS variable) can pass extra keys: no excess-property check there.
+    const extra = (o: object) => o as never;
+    synth('ExtraWaf', { waf: extra({ enabled: true, enable: true }) }).resourceCountIs('AWS::WAFv2::WebACL', 1);
+    synth('ExtraMonitoring', { monitoring: extra({ enabled: false, alarms: 1 }) }).resourceCountIs('AWS::CloudWatch::Alarm', 0);
+    assert.doesNotThrow(() => synth('ExtraLogging', { logging: extra({ enabled: true, retention: 7 }) }));
+    assert.doesNotThrow(() => synth('ExtraSkew', { skewProtection: extra({ enabled: true, ttl: 1 }) }));
+    // The app's own `frontDoor.features` is still checked.
+    assert.throws(
+      () => synth('ExplicitExtra', { frontDoor: { features: { waf: extra({ enabled: true, enable: true }) } } }),
+      (e: Error) => e.name === 'InvalidFrontDoorSettingError' && /frontDoor\.features\.waf\.enable/.test(e.message),
+    );
+  });
+
+  it('frontDoor: null is the default CloudFront door (as on HostingConstruct)', () => {
+    const stack = newStack('NullDoor');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: null as never });
+    Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+  });
+
   it('the CloudFront default with settings: { features } reaches the distribution', () => {
     const stack = newStack('FeatCf');
     new Hosting(stack, 'Hosting', {

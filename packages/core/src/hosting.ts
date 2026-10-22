@@ -27,6 +27,7 @@ import {
   HostingError,
   type HostingDomainConfig,
   type HostingFrontDoor,
+  pickKnownSettingKeys,
   resolveFrontDoorFeatures,
   type StackedDoorFeatures,
   type HostingWafConfig,
@@ -980,7 +981,9 @@ export class Hosting extends Construct {
           domainName: resolveDomainNames(settingsDomain.domainName, resolvedSecrets),
         }
       : undefined;
-    const l3Settings: FrontDoorSettings = { ...doorSettings, domain: resolvedDomain };
+    // The app's own `frontDoor.features` were validated above; keys an alias
+    // carried that its setting doesn't take are dropped, as the released props ignored them.
+    const l3Settings: FrontDoorSettings = pickKnownSettingKeys({ ...doorSettings, domain: resolvedDomain });
 
     const hostingProps: HostingConstructProps = {
       manifest,
@@ -1345,7 +1348,7 @@ export class Hosting extends Construct {
     }
     // The edge layer's settings: `frontDoor.features.edge`.
     const edge =
-      typeof props.frontDoor === 'object' && props.frontDoor.kind === 'stacked' ? props.frontDoor.features?.edge : undefined;
+      typeof props.frontDoor === 'object' && props.frontDoor !== null && props.frontDoor.kind === 'stacked' ? props.frontDoor.features?.edge : undefined;
     const { result } = buildFrontDoor(
       this,
       cloudFrontEdgeDoor,
@@ -1575,6 +1578,8 @@ function resolveBlocksDoorSettings(
 
 /** `frontDoor` without the stacked door (which only `Hosting` builds — the L3 never sees it). */
 function nonStacked(frontDoor: HostingProps['frontDoor']): HostingFrontDoor<HostingDomain> | undefined {
+  // `null` is the default door (as on `HostingConstruct`); `typeof null` is 'object'.
+  if (frontDoor === null) return undefined;
   return typeof frontDoor === 'object' && frontDoor.kind === 'stacked' ? undefined : frontDoor;
 }
 

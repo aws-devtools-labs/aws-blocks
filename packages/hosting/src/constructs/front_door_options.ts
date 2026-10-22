@@ -575,6 +575,29 @@ const validateDoorOptions = (frontDoor: object, kind: FrontDoorKind, label: stri
 };
 
 /**
+ * The settings with only the keys each setting takes (`waf: { enabled, rateLimit, webAclArn }`, …).
+ * `@aws-blocks/core` merges the deprecated top-level props into the
+ * `frontDoor.features` it hands this construct; a released prop never
+ * rejected an unknown key (`waf: { enable: true }` was ignored), so the merged
+ * settings drop such keys rather than fail the check below on a prop the app
+ * never wrote as `frontDoor.features`.
+ *
+ * @internal Framework-only.
+ */
+export function pickKnownSettingKeys<T extends Record<string, unknown>>(settings: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(settings)) {
+    const keys = SETTING_KEYS[name as FrontDoorSettingName];
+    if (!keys || value === null || typeof value !== 'object' || Array.isArray(value)) {
+      out[name] = value;
+      continue;
+    }
+    out[name] = Object.fromEntries(Object.entries(value).filter(([key]) => keys.includes(key)));
+  }
+  return out as T;
+}
+
+/**
  * Check the keys inside `frontDoor.features` settings (`waf`, `logging`, …),
  * and normalize the geo-restriction type. Only `frontDoor.features` is checked
  * for unknown keys; the deprecated top-level props keep their released
