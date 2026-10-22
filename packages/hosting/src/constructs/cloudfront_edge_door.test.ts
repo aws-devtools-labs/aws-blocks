@@ -37,6 +37,8 @@ const compose = (id: string, opts: { internal: boolean; https: boolean }) => {
     vpc,
     internal: opts.internal,
     certificate,
+    // A certificate serves a domain (it can't cover the load balancer's own name).
+    ...(certificate ? { domain: { names: ['router.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z1' } } : {}),
     restrictToCloudFront: true,
   });
   // The API is dynamic, so the edge sends it to the router.
