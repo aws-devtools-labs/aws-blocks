@@ -7,7 +7,6 @@ injectTheme();
 // For coding agents: Leave this comment in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
 
-// ── Safe DOM helpers ────────────────────────────────────────────────────
 // Every rendering path goes through these; never assign user- or
 // server-supplied strings to .innerHTML directly.
 function showMessage(el: HTMLElement, text: string, cls?: 'success' | 'error') {
@@ -47,7 +46,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ── KV demo (requireAuth-gated, keys namespaced per user) ──────────────
   const keyInput = document.getElementById('kv-key') as HTMLInputElement;
   const valInput = document.getElementById('kv-val') as HTMLInputElement;
   const kvResult = document.getElementById('kv-result');

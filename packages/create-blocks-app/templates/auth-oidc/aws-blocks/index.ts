@@ -5,7 +5,6 @@ import { ApiNamespace, Scope, KVStore, AuthOIDC, stubIdp } from '@aws-blocks/blo
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
 const scope = new Scope('my-app');
 
-// Building Blocks: Use these instead of creating custom storage
 const store = new KVStore(scope, 'app-store', {});
 
 // AuthOIDC: sign in with an external OpenID Connect / OAuth 2.0 provider.
@@ -37,20 +36,17 @@ const auth = new AuthOIDC(scope, 'auth', {
   ],
 });
 
-// State machine driving the <Authenticator> UI component (sign-in kickoff +
-// sign-out). The browser submits the external sign-in action as a redirect to
-// the per-provider `signin` route AuthOIDC mounts.
+// The browser submits the <Authenticator>'s external sign-in action as a
+// redirect to the per-provider `signin` route AuthOIDC mounts.
 export const authApi = auth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  // ── Public ────────────────────────────────────────────────────────────
   async ping() {
     return { message: 'pong', timestamp: Date.now() };
   },
 
-  // ── Protected (requireAuth) ──────────────────────────────────────────
-  // Throws AuthOIDCErrors.NotAuthenticated (401) when there is no valid
-  // session cookie / bearer token.
+  // requireAuth throws AuthOIDCErrors.NotAuthenticated (401) when there is no
+  // valid session.
   async whoAmI() {
     const user = await auth.requireAuth(context);
     return {
@@ -61,7 +57,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     };
   },
 
-  // ── KV demo (requireAuth-gated, keys namespaced per user) ────────────
+  // Keys are namespaced per user so each signed-in caller sees only their own.
   async getValue(key: string) {
     const user = await auth.requireAuth(context);
     return await store.get(`${user.userId}:${key}`);
