@@ -181,7 +181,7 @@ export interface WaitUntilCompleteOptions {
  * Options for submit() and submitBatch() calls.
  */
 export interface SubmitOptions {
-	/** Delay before the job becomes visible for processing. 0–900 seconds. Default: 0. */
+	/** Delay before the job becomes visible for processing. Integer from 0 to 900 seconds. Default: 0. */
 	delaySeconds?: number;
 }
 
@@ -194,4 +194,3 @@ export interface BatchSubmitResult {
 	/** Details of any entries that failed to enqueue. */
 	failed: Array<{ index: number; code: string; message: string }>;
 }
-
