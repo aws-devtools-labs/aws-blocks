@@ -409,3 +409,86 @@ for (const [label, generate, event] of variants) {
     });
   });
 }
+
+// ── No image function: the framework image endpoints serve the source ──────
+// The API Gateway door routes `/_next/image`, `/_ipx/*` and `/_image` to the
+// asset proxy when the deploy builds no image function (preview mode). A local
+// source is served as stored; a remote one is redirected to itself only when
+// its host is allowlisted, and never fetched.
+
+describe('API Gateway asset proxy — image endpoints without an image function', () => {
+  const IMAGE_OBJECTS: Record<string, StoredObject> = {
+    ...OBJECTS,
+    [`${PREFIX}/img/cat.png`]: { body: 'png-bytes', contentType: 'image/png' },
+  };
+  const handler = (stripPrefix = '') =>
+    loadHandler(
+      generateApiGwAssetProxyCode({
+        spaFallback: false,
+        stripPrefix,
+        imageFallback: { hosts: ['images.example.com', '*.cdn.example.com'] },
+      }),
+      IMAGE_OBJECTS,
+    );
+  const get = (path: string, query?: Record<string, string>) => ({
+    rawPath: path,
+    queryStringParameters: query,
+    requestContext: { http: { method: 'GET', path } },
+  });
+
+  it('Next.js `/_next/image?url=` serves the local source unoptimized', async () => {
+    const res = await handler()(get('/_next/image', { url: '/img/cat.png', w: '640', q: '75' }));
+    assert.equal(res.statusCode, 200);
+    assert.equal(decode(res), 'png-bytes');
+    assert.equal(res.headers['content-type'], 'image/png');
+  });
+
+  it('Astro `/_image?href=` and Nuxt `/_ipx/<modifiers>/<src>` serve the local source', async () => {
+    const astro = await handler()(get('/_image', { href: '/img/cat.png', w: '100' }));
+    assert.equal(decode(astro), 'png-bytes');
+    const ipx = await handler()(get('/_ipx/w_640&f_webp/img/cat.png'));
+    assert.equal(decode(ipx), 'png-bytes');
+  });
+
+  it('strips the basePath from the endpoint and from the source', async () => {
+    const res = await handler('/app')(get('/app/_next/image', { url: '/app/img/cat.png', w: '640' }));
+    assert.equal(decode(res), 'png-bytes');
+    const ipx = await handler('/app')(get('/app/_ipx/w_640/img/cat.png'));
+    assert.equal(decode(ipx), 'png-bytes');
+  });
+
+  it('redirects an allowlisted remote source to itself (302), exact or wildcard host', async () => {
+    const exact = await handler()(get('/_next/image', { url: 'https://images.example.com/a.jpg', w: '640' }));
+    assert.equal(exact.statusCode, 302);
+    assert.equal(exact.headers.location, 'https://images.example.com/a.jpg');
+    // API Gateway may collapse the `//` of an inlined ipx source.
+    const wildcard = await handler()(get('/_ipx/w_640/https:/eu.cdn.example.com/b.jpg'));
+    assert.equal(wildcard.statusCode, 302);
+    assert.equal(wildcard.headers.location, 'https://eu.cdn.example.com/b.jpg');
+  });
+
+  it('answers 404 for a remote source whose host is not allowlisted (no open redirect)', async () => {
+    for (const url of [
+      'https://evil.example.net/x.png',
+      'https://images.example.com.evil.net/x.png',
+      'https://cdn.example.com/x.png',
+      'http://169.254.169.254/latest/meta-data/',
+    ]) {
+      const res = await handler()(get('/_next/image', { url, w: '640' }));
+      assert.equal(res.statusCode, 404, url);
+      assert.equal(res.headers.location, undefined, url);
+    }
+  });
+
+  it('answers 404 for a missing or protocol-relative source', async () => {
+    assert.equal((await handler()(get('/_next/image', { w: '640' }))).statusCode, 404);
+    assert.equal((await handler()(get('/_next/image', { url: '//evil.example.net/x.png' }))).statusCode, 404);
+    assert.equal((await handler()(get('/_next/image', { url: '/img/missing.png' }))).statusCode, 404);
+  });
+
+  it('without `imageFallback` the endpoints are plain paths (no source lookup)', async () => {
+    const plain = loadHandler(generateApiGwAssetProxyCode({ spaFallback: false }), IMAGE_OBJECTS);
+    const res = await plain(get('/_next/image', { url: '/img/cat.png' }));
+    assert.equal(res.statusCode, 404);
+  });
+});

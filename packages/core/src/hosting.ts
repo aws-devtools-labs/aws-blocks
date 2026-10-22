@@ -10,6 +10,7 @@ import {
   type FrameworkAdapterFn,
   getAdapter,
   normalizeBasePath,
+  withBuildProfile,
   withComputeTarget,
 } from '@aws-blocks/hosting/adapters';
 import {
@@ -592,6 +593,127 @@ export interface HostingProps {
    * ```
    */
   frontDoor?: HostingFrontDoor<HostingDomain> | CloudFrontOverRouterFrontDoor;
+
+  /**
+   * Preview mode: a fast, cheap, disposable deploy for ephemeral environments
+   * (pull-request previews, per-branch sandboxes, demos). The app keeps
+   * working — routing, server rendering, prerendered pages, same-origin
+   * cookie auth, the API — while the services a throwaway environment doesn't
+   * need are left out.
+   *
+   * Preview is **opt-in**: omitted (or `false`), the app deploys its full
+   * shape in every stage, sandbox and production alike. It is a decision in
+   * code, not a side effect of the deploy stage: an app that wants a preview
+   * in some environments reads its own signal (an env var, the branch) and
+   * sets `preview` from it.
+   *
+   * When on:
+   * - The app is served by the Amazon API Gateway HTTP API door
+   *   (`frontDoor: { kind: 'apiGateway' }`; see {@link HostingProps.frontDoor}):
+   *   one regional origin, no CloudFront distribution to create or tear down.
+   *   Server responses are buffered (no streaming), and a response is capped
+   *   at about 6 MB. `frontDoor` may be omitted, or set to an `apiGateway`
+   *   door (for example with a custom domain); any other door fails synth
+   *   (`PreviewFrontDoorError`).
+   * - No incremental regeneration: Next.js builds without the tag cache and the
+   *   revalidation queue (no DynamoDB table, SQS queue or revalidation
+   *   function). Prerendered pages are still served from the build's snapshot.
+   * - No image optimization (unless `imageOptimization: true`): the framework
+   *   image endpoints serve the source image, unoptimized. A remote source is
+   *   redirected to itself when its host is in the app's image allowlist,
+   *   else 404; the proxy never fetches it.
+   * - Next.js `runtime: 'edge'` routes run as regional Lambda functions, not
+   *   Lambda@Edge (no us-east-1 edge stack).
+   * - A fixed build id (`'preview'`): an unchanged build produces the same
+   *   assets and template, so a code-only re-deploy skips the asset upload and
+   *   can hotswap (`startSandbox({ preview: true })`).
+   *
+   * @example
+   * ```ts
+   * // full shape (default)
+   * new Hosting(stack, 'Web', { root, api: blocksStack });
+   *
+   * // preview, from the app's own signal
+   * new Hosting(stack, 'Web', { root, api: blocksStack, preview: process.env.DEPLOY_ENV === 'preview' });
+   *
+   * // preview that keeps image optimization
+   * new Hosting(stack, 'Web', { root, api: blocksStack, preview: { enabled: true, imageOptimization: true } });
+   * ```
+   *
+   * @default false
+   */
+  preview?: boolean | PreviewOptions;
+}
+
+/**
+ * The object form of {@link HostingProps.preview}: turn preview on and keep
+ * specific capabilities.
+ */
+export interface PreviewOptions {
+  /**
+   * Turn preview on. Omitted in the object form, preview stays **off**, as
+   * when `preview` is not set at all.
+   * @default false
+   */
+  enabled?: boolean;
+  /**
+   * Keep on-the-fly image optimization (an image function behind the door).
+   * @default false
+   */
+  imageOptimization?: boolean;
+}
+
+/**
+ * What preview mode changes in one {@link Hosting}, resolved from
+ * {@link HostingProps.preview}.
+ */
+export interface PreviewProfile {
+  /** Preview is on. Every field below is `false` when it is off. */
+  enabled: boolean;
+  /** Build without the incremental-regeneration machinery (tag cache, revalidation queue and function). */
+  skipIsr: boolean;
+  /** Build no image-optimization function; the image endpoints serve the source image. */
+  skipImageOptimization: boolean;
+  /** Build Next.js `runtime: 'edge'` routes as regional Lambda functions instead of Lambda@Edge. */
+  edgeToRegional: boolean;
+}
+
+/**
+ * Resolve {@link HostingProps.preview}. Preview is on only when the app sets
+ * `preview: true` or `preview: { enabled: true }`.
+ *
+ * @param preview the prop.
+ * @returns the resolved profile.
+ */
+export function resolvePreviewProfile(preview: HostingProps['preview']): PreviewProfile {
+  const options = typeof preview === 'object' ? preview : undefined;
+  const enabled = typeof preview === 'boolean' ? preview : options?.enabled === true;
+  return {
+    enabled,
+    skipIsr: enabled,
+    skipImageOptimization: enabled && options?.imageOptimization !== true,
+    edgeToRegional: enabled,
+  };
+}
+
+/**
+ * The front door a preview deploy uses: the app's `frontDoor` when it is an
+ * API Gateway door, the HTTP API door when it is omitted.
+ *
+ * @param frontDoor the app's `frontDoor` prop.
+ * @returns the door.
+ * @throws HostingError('PreviewFrontDoorError') when the app chose another door.
+ */
+function previewFrontDoor(frontDoor: HostingProps['frontDoor']): HostingProps['frontDoor'] {
+  if (frontDoor === undefined) return { kind: 'apiGateway' };
+  if (typeof frontDoor === 'object' && 'kind' in frontDoor && frontDoor.kind === 'apiGateway') return frontDoor;
+  const chosen =
+    typeof frontDoor === 'string' ? `'${frontDoor}'` : `{ kind: '${('kind' in frontDoor && frontDoor.kind) || 'cloudfront'}' }`;
+  throw new HostingError('PreviewFrontDoorError', {
+    message: `Hosting preview mode is served by the API Gateway door, but frontDoor is ${chosen}.`,
+    resolution:
+      "Remove `frontDoor` (preview uses `{ kind: 'apiGateway' }`), set it to an `apiGateway` door, or turn preview off.",
+  });
 }
 
 /**
@@ -645,6 +767,9 @@ export interface CloudFrontOverRouterFrontDoor {
    */
   features?: StackedDoorFeatures;
 }
+
+/** The build id every preview deploy uses (see {@link HostingProps.preview}). */
+const PREVIEW_BUILD_ID = 'preview';
 
 // ─── Default build output directories per framework ──────────────
 
@@ -783,12 +908,19 @@ export class Hosting extends Construct {
    *   `new Hosting()` path (which then rejects any synth-time secret with a
    *   clear "use Hosting.create()" error).
    */
-  constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
+  constructor(scope: Construct, id: string, appProps: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
     // Stack/stage children before Hosting builds anything, so the fronted
     // backend's role coverage also reaches the singletons and helper stacks it
     // adds (step 12).
     const childrenBefore = snapshotForHosting(this);
+
+    // Preview mode: resolved once, before anything reads the door. A preview
+    // is served by the API Gateway door (see `HostingProps.preview`).
+    const preview = resolvePreviewProfile(appProps.preview);
+    const props: HostingProps = preview.enabled
+      ? { ...appProps, frontDoor: previewFrontDoor(appProps.frontDoor) }
+      : appProps;
 
     const root = resolve(props.root);
 
@@ -869,11 +1001,40 @@ export class Hosting extends Construct {
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
     // Adapters build for the selected compute: Web Functions need a plain
     // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
-    // Arm64 native modules (Astro's sharp).
-    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
+    // Arm64 native modules (Astro's sharp). They also build for the door that
+    // invokes the server (an API Gateway HTTP API: payload 2.0, buffered) and
+    // for the preview trims.
+    const httpApiDoor =
+      typeof props.frontDoor === 'object' &&
+      'kind' in props.frontDoor &&
+      props.frontDoor.kind === 'apiGateway' &&
+      (props.frontDoor.api ?? 'http') === 'http';
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
+      withBuildProfile(
+        {
+          serverInvoke: httpApiDoor ? 'http-api' : 'default',
+          ...(preview.enabled
+            ? {
+                edgeToRegional: preview.edgeToRegional,
+                skipIsr: preview.skipIsr,
+                skipImageOptimization: preview.skipImageOptimization,
+                deterministicBuildId: PREVIEW_BUILD_ID,
+              }
+            : {}),
+        },
+        () => adapter(root),
+      ),
+    );
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
+    // A preview uses a fixed build id: the per-deploy random id drives the
+    // atomic `builds/<id>/` cutover a long-lived site needs, but it changes the
+    // asset prefix, the function code and the API name on every deploy, so no
+    // re-deploy could skip the upload or hotswap. A preview is one throwaway
+    // environment, overwritten in place.
+    if (preview.enabled) {
+      manifest.buildId = PREVIEW_BUILD_ID;
+    } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }
 
@@ -988,6 +1149,7 @@ export class Hosting extends Construct {
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
+      ...(preview.skipImageOptimization ? { skipImageOptimization: true } : {}),
       // Plain env + deploy-time literals go straight to the L3 (which stays
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.

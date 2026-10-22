@@ -1,0 +1,280 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import assert from 'node:assert';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { type BuildProfile, buildProfile } from '@aws-blocks/hosting/adapters';
+import type { DeployManifest } from '@aws-blocks/hosting/constructs';
+import { App, Stack } from 'aws-cdk-lib';
+import { Match, Template } from 'aws-cdk-lib/assertions';
+import { type BlocksStackApi, Hosting, type HostingProps, resolvePreviewProfile } from './hosting.js';
+import { clearRouteRegistry } from './raw-route.js';
+
+const MOCK_API: BlocksStackApi = {
+  apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks',
+};
+
+/** A minimal SPA build output (`dist/index.html`). */
+function createSpaBuildOutput(root: string): void {
+  const distDir = path.join(root, 'dist');
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.writeFileSync(path.join(distDir, 'index.html'), '<!DOCTYPE html><html><body>Hello</body></html>');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'test-spa', dependencies: { react: '^18' } }));
+}
+
+/**
+ * A server-rendered fixture: a `default` server, an `edge1` regional function
+ * serving `/api/edge`, and an image function. Records the build profile the
+ * adapter ran with.
+ */
+function ssrFixture(root: string, seen: { profile?: BuildProfile }) {
+  const bundle = (name: string) => {
+    const dir = path.join(root, '.hosting', 'compute', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const handler = async () => ({})');
+    return dir;
+  };
+  const staticDir = path.join(root, '.hosting', 'static');
+  fs.mkdirSync(staticDir, { recursive: true });
+  fs.writeFileSync(path.join(staticDir, 'index.html'), '<html></html>');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'ssr' }));
+  fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
+  return (_projectDir: string): DeployManifest => {
+    seen.profile = buildProfile();
+    return {
+      version: 1,
+      compute: {
+        default: { type: 'handler', bundle: bundle('default'), handler: 'index.handler', placement: 'regional', streaming: false },
+        edge1: { type: 'handler', bundle: bundle('edge1'), handler: 'index.handler', placement: 'regional', streaming: false },
+      },
+      staticAssets: { directory: staticDir },
+      routes: [
+        { pattern: '/_next/static/*', target: 'static' },
+        { pattern: '/api/edge', target: 'edge1' },
+        { pattern: '/_next/image', target: 'image-optimization' },
+        { pattern: '/*', target: 'default' },
+      ],
+      imageOptimization: {
+        bundle: bundle('image'),
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+        remotePatterns: [{ hostname: 'images.example.com' }],
+      },
+      buildId: 'random-build',
+    };
+  };
+}
+
+const newStack = (name: string) =>
+  new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
+
+describe('resolvePreviewProfile', () => {
+  it('is off unless the app turns it on', () => {
+    for (const preview of [undefined, false, {}, { enabled: false }, { imageOptimization: true }] as const) {
+      assert.deepStrictEqual(resolvePreviewProfile(preview), {
+        enabled: false,
+        skipIsr: false,
+        skipImageOptimization: false,
+        edgeToRegional: false,
+      });
+    }
+  });
+
+  it('`true` turns every trim on', () => {
+    assert.deepStrictEqual(resolvePreviewProfile(true), {
+      enabled: true,
+      skipIsr: true,
+      skipImageOptimization: true,
+      edgeToRegional: true,
+    });
+  });
+
+  it('`imageOptimization: true` keeps the image function', () => {
+    const profile = resolvePreviewProfile({ enabled: true, imageOptimization: true });
+    assert.strictEqual(profile.enabled, true);
+    assert.strictEqual(profile.skipImageOptimization, false);
+  });
+});
+
+describe('Hosting preview mode', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-preview-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearRouteRegistry();
+  });
+
+  it('is served by the API Gateway HTTP API door: no CloudFront distribution', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PreviewSpa');
+    const hosting = new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, preview: true });
+
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    // The API is proxied same-origin.
+    t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
+    assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
+  });
+
+  it('without preview, the same app deploys the CloudFront door', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('NoPreviewSpa');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+    const t = Template.fromStack(stack);
+    t.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+  });
+
+  it('uses the fixed build id `preview`', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const stack = newStack('PreviewBuildId');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      preview: true,
+    });
+
+    const t = Template.fromStack(stack);
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/preview' } },
+    });
+  });
+
+  it('builds the adapter for the HTTP API and with every preview trim', () => {
+    const seen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('PreviewProfile'), 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      preview: true,
+    });
+
+    assert.deepStrictEqual(seen.profile, {
+      serverInvoke: 'http-api',
+      edgeToRegional: true,
+      skipIsr: true,
+      skipImageOptimization: true,
+      deterministicBuildId: 'preview',
+    });
+  });
+
+  it('the HTTP API door builds the server for the HTTP API without preview too', () => {
+    const seen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('HttpDoorProfile'), 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      frontDoor: { kind: 'apiGateway' },
+    });
+
+    assert.deepStrictEqual(seen.profile, { serverInvoke: 'http-api' });
+  });
+
+  it('the CloudFront door keeps the default build', () => {
+    const seen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('CloudFrontProfile'), 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+    });
+
+    assert.deepStrictEqual(seen.profile, { serverInvoke: 'default' });
+  });
+
+  it('builds no image function; the image endpoint goes to the asset proxy with the app allowlist', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const stack = newStack('PreviewImage');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      preview: true,
+    });
+
+    const t = Template.fromStack(stack);
+    const fns = t.findResources('AWS::Lambda::Function');
+    const imageFns = Object.keys(fns).filter((id) => id.includes('ImageOptimization'));
+    assert.deepStrictEqual(imageFns, []);
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'ANY /_next/image' });
+    t.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'ANY /_ipx/{proxy+}' });
+    // The asset proxy carries the remote-source allowlist.
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      Code: { ZipFile: Match.stringLikeRegexp('IMAGE_REMOTE_HOSTS = \\["images\\.example\\.com"\\]') },
+    });
+  });
+
+  it('`imageOptimization: true` keeps the image function behind the door', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const stack = newStack('PreviewKeepImage');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      preview: { enabled: true, imageOptimization: true },
+    });
+
+    assert.strictEqual(seen.profile?.skipImageOptimization, false);
+    const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function');
+    assert.ok(Object.keys(fns).some((id) => id.includes('ImageOptimization')));
+  });
+
+  it('routes a regional edge function straight to it, not to the server', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const stack = newStack('PreviewEdgeRoute');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      preview: true,
+    });
+
+    const t = Template.fromStack(stack);
+    const routes = t.findResources('AWS::ApiGatewayV2::Route', { Properties: { RouteKey: 'ANY /api/edge' } });
+    const [route] = Object.values(routes);
+    assert.ok(route, 'the edge route has its own API route');
+    const target = JSON.stringify(route.Properties.Target);
+    assert.match(target, /ComputeIntedge1/);
+  });
+
+  it('accepts an explicit API Gateway door', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PreviewExplicitDoor');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, preview: true, frontDoor: { kind: 'apiGateway' } });
+
+    Template.fromStack(stack).resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+  });
+
+  for (const [label, frontDoor] of [
+    ['cloudfront', 'cloudfront'],
+    ['none', 'none'],
+    ['alb', { kind: 'alb' }],
+    ['cloudfront with features', { features: { priceClass: undefined } }],
+  ] as const) {
+    it(`fails synth with another door (${label})`, () => {
+      createSpaBuildOutput(tmpDir);
+      const props: HostingProps = { root: tmpDir, api: MOCK_API, preview: true, frontDoor };
+      assert.throws(
+        () => new Hosting(newStack(`PreviewDoor${label.replace(/\W/g, '')}`), 'Hosting', props),
+        (err: Error) => err.name === 'PreviewFrontDoorError' && /API Gateway door/.test(err.message),
+      );
+    });
+  }
+});

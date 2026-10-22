@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Notes Manager</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #333; }
+      h1 { margin-bottom: 0.5rem; }
+      h2 { margin: 1.5rem 0 0.75rem; }
+      button { padding: 0.5rem 1rem; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+      button:hover { background: #f0f0f0; }
+      button.primary { background: #0066cc; color: #fff; border-color: #0066cc; }
+      button.primary:hover { background: #0055aa; }
+      button.danger { color: #c00; border-color: #c00; }
+      input, textarea { padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; width: 100%; }
+      textarea { min-height: 80px; resize: vertical; }
+      .card { background: #f9f9f9; border: 1px solid #eee; border-radius: 8px; padding: 1rem; margin: 0.75rem 0; }
+      .row { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+      .hidden { display: none; }
+      .error { color: #c00; margin: 0.5rem 0; }
+      .muted { color: #888; }
+      .note-item { display: flex; justify-content: space-between; align-items: flex-start; }
+      .note-item .note-body { flex: 1; }
+      #app-status { color: #888; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>📝 Notes Manager</h1>
+    <p id="app-status">Loading...</p>
+
+    <!-- Landing / Public -->
+    <div id="view-landing">
+      <div class="card">
+        <p>Community stats: <strong id="stat-total">...</strong> notes created so far</p>
+      </div>
+
+      <h2>Sign In</h2>
+      <div class="row"><input id="login-username" placeholder="Email" /></div>
+      <div class="row"><input id="login-password" type="password" placeholder="Password" /></div>
+      <div class="row">
+        <button id="btn-login" class="primary" onclick="doLogin()">Log In</button>
+        <button id="btn-signup" onclick="doSignUp()">Sign Up</button>
+      </div>
+
+      <div id="confirm-section" class="hidden">
+        <div class="row"><input id="confirm-code" placeholder="Verification code" /></div>
+        <div class="row"><button id="btn-confirm" class="primary" onclick="doConfirm()">Confirm Account</button></div>
+      </div>
+
+      <p id="auth-error" class="error"></p>
+      <p id="auth-info" class="muted"></p>
+    </div>
+
+    <!-- Dashboard (logged in) -->
+    <div id="view-dashboard" class="hidden">
+      <p>Logged in as <strong id="display-username"></strong> · <button id="btn-logout" onclick="doLogout()">Log Out</button></p>
+
+      <h2>Create Note</h2>
+      <div class="row"><input id="note-title" placeholder="Title" /></div>
+      <div class="row"><textarea id="note-content" placeholder="Content"></textarea></div>
+      <div class="row"><button id="btn-create" class="primary" onclick="doCreateNote()">Create Note</button></div>
+      <p id="create-error" class="error"></p>
+
+      <h2>Your Notes</h2>
+      <div id="notes-list"></div>
+      <p id="notes-empty" class="muted hidden">No notes yet. Create your first note above!</p>
+    </div>
+
+    <script type="module" src="/src/index.ts"></script>
+  </body>
+</html>
