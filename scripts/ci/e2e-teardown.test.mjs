@@ -199,8 +199,11 @@ describe('e2e-teardown.mjs', () => {
 
 	it('warns when a stack cancelled mid-create is still finishing its create', () => {
 		const name = `bb-test-${ID}-pr-9-1`;
-		const r = run({ stacks: [stack(name, 'CREATE_IN_PROGRESS')], statusAfterDelete: 'CREATE_IN_PROGRESS', budget: '1' });
+		const started = Date.now();
+		const r = run({ stacks: [stack(name, 'CREATE_IN_PROGRESS')], statusAfterDelete: 'CREATE_IN_PROGRESS', budget: '30' });
 		assert.equal(r.status, 0, r.out);
+		// Two polls, not the whole budget.
+		assert.ok(Date.now() - started < 15_000);
 		assert.deepEqual(deletes(r.calls), [name]);
 		assert.match(r.out, /::warning title=E2E teardown::DeleteStack .* accepted; still CREATE_IN_PROGRESS/);
 	});

@@ -26,8 +26,8 @@
 // A passing job whose suite left a stack (its test.after destroy failed, which
 // node:test does not turn into a failed run) gets a warning and a new delete.
 //
-// Env: JOB_STATUS (`job.status`), E2E_TEARDOWN_BUDGET_SECONDS (default 100, under the
-// step's 2-minute timeout).
+// Env: JOB_STATUS (`job.status`), E2E_TEARDOWN_BUDGET_SECONDS (default 85: with
+// the calls a deadline lets finish, under the step's 2-minute timeout).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -75,7 +75,7 @@ if (!appDir) {
 	process.exit(2);
 }
 const jobStatus = process.env.JOB_STATUS || 'unknown';
-const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 100) * 1000;
+const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 85) * 1000;
 const pollMs = Number(process.env.E2E_TEARDOWN_POLL_MS ?? 10_000);
 
 const error = (msg) => console.log(`::error title=E2E teardown::${msg}`);
@@ -156,8 +156,10 @@ async function main() {
 			}
 		}
 		// DeleteStack can be accepted without starting a delete; wait until it has.
+		// A create still finishing may hold the delete for minutes, so give it 2 polls.
+		const until = was === 'CREATE_IN_PROGRESS' || was === 'REVIEW_IN_PROGRESS' ? Date.now() + 2 * pollMs : deadline;
 		let now = statusOf(name);
-		while (now !== 'DELETE_IN_PROGRESS' && now !== 'gone' && Date.now() + pollMs < deadline) {
+		while (now !== 'DELETE_IN_PROGRESS' && now !== 'gone' && Date.now() + pollMs < Math.min(until, deadline)) {
 			await sleep(pollMs);
 			now = statusOf(name);
 		}
