@@ -1995,6 +1995,10 @@ export class HostingConstruct extends Construct {
           `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
             'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
             (isNone
+              ? ''
+              : 'AuthBasic drops `Secure` from its session cookie behind such a door; AuthCognito and AuthOIDC keep it, ' +
+                "so the browser discards their session cookie and sign-in doesn't persist. ") +
+            (isNone
               ? 'Use the CloudFront door for HTTPS.'
               : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),
         );
