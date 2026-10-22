@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
   ComparisonOperator,
@@ -172,6 +172,22 @@ export class MonitoringConstruct extends Construct {
     });
     for (const sub of props.subscriptions ?? []) {
       this.topic.addSubscription(sub);
+    }
+    // An alarm topic with no subscribers can flip to ALARM but deliver the
+    // notification nowhere — the same silent-delivery gap DECISIONS.md D-016
+    // ("no silent gap") warns against. The topic ARN is also surfaced as a
+    // CloudFormation output so an operator can subscribe out-of-band, but that is
+    // easy to miss, so warn loudly at synth.
+    if ((props.subscriptions ?? []).length === 0) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers',
+        'Hosting monitoring is enabled but no alarm subscribers were supplied, ' +
+          'so the alarm topic can enter ALARM but deliver to no one. Add at least ' +
+          'one endpoint via `monitoring.subscriptions` (EmailSubscription / ' +
+          'UrlSubscription), or subscribe the topic out-of-band using the ' +
+          'MonitoringTopicArn stack output. Set `monitoring: { enabled: false }` ' +
+          'to turn monitoring off deliberately.',
+      );
     }
     const action = new SnsAction(this.topic);
 

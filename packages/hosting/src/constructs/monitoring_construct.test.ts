@@ -23,7 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
@@ -121,6 +121,29 @@ void describe('MonitoringConstruct', () => {
         Protocol: 'email',
         Endpoint: 'oncall@example.com',
       });
+    });
+
+    void it('warns at synth when enabled with no subscribers (silent-delivery gap)', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', { enabled: true });
+      // The topic is created but has no subscriber, so an alarm would deliver
+      // nowhere — warn loudly rather than leaving a green-but-undeliverable alarm.
+      Annotations.fromStack(stack).hasWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp('no alarm subscribers were supplied'),
+      );
+    });
+
+    void it('does NOT warn when at least one subscriber is supplied', () => {
+      const stack = createStack();
+      new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+      });
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp('no alarm subscribers were supplied'),
+      );
     });
 
     void it('creates no alarms when no monitorable resources are supplied', () => {

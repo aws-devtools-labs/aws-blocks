@@ -151,6 +151,32 @@ describe('createSharedGateway — single shared REST API', () => {
 		});
 	});
 
+	test('caps every Lambda integration at API Gateway’s 29s request ceiling', () => {
+		const { stack, compute } = setup('SharedGwIntegrationTimeout');
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+		});
+
+		const template = Template.fromStack(stack);
+		// Every Lambda (AWS_PROXY) integration carries TimeoutInMillis: 29000 — the
+		// function timeout (up to 900s for async work) is unreachable on the
+		// synchronous HTTP path, so the integration pins the real boundary. The
+		// root MOCK method CDK auto-creates has no Lambda and no timeout.
+		const methods = template.findResources('AWS::ApiGateway::Method');
+		const proxyIntegrations = Object.values(methods)
+			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
+			.filter((i): i is { Type?: string; TimeoutInMillis?: number } => i?.Type === 'AWS_PROXY');
+		assert.ok(proxyIntegrations.length > 0, 'at least one Lambda integration is created');
+		for (const integration of proxyIntegrations) {
+			assert.strictEqual(
+				integration.TimeoutInMillis,
+				29000,
+				'each Lambda integration is pinned to the 29s API Gateway request ceiling',
+			);
+		}
+	});
+
 	test('routes the RPC endpoint, per-namespace RPC paths, RawRoute sub-paths, and every other path', () => {
 		const { stack, compute } = setup('SharedGwTree');
 		createSharedGateway(stack, {

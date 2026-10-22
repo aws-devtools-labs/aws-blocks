@@ -19,6 +19,20 @@ import type { ComputeBase } from './compute/compute.js';
  */
 const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
 
+/**
+ * Integration timeout for every API-Gateway→Lambda integration on the shared
+ * REST API, in seconds. API Gateway's own ceiling for a REST integration is
+ * **29 seconds**: a request still in flight at that point is cut off with a 504
+ * no matter how long the Lambda is allowed to run. The shared handler's
+ * function timeout is the async-work ceiling (up to 900s for SQS/AsyncJob
+ * invocations), which is unreachable on the synchronous HTTP path — so a client
+ * that waits out the full function timeout gets a 504, not a response. Pinning
+ * the integration timeout makes that boundary explicit (and lets the 504 surface
+ * at 29s instead of API Gateway's silent default), without touching the function
+ * timeout the async path depends on.
+ */
+const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
+
 /** Inputs the shared REST API gateway is built from. @internal */
 export interface SharedGatewayProps {
 	/**
@@ -169,7 +183,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		restApi.deploymentStage.node.addDependency(apiGatewayAccount);
 	}
 
-	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler);
+	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler, {
+		timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+	});
 
 	// Nested resource tree for /aws-blocks/api. The intermediate resource
 	// gets a proxy so sub-paths (RawRoutes) still reach the function.
@@ -199,7 +215,10 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		// API, instead of CDK's default two per method (stage + test-invoke), so the
 		// function's resource policy stays flat however many namespaces it hosts.
 		// Safe because the only routes integrating this function are the ones below.
-		const integration = new apigateway.LambdaIntegration(handler, { scopePermissionToMethod: false });
+		const integration = new apigateway.LambdaIntegration(handler, {
+			scopePermissionToMethod: false,
+			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+		});
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(
