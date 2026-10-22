@@ -15,10 +15,6 @@ name: PR Checks
 on:
   pull_request:
     branches: ['*']
-  # Manual run from any branch (Actions tab or `gh workflow run pr-checks.yml --ref <branch>`)
-  # runs every E2E job, whatever the branch changed. A manual run has no PR, so it
-  # uses E2E account 1.
-  workflow_dispatch:
 
 # One run per PR. When a new commit is pushed, any still-running run for the
 # same PR is cancelled. Prevents two concurrent `cdk deploy` invocations from
@@ -26,7 +22,7 @@ on:
 # wedged in DELETE_FAILED and block every later run until the stack is
 # manually cleaned up in AWS.
 concurrency:
-  group: pr-checks-${{ github.event.pull_request.number || github.run_id }}
+  group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 # Grant OIDC tokens only to role-assuming jobs so PR-head build jobs cannot
@@ -40,13 +36,32 @@ env:
   NODE_OPTIONS: '--test-reporter=spec'
 
 jobs:
+  # Picks the E2E jobs to run. By default that is every E2E job when the PR
+  # changes packages/ or test-apps/, and none otherwise. A line in the PR
+  # description overrides it, so a PR that only changes CI (this workflow,
+  # .github/actions/) or one E2E suite can run just the jobs it affects:
+  #
+  #   E2E: all                    every E2E job
+  #   E2E: sandbox, hosting       only these (job ids without the e2e- prefix)
+  #
+  # The description is read when the run starts, so after editing it push a
+  # commit or re-run all jobs. Each PR runs in its own E2E account (PR number
+  # mod the pool size), so parallel PRs spread across the pool. If the line
+  # skips a job the changes call for, the Build and Test gate fails: remove the
+  # line before merging.
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read  # reads the E2E: line from the PR description
     outputs:
       # E2E account for this PR (see .github/actions/e2e-slot).
       e2e-index: ${{ steps.e2e-slot.outputs.index }}
-      source-changed: ${{ steps.check.outputs.source-changed }}
+      # JSON array of the E2E jobs to run, e.g. ["sandbox","hosting"]
+      e2e: ${{ steps.check.outputs.e2e }}
+      # true when the E2E: line skipped a job the changes call for
+      e2e-narrowed: ${{ steps.check.outputs.narrowed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,14 +70,49 @@ jobs:
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
       - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          E2E_ACCOUNT: ${{ steps.e2e-slot.outputs.account }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          all='templates templates-windows sandbox sandbox-vpc compute-smoke production supabase hosting telemetry'
+
+          if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
+            changed=$all
           else
-            echo "source-changed=false" >> "$GITHUB_OUTPUT"
+            changed=''
           fi
+
+          line=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' \
+            | tr -d '\r' | grep -im1 '^E2E:' || true)
+          if [ -z "$line" ]; then
+            selected=$changed
+          else
+            echo "PR description: $line"
+            selected=''
+            for key in $(echo "${line#*:}" | tr ',[:upper:]' ' [:lower:]'); do
+              if [ "$key" = all ]; then
+                selected=$all
+              elif [[ " $all " == *" $key "* ]]; then
+                selected="$selected $key"
+              else
+                echo "::error::Unknown E2E job '$key' in the PR description. Use 'all' or any of: $all"
+                exit 1
+              fi
+            done
+          fi
+
+          narrowed=false
+          for key in $changed; do
+            [[ " $selected " == *" $key "* ]] || narrowed=true
+          done
+
+          # shellcheck disable=SC2086 # split the job list into arguments
+          e2e=$(jq -cn '$ARGS.positional | unique' --args $selected)
+          echo "E2E jobs: $e2e (account $E2E_ACCOUNT)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "e2e=$e2e" >> "$GITHUB_OUTPUT"
+          echo "narrowed=$narrowed" >> "$GITHUB_OUTPUT"
 
   blocks-integrity:
     name: Blocks Package Integrity
@@ -90,11 +140,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-
-          # A manual run has no PR base; compare against where the branch left main.
-          if [[ -z "$BASE_SHA" ]]; then
-            BASE_SHA=$(git merge-base origin/main HEAD)
-          fi
 
           # Release PRs consume changesets — the files are already gone. Skip.
           if [[ "$GITHUB_HEAD_REF" == "changeset-release/main" ]]; then
@@ -274,7 +319,7 @@ jobs:
   e2e-templates:
     name: E2E Templates
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -313,7 +358,7 @@ jobs:
   e2e-templates-windows:
     name: E2E Templates (Windows)
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -349,7 +394,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Sandbox
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'sandbox') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -390,7 +435,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'sandbox-vpc') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -447,7 +492,7 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -507,7 +552,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'production') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: e2e
@@ -548,7 +593,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Supabase
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'supabase') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: e2e
@@ -627,7 +672,7 @@ jobs:
     name: E2E Hosting (${{ matrix.framework }})
     timeout-minutes: 60
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'hosting') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: e2e
     strategy:
@@ -719,7 +764,7 @@ jobs:
   e2e-telemetry:
     name: Telemetry E2E
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e), 'telemetry') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -766,17 +811,28 @@ jobs:
           npx tsx aws-blocks/scripts/destroy.ts || true
 
   # Gate job — matches the branch protection required check name.
-  # Skipped E2E jobs (no source changes) are treated as passing.
+  # Skipped E2E jobs (not selected by detect-changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
+          # A failed detect-changes skips every E2E job, which would otherwise pass below.
+          if [[ "${{ needs.detect-changes.result }}" != "success" ]]; then
+            echo "detect-changes failed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.detect-changes.outputs.e2e-narrowed }}" == "true" ]]; then
+            echo "The E2E: line in the PR description skips E2E jobs this PR's changes call for. Remove it before merging."
+            exit 1
+          fi
+
           if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
             echo "blocks-integrity failed"
             exit 1
@@ -792,7 +848,7 @@ jobs:
             exit 1
           fi
 
-          # E2E jobs must either succeed or be skipped (no source changes)
+          # E2E jobs must either succeed or be skipped (not selected)
           if [[ "${{ needs.e2e-templates.result }}" != "success" && "${{ needs.e2e-templates.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-templates-windows.result }}" != "success" && "${{ needs.e2e-templates-windows.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||
