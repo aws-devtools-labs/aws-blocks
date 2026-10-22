@@ -109,11 +109,20 @@ async function readDeliveredCode<T extends DeliveredCode>(channel: string, usern
   return parseStoredRecord<T>(key, await store.get(key));
 }
 
+/** Every channel that records delivered codes (the `recordDeliveredCode` callers below). */
+const CODE_CHANNELS = ['auth', 'authC', 'authCMfa'] as const;
+
 async function purgeDeliveredCodes(username?: string): Promise<number> {
   const keys: string[] = [];
-  for await (const entry of store.scan()) {
-    if (!entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) continue;
-    if (username === undefined || entry.key.endsWith(`:${username}`)) keys.push(entry.key);
+  if (username === undefined) {
+    for await (const entry of store.scan()) {
+      if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+    }
+  } else {
+    for (const channel of CODE_CHANNELS) {
+      const key = codeKey(channel, username);
+      if ((await store.get(key)) !== null) keys.push(key);
+    }
   }
   for (const key of keys) await store.delete(key);
   return keys.length;
@@ -1177,8 +1186,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
    *
    * Pass `username` to delete only that user's records (every channel). The
-   * e2e does: suites run at the same time (test/background-suites.ts), so a
-   * full purge could delete a code another suite is still waiting to read.
+   * e2e sweeps everything once, before its suites start running at the same
+   * time (test/background-suites.ts), and passes `username` after that: a full
+   * purge then could delete a code another suite is still waiting to read.
    */
   async authPurgeDeliveredCodes(username?: string) {
     return { deleted: await purgeDeliveredCodes(username) };
