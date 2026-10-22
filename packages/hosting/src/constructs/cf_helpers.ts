@@ -62,7 +62,7 @@ import type {
   DoorRedirect,
   DoorRoute,
 } from './front_door.js';
-import { CF_MATCH_HELPERS, headerRowsJs, redirectRowsJs } from './kvs_router.js';
+import { CF_MATCH_HELPERS, headerRowsJs, redirectRowsJs, VIEWER_URI_JS } from './kvs_router.js';
 
 // ── Wiring record ───────────────────────────────────────────────────────────
 
@@ -454,7 +454,7 @@ var HEADERS = ${rows};
 function handler(event) {
   var request = event.request;
   var response = event.response;
-  var uri = request.uri;
+  ${VIEWER_URI_JS}
 ${headerRowsJs('HEADERS', '  ')}
   return response;
 }`;

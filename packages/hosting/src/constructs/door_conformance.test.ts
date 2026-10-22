@@ -25,8 +25,9 @@
  * CloudFront is modelled as documented: a viewer-response function is not
  * invoked when the origin answers 400 or higher, nor for a response the
  * viewer-request function generated; the viewer-response function sees the
- * request as the viewer sent it; S3 (listable through the origin access
- * control) answers a missing key with 404.
+ * request as the viewer-request function left it (the URI rewritten to the
+ * build prefix, as observed on a deployed distribution); S3 (listable through
+ * the origin access control) answers a missing key with 404.
  *
  * Out of scope: the door's routing layer in front of the handler (ALB listener
  * rules, API Gateway routes, CloudFront behaviors for non-static origins), SSR
@@ -292,7 +293,8 @@ const runCloudFront = async (
   }
   let response: CfResponse = { statusCode: 200, headers: { 'content-type': { value: hit.contentType } }, cookies: {} };
   if (responseCode) {
-    const out = await loadCfFunction(responseCode, kvs, selected)({ request: viewerRequest(), response });
+    // The viewer-response function sees the request as the viewer-request function left it.
+    const out = await loadCfFunction(responseCode, kvs, selected)({ request, response });
     if (isResponse(out)) response = out;
   }
   return toRow(response.statusCode, response.headers, hit.body);

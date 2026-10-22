@@ -1354,6 +1354,32 @@ void describe('response fn — G14 per-pattern headers (exact + multi + lowercas
     });
     assert.equal(out.headers['x-api'].value, 'yes');
   });
+  // The viewer-response function sees the URI the request function rewrote
+  // (`/builds/<id>/…`); it matches the rules on the viewer's URI, which the
+  // request function recorded, as the regional doors' proxies do.
+  void it('matches the rules on the viewer URI the request function recorded, not the rewritten one', async () => {
+    const { output: rewritten } = await runRequestFn(reqCode, entries, req('/api/users'));
+    assert.equal(rewritten.headers['x-blocks-viewer-uri'].value, '/api/users');
+    assert.match(rewritten.uri, /^\/builds\/b1\//);
+    const out = await runResponseFn(respCode, entries, rewritten, { statusCode: 200, headers: {}, cookies: {} });
+    assert.equal(out.headers['x-api'].value, 'yes');
+  });
+  void it('ignores a client-sent viewer-URI header on a URI the request function did not rewrite', async () => {
+    const out = await runResponseFn(
+      respCode,
+      entries,
+      { uri: '/other', headers: { 'x-blocks-viewer-uri': { value: '/secure-headers' } } },
+      { statusCode: 200, headers: {}, cookies: {} },
+    );
+    assert.ok(!out.headers['x-frame-options']);
+    // A direct /builds/ fetch drops a client-sent one before the response function runs.
+    const { output } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/builds/b1/x.html', { headers: { 'x-blocks-viewer-uri': { value: '/secure-headers' } } }),
+    );
+    assert.equal(output.headers['x-blocks-viewer-uri'], undefined);
+  });
   void it('does NOT apply header rules to a non-matching path', async () => {
     const out = await runResponseFn(respCode, entries, { uri: '/other' }, {
       statusCode: 200,

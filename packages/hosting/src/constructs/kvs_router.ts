@@ -431,6 +431,26 @@ const SHARED_CF_HELPERS = `${CF_KVS_HELPERS}
 ${CF_MATCH_HELPERS}`;
 
 /**
+ * The request header the viewer-request functions record the viewer's URI in
+ * before they rewrite it to the build prefix (`/builds/<buildId>/…`). The
+ * viewer-response function sees the rewritten URI, so it matches the app's
+ * header rules on this one instead, as the regional doors' proxies match the
+ * path the viewer asked for. It is trusted only on a rewritten URI.
+ *
+ * @internal Framework-only.
+ */
+export const VIEWER_URI_HEADER = 'x-blocks-viewer-uri';
+
+/**
+ * JS 2.0 source: `var uri` = the viewer's URI in a viewer-response function
+ * (see {@link VIEWER_URI_HEADER}).
+ *
+ * @internal Framework-only.
+ */
+export const VIEWER_URI_JS = `var vu = request.uri.indexOf('/builds/') === 0 && request.headers['${VIEWER_URI_HEADER}'];
+  var uri = vu ? vu.value : request.uri;`;
+
+/**
  * The first-match redirect over a `[[source, destination, status], …]` rows
  * array (JS 2.0 source): returns the redirect response from the enclosing
  * function. Shared by the edge router (per KVS chunk) and `cf.redirects`.
@@ -555,10 +575,12 @@ async function handler(event) {
   // re-request /builds/<id>/<page> through this same behavior). Send straight
   // to S3 with no re-prefix / no redirect / no rewrite.
   if (uri.indexOf('/builds/') === 0) {
+    delete request.headers['x-blocks-viewer-uri'];
     stripCred(request, meta);
     cf.selectRequestOriginById(meta.oS3);
     return request;
   }
+  if (meta.hc) request.headers['x-blocks-viewer-uri'] = { value: uri };
 
   // 0b. www <-> apex canonical 301 (runs before everything else).
   if (meta.ww) {
@@ -754,7 +776,7 @@ ${SHARED_CF_HELPERS}
 async function handler(event) {
   var request = event.request;
   var response = event.response;
-  var uri = request.uri;
+  ${VIEWER_URI_JS}
   var meta = await getJson('meta', null);
   if (!meta) { return response; }
 

@@ -455,6 +455,8 @@ function handler(event) {
   var request = event.request;
   var redirect = blocksRedirectResponse(request.uri);
   if (redirect) return redirect;
+  // The viewer's URI, for the header rules at viewer-response (see VIEWER_URI_HEADER).
+  request.headers['x-blocks-viewer-uri'] = { value: request.uri };
   request.uri = BUILD_PREFIX + resolveIndex(stripBasePath(request.uri, STRIP_PREFIX), SPA_FALLBACK);
   return request;
 }`;
