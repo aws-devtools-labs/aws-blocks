@@ -109,10 +109,11 @@ async function readDeliveredCode<T extends DeliveredCode>(channel: string, usern
   return parseStoredRecord<T>(key, await store.get(key));
 }
 
-async function purgeDeliveredCodes(): Promise<number> {
+async function purgeDeliveredCodes(username?: string): Promise<number> {
   const keys: string[] = [];
   for await (const entry of store.scan()) {
-    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+    if (!entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) continue;
+    if (username === undefined || entry.key.endsWith(`:${username}`)) keys.push(entry.key);
   }
   for (const key of keys) await store.delete(key);
   return keys.length;
@@ -589,6 +590,14 @@ const numberSetting = new AppSetting<number>(scope, 'number-setting', {
 
 const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
+  secret: true,
+});
+
+// The Agent suite's API-key resolver test writes and reads its own secret: it
+// runs in a background process at the same time as the AppSetting suite, which
+// writes and restores `secretSetting` (test/background-suites.ts).
+const agentApiKeySetting = new AppSetting(scope, 'agent-api-key-setting', {
+  name: `${ssmPrefix}/agent-api-key`,
   secret: true,
 });
 
@@ -1166,9 +1175,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * Codes are one small record per test user and CI destroys the table at
    * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
    * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+   *
+   * Pass `username` to delete only that user's records (every channel). The
+   * e2e does: suites run at the same time (test/background-suites.ts), so a
+   * full purge could delete a code another suite is still waiting to read.
    */
-  async authPurgeDeliveredCodes() {
-    return { deleted: await purgeDeliveredCodes() };
+  async authPurgeDeliveredCodes(username?: string) {
+    return { deleted: await purgeDeliveredCodes(username) };
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -2141,10 +2154,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
-    // Puts a test value into the secret setting, then resolves it via the same
+    // Puts a test value into its own secret setting, then resolves it via the same
     // () => Promise<string> pattern the agent uses for apiKey.
-    await secretSetting.put('sk-test-12345');
-    const resolver: () => Promise<string> = () => secretSetting.get();
+    await agentApiKeySetting.put('sk-test-12345');
+    const resolver: () => Promise<string> = () => agentApiKeySetting.get();
     const resolved = await resolver();
     return { resolved: resolved === 'sk-test-12345' };
   },

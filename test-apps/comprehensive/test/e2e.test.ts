@@ -23,9 +23,6 @@ import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
-import { asyncJobTests } from './async-job.test.js';
-import { asyncJobStatusTests } from './async-job-status.test.js';
-import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -39,6 +36,7 @@ import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
+import { backgroundSuites } from './background-suites.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -218,6 +216,14 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
   }
 });
 
+// Agent, AsyncJob and AsyncJob status spend most of their time waiting on
+// queues, Lambda and the model, so each runs in its own child process against
+// this server/stack while the suites below run here. They start now and are
+// awaited at the end of this file. See ./background-suites.ts for why a child
+// process and what a suite must not share to belong there.
+const background = backgroundSuites(['agent', 'async-job', 'async-job-status']);
+test('Background suites - start Agent, AsyncJob, AsyncJob status', () => background.start());
+
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
@@ -263,15 +269,6 @@ authCognitoAdminTests(() => api);
 // AuthOIDC tests (separate file)
 oidcAuthTests(() => api);
 
-// Database tests (separate file)
-databaseTests(() => api);
-
-// AsyncJob tests (separate file)
-asyncJobTests(() => api);
-
-// AsyncJob status tracking tests (separate file)
-asyncJobStatusTests(() => api);
-
 // CronJob tests (separate file)
 cronJobTests(() => api);
 
@@ -305,9 +302,6 @@ cliClientTests();
 // Tracer tests (separate file)
 tracerTests(() => api);
 
-// Agent BB tests last — uses Realtime internally, may affect WS server state
-agentTests(() => api);
-
 test('Context - access headers', { timeout: 10_000 }, async () => {
   const headers = await api.echoHeaders();
   assert.ok(headers['content-type']);
@@ -328,3 +322,10 @@ test('Data types - serialization', { timeout: 10_000 }, async () => {
   assert.deepStrictEqual(await api.echoData([1, 2, 3]), [1, 2, 3]);
   assert.strictEqual(await api.echoData(null), null);
 });
+
+// Background suites started at the top of this file: one test per suite, each
+// failing with that suite's own exit status (its results are the prefixed
+// lines in the output).
+for (const suite of background.suites) {
+  test(`Background suite - ${suite.name}`, () => suite.done());
+}
