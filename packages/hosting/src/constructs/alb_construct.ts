@@ -150,6 +150,42 @@ const REDIRECT_PRIORITY_BASE = 100;
 const ROUTE_PRIORITY_BASE = 1000;
 /** An ALB listener rule holds at most 5 condition values (a hard limit), the header check included. */
 const MAX_CONDITION_VALUES = 5;
+/** An ALB listener rule holds at most 6 wildcard characters (`*` and `?` alike), across its conditions (a hard limit). */
+const MAX_RULE_WILDCARDS = 6;
+
+/** The wildcard characters (`*`, `?`) in an ALB path pattern. */
+const wildcardsIn = (pattern: string): number => (pattern.match(/[*?]/g) ?? []).length;
+
+/**
+ * Pack path patterns into listener-rule conditions: in order, at most
+ * `maxValues` patterns and {@link MAX_RULE_WILDCARDS} wildcards per rule (the
+ * header check's value has none: the secret is alphanumeric).
+ *
+ * @throws HostingError('UnsupportedRoutePatternError') for one pattern with more wildcards than a rule allows.
+ * @internal Framework-only.
+ */
+export const packRulePaths = (paths: readonly string[], maxValues: number): string[][] => {
+  const rules: string[][] = [];
+  let wildcards = 0;
+  for (const path of paths) {
+    const n = wildcardsIn(path);
+    if (n > MAX_RULE_WILDCARDS) {
+      throw new HostingError('UnsupportedRoutePatternError', {
+        message: `The ALB front door can't route '${path}': a listener rule allows at most ${MAX_RULE_WILDCARDS} wildcards (* or ?).`,
+        resolution: 'Use a pattern with fewer wildcards (`/files/*`), or the CloudFront door.',
+      });
+    }
+    const last = rules[rules.length - 1];
+    if (last && last.length < maxValues && wildcards + n <= MAX_RULE_WILDCARDS) {
+      last.push(path);
+      wildcards += n;
+    } else {
+      rules.push([path]);
+      wildcards = n;
+    }
+  }
+  return rules;
+};
 /** The last listener rule priority: the header-checked catch-all of a locked ALB. */
 const CATCH_ALL_PRIORITY = 50000;
 /** The default quota of listener rules per Application Load Balancer (adjustable; the default rule not counted). */
@@ -365,7 +401,7 @@ export class AlbConstruct extends Construct {
     // which covers sign-in at `/aws-blocks/auth/*`, plus the backend's raw routes)
     // → one backend; a named namespace routes `/aws-blocks/api/{ns}/*`. These
     // rules win over the route/catch-all rules (lowest priority numbers). A rule
-    // holds at most 5 condition values, so the paths are packed 5 to a rule (4
+    // holds at most 5 condition values and 6 wildcards, so the paths are packed up to 5 to a rule (4
     // beside the origin-verify header of a locked ALB).
     let apiPriority = API_PRIORITY_BASE;
     let ruleCount = 0;
@@ -394,7 +430,7 @@ export class AlbConstruct extends Construct {
         // Requires the LAMBDA target type (set explicitly above for the validator).
         multiValueHeadersEnabled: true,
       });
-      for (let i = 0; i < paths.length; i += pathsPerRule) {
+      for (const rulePaths of packRulePaths(paths, pathsPerRule)) {
         if (apiPriority >= REDIRECT_PRIORITY_BASE) {
           throw new HostingError('TooManyApiPathsError', {
             message:
@@ -407,7 +443,7 @@ export class AlbConstruct extends Construct {
         }
         listener.addTargetGroups(`ApiRoute${apiPriority}`, {
           priority: apiPriority++,
-          conditions: [...verify, elbv2.ListenerCondition.pathPatterns(paths.slice(i, i + pathsPerRule))],
+          conditions: [...verify, elbv2.ListenerCondition.pathPatterns(rulePaths)],
           targetGroups: [apiTg],
         });
         ruleCount++;
@@ -424,7 +460,7 @@ export class AlbConstruct extends Construct {
     // `pathsPerRule` sources each); the proxy picks the first matching redirect.
     let priority = REDIRECT_PRIORITY_BASE;
     const redirectSources = [...new Set(plan.routes.redirects.map((r) => r.source))];
-    for (let i = 0; i < redirectSources.length; i += pathsPerRule) {
+    for (const rulePaths of packRulePaths(redirectSources, pathsPerRule)) {
       if (priority >= ROUTE_PRIORITY_BASE) {
         throw new HostingError('TooManyRedirectsError', {
           message:
@@ -435,23 +471,25 @@ export class AlbConstruct extends Construct {
       }
       listener.addTargetGroups(`Redirect${priority}`, {
         priority: priority++,
-        conditions: [...verify, elbv2.ListenerCondition.pathPatterns(redirectSources.slice(i, i + pathsPerRule))],
+        conditions: [...verify, elbv2.ListenerCondition.pathPatterns(rulePaths)],
         targetGroups: [staticTg],
       });
       ruleCount++;
     }
 
     // Routes: consecutive patterns bound for the same target group share a rule
-    // (order between targets is kept, so the first match still wins). Trailing
-    // routes that go where the catch-all goes add nothing, so they are dropped.
-    const groups: Array<{ tg: elbv2.ApplicationTargetGroup; patterns: string[] }> = [];
+    // (order between targets is kept, so the first match still wins), within
+    // the per-rule value and wildcard limits. Trailing routes that go where the
+    // catch-all goes add nothing, so they are dropped.
+    const runs: Array<{ tg: elbv2.ApplicationTargetGroup; patterns: string[] }> = [];
     for (const entry of plan.routes.entries) {
       const tg = tgForKind(entry.kind);
-      const last = groups[groups.length - 1];
-      if (last && last.tg === tg && last.patterns.length < pathsPerRule) last.patterns.push(entry.pattern);
-      else groups.push({ tg, patterns: [entry.pattern] });
+      const last = runs[runs.length - 1];
+      if (last && last.tg === tg) last.patterns.push(entry.pattern);
+      else runs.push({ tg, patterns: [entry.pattern] });
     }
-    while (groups.length > 0 && groups[groups.length - 1].tg === defaultTg) groups.pop();
+    while (runs.length > 0 && runs[runs.length - 1].tg === defaultTg) runs.pop();
+    const groups = runs.flatMap((run) => packRulePaths(run.patterns, pathsPerRule).map((patterns) => ({ tg: run.tg, patterns })));
     priority = ROUTE_PRIORITY_BASE;
     for (const group of groups) {
       listener.addTargetGroups(`Route${priority}`, {

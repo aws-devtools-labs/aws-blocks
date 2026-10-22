@@ -6,7 +6,7 @@ import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { HostingPlan } from '../plan/types.js';
-import { AlbConstruct } from './alb_construct.js';
+import { AlbConstruct, packRulePaths } from './alb_construct.js';
 import { albDoor } from './alb_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
@@ -298,6 +298,37 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
     const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('CatchAllApiPathNotRouted'));
     assert.equal(warnings.length, 1);
     assert.match(String(warnings[0]?.entry.data), /ALB front door/);
+  });
+
+  // Measured with CreateRule: a rule takes 5 condition values (the header's
+  // included) and 6 wildcards (`*` and `?` alike) across its conditions.
+  it('never packs more than 5 values or 6 wildcards into one rule (redirects, routes and API paths, locked router)', () => {
+    const wild = Array.from({ length: 6 }, (_, i) => `/s${i}/*/x/*`); // 2 wildcards each
+    const plan: HostingPlan = {
+      ...serverPlan(
+        wild.map((pattern) => ({ pattern, kind: 'static' as const })),
+        wild.map((source, i) => ({ source, destination: `/n${i}/*`, statusCode: 301 as const })),
+      ),
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+    };
+    const { t } = synthWithServer(plan, { restrictToCloudFront: true, apiPaths: ['/aws-blocks/*', ...wild] });
+    const rules = rulePaths(t).filter((r) => r.paths.length > 0);
+    assert.ok(rules.length > 0);
+    for (const rule of rules) {
+      const values = rule.paths.length + (rule.header?.length ?? 0);
+      const wildcards = rule.paths.join('').replace(/[^*?]/g, '').length;
+      assert.ok(values <= 5, `rule ${rule.priority}: ${values} values`);
+      assert.ok(wildcards <= 6, `rule ${rule.priority}: ${wildcards} wildcards (${rule.paths.join(' ')})`);
+    }
+    // Every pattern is still routed, in order.
+    assert.deepEqual(rules.filter((r) => r.priority >= 100 && r.priority < 1000).flatMap((r) => r.paths), wild);
+  });
+
+  it('packRulePaths: values and wildcards per rule, order kept; a pattern over the wildcard limit fails synth', () => {
+    assert.deepEqual(packRulePaths(['/a', '/b', '/c', '/d', '/e', '/f'], 5), [['/a', '/b', '/c', '/d', '/e'], ['/f']]);
+    assert.deepEqual(packRulePaths(['/a/*/b/*', '/c/*/d/*', '/e/*/f/*', '/g/*'], 4), [['/a/*/b/*', '/c/*/d/*', '/e/*/f/*'], ['/g/*']]);
+    assert.deepEqual(packRulePaths(['/a?/*', '/b/*'], 4), [['/a?/*', '/b/*']]);
+    assert.throws(() => packRulePaths(['/*/*/*/*/*/*/*'], 5), (e: Error) => e.name === 'UnsupportedRoutePatternError');
   });
 
   it('warns when the rules exceed the default quota of 100 per load balancer', () => {
