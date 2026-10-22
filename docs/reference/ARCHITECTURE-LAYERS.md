@@ -1,479 +1,66 @@
 # Building Block Layer Architecture
 
-## Overview
+A Building Block (BB) is one npm package that exposes **one class name** with **up to four implementations**, one per place the code runs. Node.js [conditional exports](https://nodejs.org/api/packages.html#conditional-exports) pick the implementation, so application code writes `new KVStore(scope, 'todos')` once and gets a local store in development, a DynamoDB table at synth, and SDK calls in Lambda.
 
-Building Blocks in AWS Blocks are structured with **four independent exports**, each in its own file. All four files must be present, but exports can be no-ops when not needed.
+This page explains the model. For the files a BB contains and how to write each one, see [Building Block Structure](./building-block-structure.md). The canonical reference implementation is [`packages/bb-kv-store`](../../packages/bb-kv-store/).
 
-This separation provides:
+## The four layers
 
-- **Clear separation of concerns** - Infrastructure, runtime, mocking, and client protocols are distinct
-- **Selective bundling** - Only relevant code ships to each environment
-- **Explicit contracts** - All Building Blocks have the same file structure
-- **Better tooling** - AWS Blocks can analyze and optimize each layer independently
+Every BB `package.json` maps one export path to the four layer files:
 
-## Export Structure
-
-```
-building-block/
-├── client-hook.ts  # Client protocol extensions
-├── index.ts        # Runtime layer (AWS SDK calls, business logic)
-├── infra.ts        # Infrastructure layer (CDK resources)
-└── mock.ts         # Mock layer (local development)
-```
-
-All four files are **required**. If a Building Block doesn't need a particular layer, export a no-op.
-
-## How AWS Blocks Consumes Each Export
-
-```
-Building Block Exports          Consumption
-┌─────────────────────┐
-│ client-hook.ts      │────────> Browser Bundle
-│ index.ts            │────────> Lambda Bundle (production)
-│ infra.ts            │────────> CDK Bundle (deployment)
-│ mock.ts             │────────> Local Server (development)
-└─────────────────────┘
-```
-
-| Export | Local Dev | Deployment | Production |
-|--------|-----------|------------|------------|
-| `client-hook.ts` | ✅ Bundled to browser | ❌ | ✅ Bundled to browser |
-| `index.ts` | ❌ | ❌ | ✅ Bundled to Lambda |
-| `infra.ts` | ❌ | ✅ Synthesized to CDK | ❌ |
-| `mock.ts` | ✅ Used in local server | ❌ | ❌ |
-
-## Export Requirements
-
-### All Exports Required
-
-Every Building Block must have all four files:
-- `client-hook.ts`
-- `index.ts`
-- `infra.ts`
-- `mock.ts`
-
-### No-Op Exports
-
-When a Building Block doesn't need a particular layer, export a no-op:
-
-**client-hook.ts** (no client protocol needed):
-```typescript
-// No client-side protocol extensions needed
-export {};
-```
-
-**infra.ts** (no infrastructure needed):
-```typescript
-import { Construct } from 'constructs';
-
-// No infrastructure to provision
-export function materialize(scope: Construct, name: string, options: any) {
-  return {};
-}
-```
-
-**mock.ts** (use production implementation locally):
-```typescript
-// Re-export production implementation for local use
-export * from './index.js';
-```
-
-## Examples
-
-### Full Building Block (All Layers)
-
-**FileBucket** - S3 storage with local filesystem mock
-
-```
-file-bucket/
-├── client-hook.ts  # No client protocol needed (no-op)
-├── index.ts        # S3Client operations
-├── infra.ts        # s3.Bucket CDK resource
-└── mock.ts         # fs.readFile/writeFile
-```
-
-**client-hook.ts:**
-```typescript
-export {};
-```
-
-**index.ts:**
-```typescript
-import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-
-export class FileBucket {
-  private client?: S3Client;
-  private bucketName?: string;
-
-  constructor(public name: string, public options: FileBucketOptions) {}
-
-  private getClient() {
-    if (!this.client) {
-      this.client = new S3Client({});
-      this.bucketName = process.env[`BLOCKS_${this.name}_BUCKET_NAME`];
-    }
-    return this.client;
-  }
-
-  async get(key: string): Promise<Buffer> {
-    const client = this.getClient();
-    const result = await client.send(new GetObjectCommand({
-      Bucket: this.bucketName,
-      Key: key
-    }));
-    return Buffer.from(await result.Body!.transformToByteArray());
-  }
-
-  async put(key: string, data: Buffer): Promise<void> {
-    const client = this.getClient();
-    await client.send(new PutObjectCommand({
-      Bucket: this.bucketName,
-      Key: key,
-      Body: data
-    }));
+```jsonc
+"type": "module",
+"exports": {
+  ".": {
+    "browser":     "./dist/index.browser.js",                                    // browser bundles
+    "cdk":         { "types": "./dist/index.cdk.d.ts", "default": "./dist/index.cdk.js" },
+    "aws-runtime": "./dist/index.aws.js",                                        // deployed Lambda
+    "types":       "./dist/index.mock.d.ts",                                     // types resolve to the mock
+    "default":     "./dist/index.mock.js"                                        // local dev + tests
   }
 }
 ```
 
-**infra.ts:**
-```typescript
-import { Construct } from 'constructs';
-import { Bucket } from 'aws-cdk-lib/aws-s3';
-import { CfnOutput } from 'aws-cdk-lib';
+| Layer | File | Selected by | Runs when | Does |
+|---|---|---|---|---|
+| Mock | `index.mock.ts` | `default` (and `types`) | `npm run dev`, unit and e2e tests | Implements the full API locally and persists to `.bb-data/{fullId}/` |
+| CDK | `index.cdk.ts` | `cdk` | CDK synth, run with `--conditions=cdk` | Provisions the AWS resources, grants IAM on the shared execution role, registers extra config; every runtime method is a `synthGuard` stub |
+| AWS runtime | `index.aws.ts` | `aws-runtime` | inside the deployed Lambda (bundled by esbuild with `--conditions aws-runtime`) | Implements the API with the AWS SDK |
+| Browser | `index.browser.ts` | `browser` | client bundles | Re-exports types and error constants; the class is a stub, because data methods are server-side only |
 
-export function materialize(scope: Construct, name: string, options: any) {
-  const bucket = new Bucket(scope, `${name}-bucket`);
+Things that follow from this:
 
-  new CfnOutput(scope, `${name}-bucket-name`, {
-    value: bucket.bucketName,
-    exportName: `BLOCKS_${name}_BUCKET_NAME`
-  });
+- **Synth must run with `--conditions=cdk`.** Without it, Node falls through to `default` and loads the mocks, so synth would produce no infrastructure. `BlocksStack` and `BlocksBackend` throw at construction when the flag is missing.
+- **Types resolve to the mock.** `"types"` points at `index.mock.d.ts`, so the mock's public types are the BB's public types. Every named export of `index.mock.ts` must also exist in the `cdk`, `aws-runtime` and `browser` entries; `packages/blocks/src/conditional-exports.test.ts` enforces it.
+- **Data methods run only inside handlers.** Under `--conditions=cdk` they are `synthGuard` stubs that throw, so calling one at module top level fails synth with an explanation instead of silently doing nothing.
 
-  return { bucket };
-}
-```
+## How the layers agree on resource names
 
-**mock.ts:**
-```typescript
-import * as fs from 'fs/promises';
-import * as path from 'path';
+The layers never pass resource names to each other. Each derives the same name from the instance's `fullId` (its scoped id, e.g. `app-notes`) independently:
 
-export class FileBucket {
-  private basePath: string;
+1. The **CDK layer** provisions the resource with a name derived from `this.fullId` (e.g. `tableName: this.fullId.substring(0, 255)`).
+2. The **AWS runtime layer** computes the same name in its constructor and records it with `registerSdkIdentifiers(this.fullId, { tableName })`.
+3. The **mock layer** registers a `mock-`-prefixed name the same way.
+4. Methods resolve names **at call time** with `getSdkIdentifiers(this)`, never by caching them in the constructor. The registry is per process, so co-located BBs can find each other's resources.
 
-  constructor(public name: string, public options: any) {
-    this.basePath = path.join(process.cwd(), '.bb-local', name);
-    fs.mkdir(this.basePath, { recursive: true });
-  }
+`fromExisting(…)` follows the same path: it returns a lightweight **reference object** (e.g. `{ tableName }`) that you pass into the constructor, and every layer uses the referenced name instead of the derived one.
 
-  async get(key: string): Promise<Buffer> {
-    return await fs.readFile(path.join(this.basePath, key));
-  }
+## Configuration beyond names
 
-  async put(key: string, data: Buffer): Promise<void> {
-    const filePath = path.join(this.basePath, key);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, data);
-  }
-}
-```
+When the CDK layer must tell the runtime something it cannot derive (a token-valued ARN, a feature flag), it calls `registerConfig(this, 'BLOCKS_…', value)` from `@aws-blocks/core/cdk`. Entries are written to one JSON file in S3 at synth time, and the Lambda handler loads them into `process.env` at cold start. Never use `handler.addEnvironment()` for BB config: Lambda environment variables are capped at about 4 KB for the whole function.
 
-### Composite Block (Runtime Only)
+## Composition
 
-**UserStorage** - Combines Auth + FileBucket
+A BB can build on other BBs by constructing them with itself as the parent, under fixed child ids, in each of its layers. Because the child is imported by its package name, the same conditional exports resolve it to the matching layer: the parent's CDK layer gets the child's CDK class, and its mock layer gets the child's mock.
 
-```
-user-storage/
-├── client-hook.ts  # No client protocol (no-op)
-├── index.ts        # Composes Auth and FileBucket
-├── infra.ts        # No infrastructure (no-op)
-└── mock.ts         # Re-exports index.ts
-```
+`Auth` ([`packages/bb-auth`](../../packages/bb-auth/)) is the example: every layer composes a `KVStore` named `sessions` and a secret `AppSetting` named `session-secret` (`src/index.cdk.ts`, `src/sessions.ts`, `src/index.aws.ts`). A configuration with only directly federated OIDC providers provisions nothing else, so the composed BBs are its whole infrastructure. Child ids are part of the resource identity: renaming one makes CloudFormation replace the resource.
 
-**client-hook.ts:**
-```typescript
-export {};
-```
+## Values that cross the wire
 
-**index.ts:**
-```typescript
-import { Auth } from './auth.js';
-import { FileBucket } from './file-bucket.js';
+An `ApiNamespace` method returns plain JSON-serializable data. A BB that must hand the client a live object (a realtime channel, a file handle) returns a **Transferable**: its `toJSON()` produces a `{ __blocks: '<type>', … }` descriptor, and a client plugin registered with `scope.registerClientMiddleware(pkg)` re-hydrates it in the browser. [`packages/bb-realtime`](../../packages/bb-realtime/) is the end-to-end example. A BB instance itself (a `Scope` subclass) is server-only and never crosses the wire.
 
-export class UserStorage {
-  private auth: Auth;
-  private storage: FileBucket;
+## See also
 
-  constructor(public name: string) {
-    this.auth = new Auth(`${name}-auth`, {});
-    this.storage = new FileBucket(`${name}-storage`, {});
-  }
-
-  async saveUserFile(context: any, filename: string, data: Buffer) {
-    const user = await this.auth.requireUser(context);
-    await this.storage.put(`${user.id}/${filename}`, data);
-  }
-
-  async getUserFile(context: any, filename: string): Promise<Buffer> {
-    const user = await this.auth.requireUser(context);
-    return await this.storage.get(`${user.id}/${filename}`);
-  }
-}
-```
-
-**infra.ts:**
-```typescript
-import { Construct } from 'constructs';
-
-// No infrastructure - uses composed blocks' infrastructure
-export function materialize(scope: Construct, name: string, options: any) {
-  return {};
-}
-```
-
-**mock.ts:**
-```typescript
-// Use production implementation locally
-export * from './index.js';
-```
-
-### Infrastructure-Only Block
-
-**Dashboard** - CloudWatch dashboard
-
-```
-dashboard/
-├── client-hook.ts  # No client protocol (no-op)
-├── index.ts        # No runtime behavior (no-op)
-├── infra.ts        # Dashboard CDK resource
-└── mock.ts         # No mock needed (no-op)
-```
-
-**client-hook.ts:**
-```typescript
-export {};
-```
-
-**index.ts:**
-```typescript
-// No runtime behavior
-export {};
-```
-
-**infra.ts:**
-```typescript
-import { Construct } from 'constructs';
-import { Dashboard, GraphWidget } from 'aws-cdk-lib/aws-cloudwatch';
-
-export function materialize(scope: Construct, name: string, options: any) {
-  const dashboard = new Dashboard(scope, `${name}-dashboard`, {
-    dashboardName: name
-  });
-
-  return { dashboard };
-}
-```
-
-**mock.ts:**
-```typescript
-// No mock needed
-export {};
-```
-
-### Protocol Extension Block
-
-**Realtime** - WebSocket communication
-
-```
-realtime/
-├── client-hook.ts  # WebSocket client setup
-├── index.ts        # Server-side pub/sub
-├── infra.ts        # AppSync Event API
-└── mock.ts         # In-memory pub/sub
-```
-
-**client-hook.ts:**
-```typescript
-export class RealtimeClientHook {
-  private ws?: WebSocket;
-
-  async onInit(config: any) {
-    this.ws = new WebSocket(config.websocketUrl);
-    
-    this.ws.onmessage = (event) => {
-      // Handle incoming messages
-    };
-  }
-
-  async subscribe(channel: string) {
-    this.ws?.send(JSON.stringify({ type: 'subscribe', channel }));
-  }
-
-  async publish(channel: string, message: any) {
-    this.ws?.send(JSON.stringify({ type: 'publish', channel, message }));
-  }
-}
-```
-
-**index.ts:**
-```typescript
-import { IoTDataPlaneClient, PublishCommand } from '@aws-sdk/client-iot-data-plane';
-
-export class Realtime {
-  private client?: IoTDataPlaneClient;
-  private endpoint?: string;
-
-  constructor(public name: string, public options: any) {}
-
-  private getClient() {
-    if (!this.client) {
-      this.endpoint = process.env[`BLOCKS_${this.name}_ENDPOINT`];
-      this.client = new IoTDataPlaneClient({ endpoint: this.endpoint });
-    }
-    return this.client;
-  }
-
-  async publish(channel: string, message: any) {
-    const client = this.getClient();
-    await client.send(new PublishCommand({
-      topic: channel,
-      payload: Buffer.from(JSON.stringify(message))
-    }));
-  }
-}
-```
-
-**infra.ts:**
-```typescript
-import { Construct } from 'constructs';
-import { CfnOutput } from 'aws-cdk-lib';
-// AppSync or IoT Core setup...
-
-export function materialize(scope: Construct, name: string, options: any) {
-  // Create WebSocket API infrastructure
-  // ...
-
-  new CfnOutput(scope, `${name}-endpoint`, {
-    value: endpoint,
-    exportName: `BLOCKS_${name}_ENDPOINT`
-  });
-
-  return { endpoint };
-}
-```
-
-**mock.ts:**
-```typescript
-import { EventEmitter } from 'events';
-
-const globalEmitter = new EventEmitter();
-
-export class Realtime {
-  constructor(public name: string, public options: any) {}
-
-  async publish(channel: string, message: any) {
-    globalEmitter.emit(channel, message);
-  }
-
-  subscribe(channel: string, handler: (message: any) => void) {
-    globalEmitter.on(channel, handler);
-  }
-}
-```
-
-## Implementation Details
-
-### Runtime Layer (`index.ts`)
-
-Exports classes/functions used in production application code:
-
-```typescript
-export class MyBlock {
-  constructor(public name: string, public options: Options) {}
-  
-  async doSomething() {
-    // Access resources via environment variables
-    const resourceId = process.env[`BLOCKS_${this.name}_RESOURCE_ID`];
-    // Use AWS SDK...
-  }
-}
-```
-
-### Infrastructure Layer (`infra.ts`)
-
-Exports a `materialize` function that returns CDK resources:
-
-```typescript
-import { Construct } from 'constructs';
-import { CfnOutput } from 'aws-cdk-lib';
-
-export function materialize(scope: Construct, name: string, options: Options) {
-  // Create CDK resources
-  const resource = new SomeResource(scope, name);
-  
-  // Export values for runtime injection
-  new CfnOutput(scope, `${name}-id`, {
-    value: resource.id,
-    exportName: `BLOCKS_${name}_RESOURCE_ID`,
-  });
-  
-  return { resource };
-}
-```
-
-### Mock Layer (`mock.ts`)
-
-Exports same interface as runtime layer, with local implementations:
-
-```typescript
-export class MyBlock {
-  constructor(public name: string, public options: Options) {}
-  
-  async doSomething() {
-    // Local implementation (SQLite, filesystem, in-memory, etc.)
-  }
-}
-```
-
-### Client Hook (`client-hook.ts`)
-
-Exports a class with lifecycle methods for client-side protocol handling:
-
-```typescript
-export class MyClientHook {
-  async onInit(config: any) {
-    // Initialize client-side resources
-  }
-  
-  async onResponse(res: Response) {
-    // Handle special responses (WebSocket upgrade, etc.)
-  }
-}
-```
-
-## Benefits
-
-1. **Consistent structure** - All Building Blocks have the same four files
-2. **No CDK in production bundles** - Infrastructure code never ships to Lambda
-3. **Type safety across layers** - Shared types between runtime and mock
-4. **Independent testing** - Test each layer in isolation
-5. **Clear contracts** - Each export has a well-defined interface
-6. **Explicit no-ops** - Missing functionality is visible, not implicit
-
-## Export Discovery
-
-AWS Blocks uses two mechanisms to ensure correct exports are consumed in each context:
-
-1. **Conditional exports** in package.json
-2. **Export manifest** generated at build time
-
-This ensures:
-- Browser bundles only get `client-hook.ts`
-- Lambda bundles only get `index.ts`
-- CDK apps only get `infra.ts`
-- Local dev only gets `mock.ts`
-
-## See Also
-
-- [Building Block Structure](./building-block-structure.md) - Detailed file structure guide
-- [Building Block Structure](./building-block-structure.md) - Creating custom Building Blocks
+- [Building Block Structure](./building-block-structure.md) — the files in a BB package and what goes in each
+- [`AGENTS.md`](../../AGENTS.md) — the contributor guide, including the checklist for a new BB
+- [`docs/design/API-DESIGN.md`](../design/API-DESIGN.md) — API guidelines G1–G18

@@ -1,0 +1,48 @@
+{
+  "name": "blocks-auth-app",
+  "version": "0.1.0",
+  "type": "module",
+  "blocksTemplate": "auth",
+  "blocksTemplateDescription": "Vite + vanilla-DOM tour of the Auth block: email sign-up with code, groups, profile (was auth-cognito)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "aws-blocks"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "spec": "blocks-generate-spec",
+    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
+    "dev": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
+    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
+    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "prebuild": "blocks-generate-client",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy": "tsx aws-blocks/scripts/deploy.ts",
+    "secret": "tsx aws-blocks/scripts/secret.ts",
+    "typegen": "tsx aws-blocks/scripts/typegen.ts",
+    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "test:e2e": "tsx -C browser test/e2e.test.ts",
+    "vendorize": "blocks-vendorize"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.4",
+    "tsx": "^4.23.15",
+    "esbuild": "^0.28.2",
+    "aws-cdk": "^2.1145.0",
+    "aws-cdk-lib": "^2.273.0",
+    "constructs": "^10.8.1"
+  }
+}

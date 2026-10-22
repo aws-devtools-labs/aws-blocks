@@ -61,7 +61,7 @@ describe('buildUserAgentChain', () => {
 		const root = { id: 'my-app' };
 		const parentBB = new TestBB('auth', {
 			parent: root,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		const childBB = new TestBB('store', {
@@ -74,7 +74,7 @@ describe('buildUserAgentChain', () => {
 
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -90,7 +90,7 @@ describe('buildUserAgentChain', () => {
 		});
 		const parentBB = new TestBB('auth', {
 			parent: grandparentBB,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		const childBB = new TestBB('store', {
@@ -104,7 +104,7 @@ describe('buildUserAgentChain', () => {
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
 			['bb', 'Dashboard/2.0.0'],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -136,7 +136,7 @@ describe('buildUserAgentChain', () => {
 		const root = { id: 'my-app' };
 		const parentBB = new TestBB('auth', {
 			parent: root,
-			bbName: 'AuthBasic',
+			bbName: 'Auth',
 			bbVersion: '1.0.1',
 		});
 		// Plain scope between parent BB and child BB
@@ -154,7 +154,7 @@ describe('buildUserAgentChain', () => {
 
 		assert.deepStrictEqual(chain, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthBasic/1.0.1'],
+			['bb', 'Auth/1.0.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -248,6 +248,55 @@ describe('buildUserAgentChain', () => {
 	});
 });
 
+// ── registerLambdaEventHandler: one handler per event key ───────────────────
+
+describe('registerLambdaEventHandler', () => {
+	type Handlers = Map<string, (record: unknown) => Promise<void>>;
+	const GLOBAL_KEY = '__BLOCKS_LAMBDA_EVENT_HANDLERS__';
+	const handlers = (): Handlers => Reflect.get(globalThis, GLOBAL_KEY);
+
+	test('registers under `{eventSource}:{identifier}`', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		const handler = async () => {};
+		new TestBB('job', { parent: { id: 'app' } }).registerLambdaEventHandler('aws:sqs', 'queue-a', handler);
+		assert.strictEqual(handlers().get('aws:sqs:queue-a'), handler);
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+	});
+
+	test('a second handler for the same key is refused, and the first stays in place', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		const first = async () => {};
+		new TestBB('auth', { parent: { id: 'app' } }).registerLambdaEventHandler(
+			'aws:cognito-idp',
+			'us-east-1_Pool',
+			first,
+		);
+		const second = new TestBB('adminauth', { parent: { id: 'app' } });
+		assert.throws(
+			() => second.registerLambdaEventHandler('aws:cognito-idp', 'us-east-1_Pool', async () => {}),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /'app-adminauth'/, 'names the block that tried to register');
+				assert.match(e.message, /"aws:cognito-idp:us-east-1_Pool"/, 'names the event key');
+				assert.match(e.message, /already registered/);
+				return true;
+			},
+		);
+		assert.strictEqual(handlers().get('aws:cognito-idp:us-east-1_Pool'), first, 'never silently replaced');
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+	});
+
+	test('the same identifier under another event source, or another identifier, is a different key', () => {
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+		const bb = new TestBB('multi', { parent: { id: 'app' } });
+		bb.registerLambdaEventHandler('aws:sqs', 'x', async () => {});
+		bb.registerLambdaEventHandler('blocks.cronjob', 'x', async () => {});
+		bb.registerLambdaEventHandler('aws:sqs', 'y', async () => {});
+		assert.deepStrictEqual([...handlers().keys()].sort(), ['aws:sqs:x', 'aws:sqs:y', 'blocks.cronjob:x']);
+		Reflect.deleteProperty(globalThis, GLOBAL_KEY);
+	});
+});
+
 // ── formatUserAgentString: string rendering + Postgres 63-byte limit ────────
 
 describe('formatUserAgentString', () => {
@@ -279,19 +328,19 @@ describe('formatUserAgentString', () => {
 
 	test('a chain within 63 bytes is returned unchanged', () => {
 		const root = { id: 'my-app' };
-		const auth = new TestBB('auth', { parent: root, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 		const db = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
 
 		const s = db.testFormatUserAgentString();
 		assert.ok(Buffer.byteLength(s, 'utf8') <= 63);
-		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/AuthBasic/1.0.1 bb/Database/0.2.6`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Auth/1.0.1-rc.1 bb/Database/0.2.6`);
 	});
 
 	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
 		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
-		const p3 = new TestBB('c', { parent: p2, bbName: 'AuthCognito', bbVersion: '7.8.9' });
+		const p3 = new TestBB('c', { parent: p2, bbName: 'EmailClient', bbVersion: '7.8.9' });
 		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
 
 		const full = leaf.testBuildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
@@ -327,7 +376,7 @@ describe('formatUserAgentString', () => {
 
 	test('the origin is kept when the leaf cannot fit alongside it', () => {
 		const root = { id: 'my-app' };
-		const auth = new TestBB('auth', { parent: root, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 		const leaf = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
 
 		// 20 bytes admits `aws-blocks/<core>` but not the marker plus the leaf.
@@ -419,7 +468,7 @@ describe('buildingBlockParent', () => {
 		const self = buildingBlockParent({
 			id: 'auth',
 			parent: root,
-			bbName: 'AuthOidc',
+			bbName: 'Auth',
 			bbVersion: '0.2.1',
 		});
 		const child = new TestBB('sessions', {
@@ -430,7 +479,7 @@ describe('buildingBlockParent', () => {
 
 		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'AuthOidc/0.2.1'],
+			['bb', 'Auth/0.2.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -464,7 +513,7 @@ describe('buildingBlockParent', () => {
 		const self = buildingBlockParent({
 			id: 'auth',
 			parent: grandparent,
-			bbName: 'AuthOidc',
+			bbName: 'Auth',
 			bbVersion: '0.2.1',
 		});
 		const child = new TestBB('sessions', {
@@ -476,7 +525,7 @@ describe('buildingBlockParent', () => {
 		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
 			['aws-blocks', CORE_VERSION],
 			['bb', 'Database/3.0.0'],
-			['bb', 'AuthOidc/0.2.1'],
+			['bb', 'Auth/0.2.1'],
 			['bb', 'KVStore/0.4.0'],
 		]);
 	});
@@ -485,7 +534,7 @@ describe('buildingBlockParent', () => {
 		const self = buildingBlockParent({
 			id: 'auth',
 			parent: root,
-			bbName: 'AuthOidc',
+			bbName: 'Auth',
 			bbVersion: '',
 		});
 		const child = new TestBB('sessions', {
@@ -506,7 +555,7 @@ describe('buildingBlockParent', () => {
 		const self = buildingBlockParent({
 			id: 'auth',
 			parent: root,
-			bbName: 'AuthOidc',
+			bbName: 'Auth',
 			bbVersion: '0.2.1',
 		});
 

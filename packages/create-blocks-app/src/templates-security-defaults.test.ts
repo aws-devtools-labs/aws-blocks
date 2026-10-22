@@ -92,7 +92,7 @@ function methodBody(source: string, method: string): string {
 }
 
 describe('create-blocks-app template key-value methods require auth', () => {
-  for (const name of ['demo', 'auth-cognito']) {
+  for (const name of ['demo', 'auth']) {
     const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
 
     for (const method of ['getValue', 'setValue']) {

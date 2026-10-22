@@ -4,8 +4,7 @@
 '@aws-blocks/bb-agent': patch
 '@aws-blocks/bb-app-setting': patch
 '@aws-blocks/bb-async-job': patch
-'@aws-blocks/bb-auth-cognito': patch
-'@aws-blocks/bb-auth-oidc': patch
+'@aws-blocks/bb-auth': patch
 '@aws-blocks/bb-cron-job': patch
 '@aws-blocks/bb-dashboard': patch
 '@aws-blocks/bb-data': patch

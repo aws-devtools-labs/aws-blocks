@@ -239,6 +239,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # publish:local empties dist-registry/ before every run; this pins that the
+      # reset can never delete anything outside it.
+      - name: Test the local-registry reset guard
+        run: npx tsx --test scripts/publish/local-registry.test.ts
+
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
       - name: Test the E2E job selection
@@ -417,6 +422,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # This run's test-support secret: random per run, masked in the logs, never
+      # stored. The deploy registers it as config for the e2e build's gated
+      # test-only methods, and the tests send it, so nothing reads it from AWS.
+      - name: Generate the test-support secret
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
+
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
 
@@ -593,6 +607,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # This run's test-support secret: random per run, masked in the logs, never
+      # stored. The deploy registers it as config for the e2e build's gated
+      # test-only methods, and the tests send it, so nothing reads it from AWS.
+      - name: Generate the test-support secret
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
+
       - name: E2E Test Production
         run: npm run test:e2e:production
 
@@ -765,6 +788,15 @@ jobs:
 
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
+
+      # This run's test-support secret: random per run, masked in the logs, never
+      # stored. The deploy registers it as config for the e2e build's gated
+      # test-only methods, and the tests send it, so nothing reads it from AWS.
+      - name: Generate the test-support secret
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
 
       - name: E2E Test Hosting (${{ matrix.framework }})
         run: npm run ${{ matrix.script }}

@@ -12,7 +12,7 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-let currentUser: { username: string } | null = null;
+let currentUser: { username: string; displayName?: string } | null = null;
 let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;
 
 // Refresh todo list
@@ -155,7 +155,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentUser = user;
     const authStatus = document.getElementById('auth-status');
     if (authStatus) {
-      authStatus.textContent = user ? `Logged in as: ${user.username}` : 'Not logged in';
+      // With `signInWith: ['email']`, `username` is an id Cognito generates;
+      // `displayName` is the email the user signed in with.
+      authStatus.textContent = user ? `Logged in as: ${user.displayName ?? user.username}` : 'Not logged in';
     }
     await refreshTodos();
   });

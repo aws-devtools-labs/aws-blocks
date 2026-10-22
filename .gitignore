@@ -81,9 +81,6 @@ packages/*/src/version.ts
 # RFC drafts (personal working docs)
 docs/tech-design/telemetry-rfc.md
 
-# Manual-test Cognito pool manifest (contains per-deploy AWS resource IDs)
-packages/bb-auth-cognito/scripts/.manual-pools.json
-
 my-test/
 
 # SSR test-app build artefacts (Nuxt/Nitro and Playwright)

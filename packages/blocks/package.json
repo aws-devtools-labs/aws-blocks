@@ -76,15 +76,13 @@
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
     "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js dist/brand-coverage.test.js dist/default-compute-telemetry.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
+    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js dist/ui.test.js dist/brand-coverage.test.js dist/default-compute-telemetry.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.7.0",
     "@aws-blocks/hosting": "^0.4.1",
     "@aws-blocks/auth-common": "^0.2.0",
-    "@aws-blocks/bb-auth-basic": "^0.1.11",
-    "@aws-blocks/bb-auth-cognito": "^0.1.12",
-    "@aws-blocks/bb-auth-oidc": "^0.2.2",
+    "@aws-blocks/bb-auth": "^0.1.0",
     "@aws-blocks/bb-kv-store": "^0.3.1",
     "@aws-blocks/bb-distributed-table": "^0.2.2",
     "@aws-blocks/bb-realtime": "^0.4.0",
@@ -144,14 +142,8 @@
       "@aws-blocks/bb-knowledge-base": [
         "KnowledgeBase"
       ],
-      "@aws-blocks/bb-auth-basic": [
-        "AuthBasic"
-      ],
-      "@aws-blocks/bb-auth-cognito": [
-        "AuthCognito"
-      ],
-      "@aws-blocks/bb-auth-oidc": [
-        "AuthOIDC"
+      "@aws-blocks/bb-auth": [
+        "Auth"
       ],
       "@aws-blocks/bb-agent": [
         "Agent"

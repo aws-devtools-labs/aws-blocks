@@ -122,7 +122,7 @@ export function App() {
         {' '}<strong>real-time sync</strong> across browser tabs,
         and <strong>todos stored in a distributed table</strong> with per-user isolation.
       </p>
-      {!user && <p>Sign in to get started.</p>}
+      {!user && <p>Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the <code>npm run dev</code> terminal.</p>}
       {user && <TodoApp />}
     </div>
   );
