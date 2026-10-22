@@ -602,14 +602,19 @@ jobs:
           # below while the account filled up. It fails the step once the
           # summary has printed. The CLI's error starts with a blank line, so
           # take the first non-blank one, with account ids masked (public log).
+          # More attempts than the CLI default, so one throttled call doesn't
+          # fail the leg.
           LIST_FAILED=0
-          if ! APIS=$(aws apigateway get-rest-apis \
-            --query "items[].[id,name,createdDate]" --output text 2>/tmp/get-rest-apis.err); then
-            REASON=$(grep -m 1 -v '^[[:space:]]*$' /tmp/get-rest-apis.err | head -c 500 | sed -E 's/[0-9]{12}/<account>/g' || true)
-            echo "::error::apigateway get-rest-apis failed, orphaned REST APIs were not swept: ${REASON:-no error output}"
+          LIST_ERR=$(mktemp)
+          if ! APIS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws apigateway get-rest-apis \
+            --query "items[].[id,name,createdDate]" --output text 2>"$LIST_ERR"); then
+            REASON=$(grep -m 1 -v '^[[:space:]]*$' "$LIST_ERR" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
+            REASON=${REASON:-no error output}
+            echo "::error::apigateway get-rest-apis failed, orphaned REST APIs were not swept: ${REASON//%/%25}"
             APIS=""
             LIST_FAILED=1
           fi
+          rm -f "$LIST_ERR"
 
           # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
           # enough to be clearly abandoned (>6h), and (c) are owned by NO live stack
@@ -637,7 +642,7 @@ jobs:
           # `while` iterate zero times (it guards `[ -z "$ID" ] && continue`) so the
           # headroom summary and the EDGE-quota warning below always print, which is
           # the one thing this step exists to report.
-          if [ -z "$APIS" ]; then
+          if [ -z "$APIS" ] && [ "$LIST_FAILED" -eq 0 ]; then
             echo "✅ No custom REST APIs found"
           fi
 

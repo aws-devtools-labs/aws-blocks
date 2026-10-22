@@ -6,11 +6,12 @@
 // `aws` on PATH; nothing reaches AWS.
 //
 // Run: node --test scripts/ci/rest-api-quota.test.mjs
+// The step tests need GNU date (the step runs `date -d`), so they skip elsewhere.
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +30,8 @@ const DENIED =
 // A stub `aws` that serves canned output from its fixture dir and logs every call.
 //   get-rest-apis with --query  -> rest-apis.txt (the sweep's id/name/date listing)
 //   get-rest-apis without       -> rest-apis.json (the quota count)
-//   get-rest-apis.err present   -> its text on stderr, exit 254 (both forms)
+//   get-rest-apis.err present   -> its text on stderr, exit 254 (both forms);
+//                                  get-rest-apis-query.err / -json.err fail one form
 //   list-stacks.err present     -> the same for list-stacks
 //   describe-stack-resources    -> resources-<stack>.txt
 //   delete-rest-api             -> appends the id to deleted.txt
@@ -38,8 +40,11 @@ d=$STUB_DIR
 echo "$*" >> "$d/calls.txt"
 case "$1 $2" in
 'apigateway get-rest-apis')
-	if [ -f "$d/get-rest-apis.err" ]; then cat "$d/get-rest-apis.err" >&2; exit 254; fi
-	case " $* " in *' --query '*) cat "$d/rest-apis.txt" 2>/dev/null ;; *) cat "$d/rest-apis.json" ;; esac ;;
+	case " $* " in *' --query '*) form=query ;; *) form=json ;; esac
+	for f in "$d/get-rest-apis.err" "$d/get-rest-apis-$form.err"; do
+		if [ -f "$f" ]; then cat "$f" >&2; exit 254; fi
+	done
+	if [ "$form" = query ]; then cat "$d/rest-apis.txt" 2>/dev/null; else cat "$d/rest-apis.json"; fi ;;
 'cloudformation list-stacks')
 	if [ -f "$d/list-stacks.err" ]; then cat "$d/list-stacks.err" >&2; exit 254; fi
 	cat "$d/stacks.txt" 2>/dev/null ;;
@@ -51,9 +56,15 @@ case "$1 $2" in
 esac
 `;
 
+const dirs = [];
+after(() => {
+	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+});
+
 /** A fixture dir holding the stub `aws` (and a no-op `sleep`) plus `files`. */
 function fixture(files = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'rest-api-quota-'));
+	dirs.push(dir);
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
 	writeFileSync(join(bin, 'aws'), STUB);
@@ -83,6 +94,8 @@ function run(dir, args, env = {}) {
 
 const api = (id, types) => ({ id, name: id, endpointConfiguration: { types } });
 const apis = (...items) => JSON.stringify({ items });
+
+const GNU_DATE = spawnSync('date', ['-d', '@0', '+%s'], { encoding: 'utf8' }).stdout?.trim() === '0';
 
 /** The `run:` script of the REST API sweep step, dedented. */
 function stepScript() {
@@ -164,18 +177,36 @@ describe('rest-api-quota.sh', () => {
 	});
 });
 
-describe(`cleanup-stacks.yml "${STEP}" step`, () => {
+describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU date' }, () => {
 	const old = '2020-01-01T00:00:00+00:00';
 
 	it('fails the leg, with the CLI error, when the REST APIs cannot be listed', () => {
 		const r = runStep(fixture({ 'get-rest-apis.err': DENIED }));
 		assert.notEqual(r.status, 0, 'the step must fail when get-rest-apis fails');
-		assert.match(r.stdout, /^::error::.*AccessDeniedException/m);
+		assert.match(
+			r.stdout,
+			/^::error::apigateway get-rest-apis failed, orphaned REST APIs were not swept: An error occurred \(AccessDeniedException\)/m,
+		);
 		assert.doesNotMatch(r.stdout, /123456789012/);
+		assert.doesNotMatch(r.stdout, /No custom REST APIs found/);
 		// The summary still prints, so the run page shows what happened.
 		assert.match(r.summary, /## API Gateway REST API Cleanup Summary/);
 		assert.match(r.summary, /REST APIs remaining: unknown/);
 		assert.equal(r.deleted, '');
+	});
+
+	it('fails the leg when only the sweep listing fails', () => {
+		const r = runStep(fixture({ 'get-rest-apis-query.err': DENIED, 'rest-apis.json': apis(api('a', ['EDGE'])) }));
+		assert.notEqual(r.status, 0);
+		assert.match(r.stdout, /^::error::apigateway get-rest-apis failed/m);
+		assert.match(r.summary, /^- REST APIs remaining: 1 total, 1 EDGE \(cap 120\)$/m);
+	});
+
+	it('fails the leg when only the count fails', () => {
+		const r = runStep(fixture({ 'get-rest-apis-json.err': DENIED, 'rest-apis.txt': '' }));
+		assert.notEqual(r.status, 0);
+		assert.doesNotMatch(r.stdout, /orphaned REST APIs were not swept/);
+		assert.match(r.summary, /REST APIs remaining: unknown/);
 	});
 
 	it('reports the EDGE count and passes when the listing works', () => {
@@ -210,5 +241,22 @@ describe(`cleanup-stacks.yml "${STEP}" step`, () => {
 		);
 		assert.equal(r.deleted, '', 'an unknown ownership set must not read as "no stack owns any API"');
 		assert.match(r.summary, /- Deferred to next run.*: 1/);
+	});
+});
+
+describe('cleanup-stacks.yml checkout', () => {
+	// The REST API step runs the script from the checkout, on every leg.
+	it('checks out scripts/ci on every leg', () => {
+		const lines = readFileSync(WORKFLOW, 'utf8').split('\n');
+		const job = lines.slice(lines.indexOf('  cleanup:'));
+		const at = job.findIndex((l) => l.trim().startsWith('- uses: actions/checkout@'));
+		assert.notEqual(at, -1, 'the cleanup job has no checkout step');
+		const step = [];
+		for (const line of job.slice(at + 1)) {
+			if (line.trim().startsWith('- ')) break;
+			step.push(line.trim());
+		}
+		assert.ok(!step.some((l) => l.startsWith('if:')), 'the checkout must run on every leg');
+		assert.ok(step.includes('scripts/ci'), 'sparse-checkout must include scripts/ci');
 	});
 });
