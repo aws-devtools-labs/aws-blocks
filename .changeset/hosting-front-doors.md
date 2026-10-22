@@ -156,6 +156,10 @@ match the path the viewer asked for, as on the regional doors: the
 viewer-response function sees the URI rewritten to the build prefix, so the
 viewer-request function records the viewer's URI for it (`x-blocks-viewer-uri`,
 trusted only on a rewritten URI), and a rule such as `/assets/*` applies.
+Nuxt image optimization (`@nuxt/image` through the IPX Lambda) works under an
+`app.baseURL` behind every door: the ALB and API Gateway doors route the full
+`/<baseURL>/_ipx/...` path to the image Lambda, which now strips the base path
+before IPX's own prefix (`IPX_APP_BASE_URL`).
 The stacked door emits `HostingInvalidationId`, so the post-deploy liveness
 poll waits for the edge's invalidation.
 

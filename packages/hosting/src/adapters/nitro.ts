@@ -1338,8 +1338,16 @@ const buildManifest = (input: {
       // Forward the user-configured base URL into the Lambda so its
       // prefix-stripping regex matches whatever path CloudFront
       // routes here. Default `/_ipx` works without an explicit env.
-      ...(effectiveIpxBaseURL !== '/_ipx'
-        ? { environment: { IPX_BASE_URL: effectiveIpxBaseURL } }
+      // The app's base path too: behind the ALB and API Gateway doors the
+      // image Lambda receives `/<basePath>/_ipx/...` (the CloudFront router
+      // strips it first), so it strips an optional base path before IPX's.
+      ...(effectiveIpxBaseURL !== '/_ipx' || basePath
+        ? {
+            environment: {
+              ...(effectiveIpxBaseURL !== '/_ipx' ? { IPX_BASE_URL: effectiveIpxBaseURL } : {}),
+              ...(basePath ? { IPX_APP_BASE_URL: basePath } : {}),
+            },
+          }
         : {}),
     };
   }
