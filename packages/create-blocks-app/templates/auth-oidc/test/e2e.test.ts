@@ -85,18 +85,9 @@ test('AuthOIDC - requireAuth rejects a signed-out caller', async () => {
   await assert.rejects(api.getValue('k'), { status: 401 });
 });
 
-// Drive the server-initiated OIDC sign-in exactly as a browser does, but over
-// `fetch` with the installed cookie jar: GET the per-provider sign-in route,
-// then follow each 302 by hand so the cookie jar carries the pending-auth and
-// session cookies across the hops.
-//
-//   GET /aws-blocks/auth/signin/demo   → 302 to the stub IdP /authorize
-//   GET .../idp/demo/authorize         → onAuthorize auto-approves → 302 to /callback?code=…
-//   GET /aws-blocks/auth/callback?code  → exchanges the code, sets the session
-//                                         cookie, 302 to postSignInPath (/)
-//
-// The stub signs real RS256 tokens its own JWKS verifies, so this exercises the
-// same discovery + token-exchange + verify path a real IdP drives. No AWS.
+// Drive the server-initiated OIDC sign-in over `fetch` with the cookie jar,
+// following each 302 by hand (signin → stub authorize → callback → "/") so the
+// jar carries the pending-auth and session cookies across the hops.
 async function signInThroughStub(provider: string): Promise<void> {
   let url: string | null = `${origin}/aws-blocks/auth/signin/${provider}`;
   // A bounded hop count: signin → authorize → callback → postSignInPath is 3

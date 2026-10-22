@@ -7,20 +7,9 @@ const scope = new Scope('my-app');
 
 const store = new KVStore(scope, 'app-store', {});
 
-// AuthOIDC: sign in with an external OpenID Connect / OAuth 2.0 provider.
-//
-// Locally (`npm run dev`), there is no real IdP: the `stubIdp` provider mounts
-// an in-process stub Identity Provider that signs real RS256 tokens with its
-// own keypair, so the app exercises the exact JWKS-fetch + token-verify code
-// path a real IdP drives — without any credentials. `onAuthorize` decides who
-// the stub signs in (here: the single configured user), which keeps the local
-// sign-in deterministic for the e2e below.
-//
-// To use a real provider instead, swap `stubIdp(...)` for `google(...)` /
-// `github(...)` / `customOidc(...)` and supply `clientId`/`clientSecret` from a
-// Secret — see node_modules/@aws-blocks/bb-auth-oidc/README.md. The rest of this
-// file (the `requireAuth`-gated API, the auth state machine) is unchanged: the
-// provider is the only thing that differs between local and deployed.
+// AuthOIDC with the in-process `stubIdp` provider: local dev/e2e sign in with no
+// real IdP. Swap it for `google`/`github`/`customOidc` + a Secret to deploy — see
+// node_modules/@aws-blocks/bb-auth-oidc/README.md.
 const DEMO_USER = { sub: 'stub-user-1', email: 'alice@stub.invalid', name: 'Alice Example' } as const;
 
 const auth = new AuthOIDC(scope, 'auth', {
