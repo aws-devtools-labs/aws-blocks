@@ -14,6 +14,9 @@ import { normalizeBasePath, prependBasePath } from '../adapters/shared/basepath.
 import { buildRouteTable } from './route-table.js';
 import type { BackendOrigin, HostingPlan, HeaderRule, Origin, RedirectRule } from './types.js';
 
+/** A URL with a scheme (`https://…`): left as is, never prefixed or slash-collapsed. */
+const ABSOLUTE_URL = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 /** Stable origin ids shared by every renderer (a CloudFront behavior, an ALB target, …). */
 export const ORIGIN_IDS = {
   static: 'blocks-s3',
@@ -83,7 +86,8 @@ export const buildHostingPlan = (input: BuildHostingPlanInput): HostingPlan => {
 
   const redirects: RedirectRule[] = (manifest.redirects ?? []).map((r) => ({
     source: prependBasePath(basePath, r.source),
-    destination: prependBasePath(basePath, r.destination),
+    // An absolute destination (`https://example.org/moved`) is another site's URL, not a path under ours.
+    destination: ABSOLUTE_URL.test(r.destination) ? r.destination : prependBasePath(basePath, r.destination),
     statusCode: r.statusCode,
   }));
 

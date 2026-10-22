@@ -154,4 +154,29 @@ describe("regional doors apply the app's redirects, header rules and error pages
     assert.ok(parts.includes('old') && parts.includes('legacy'), `resources: ${parts.join(', ')}`);
     assert.ok(assetProxySource(t).includes('["/legacy","/",302]'));
   });
+
+  it('API Gateway (HTTP and REST): a redirect source with an inner wildcard warns that the server answers it', () => {
+    const inner = (): DeployManifest => ({
+      ...ssr(),
+      redirects: [...rules.redirects, { source: '/docs/*.html', destination: '/guide/*', statusCode: 301 }],
+    });
+    const redirectWarnings = (frontDoor: HostingConstructProps['frontDoor'], manifest: DeployManifest, extra = {}) => {
+      const stack = new Stack(new App(), 'R', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, ...extra });
+      return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('RedirectNotExpressible'));
+    };
+    const domain = { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' };
+    for (const [frontDoor, extra] of [
+      [{ kind: 'apiGateway' }, {}],
+      [{ kind: 'apiGateway', api: 'rest' }, { domain }],
+    ] as const) {
+      const warnings = redirectWarnings(frontDoor, inner(), extra);
+      assert.equal(warnings.length, 1, JSON.stringify(frontDoor));
+      assert.match(warningText(warnings), /\/docs\/\*\.html/);
+      assert.doesNotMatch(warningText(warnings), /\/old\/\*/, 'a routable source is not named');
+    }
+    // A SPA's default is the asset proxy, which applies every redirect: no warning.
+    const spaInner: DeployManifest = { ...spa(), redirects: inner().redirects };
+    assert.deepEqual(redirectWarnings({ kind: 'apiGateway' }, spaInner), []);
+  });
 });

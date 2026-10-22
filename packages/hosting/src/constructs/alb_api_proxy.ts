@@ -84,6 +84,10 @@ exports.handler = async (event) => {
   headers['host'] = target.host;
 
   var bodyBuf = event.body == null ? null : Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8');
+  // The client's content-length was stripped with the hop-by-hop set; send the
+  // relayed body's own length, so the request is never chunked (API Gateway
+  // and some backends reject or mis-read a chunked body with no length).
+  if (bodyBuf) headers['content-length'] = String(bodyBuf.length);
 
   return await new Promise((resolve) => {
     var req = https.request({
@@ -134,8 +138,7 @@ exports.handler = async (event) => {
         body: '{"error":"Bad Gateway"}',
       });
     });
-    if (bodyBuf) req.write(bodyBuf);
-    req.end();
+    req.end(bodyBuf || undefined);
   });
 };
 `;

@@ -1007,6 +1007,7 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
         { source: '/old-page', destination: '/new-page', statusCode: 308 },
         { source: '/legacy/*', destination: '/modern/*', statusCode: 301 },
         { source: '/temp', destination: '/home', statusCode: 302 },
+        { source: '/go/*', destination: '/*', statusCode: 301 },
       ],
     }),
     buildId: 'b1',
@@ -1037,6 +1038,18 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
       !output.headers.location.value.includes('*'),
       'Location must not contain a literal asterisk',
     );
+  });
+
+  // A tail spliced onto a root destination keeps one leading slash: `//host`
+  // (or `/\host`) in Location is protocol-relative and leaves the site.
+  void it('never answers a protocol-relative Location (open redirect)', async () => {
+    for (const uri of ['/go//evil.example', '/go/\\evil.example', '/go///evil.example/x']) {
+      const { output } = await runRequestFn(reqCode, entries, req(uri));
+      assert.equal(output.statusCode, 301);
+      assert.match(output.headers.location.value, /^\/evil\.example/, uri);
+    }
+    const { output } = await runRequestFn(reqCode, entries, req('/go/docs/a'));
+    assert.equal(output.headers.location.value, '/docs/a');
   });
 
   void it('splices a single-segment tail after the wildcard prefix', async () => {

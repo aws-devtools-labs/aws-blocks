@@ -54,6 +54,17 @@ describe('buildHostingPlan — routes, redirects, headers', () => {
       { pattern: '/app/secure/*', headers: { 'X-Frame-Options': 'DENY' } },
     ]);
   });
+
+  it('leaves an absolute redirect destination as written (no basePath, no slash collapsing)', () => {
+    for (const basePath of [undefined, '/app']) {
+      const manifest = manifestWith([{ pattern: '/a', target: 'static' }], {
+        ...(basePath ? { basePath } : {}),
+        redirects: [{ source: '/moved', destination: 'https://example.org/new//page', statusCode: 301 }],
+      });
+      const plan = buildHostingPlan({ manifest, buildId: 'b1', hasServer: false, hasImage: false });
+      assert.equal(plan.routes.redirects[0]?.destination, 'https://example.org/new//page', `basePath ${basePath}`);
+    }
+  });
 });
 
 describe('buildHostingPlan — policies + release', () => {

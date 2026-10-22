@@ -47,6 +47,7 @@ import type { HostingPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
+import { routableApiPaths } from './apigw_routes.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import type { OriginHandle } from './layer.js';
 import { assetProxyEnvironment } from './asset_proxy_core.js';
@@ -365,7 +366,7 @@ export class AlbConstruct extends Construct {
     let ruleCount = 0;
     for (const origin of plan.backend?.origins ?? []) {
       const ns = origin.namespace;
-      const paths = ns === '*' ? [...new Set(props.apiPaths ?? ['/aws-blocks/*'])] : [`/aws-blocks/api/${ns}/*`];
+      const paths = ns === '*' ? routableApiPaths(this, 'ALB', props.apiPaths ?? ['/aws-blocks/*']) : [`/aws-blocks/api/${ns}/*`];
       const idSuffix = ns === '*' ? 'Default' : ns;
       const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,

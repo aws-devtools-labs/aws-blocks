@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { HostingPlan } from '../plan/types.js';
 import { ApiGatewayConstruct } from './apigw_construct.js';
@@ -57,6 +57,16 @@ describe('ApiGatewayConstruct — static plan', () => {
 });
 
 describe('ApiGatewayConstruct — with backend proxy', () => {
+  it("leaves the backend's catch-all raw route ('/*') out on HTTP and REST, and warns (as the ALB door does)", () => {
+    const plan = withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api');
+    for (const Ctor of [ApiGatewayConstruct, ApiGatewayRestConstruct]) {
+      const stack = new Stack(new App(), 'C', { env: { account: '111111111111', region: 'us-west-2' } });
+      new Ctor(stack, 'ApiGw', { plan, bucket: new Bucket(stack, 'Assets'), apiPaths: ['/aws-blocks/*', '/*'] });
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('CatchAllApiPathNotRouted'));
+      assert.equal(warnings.length, 1, Ctor.name);
+    }
+  });
+
   it('adds the same-origin backend route (/aws-blocks/*, which covers sign-in) via HTTP integration', () => {
     const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'));
     // 2 static + 2 backend (`/aws-blocks/{proxy+}`, and `/aws-blocks` itself — a

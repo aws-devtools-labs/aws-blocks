@@ -185,7 +185,9 @@ export type DoorApp = {
   readonly headers: readonly DoorHeaderRule[];
   /**
    * Custom error pages, as object keys relative to {@link AssetsOrigin.prefix}
-   * (e.g. `404.html`). Present only when the app configured one.
+   * (e.g. `404.html`): the app's `errorPages`, else the 404 and 500 pages the
+   * framework build shipped (e.g. a SPA's `404.html`). Present only when the
+   * app has one.
    */
   readonly errorPages?: { readonly notFound?: string; readonly serverError?: string };
 };

@@ -435,38 +435,32 @@ ${CF_MATCH_HELPERS}`;
  * array (JS 2.0 source): returns the redirect response from the enclosing
  * function. Shared by the edge router (per KVS chunk) and `cf.redirects`.
  *
- * With `opts.sameSite`, a spliced destination that starts with a slash keeps
- * exactly one leading slash: the captured tail of `/old//evil.example` (or
- * `/old/\\evil.example`) would otherwise produce a protocol-relative
- * `Location: //evil.example`, which a browser follows off-site. The proxies,
- * the stacked edge and `cf.redirects` turn it on; the CloudFront door's KVS
- * router keeps its emitted code unchanged.
+ * A wildcard destination (trailing `*`) gets the captured tail spliced in.
+ * The guard is on the DESTINATION shape, not on the tail being truthy: an
+ * exact hit on a wildcard prefix (request `/old/` against source `/old/*`)
+ * yields tail `''`, and a truthiness guard would skip the splice and leak the
+ * literal `*` into `Location` (`/new/*`). The emitted code carries no
+ * comments: it ships inside the CloudFront Function, under its 10 KB limit.
+ *
+ * A spliced destination that starts with a slash keeps exactly one leading
+ * slash: the captured tail of `/old//evil.example` (or `/old/\\evil.example`)
+ * would otherwise produce a protocol-relative `Location: //evil.example`,
+ * which a browser follows off-site. Every door emits the same rows code, so a
+ * redirect gives the same `Location` on each.
  *
  * @param rows the JS expression holding the rows.
  * @param indent the indentation of the emitted lines.
- * @param opts.sameSite collapse leading slash/backslash runs in a spliced, root-relative destination. @default false
  * @internal Framework-only.
  */
-export const redirectRowsJs = (rows: string, indent: string, opts: { sameSite?: boolean } = {}): string =>
+export const redirectRowsJs = (rows: string, indent: string): string =>
   [
     `for (var j = 0; j < ${rows}.length; j++) {`,
     `  var m = matchPattern(uri, ${rows}[j][0]);`,
     '  if (m) {',
     `    var dest = ${rows}[j][1];`,
-    "    // Splice the captured tail into a wildcard destination. Guard on the",
-    "    // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact",
-    "    // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')",
-    "    // yields tail '' , and a truthiness guard would skip the splice and leak",
-    "    // the literal '*' into Location (-> '/new/*'). Always strip the trailing",
-    "    // '*' and append the tail (empty string included).",
     "    if (dest.charAt(dest.length - 1) === '*') {",
     "      dest = dest.substring(0, dest.length - 1) + (m.tail || '');",
-    ...(opts.sameSite
-      ? [
-          '      // One leading slash only: a spliced `//host` (or `/\\host`) is protocol-relative.',
-          "      if (dest.charAt(0) === '/' || dest.charAt(0) === '\\\\') { dest = '/' + dest.replace(/^[\\/\\\\]+/, ''); }",
-        ]
-      : []),
+    "      if (dest.charAt(0) === '/' || dest.charAt(0) === '\\\\') { dest = '/' + dest.replace(/^[\\/\\\\]+/, ''); }",
     '    }',
     `    return { statusCode: ${rows}[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };`,
     '  }',

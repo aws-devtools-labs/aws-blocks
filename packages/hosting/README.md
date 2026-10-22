@@ -459,6 +459,13 @@ Some apps need the CloudFront door:
   only on the CloudFront door. Behind any other door synth fails with
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
+- A streaming server (Next.js through OpenNext, or Nitro with
+  `awsLambda.streaming: true`) answers only through a door that streams: the
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. The ALB door, the
+  stacked door (its router is an ALB) and the HTTP API invoke the server
+  without streaming, so synth fails with
+  `StreamingServerNeedsStreamingDoorError` instead of deploying an app whose
+  pages never answer.
 
 ### Settings per door kind
 

@@ -57,7 +57,14 @@ import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { albDoor } from './alb_door.js';
-import { ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode } from './alb_lambda_event.js';
+import {
+  ALB_EVENT_SHIM_FILE,
+  ALB_EVENT_SHIM_HANDLER,
+  FORWARDED_HOST_SHIM_FILE,
+  FORWARDED_HOST_SHIM_HANDLER,
+  generateAlbEventShimCode,
+  generateForwardedHostShimCode,
+} from './alb_lambda_event.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -600,6 +607,14 @@ export class HostingConstruct extends Construct {
    * door with `serverResponse: 'buffered'`), else `'streaming'`.
    */
   readonly serverResponse: 'streaming' | 'buffered';
+
+  /**
+   * What the selected door can serve (streaming, wildcard routes, the app's
+   * rules on every response), read by the synth checks.
+   *
+   * @internal Framework-only.
+   */
+  readonly doorCapabilities: DoorCapabilities;
   /**
    * What the front door handed back: its service id, public `url`, and the
    * `originHandle` a door stacked in front of it attaches to.
@@ -745,6 +760,12 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
+    assertServerReachableByDoor(
+      manifest,
+      this.doorCapabilities,
+      stackedRouter ? 'stacked' : resolved.kind === 'apiGateway' ? 'apiGateway (HTTP API)' : resolved.kind,
+    );
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -856,7 +877,7 @@ export class HostingConstruct extends Construct {
 
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: isSsrCompute ? withAlbEventShim(resource, props.frontDoor) : resource,
+        computeResource: isSsrCompute ? withDoorEventShim(resource, props.frontDoor) : resource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -1871,7 +1892,7 @@ export class HostingConstruct extends Construct {
               internal: fd.internal,
               certificate,
               restrictToCloudFront: stackedRouter,
-              errorPages: proxyErrorPages(this.doorInput, manifest),
+              errorPages: this.doorInput.app.errorPages,
               // Custom domain: names from `features.domain`; the regional cert is
               // the door's `certificate`, else `domain.certificate`, else
               // DNS-validated against the hosted zone by the construct.
@@ -1886,10 +1907,12 @@ export class HostingConstruct extends Construct {
                   : undefined,
               // Native ALB features, from the ALB door's settings
               // (`frontDoor.features`, plus the deprecated top-level aliases).
-              // Logging and monitoring are off unless set (and not `enabled: false`).
+              // Logging is off unless set (and not `enabled: false`); monitoring is
+              // on unless `enabled: false`, the `HostingProps.monitoring` default
+              // the CloudFront door uses too.
               accessLogging: f.logging !== undefined && f.logging.enabled !== false,
               waf: f.waf,
-              monitoring: f.monitoring !== undefined && f.monitoring.enabled !== false,
+              monitoring: f.monitoring?.enabled ?? true,
             },
           },
           { wiringCheck: false },
@@ -1911,7 +1934,7 @@ export class HostingConstruct extends Construct {
             apiType: fd.api ?? 'http',
             apiGateway: {
               ...common,
-              errorPages: proxyErrorPages(this.doorInput, manifest),
+              errorPages: this.doorInput.app.errorPages,
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -1961,7 +1984,9 @@ export class HostingConstruct extends Construct {
       // A door served over plain HTTP with an API: sign-in, cookies and every
       // RPC travel in cleartext between the browser and the door.
       // (The stacked door's router isn't the public address: the core warns about its hop.)
-      if (built.url.startsWith('http://') && props.backendApi && !stackedRouter) {
+      // The S3 website's URL is a token at synth, so its handle's protocol says it.
+      const plainHttp = built.url.startsWith('http://') || built.originHandle.protocol === 'http';
+      if (plainHttp && props.backendApi && !stackedRouter) {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:PlainHttpFrontDoor',
           `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
@@ -2521,6 +2546,7 @@ export class HostingConstruct extends Construct {
       monitoring: resolved.features.monitoring,
       geoRestriction: resolved.features.geoRestriction,
       errorPages: props.errorPages,
+      frameworkErrorPages: frameworkErrorPagesOf(manifest),
       skewProtection: resolved.features.skewProtection,
     });
   }
@@ -2579,71 +2605,156 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
 };
 
 /**
- * How the selected front door invokes the server-rendering compute. Known
- * before the compute is built, so the server answers in a form the door can
- * carry: an ALB Lambda target (also the router of the stacked door) and an API
- * Gateway HTTP API integration invoke it without streaming; the CloudFront
- * default and the API Gateway REST door stream; a bring-your-own door says so
- * with `serverResponse` (default `'streaming'`).
+ * What a front door can serve, declared once per built-in door and read by
+ * every check and default that depends on it, so the doors cannot disagree:
+ *
+ * - `streaming`: it invokes the server with response streaming, so a
+ *   streaming handler (`streamifyResponse`, e.g. the OpenNext server) answers
+ *   through it. An ALB Lambda target (also the stacked door's router) and an
+ *   API Gateway HTTP API integration invoke synchronously; the CloudFront
+ *   door and the API Gateway REST door stream.
+ * - `wildcardRoutes`: it routes a wildcard anywhere in a path (`/*.js`), not
+ *   only as a whole trailing segment.
+ * - `appliesRules`: it applies the app's redirects, header rules and error
+ *   pages to every response, not only to those its asset proxy answers.
+ * - `forwardedHost`: it sets `x-forwarded-host` from the viewer's `Host`, over
+ *   any value the client sent. Behind a door that doesn't, the server is
+ *   given `Host` as `x-forwarded-host` instead (see `withDoorEventShim`), so a
+ *   server that builds redirects or absolute URLs from it never uses a host
+ *   the client chose.
+ *
+ * A bring-your-own door declares only `streaming`, through `serverResponse`
+ * (default `'streaming'`); the rest are its own to wire (and `cf.recordWired`
+ * reports what it left out).
+ *
+ * @internal Framework-only.
  */
-const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'streaming' | 'buffered' => {
-  if (typeof frontDoor !== 'object' || frontDoor === null) return 'streaming';
+export type DoorCapabilities = {
+  readonly streaming: boolean;
+  readonly wildcardRoutes?: boolean;
+  readonly appliesRules?: boolean;
+  readonly forwardedHost?: boolean;
+};
+
+/**
+ * The capabilities of the selected door (see `DoorCapabilities`).
+ *
+ * @internal Framework-only.
+ */
+export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor']): DoorCapabilities => {
+  if (frontDoor === 'none') return { streaming: false, wildcardRoutes: false, appliesRules: false, forwardedHost: false };
+  if (typeof frontDoor !== 'object' || frontDoor === null) {
+    return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
+  }
   switch (frontDoor.kind) {
     case 'alb':
+      return { streaming: albDoor.serverResponse === 'streaming', wildcardRoutes: true, appliesRules: false, forwardedHost: false };
     case 'stackedRouter':
-      return albDoor.serverResponse ?? 'buffered';
+      // The edge in front applies the rules and sets the forwarded host; the ALB under it invokes the server.
+      return { streaming: albDoor.serverResponse === 'streaming', wildcardRoutes: true, appliesRules: true, forwardedHost: true };
     case 'apiGateway':
-      return (frontDoor.api ?? 'http') === 'rest' ? 'streaming' : 'buffered';
+      return { streaming: (frontDoor.api ?? 'http') === 'rest', wildcardRoutes: false, appliesRules: false, forwardedHost: false };
     case 'custom':
       // `door` is validated (with a clear error) by the time the door is built.
-      return frontDoor.door?.serverResponse ?? 'streaming';
+      return { streaming: (frontDoor.door?.serverResponse ?? 'streaming') === 'streaming' };
     default:
-      return 'streaming';
+      return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
   }
 };
 
 /**
- * The error pages a regional door's asset proxy serves, as object keys under
- * the build prefix: the app's own (`errorPages`, uploaded as `404.html` /
- * `500.html`), else the ones the framework build shipped
- * (`manifest.errorPages`, e.g. a SPA's `404.html`) — the pages the CloudFront
- * door serves for the same misses.
- *
- * @returns the pages, or `undefined` when the app has none.
+ * How the selected front door invokes the server-rendering compute. Known
+ * before the compute is built, so the server answers in a form the door can
+ * carry (see `DoorCapabilities.streaming`).
  */
-const proxyErrorPages = (
-  input: DoorInput,
-  manifest: DeployManifest,
-): { notFound?: string; serverError?: string } | undefined => {
+const serverResponseFor = (frontDoor: HostingConstructProps['frontDoor']): 'streaming' | 'buffered' =>
+  doorCapabilitiesFor(frontDoor).streaming ? 'streaming' : 'buffered';
+
+/**
+ * Fail synth when the server is a streaming Lambda handler (the OpenNext
+ * server for Next.js, Nitro with `awsLambda.streaming`) and the door invokes
+ * it without streaming. Building the function buffered changes only how it is
+ * invoked, not the handler: it still answers with the streaming framing, so
+ * behind an ALB target or an API Gateway HTTP API the app deploys and no page
+ * answers.
+ *
+ * @param manifest the deploy manifest.
+ * @param capabilities the door's capabilities.
+ * @param label the door as the app wrote it, for the message.
+ * @throws HostingError('StreamingServerNeedsStreamingDoorError') for a streaming handler behind a door that doesn't stream.
+ * @internal Framework-only.
+ */
+const assertServerReachableByDoor = (manifest: DeployManifest, capabilities: DoorCapabilities, label: string): void => {
+  if (capabilities.streaming) return;
+  const server = manifest.compute.default ?? manifest.compute.server;
+  if (server?.type !== 'handler' || server.streaming !== true) return;
+  throw new HostingError('StreamingServerNeedsStreamingDoorError', {
+    message:
+      `The app's server is a streaming Lambda handler (Next.js through OpenNext, or response streaming turned on in ` +
+      `the framework), and the '${label}' front door invokes it without streaming: the app would deploy and every ` +
+      'page would fail to answer.',
+    resolution:
+      "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`) or `{ kind: 'apiGateway', api: 'rest' }`, " +
+      "or turn the framework's response streaming off (Nitro: `awsLambda.streaming: false`).",
+  });
+};
+
+/**
+ * The error pages the framework build shipped (`manifest.errorPages`, e.g. a
+ * SPA's `404.html`), as object keys under the build prefix. `DoorInput`
+ * carries them as `app.errorPages` when the app sets none, so every door —
+ * the CloudFront and stacked edges, the regional doors' asset proxies, a
+ * bring-your-own door through `cf.errorPages` — serves the same page.
+ *
+ * @returns the pages, or `undefined` when the build shipped none.
+ */
+const frameworkErrorPagesOf = (manifest: DeployManifest): { notFound?: string; serverError?: string } | undefined => {
   const key = (page: string | undefined) => page?.replace(/^\/+/, '') || undefined;
-  const notFound = input.app.errorPages?.notFound ?? key(manifest.errorPages?.[404]);
-  const serverError = input.app.errorPages?.serverError ?? key(manifest.errorPages?.[500]);
+  const notFound = key(manifest.errorPages?.[404]);
+  const serverError = key(manifest.errorPages?.[500]);
   if (!notFound && !serverError) return undefined;
   return { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) };
 };
 
 /**
- * Put the ALB event shim in front of a native Lambda handler server behind the
- * ALB door (also the stacked door's router): the shim turns the ALB
- * Lambda-target event (multi-value headers, top-level method) into the API
- * Gateway REST shape the handler reads, and its response back into the ALB
- * shape, so every `Set-Cookie` survives (see `alb_lambda_event.ts`). Only a
- * buffered `handler` server whose module is found in the bundle is wrapped; a
- * Lambda Web Adapter server reads ALB events natively, and every other door
- * keeps the handler as built.
+ * Fit the server to the door it is behind (see `alb_lambda_event.ts`):
+ *
+ * - Behind the ALB door (also the stacked door's router), the ALB event shim
+ *   goes in front of a buffered native Lambda handler: it turns the ALB
+ *   Lambda-target event (multi-value headers, top-level method) into the API
+ *   Gateway REST shape the handler reads, and its response back into the ALB
+ *   shape, so every `Set-Cookie` survives. A Lambda Web Adapter server reads
+ *   ALB events natively.
+ * - Behind a door that doesn't set `x-forwarded-host` from the viewer's `Host`
+ *   (`DoorCapabilities.forwardedHost`: the ALB and API Gateway doors), the
+ *   server is given `Host` as `x-forwarded-host`: the ALB shim sets it, a
+ *   handler behind API Gateway gets the forwarded-host shim, and a Lambda Web
+ *   Adapter server that reads its host from `x-forwarded-host` (adapter-node's
+ *   `HOST_HEADER`) reads `host` instead.
+ *
+ * Only a `handler` server whose module is found in the bundle is wrapped; a
+ * bring-your-own door, and the CloudFront door, keep the server as built.
  *
  * @param resource the server compute resource.
  * @param frontDoor the door.
- * @returns the resource to build (with the shim as its handler when wrapped).
+ * @returns the resource to build (with a shim as its handler when wrapped).
  */
-const withAlbEventShim = (
+const withDoorEventShim = (
   resource: DeployManifest['compute'][string],
   frontDoor: HostingConstructProps['frontDoor'],
 ): DeployManifest['compute'][string] => {
-  if (typeof frontDoor !== 'object' || frontDoor === null || (frontDoor.kind !== 'alb' && frontDoor.kind !== 'stackedRouter')) {
-    return resource;
+  if (typeof frontDoor !== 'object' || frontDoor === null) return resource;
+  const kind = frontDoor.kind;
+  if (kind !== 'alb' && kind !== 'stackedRouter' && kind !== 'apiGateway') return resource;
+  const forwardedHostFromHost = doorCapabilitiesFor(frontDoor).forwardedHost === false;
+  if (resource.type === 'http-server') {
+    if (!forwardedHostFromHost || resource.environment?.HOST_HEADER !== 'x-forwarded-host') return resource;
+    return { ...resource, environment: { ...resource.environment, HOST_HEADER: 'host' } };
   }
-  if (resource.type !== 'handler' || resource.streaming === true) return resource;
+  if (resource.type !== 'handler') return resource;
+  const isAlb = kind !== 'apiGateway';
+  if (isAlb && resource.streaming === true) return resource; // fails synth (assertServerReachableByDoor)
+  if (!isAlb && !forwardedHostFromHost) return resource;
   const handler = resource.handler ?? 'index.handler';
   const dot = handler.lastIndexOf('.');
   if (dot <= 0) return resource;
@@ -2653,10 +2764,12 @@ const withAlbEventShim = (
     .map((ext) => `${moduleBase}${ext}`)
     .find((file) => fs.existsSync(path.join(resource.bundle, file)));
   if (!moduleFile) return resource;
-  const shimPath = path.join(resource.bundle, ALB_EVENT_SHIM_FILE);
-  const code = generateAlbEventShimCode(`./${moduleFile}`, exportName);
+  const [shimFile, shimHandler, code] = isAlb
+    ? [ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode(`./${moduleFile}`, exportName, { forwardedHostFromHost })]
+    : [FORWARDED_HOST_SHIM_FILE, FORWARDED_HOST_SHIM_HANDLER, generateForwardedHostShimCode(`./${moduleFile}`, exportName)];
+  const shimPath = path.join(resource.bundle, shimFile);
   if (!fs.existsSync(shimPath) || fs.readFileSync(shimPath, 'utf-8') !== code) fs.writeFileSync(shimPath, code);
-  return { ...resource, handler: ALB_EVENT_SHIM_HANDLER };
+  return { ...resource, handler: shimHandler };
 };
 
 /**

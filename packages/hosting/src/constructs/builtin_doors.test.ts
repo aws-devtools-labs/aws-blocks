@@ -397,6 +397,10 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.equal(warn({ kind: 'alb' }, { backendApi: { url: API_URL } }).length, 1);
       assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
+      // The S3 website's URL is a token at synth; its handle says it is plain HTTP.
+      const none = warn('none', { backendApi: { url: API_URL } });
+      assert.equal(none.length, 1);
+      assert.match(JSON.stringify(none[0].entry.data), /an S3 website has no TLS/);
     });
 
     it('the ALB door with a custom domain: the URL, the trusted origin and the CORS origin are the domain', () => {

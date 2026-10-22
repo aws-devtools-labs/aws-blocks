@@ -44,6 +44,7 @@ import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
   APIGW_DEFAULT_ROUTE_QUOTA,
   apiPathToRoutes,
+  routableApiPaths,
   backendBaseUrl,
   DEFAULT_API_PATHS,
   globToProxyPath,
@@ -149,7 +150,7 @@ export class ApiGatewayConstruct extends Construct {
       const base = backendBaseUrl(origin.ingress.url); // https://…/prod
       if (origin.namespace === '*') {
         let i = 0;
-        for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
+        for (const pattern of routableApiPaths(this, 'API Gateway', props.apiPaths ?? DEFAULT_API_PATHS)) {
           for (const route of apiPathToRoutes(pattern, 'API Gateway')) {
             if (backendPaths.has(route.path)) continue;
             backendPaths.add(route.path);
@@ -177,9 +178,14 @@ export class ApiGatewayConstruct extends Construct {
     // Redirect sources first: each routes to the asset proxy, which answers the
     // redirect with the CloudFront door's semantics (first match, wildcard tail
     // spliced). A source with an inner wildcard has no route form.
+    const unroutedRedirects: string[] = [];
     for (const r of plan.routes.redirects) {
       const path = globToProxyPath(r.source);
-      if (path === null || path.includes('*') || seen.has(path) || backendPaths.has(path)) continue;
+      if (path !== null && path.includes('*')) {
+        unroutedRedirects.push(r.source);
+        continue;
+      }
+      if (path === null || seen.has(path) || backendPaths.has(path)) continue;
       if (path.startsWith('/aws-blocks/')) continue; // backend owns these
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
@@ -198,6 +204,8 @@ export class ApiGatewayConstruct extends Construct {
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: integrationForKind(entry.kind) });
     }
     warnInexpressibleRoutes(this, 'API Gateway', inexpressible);
+    // Behind a server default, a redirect with no route reaches the server, not the proxy.
+    if (serverIntegration) warnUnroutedRedirects(this, 'API Gateway', unroutedRedirects);
     const routeCount = seen.size + backendPaths.size + 1; // + $default
     if (routeCount > APIGW_DEFAULT_ROUTE_QUOTA) {
       Annotations.of(this).addWarning(
@@ -256,5 +264,24 @@ export const warnInexpressibleRoutes = (scope: Construct, door: string, patterns
     '@aws-blocks/hosting:RouteNotExpressible',
     `The ${door} front door can't express these route patterns (a wildcard inside a path segment), so its default ` +
       `integration serves them: ${patterns.join(', ')}.`,
+  );
+};
+
+/**
+ * Warn at synth (`@aws-blocks/hosting:RedirectNotExpressible`) for redirect
+ * sources API Gateway has no path form for (a wildcard inside a segment, e.g.
+ * `/old/*.html`) on a door whose default integration is the server: no route
+ * sends them to the asset proxy, which applies redirects, so the server
+ * answers those requests instead (typically a 404).
+ *
+ * @internal Framework-only.
+ */
+export const warnUnroutedRedirects = (scope: Construct, door: string, sources: readonly string[]): void => {
+  if (sources.length === 0) return;
+  Annotations.of(scope).addWarningV2(
+    '@aws-blocks/hosting:RedirectNotExpressible',
+    `The ${door} front door can't route these redirect sources (a wildcard inside a path segment), so the redirects ` +
+      `never apply and the server answers those requests: ${sources.join(', ')}. Use a whole trailing segment ` +
+      "(`/path/*`), or the CloudFront or ALB door.",
   );
 };

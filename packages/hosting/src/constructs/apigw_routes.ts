@@ -5,7 +5,8 @@
  * `addRoutes` vs the REST resource tree), so the constructs stay separate — but
  * the plan-derived path math is identical and lives here.
  */
-import { Fn } from 'aws-cdk-lib';
+import { Annotations, Fn } from 'aws-cdk-lib';
+import type { IConstruct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 
 /**
@@ -17,6 +18,30 @@ export const globToProxyPath = (pattern: string): string | null => {
 	if (pattern === '/*' || pattern === '*') return null;
 	if (pattern.endsWith('/*')) return `${pattern.slice(0, -2)}/{proxy+}`;
 	return pattern; // exact
+};
+
+/**
+ * Warn at synth (`@aws-blocks/hosting:CatchAllApiPathNotRouted`) when the
+ * backend's raw routes include the catch-all `/*` (e.g.
+ * `RawRoute('/{proxy+}')`): routing it to the API would send every page and
+ * asset there, so the regional doors leave it out and the site keeps its own
+ * routes. Every regional door applies the same rule.
+ *
+ * @param patterns the backend path patterns the door received.
+ * @returns the patterns the door routes (without the catch-all).
+ * @internal Framework-only.
+ */
+export const routableApiPaths = (scope: IConstruct, door: string, patterns: Iterable<string>): string[] => {
+	const all = [...new Set(patterns)];
+	const routable = all.filter((p) => globToProxyPath(p) !== null);
+	if (routable.length < all.length) {
+		Annotations.of(scope).addWarningV2(
+			'@aws-blocks/hosting:CatchAllApiPathNotRouted',
+			`The ${door} front door does not route the backend's catch-all raw route ('/*'): it would send every page ` +
+				'and asset to the API. Register the raw routes under a path prefix (`/hooks/*`).',
+		);
+	}
+	return routable;
 };
 
 /**

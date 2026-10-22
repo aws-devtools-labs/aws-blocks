@@ -9,6 +9,10 @@
  * Gateway integration, a `DoorInput` server origin), so a Web Function behind
  * one would deploy with no traffic reaching it. Those combinations fail synth
  * with `UnsupportedComputeFrontDoorError`, before anything deploys.
+ *
+ * Likewise a streaming Lambda handler (the OpenNext server) answers only
+ * through a door that streams (`DoorCapabilities.streaming`): behind any other
+ * one synth fails with `StreamingServerNeedsStreamingDoorError`.
  */
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -21,7 +25,7 @@ import { Template } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { cf } from './cf_helpers.js';
 import { defineFrontDoor } from './front_door.js';
-import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
+import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
 const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
 
@@ -150,3 +154,81 @@ describe('HostingConstruct — middleware runs only behind the CloudFront door',
     assert.doesNotThrow(() => synth(undefined));
   });
 });
+
+describe('HostingConstruct — a streaming server needs a door that streams', () => {
+  let tmpDir: string;
+  let bundleDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-stream-'));
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), '<html></html>');
+    bundleDir = path.join(tmpDir, 'server');
+    fs.mkdirSync(bundleDir);
+    fs.writeFileSync(path.join(bundleDir, 'index.mjs'), 'export const handler = async () => ({});');
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const manifest = (streaming: boolean): DeployManifest => ({
+    version: 1,
+    buildId: 'st1',
+    compute: {
+      default: { type: 'handler', bundle: bundleDir, handler: 'index.handler', placement: 'regional', streaming },
+    },
+    staticAssets: { directory: tmpDir },
+    routes: [
+      { pattern: '/_next/static/*', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ],
+  });
+  const domain = { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' };
+  const synth = (frontDoor: HostingConstructProps['frontDoor'], streaming: boolean, extra: Partial<HostingConstructProps> = {}) =>
+    new HostingConstruct(new Stack(new App(), 'St', { env: { account: '111111111111', region: 'us-west-2' } }), 'Hosting', {
+      manifest: manifest(streaming),
+      frontDoor,
+      backendApi: { url: API_URL },
+      ...extra,
+    });
+  // A door that wires every origin it gets (the server as its default), so only the streaming check decides.
+  const ssrDoor = (serverResponse: 'streaming' | 'buffered') =>
+    defineFrontDoor({
+      service: 'my-cdn',
+      serverResponse,
+      build(scope, { app, origins }) {
+        const dist = new Distribution(scope, 'Cdn', {
+          defaultBehavior: { origin: cf.origin(origins.server ?? origins.assets) },
+          additionalBehaviors: { ...cf.behaviors(app.routes), ...cf.apiBehaviors(origins.api) },
+        });
+        return { url: `https://${dist.distributionDomainName}` };
+      },
+    });
+  const bufferedDoor = ssrDoor('buffered');
+
+  for (const [label, frontDoor] of [
+    ['alb', { kind: 'alb' }],
+    ['stacked', { kind: 'stackedRouter' }],
+    ['apiGateway (HTTP API)', { kind: 'apiGateway' }],
+    ['custom', { kind: 'custom', door: bufferedDoor }],
+  ] as const) {
+    it(`${label}: a streaming handler fails synth with StreamingServerNeedsStreamingDoorError`, () => {
+      assert.equal(doorCapabilitiesFor(frontDoor).streaming, false);
+      assert.throws(
+        () => synth(frontDoor, true),
+        (e: Error) => e.name === 'StreamingServerNeedsStreamingDoorError' && e.message.includes(`'${label}'`),
+      );
+    });
+    it(`${label}: a buffered handler builds`, () => {
+      assert.doesNotThrow(() => synth(frontDoor, false));
+    });
+  }
+
+  for (const [label, frontDoor, extra] of [
+    ['cloudfront', undefined, {}],
+    ['apiGateway (REST)', { kind: 'apiGateway', api: 'rest' }, { domain }],
+    ['custom (streaming)', { kind: 'custom', door: ssrDoor('streaming') }, {}],
+  ] as const) {
+    it(`${label}: a streaming handler builds`, () => {
+      assert.equal(doorCapabilitiesFor(frontDoor).streaming, true);
+      assert.doesNotThrow(() => synth(frontDoor, true, extra));
+    });
+  }
+});
+

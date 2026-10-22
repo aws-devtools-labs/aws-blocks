@@ -438,7 +438,7 @@ var REDIRECTS = ${rows};
 function handler(event) {
   var request = event.request;
   var uri = request.uri;
-${redirectRowsJs('REDIRECTS', '  ', { sameSite: true })}
+${redirectRowsJs('REDIRECTS', '  ')}
   return request;
 }`;
     const fn = inlineFunction(scope, 'BlocksRedirects', 'redirects', code);

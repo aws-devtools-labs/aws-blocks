@@ -53,6 +53,11 @@ export type BuildDoorInputParams = {
   /** The backend API, when `Hosting` was given one. */
   api?: { url: string; paths?: readonly string[] };
   errorPages?: { notFound?: string; serverError?: string };
+  /**
+   * The error pages the framework build shipped (`manifest.errorPages`), as
+   * object keys under the build prefix: `app.errorPages` when the app sets none.
+   */
+  frameworkErrorPages?: { notFound?: string; serverError?: string };
 } & DoorFeatureSettings;
 
 /**
@@ -156,6 +161,9 @@ export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
   }
 
   const features = toDoorFeatures(params);
+  // The app's own pages (uploaded as `404.html` / `500.html`), else the framework's.
+  const notFound = params.errorPages?.notFound ? '404.html' : params.frameworkErrorPages?.notFound;
+  const serverError = params.errorPages?.serverError ? '500.html' : params.frameworkErrorPages?.serverError;
 
   return {
     app: {
@@ -166,13 +174,8 @@ export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
       routes,
       redirects: plan.routes.redirects,
       headers: plan.routes.headers,
-      ...(params.errorPages && (params.errorPages.notFound || params.errorPages.serverError)
-        ? {
-            errorPages: {
-              ...(params.errorPages.notFound ? { notFound: '404.html' } : {}),
-              ...(params.errorPages.serverError ? { serverError: '500.html' } : {}),
-            },
-          }
+      ...(notFound || serverError
+        ? { errorPages: { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) } }
         : {}),
     },
     origins: {

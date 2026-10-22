@@ -84,7 +84,7 @@ function createNextjsBuildOutput(root: string): void {
  * would produce for a Next.js app. Used with `customAdapter` in unit tests
  * to avoid needing a real Next.js build + OpenNext binary.
  */
-function createNextjsFixtureAdapter(root: string) {
+function createNextjsFixtureAdapter(root: string, opts: { streaming?: boolean } = {}) {
   return (_projectDir: string) => ({
     version: 1 as const,
     compute: {
@@ -93,7 +93,7 @@ function createNextjsFixtureAdapter(root: string) {
         bundle: path.join(root, '.hosting', 'compute', 'default'),
         handler: 'index.handler',
         placement: 'regional' as const,
-        streaming: true,
+        streaming: opts.streaming ?? true,
       },
     },
     staticAssets: {
@@ -2812,6 +2812,8 @@ describe('Hosting', () => {
   });
 
   describe('composed CF → ALB front door', () => {
+    // The router is an ALB, which invokes the server without streaming.
+    const BUFFERED = { streaming: false };
     it('stacks a CloudFront edge OVER a FULL ALB router (both exist), not one instead of the other', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();
@@ -2837,7 +2839,7 @@ describe('Hosting', () => {
     /** A manifest with the given routes over the Next.js fixture build (server compute `default`). */
     const routedAdapter =
       (root: string, routes: RouteBehavior[], extra: { redirects?: Array<{ source: string; destination: string; statusCode: 301 }> } = {}) =>
-      (projectDir: string) => ({ ...createNextjsFixtureAdapter(root)(projectDir), routes, ...extra });
+      (projectDir: string) => ({ ...createNextjsFixtureAdapter(root, BUFFERED)(projectDir), routes, ...extra });
     const edgeOf = (t: Template) => {
       const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
       const config = dist.Properties.DistributionConfig as {
@@ -2958,7 +2960,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
-        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        customAdapter: createNextjsFixtureAdapter(tmpDir, BUFFERED),
         frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
       const t = Template.fromStack(stack);
@@ -2991,7 +2993,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
-        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        customAdapter: createNextjsFixtureAdapter(tmpDir, BUFFERED),
         frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
       const t = Template.fromStack(stack);
@@ -3006,12 +3008,18 @@ describe('Hosting', () => {
       const fns = t.findResources('AWS::CloudFront::Function');
       const staticFn = Object.keys(fns).find((id) => String(fns[id].Properties.FunctionCode).includes('resolveIndex'));
       assert.ok(staticFn && dependsOn.includes(staticFn), 'after the cutover');
+      // The post-deploy liveness poll waits on this invalidation, as on the CloudFront door.
+      const out = Object.entries(t.findOutputs('*')).filter(([k]) => k.includes('HostingInvalidationId'));
+      assert.strictEqual(out.length, 1, 'the stacked edge emits HostingInvalidationId');
+      const value = JSON.stringify(out[0][1].Value);
+      assert.ok(value.includes(invalidations[0][0]), 'it names the edge invalidation');
       // A static site has no server, so nothing at the edge can be stale.
       const spa = stackedSynth('CfOverAlbNoInvalidate');
       assert.strictEqual(
         Object.values(spa.findResources('Custom::AWS')).filter((r) => JSON.stringify(r.Properties.Create ?? r.Properties.Update ?? '').includes('createInvalidation')).length,
         0,
       );
+      assert.strictEqual(Object.keys(spa.findOutputs('*')).filter((k) => k.includes('HostingInvalidationId')).length, 0);
     });
 
     it('a stacked SPA whose static routes reach the router warns about files over the ALB 1 MB limit', () => {
@@ -3036,7 +3044,7 @@ describe('Hosting', () => {
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
-        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        customAdapter: createNextjsFixtureAdapter(tmpDir, BUFFERED),
         frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
       });
       const edge = edgeOf(Template.fromStack(stack));

@@ -172,8 +172,8 @@ export type AlbDoorFeatures<TDomain = HostingDomainConfig> = {
    */
   logging?: HostingLoggingConfig;
   /**
-   * Alarms on the ALB's own metrics (5xx count, target response time): off
-   * unless set (and not `enabled: false`). The ALB door creates no alarm topic
+   * Alarms on the ALB's own metrics (5xx count, target response time): on
+   * unless `enabled: false`, as on the CloudFront door. The ALB door creates no alarm topic
    * and subscribes no endpoints, so only `enabled` applies; attach actions to
    * the alarms yourself.
    */

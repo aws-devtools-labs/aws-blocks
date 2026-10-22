@@ -286,6 +286,20 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
     ]);
   });
 
+  it("never routes the backend's catch-all raw route ('/*') to the API, and warns (as the API Gateway door does)", () => {
+    const plan: HostingPlan = {
+      ...serverPlan([{ pattern: '/assets/*', kind: 'static' }]),
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+    };
+    const { t, stack } = synthWithServer(plan, { apiPaths: ['/aws-blocks/*', '/*', '/hooks/*'] });
+    const rules = rulePaths(t).map((r) => r.paths);
+    assert.deepEqual(rules[0], ['/aws-blocks/*', '/hooks/*'], 'the API rule');
+    assert.ok(!rules.flat().includes('/*'), 'no rule sends every path to the API');
+    const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('CatchAllApiPathNotRouted'));
+    assert.equal(warnings.length, 1);
+    assert.match(String(warnings[0]?.entry.data), /ALB front door/);
+  });
+
   it('warns when the rules exceed the default quota of 100 per load balancer', () => {
     const entries = Array.from({ length: 202 }, (_, i) => ({ pattern: `/p${i}/*`, kind: i % 2 === 0 ? ('static' as const) : ('server' as const) }));
     const { stack } = synthWithServer(serverPlan(entries));

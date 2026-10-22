@@ -1025,6 +1025,8 @@ export class Hosting extends Construct {
     const isCloudFrontDoor = hosting.frontDoorKind === 'cloudfront' && !cfOverRouter;
     let publicDistribution = isCloudFrontDoor ? hosting.distribution : undefined;
     let stackedEdge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function } | undefined;
+    // The stacked edge's post-deploy invalidation (`<distributionId>/<invalidationId>`).
+    let stackedInvalidationId: string | undefined;
 
     if (cfOverRouter) {
       // The stacked door. The L3 built the ALB router (it routes static, SSR,
@@ -1168,7 +1170,9 @@ export class Hosting extends Construct {
       // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
 
-      if (stackedEdge) this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);
+      if (stackedEdge) {
+        stackedInvalidationId = this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);
+      }
     }
 
     // ── 9. Register public origin + CORS hosting origin into S3 config ──
@@ -1239,9 +1243,15 @@ export class Hosting extends Construct {
     // the window where the edge still serves the previous build's SSR HTML.
     // `GetInvalidation` needs both ids, so the value carries
     // `<distributionId>/<invalidationId>`. Absent for a pure-static deploy.
-    if (hosting.invalidationId && isCloudFrontDoor) {
+    // The stacked door's edge invalidates its own distribution (see
+    // `gateStackedEdge`), so its output names the edge's invalidation.
+    const invalidationOutput =
+      hosting.invalidationId && isCloudFrontDoor
+        ? `${hosting.distribution.distributionId}/${hosting.invalidationId}`
+        : stackedInvalidationId;
+    if (invalidationOutput) {
       new cdk.CfnOutput(this, 'HostingInvalidationId', {
-        value: `${hosting.distribution.distributionId}/${hosting.invalidationId}`,
+        value: invalidationOutput,
         description: 'CloudFront <distributionId>/<invalidationId> for the post-deploy liveness poll',
       });
     }
@@ -1367,18 +1377,19 @@ export class Hosting extends Construct {
     edge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function },
     configDeployment: s3deploy.BucketDeployment,
     buildId: string,
-  ): void {
+  ): string | undefined {
     edge.staticFunction?.node.addDependency(configDeployment);
     const server = hosting.doorInput.origins.server;
-    if (!server) return;
+    if (!server) return undefined;
     const paths = manifest.invalidationPaths ?? ['/*'];
-    if (paths.length === 0) return;
+    if (paths.length === 0) return undefined;
     const uploads = hosting.node
       .findAll()
       .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
     const invalidation = cf.invalidate(edge.distribution, { after: [...uploads, configDeployment], paths, buildId });
     if (edge.staticFunction) invalidation.node.addDependency(edge.staticFunction);
     invalidation.node.addDependency(server.fn);
+    return `${edge.distribution.distributionId}/${invalidation.getResponseField('Invalidation.Id')}`;
   }
 
   /**

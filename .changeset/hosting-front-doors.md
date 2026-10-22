@@ -54,8 +54,9 @@ that kind: a setting the chosen door doesn't implement does not compile.
   `geoRestriction`, `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`,
   `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`.
 - ALB: `domain` (without `wwwRedirect`), `waf` (a REGIONAL web ACL), `logging`,
-  `monitoring` (`enabled` only). The ALB's own access logs and alarms are off
-  unless set.
+  `monitoring` (`enabled` only). The ALB's own access logs are off unless
+  set; its alarms are on unless `monitoring: { enabled: false }`, as on the
+  CloudFront door.
 - API Gateway (HTTP and REST): `domain` (without `wwwRedirect`).
 - Stacked: per layer, `edge: { waf: { webAclArn }, contentSecurityPolicy }` (a
   CLOUDFRONT-scoped web ACL) and `router: { domain, waf, logging, monitoring }`
@@ -109,17 +110,43 @@ through the ALB and warns (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`).
 Some apps need the CloudFront door. `compute: { type: 'web-function' }` fails
 synth with `UnsupportedComputeFrontDoorError` behind any other door, and an app
 with Next.js middleware with `MiddlewareNeedsCloudFrontDoorError` (only the
-CloudFront door runs it).
+CloudFront door runs it). A streaming server (Next.js through OpenNext, or
+Nitro with `awsLambda.streaming: true`) fails synth with
+`StreamingServerNeedsStreamingDoorError` behind a door that invokes it without
+streaming (the ALB, the stacked door, the API Gateway HTTP API, or a custom
+door with `serverResponse: 'buffered'`): it would deploy and no page would
+answer. Each built-in door declares what it can serve (streaming, wildcard
+routes, the app's rules on every response, and whether it sets
+`x-forwarded-host`), and the synth checks read those declarations.
 
 The server is built for the door in front of it. Behind a door that invokes it
 without streaming (the ALB, the stacked door's ALB router, the API Gateway HTTP
 API), a Lambda Web Adapter server (Astro, Nuxt, SvelteKit) answers buffered.
-Next.js builds target a streaming API Gateway REST integration, so serve
-Next.js through CloudFront, the `'rest'` door, or a door that streams. Behind
+Serve Next.js through CloudFront, the `'rest'` door, or a door that streams. Behind
 the ALB, the server answers with multi-value headers (so every `Set-Cookie`
 survives), and a native handler server (Nitro's `aws-lambda` preset) runs
 behind a small ALB event shim that maps the ALB event to the API Gateway REST
 shape (method, decoded query, base64 body) and the response back.
+
+The server sees the viewer's host as `x-forwarded-host` behind every built-in
+door, never a value the client sent. The CloudFront door and the stacked
+door's edge set it at the edge; behind the ALB and API Gateway doors, a native
+handler server gets it from `Host` through a small shim (a streaming handler
+stays streaming), and a Lambda Web Adapter server that reads its host from
+`x-forwarded-host` (SvelteKit's `HOST_HEADER`) reads `host` instead.
+
+Redirects behave the same on every door. A wildcard tail spliced onto a
+root-relative destination keeps one leading slash on the CloudFront door too,
+so `/old//evil.example` never answers a protocol-relative `Location`; an
+absolute destination (`https://example.org/moved`) is kept as written. On the
+API Gateway door, a redirect source with a wildcard inside a segment has no
+route, so on an app with a server it warns
+(`@aws-blocks/hosting:RedirectNotExpressible`). The regional doors never route
+the backend's catch-all raw route (`/*`) to the API, which would take every
+page and asset, and warn (`@aws-blocks/hosting:CatchAllApiPathNotRouted`). The
+stacked edge serves the framework build's own 404 page, as the other doors do.
+The stacked door emits `HostingInvalidationId`, so the post-deploy liveness
+poll waits for the edge's invalidation.
 
 `HostingConstruct` exposes the resolved door as `frontDoorKind`, and takes the
 backend API to proxy same-origin as `backendApi: { url, paths? }` (the core
@@ -140,7 +167,8 @@ a `DoorInput`:
   and its Function URL uses the matching invoke mode), and the API with every
   path that must reach it.
   The API paths are `/aws-blocks/*` (RPC and sign-in) plus the backend's raw
-  routes.
+  routes. `app.errorPages` is the app's `errorPages`, else the 404 and 500
+  pages the framework build shipped.
 - `features`: the door's `frontDoor.features`, under the same names and shapes
   (`domain`, `waf`, `logging`, `monitoring`, `geoRestriction`,
   `skewProtection`). A field is present only when the app asked for that

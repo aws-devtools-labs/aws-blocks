@@ -6,10 +6,13 @@
  * it relays the request to the backend and the response back in the ALB
  * multi-value shape, so several `Set-Cookie` headers survive, and applies the
  * app's header rules to a successful response, as the CloudFront door does at
- * the edge. The generated source runs against an in-memory `node:https` stub.
+ * the edge. The generated source runs against an in-memory `node:https` stub,
+ * and once against a real local server to check what goes on the wire.
  */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it } from 'node:test';
 import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 
@@ -29,9 +32,10 @@ const load = (code: string, upstream: Upstream, seen: Seen) => {
       seen.path = opts.path;
       seen.headers = opts.headers;
       const chunks: Buffer[] = [];
-      const req = new EventEmitter() as EventEmitter & { write: (b: Buffer) => void; end: () => void };
+      const req = new EventEmitter() as EventEmitter & { write: (b: Buffer) => void; end: (b?: Buffer) => void };
       req.write = (b) => chunks.push(Buffer.from(b));
-      req.end = () => {
+      req.end = (b) => {
+        if (b) chunks.push(Buffer.from(b));
         seen.body = Buffer.concat(chunks).toString('utf8');
         if (upstream.error) {
           req.emit('error', upstream.error);
@@ -103,6 +107,59 @@ describe('ALB API forwarder', () => {
     assert.equal(seen.headers?.host, 'abc.execute-api.us-west-2.amazonaws.com');
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.multiValueHeaders['set-cookie'], ['a=1', 'b=2']);
+  });
+
+  it("sends the relayed body's own Content-Length (never a chunked body), whatever the client sent", async () => {
+    const seen: Seen = {};
+    const handler = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, seen);
+    // The client's length is for the base64 body the ALB delivered, not the 7 bytes relayed.
+    await handler(event('/aws-blocks/api', { headers: { 'content-type': ['application/json'], 'content-length': ['12'] } }));
+    assert.equal(seen.headers?.['content-length'], '7');
+    assert.equal(seen.headers?.['transfer-encoding'], undefined);
+
+    // A GET with no body sends no length.
+    const get: Seen = {};
+    const noBody = load(generateAlbApiProxyCode(), { status: 200, headers: {}, body: '{}' }, get);
+    await noBody({ ...event('/aws-blocks/api'), httpMethod: 'GET', body: null });
+    assert.equal(get.headers?.['content-length'], undefined);
+  });
+
+  it('puts a POST body on the wire with Content-Length and no Transfer-Encoding (real socket)', async () => {
+    const got: { headers?: http.IncomingHttpHeaders; body?: string } = {};
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        got.headers = req.headers;
+        got.body = Buffer.concat(chunks).toString('utf8');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{}');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      // The generated code's `https.request`, pointed at the local plain-HTTP server.
+      const https = {
+        request: (opts: http.RequestOptions, cb: (res: http.IncomingMessage) => void) =>
+          http.request({ ...opts, hostname: '127.0.0.1', port }, cb),
+      };
+      const mod: { exports: { handler?: (e: unknown) => Promise<AlbResponse> } } = { exports: {} };
+      const env = { env: { API_GW_BASE: 'https://abc.execute-api.us-west-2.amazonaws.com/prod' } };
+      new Function('require', 'exports', 'module', 'process', generateAlbApiProxyCode())(
+        () => https,
+        mod.exports,
+        mod,
+        env,
+      );
+      const res = await mod.exports.handler?.(event('/aws-blocks/api'));
+      assert.equal(res?.statusCode, 200);
+      assert.equal(got.body, '{"x":1}');
+      assert.equal(got.headers?.['content-length'], '7');
+      assert.equal(got.headers?.['transfer-encoding'], undefined);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("applies the app's matching header rules to a successful response", async () => {

@@ -83,8 +83,8 @@ describe('cf.redirects', () => {
     cf.redirects(stack, [{ source: '/a', destination: '/b', statusCode: 301 }]);
     const code = functionCode(stack);
     assert.ok(code.includes(CF_MATCH_HELPERS));
-    // The same loop, plus the same-site guard on a spliced target.
-    assert.ok(code.includes(redirectRowsJs('REDIRECTS', '  ', { sameSite: true })));
+    // The same loop (with the same-site guard on a spliced target) on every door.
+    assert.ok(code.includes(redirectRowsJs('REDIRECTS', '  ')));
     assert.ok(generateKvsRouterRequestCode().includes(CF_MATCH_HELPERS));
     assert.ok(generateKvsRouterRequestCode().includes(redirectRowsJs('drows', '    ')));
   });

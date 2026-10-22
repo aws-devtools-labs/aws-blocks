@@ -65,12 +65,13 @@ import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
 	APIGW_DEFAULT_ROUTE_QUOTA,
 	apiPathToRoutes,
+	routableApiPaths,
 	backendBaseUrl,
 	DEFAULT_API_PATHS,
 	globToProxyPath,
 	hasInnerWildcard,
 } from './apigw_routes.js';
-import { warnInexpressibleRoutes } from './apigw_construct.js';
+import { warnInexpressibleRoutes, warnUnroutedRedirects } from './apigw_construct.js';
 import { assetProxyEnvironment } from './asset_proxy_core.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
@@ -239,7 +240,7 @@ export class ApiGatewayRestConstruct extends Construct {
 			if (origin.namespace === '*') {
 				// Every API path: `/aws-blocks/*` (RPC, and sign-in at
 				// `/aws-blocks/auth/*`) plus the backend's raw routes.
-				for (const pattern of new Set(props.apiPaths ?? DEFAULT_API_PATHS)) {
+				for (const pattern of routableApiPaths(this, 'API Gateway (REST)', props.apiPaths ?? DEFAULT_API_PATHS)) {
 					for (const route of apiPathToRoutes(pattern, 'API Gateway (REST)')) {
 						if (backendPaths.has(route.path)) continue;
 						backendPaths.add(route.path);
@@ -258,9 +259,14 @@ export class ApiGatewayRestConstruct extends Construct {
 		// Redirect sources first: each routes to the asset proxy, which answers the
 		// redirect with the CloudFront door's semantics (first match, wildcard tail
 		// spliced). A source with an inner wildcard has no resource form.
+		const unroutedRedirects: string[] = [];
 		for (const r of plan.routes.redirects) {
 			const path = globToProxyPath(r.source);
-			if (path === null || path.includes('*') || seen.has(path) || backendPaths.has(path)) continue;
+			if (path !== null && path.includes('*')) {
+				unroutedRedirects.push(r.source);
+				continue;
+			}
+			if (path === null || seen.has(path) || backendPaths.has(path)) continue;
 			if (path.startsWith('/aws-blocks/')) continue; // backend owns these
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', assetIntegration);
@@ -279,6 +285,8 @@ export class ApiGatewayRestConstruct extends Construct {
 			this.api.root.resourceForPath(path).addMethod('ANY', integrationForKind(entry.kind));
 		}
 		warnInexpressibleRoutes(this, 'API Gateway (REST)', inexpressible);
+		// Behind a server default, a redirect with no resource reaches the server, not the proxy.
+		if (serverIntegration) warnUnroutedRedirects(this, 'API Gateway (REST)', unroutedRedirects);
 		// The quota counts resources (every path segment is one), not methods.
 		const resourceCount = this.api.node.findAll().filter((c) => c instanceof Resource).length + 1; // + the root
 		if (resourceCount > APIGW_DEFAULT_ROUTE_QUOTA) {
