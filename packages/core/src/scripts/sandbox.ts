@@ -915,6 +915,11 @@ export async function destroySandbox(backendPath: string) {
 export function sandboxDestroyDeps(backendPath: string, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
   const cdkArgs = [
     "exec", "cdk", "--", "destroy",
+    // `--all`, like the deploy (see buildSandboxDeployArgs): without it CDK
+    // refuses an app with more than one stack (a Lambda@Edge
+    // `edge-lambda-stack-*` outside us-east-1, a VPC lookup stack), so the
+    // destroy can never succeed. CDK deletes dependent stacks first.
+    "--all",
     "--force",
     "--context", "sandboxMode=true",
     // Single-quote backendPath: CDK re-runs the --app string through a shell,
