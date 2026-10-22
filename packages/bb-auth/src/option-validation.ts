@@ -45,6 +45,7 @@ import type {
 	CognitoOidcProviderOptions,
 	DirectOidcProviderOptions,
 	EmailPasswordOptions,
+	EmailSenderOptions,
 	ExternalUserPoolRef,
 	HostedUiOptions,
 	MfaOptions,
@@ -348,6 +349,15 @@ const BEARER_AUTH = {
 	clientIds: 'value',
 } as const satisfies ShapeOf<BearerAuthOptions>;
 
+const EMAIL_SENDER = {
+	fromAddress: 'value',
+	fromName: 'value',
+	replyTo: 'value',
+	sesRegion: 'value',
+	sesVerifiedDomain: 'value',
+	configurationSetName: 'value',
+} as const satisfies ShapeOf<EmailSenderOptions>;
+
 /**
  * Every option `Auth` accepts, at every nesting level. `codeDelivery` is
  * mock-only ({@link AuthMockOptions}) but known to every entry: the backend
@@ -380,6 +390,7 @@ export const AUTH_OPTIONS_SHAPE = {
 	removalPolicy: 'value',
 	deletionProtection: 'boolean',
 	featurePlan: 'value',
+	email: { object: EMAIL_SENDER },
 	logger: 'value',
 	codeDelivery: 'value',
 } as const satisfies ShapeOf<AuthMockOptions>;

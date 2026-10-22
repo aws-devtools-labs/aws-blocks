@@ -154,6 +154,7 @@ describe('unknown options — nested groups', () => {
 		['passkeys', { passkeys: { relyingPartId: 'x' } }, 'passkeys.relyingPartId', /passkeys\.relyingPartyId/],
 		['admin', { admin: { action: ['groups'] } }, 'admin.action', /admin\.actions/],
 		['hostedUi', { hostedUi: { domainPrefx: 'x' } }, 'hostedUi.domainPrefx', /hostedUi\.domainPrefix/],
+		['email', { email: { fromAdress: 'no-reply@example.com' } }, 'email.fromAdress', /email\.fromAddress/],
 		[
 			'socialProviders (closed set)',
 			{ socialProviders: { gogle: {} } },
@@ -359,6 +360,14 @@ describe('valid configurations pass', () => {
 			hostedUi: { domainPrefix: 'my-app' },
 			admin: { actions: ['groups', 'lifecycle'] },
 			allowBearerAuth: true,
+			email: {
+				fromAddress: 'no-reply@example.com',
+				fromName: 'Example',
+				replyTo: 'support@example.com',
+				sesRegion: 'us-east-1',
+				sesVerifiedDomain: 'example.com',
+				configurationSetName: 'auth-mail',
+			},
 			userPool: Auth.fromExisting('us-east-1_abc', 'client'),
 			onSignIn: async () => {},
 			onSignOut: async () => {},

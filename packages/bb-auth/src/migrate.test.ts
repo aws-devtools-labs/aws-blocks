@@ -168,12 +168,13 @@ export const auth = new AuthCognito(scope, 'auth', {
 				.split('\n')
 				.filter((l) => l.includes(`// ${TODO_TAG}:`) || /^\s*\/\/ {3}/.test(l))
 				.join(' ');
-			assert.match(todo, /preferredChallenge 'EMAIL_OTP' needs a pool with an Amazon SES sender/);
+			assert.match(todo, /preferredChallenge 'EMAIL_OTP' needs an Amazon SES sender/);
+			assert.match(todo, /email: \{ fromAddress: '<a verified SES address>' \}/);
 			assert.match(todo, /do NOT wrap this block's OWN pool with userPool: Auth\.fromExisting/);
 			assert.match(todo, /DELETES the pool and every user in it/);
-			assert.match(todo, /retain \+ cdk import runbook/);
 			const printed = log.join('\n');
 			assert.match(printed, /WARNING: preferredChallenge 'EMAIL_OTP'/);
+			assert.match(printed, /email: \{ fromAddress \}/);
 			assert.match(printed, /deletes it and every user in it/);
 			assert.strictEqual(printed.split("WARNING: preferredChallenge 'EMAIL_OTP'").length - 1, 1, 'printed once');
 			assert.match(
