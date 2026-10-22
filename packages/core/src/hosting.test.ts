@@ -2864,7 +2864,12 @@ describe('Hosting', () => {
         String(f.Properties.FunctionCode).includes('resolveIndex'),
       );
       assert.strictEqual(fns.length, 1, 'one static viewer-request function');
-      return new Function(`${String(fns[0].Properties.FunctionCode)}\nreturn handler;`)();
+      const handler = new Function(`${String(fns[0].Properties.FunctionCode)}\nreturn handler;`)();
+      // CloudFront always hands the function the request's headers.
+      return (event: unknown) => {
+        const e = event as { request: { headers?: Record<string, { value: string }> } };
+        return handler({ ...e, request: { headers: {}, ...e.request } });
+      };
     };
 
     it('static SPA: the edge serves everything but the API straight from the private S3 bucket (OAC), the API through the ALB', () => {
