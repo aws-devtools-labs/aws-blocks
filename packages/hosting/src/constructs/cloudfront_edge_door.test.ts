@@ -326,8 +326,9 @@ describe('cloudFrontEdgeDoor — the router default of a site without a server',
       });
       buildFrontDoor(stack, cloudFrontEdgeDoor, { ...input, upstream: { service: 'alb', url: alb.url, originHandle: alb.originHandle } }, { wiringCheck: false });
       const t = Template.fromStack(stack);
-      const dist = Object.values(t.findResources('AWS::CloudFront::Distribution'))[0];
-      const ref = (dist?.Properties.DistributionConfig.DefaultCacheBehavior.CachePolicyId as { Ref: string }).Ref;
+      const [dist] = Object.values(t.findResources('AWS::CloudFront::Distribution'));
+      assert.ok(dist, 'the edge distribution');
+      const ref = (dist.Properties.DistributionConfig.DefaultCacheBehavior.CachePolicyId as { Ref: string }).Ref;
       return t.findResources('AWS::CloudFront::CachePolicy')[ref]?.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig.CookieBehavior;
     };
     assert.equal(synth(false), 'none');
