@@ -32,6 +32,7 @@ const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 
 /** Teardown commands that failed; a failed teardown leaves a stack deployed. */
 const teardownFailures = [];
+const TEARDOWN_FAILED = 'teardown failed, stack(s) may be left deployed:';
 
 /** Run a teardown command; a failure is recorded and fails the job at the end. */
 const teardown = (cmd, args, opts = {}) => runTeardown(cmd, args, opts, ROOT, teardownFailures);
@@ -133,7 +134,7 @@ async function main() {
   }
 
   if (teardownFailures.length > 0) {
-    throw new Error(`teardown failed, stack(s) may be left deployed:\n  ${teardownFailures.join('\n  ')}`);
+    throw new Error(`${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
   }
   console.log(`\nOK: scaffolded backend template dev + sandbox + deploy all work on ${process.platform}.`);
 }
@@ -143,8 +144,8 @@ main()
   .catch((err) => {
     console.error(`\nFAIL: ${err?.message ?? err}`);
     // A phase error replaces the end-of-run teardown check; still name the leak.
-    if (teardownFailures.length > 0 && !String(err?.message).startsWith('teardown failed')) {
-      console.error(`Also, teardown failed, stack(s) may be left deployed:\n  ${teardownFailures.join('\n  ')}`);
+    if (teardownFailures.length > 0 && !String(err?.message).startsWith(TEARDOWN_FAILED)) {
+      console.error(`Also, ${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
     }
     shutdown();
     process.exit(1);
