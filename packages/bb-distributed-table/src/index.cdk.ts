@@ -295,6 +295,18 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		resources: cdk.Lazy.list({ produce: () => tableArns }),
 	}));
 
+	// On Delete, onEvent reads its own stack's status and template to tell a
+	// table leaving the stack (keep the indexes: the table is retained in
+	// production) from `indexes` being removed in an update (drop them).
+	// Read-only, this stack only. Added to the role's default policy, which the
+	// function DependsOn, so a stack delete cannot remove it before the custom
+	// resource's Delete runs (`addToRolePolicy` would emit a separate, unordered
+	// policy here because the statements above use a Lazy resource list).
+	gsiManagerLambda.role?.addToPrincipalPolicy(new PolicyStatement({
+		actions: ['cloudformation:DescribeStacks', 'cloudformation:GetTemplate'],
+		resources: [stack.stackId],
+	}));
+
 	gsiIsCompleteLambda.addToRolePolicy(new PolicyStatement({
 		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
 		resources: cdk.Lazy.list({ produce: () => tableArns }),
