@@ -1230,7 +1230,17 @@ export class Hosting extends Construct {
       // calling `.replace()` on it now would escape the `${Token[...]}` marker into
       // a dead literal that never resolves. The literal origin is escaped at
       // runtime by getCorsPatterns() once the token has resolved to a plain string.
-      registerConfig(configOwner, 'CORS_HOSTING_ORIGINS', publicUrl);
+      // The ALB and API Gateway doors serve every name of their domain (no
+      // www redirect, unlike CloudFront), so each one is an allowed origin.
+      const extraNames =
+        (hosting.frontDoorKind === 'alb' || hosting.frontDoorKind === 'apiGateway') && !cfOverRouter
+          ? [resolvedDomain?.domainName ?? []].flat().slice(1)
+          : [];
+      registerConfig(
+        configOwner,
+        'CORS_HOSTING_ORIGINS',
+        extraNames.length > 0 ? [publicUrl, ...extraNames.map((name) => `https://${name}`)].join(',') : publicUrl,
+      );
     }
 
     // ── 10. Expose resources ──────────────────────────────────────

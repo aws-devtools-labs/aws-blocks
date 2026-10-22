@@ -2681,6 +2681,38 @@ describe('Hosting', () => {
       assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://app.example.com');
       assert.deepStrictEqual(claimed, ['https://app.example.com'], 'an HTTPS ALB claims the API role');
     });
+
+    it('the ALB door with several domain names: every name is an allowed CORS origin (each one serves the app)', async () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'PublicOrigin-albnames', { env: { account: '111111111111', region: 'us-east-1' } });
+      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-east-1:111111111111:certificate/c');
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        frontDoor: {
+          kind: 'alb',
+          certificate,
+          features: { domain: { domainName: ['app.example.com', 'www.example.com'], hostedZone: 'example.com', hostedZoneId: 'Z123' } },
+        },
+      });
+      const entries = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+        Symbol.for('BLOCKS_CONFIG_REGISTRY')
+      ]?.entries;
+      assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://app.example.com,https://www.example.com');
+      assert.strictEqual(entries?.get('BLOCKS_PUBLIC_ORIGIN'), 'https://app.example.com', 'the first name stays the trusted origin');
+      const { _resetCorsPatterns, isOriginAllowed } = await import('./cors.js');
+      const prev = process.env.CORS_HOSTING_ORIGINS;
+      process.env.CORS_HOSTING_ORIGINS = String(entries?.get('CORS_HOSTING_ORIGINS'));
+      _resetCorsPatterns();
+      try {
+        assert.strictEqual(isOriginAllowed('https://www.example.com'), true);
+        assert.strictEqual(isOriginAllowed('https://evil.example.com'), false);
+      } finally {
+        if (prev === undefined) delete process.env.CORS_HOSTING_ORIGINS;
+        else process.env.CORS_HOSTING_ORIGINS = prev;
+        _resetCorsPatterns();
+      }
+    });
   });
 
   describe("frontDoor: { kind: 'apiGateway' } (API Gateway owns routing — no CloudFront)", () => {
