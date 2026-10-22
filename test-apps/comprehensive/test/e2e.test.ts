@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
+import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
 import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
@@ -223,13 +224,16 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // left in .bb-data/.
 test('AuthBasic - full purge clears every code record and leaves other keys alone', async () => {
   const stamp = Date.now().toString(36);
+  const username = `purge-probe-${stamp}`;
   const bystander = `kv-bystander-${stamp}`;
-  await api.kvPut(`__last-code:auth:purge-probe-${stamp}`, JSON.stringify({ username: `purge-probe-${stamp}`, code: '000000' }));
   await api.kvPut(bystander, 'keep me');
+  await api.authSignUp(username, 'password123');
+  await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
 
   const { deleted } = await api.authPurgeDeliveredCodes();
   assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
 
+  assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
   const left = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
   assert.deepStrictEqual(left, [], 'no code record survives a full purge');
   assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
