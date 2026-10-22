@@ -22,6 +22,10 @@
  * `multiValueHeaders` when the event was multi-value, else single values, plus
  * `statusDescription`). Any other event reaches the handler unchanged.
  *
+ * The shim drops the stacked router's origin-verify header
+ * (`x-blocks-origin-verify`) before the handler runs, so the router secret
+ * never reaches app code that logs or reports request headers.
+ *
  * Behind the ALB door, where nothing in front of the ALB sets it, the shim
  * also sets `x-forwarded-host` from `Host`, over any value the client sent, as
  * the CloudFront door's router does: a server that builds redirects or
@@ -61,6 +65,9 @@ import { STATUS_CODES } from 'node:http';
 import * as inner from ${JSON.stringify(innerModule)};
 
 const run = inner[${JSON.stringify(innerExport)}] || (inner.default && inner.default[${JSON.stringify(innerExport)}]);
+// The stacked router's origin-verify secret: the ALB matched it already, and
+// the server never sees it (a header dump or an error reporter would leak it).
+const ORIGIN_VERIFY = 'x-blocks-origin-verify';
 
 function decode(s) {
   try { return decodeURIComponent(String(s).replace(/\\+/g, ' ')); } catch (e) { return String(s); }
@@ -73,6 +80,7 @@ function toRestEvent(event) {
   if (multi) {
     for (const name in event.multiValueHeaders) {
       const key = name.toLowerCase();
+      if (key === ORIGIN_VERIFY) continue;
       const values = [].concat(event.multiValueHeaders[name]).map(String);
       multiHeaders[key] = values;
       headers[key] = values.join(key === 'cookie' ? '; ' : ', ');
@@ -80,6 +88,7 @@ function toRestEvent(event) {
   } else {
     for (const name in event.headers || {}) {
       const key = name.toLowerCase();
+      if (key === ORIGIN_VERIFY) continue;
       headers[key] = String(event.headers[name]);
       multiHeaders[key] = [headers[key]];
     }

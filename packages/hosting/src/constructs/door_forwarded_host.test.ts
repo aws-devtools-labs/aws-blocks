@@ -108,6 +108,16 @@ describe('the server shims set x-forwarded-host from Host', () => {
 		assert.equal(echo.single, 'www.example.com');
 	});
 
+	it("drops the stacked router's origin-verify secret before the handler runs (both header maps)", async () => {
+		const keys = `export const handler = async (event) => ({ statusCode: 200, body: JSON.stringify({ h: Object.keys(event.headers), m: Object.keys(event.multiValueHeaders || {}) }) });\n`;
+		const handler = await load(keys, ALB_EVENT_SHIM_FILE, generateAlbEventShimCode('./index.mjs'));
+		const ev = albEvent();
+		(ev.multiValueHeaders as Record<string, string[]>)['X-Blocks-Origin-Verify'] = ['s3cret'];
+		const seen: { h: string[]; m: string[] } = JSON.parse((await handler(ev)).body);
+		assert.ok(!seen.h.includes('x-blocks-origin-verify') && !seen.m.includes('x-blocks-origin-verify'), JSON.stringify(seen));
+		assert.ok(seen.h.includes('host'));
+	});
+
 	it('API Gateway door: the shim replaces it in both header maps, whatever the case', async () => {
 		const handler = await load(ECHO_HANDLER, FORWARDED_HOST_SHIM_FILE, generateForwardedHostShimCode('./index.mjs'));
 		const echo: Echo = JSON.parse((await handler(apiGatewayEvent('evil.example'))).body);

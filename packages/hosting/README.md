@@ -640,7 +640,9 @@ synth warning (`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows
 `'none'` publishes the build to its own public S3 website bucket, at the root.
 Each deploy prunes what the build no longer ships (a removed `*.map` stops being
 downloadable), and uploads with the same cache tiers as the other doors (hashed
-assets immutable, HTML and the rest revalidated). The page is plain HTTP and the
+assets immutable, HTML and the rest revalidated). Pruning includes the previous
+build's hashed assets: a tab opened before a deploy that then lazy-loads one of
+its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
 
@@ -678,6 +680,14 @@ session cookie is then set by the API's own HTTPS response.
   when you rotate the secret. To rotate it, put a new value and then deploy a
   change that updates both the distribution and the listener rules:
   CloudFormation re-reads a dynamic reference only for a resource it updates.
+  Each rule matches one value, and the listener rules update within seconds
+  while the distribution takes minutes to propagate, so expect 403s from the
+  router until the edge carries the new value; rotate in a quiet window.
+  The ALB forwards the header to its Lambda targets. A native handler server
+  (behind the ALB event shim) never sees it; a Lambda Web Adapter server and
+  the image-optimization function do, so don't log or report request headers
+  verbatim from them (a leaked value lets any CloudFront distribution reach
+  the router, past the edge's web ACL).
   An internet-facing ALB's security group admits only the CloudFront
   origin-facing managed prefix list
   (`com.amazonaws.global.cloudfront.origin-facing`, looked up per region at

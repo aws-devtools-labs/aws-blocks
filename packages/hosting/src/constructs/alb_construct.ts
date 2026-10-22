@@ -294,6 +294,11 @@ export class AlbConstruct extends Construct {
     // dynamic reference. Alphanumeric only: an ALB header condition treats `*`
     // and `?` as wildcards. It changes only when the secret is rotated (see
     // `originVerifySecret`).
+    //
+    // Don't change `generateSecretString` (or this construct's id): either
+    // makes CloudFormation generate a new value on upgrade, and only the
+    // resources an update happens to touch re-read the dynamic reference, so
+    // the edge and the listener rules could disagree and the router answer 403.
     this.originVerifySecret = props.restrictToCloudFront
       ? new Secret(this, 'OriginVerifySecret', {
           description: 'The header value the stacked door\'s CloudFront edge sends to its ALB router (x-blocks-origin-verify).',
