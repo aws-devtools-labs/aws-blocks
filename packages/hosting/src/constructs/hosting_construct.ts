@@ -57,6 +57,7 @@ import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { albDoor } from './alb_door.js';
+import { AlbConstruct } from './alb_construct.js';
 import {
   ALB_EVENT_SHIM_FILE,
   ALB_EVENT_SHIM_HANDLER,
@@ -1918,8 +1919,10 @@ export class HostingConstruct extends Construct {
           { wiringCheck: false },
         ).result;
         service = albDoor.service;
-        // The ALB's DNS — the stacked door's edge points its router origin at it.
-        this.loadBalancerDnsName = built.originHandle.domainName;
+        // The load balancer's own DNS name (not the custom domain the origin
+        // handle names when it has one: an alias record points the domain here).
+        const alb = this.node.findAll().find((c): c is AlbConstruct => c instanceof AlbConstruct);
+        this.loadBalancerDnsName = alb?.loadBalancer.loadBalancerDnsName;
       } else if (fd?.kind === 'apiGateway') {
         // API Gateway owns routing: a route per origin (asset-proxy → private S3,
         // SSR/image Lambdas) plus native same-origin backend proxy. `api` picks

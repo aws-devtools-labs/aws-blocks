@@ -411,6 +411,10 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       );
       const { hosting } = synth(spaManifest(), { kind: 'alb', certificate, features: { domain: DOMAIN } });
       assert.equal(hosting.distributionUrl, 'https://app.example.com');
+      // The load balancer's own name, which the domain's alias records point at — never the domain itself.
+      const dns = JSON.stringify(Stack.of(hosting).resolve(hosting.loadBalancerDnsName));
+      assert.match(dns, /"Fn::GetAtt":\["[A-Za-z0-9]+","DNSName"\]/);
+      assert.doesNotMatch(dns, /app\.example\.com/);
     });
   });
 });
