@@ -1,0 +1,31 @@
+import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { AuthBasic, AuthBasicErrors, type AuthBasicUser } from '@aws-blocks/blocks';
+
+const scope = new Scope('app');
+const auth = new AuthBasic(scope, 'auth', {
+	sessionDuration: 3600,
+	passwordPolicy: { minLength: 10, requireSpecialChars: true },
+	codeDelivery: async (username, code) => {
+		console.log(`code for ${username}: ${code}`);
+	},
+});
+
+export const authApi = auth.createApi();
+export const legacyApi = auth.buildApi();
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+	async login(username: string, password: string): Promise<AuthBasicUser> {
+		const user = await auth.signIn(username, password, context);
+		return user;
+	},
+	async confirm(username: string, code: string) {
+		try {
+			await auth.confirmSignUp(username, code);
+		} catch (e) {
+			if (e instanceof Error && e.name === AuthBasicErrors.InvalidCode) return 'bad code';
+			if (e instanceof Error && e.name === AuthBasicErrors.InvalidCredentials) return 'denied';
+			throw e;
+		}
+		return 'ok';
+	},
+}));

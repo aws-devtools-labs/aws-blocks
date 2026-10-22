@@ -1,0 +1,18 @@
+import { Auth } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const stage = process.env.STAGE ?? 'dev';
+const authId = 'auth';
+
+// A variable id.
+export const a = new Auth(scope, authId, { emailPassword: { selfSignUp: true } });
+// A template-literal id.
+export const b = new Auth(scope, `auth-${stage}`, { session: { ttlSeconds: 3600 } });
+// A computed id.
+export const c = new Auth(scope, ['auth', stage].join('-'), { users: { groups: ['ops'] } });
+// An id that mentions the old class name: left alone on purpose.
+// TODO(aws-blocks-auth-migrate): the block id expression mentions AuthCognito; it was deliberately left unchanged. It must evaluate to exactly the same string as before, or the user pool is replaced. Inline the old value.
+export const d = new Auth(scope, AuthCognito.name.toLowerCase(), { session: { crossDomain: true } });
+// A string-literal id whose text looks like an old error name.
+export const e = new Auth(scope, 'SessionExpiredException');

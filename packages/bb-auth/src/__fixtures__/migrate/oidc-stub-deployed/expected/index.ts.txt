@@ -1,0 +1,29 @@
+import { Scope } from '@aws-blocks/core';
+import { Auth, stubIdp } from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+
+// AuthOIDC served the stub IdP from deployed stacks too (an e2e sandbox signs in through it).
+export const auth = new Auth(scope, 'e2e-auth', {
+	emailPassword: false,
+	oidcProviders: {
+		corp: stubIdp({
+			// TODO(aws-blocks-auth-migrate): RISK: stubIdp() is local-only in Auth — synth refuses it unless it sets unsafeAllowDeployed. AuthOIDC served this stub
+			//   from deployed stacks too, so the codemod kept that with unsafeAllowDeployed: true. A deployed stub signs ANYONE who
+			//   can reach the app in as its users, with no credentials. Keep the flag only on a disposable test stack. For
+			//   production, remove it and deploy the real provider instead (choose the provider by environment, so npm run dev
+			//   keeps the stub) — MIGRATION.md, "stubIdp() is local-only".
+			unsafeAllowDeployed: true,
+		}),
+		staff: stubIdp({
+			onAuthorize: (req) => req.users[0],
+			users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } }],
+			// TODO(aws-blocks-auth-migrate): RISK: stubIdp() is local-only in Auth — synth refuses it unless it sets unsafeAllowDeployed. AuthOIDC served this stub
+			//   from deployed stacks too, so the codemod kept that with unsafeAllowDeployed: true. A deployed stub signs ANYONE who
+			//   can reach the app in as its users, with no credentials. Keep the flag only on a disposable test stack. For
+			//   production, remove it and deploy the real provider instead (choose the provider by environment, so npm run dev
+			//   keeps the stub) — MIGRATION.md, "stubIdp() is local-only".
+			unsafeAllowDeployed: true,
+		}),
+	},
+});
