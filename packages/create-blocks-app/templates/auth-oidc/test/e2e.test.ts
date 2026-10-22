@@ -127,12 +127,10 @@ test('AuthOIDC - stub sign-in authorises a requireAuth call', async (t) => {
     return;
   }
 
-  // Start signed out.
   await authApi.setAuthState({ action: 'signOut' });
   const before = await authApi.getAuthState();
   assert.strictEqual(before.state, 'signedOut');
 
-  // Sign in through the stub IdP's full authorize → callback redirect flow.
   await signInThroughStub('demo');
 
   // The session cookie now authorises a requireAuth-gated call, and whoAmI
@@ -143,7 +141,6 @@ test('AuthOIDC - stub sign-in authorises a requireAuth call', async (t) => {
   assert.strictEqual(me.provider, 'demo');
   assert.ok(typeof me.userId === 'string' && me.userId.length > 0);
 
-  // The auth state machine agrees the session is signed in.
   const after = await authApi.getAuthState();
   assert.strictEqual(after.state, 'signedIn');
 });
