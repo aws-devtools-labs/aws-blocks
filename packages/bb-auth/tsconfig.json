@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "lib": ["ES2022", "ESNext.Array", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../auth-common" },
+    { "path": "../bb-app-setting" },
+    { "path": "../bb-kv-store" },
+    { "path": "../bb-logger" }
+  ]
+}
