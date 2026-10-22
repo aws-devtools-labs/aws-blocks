@@ -14,5 +14,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "vite": "^6.4.4"
   }
 }

@@ -30,7 +30,7 @@
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "svelte": "^5.57.2",
-    "vite": "^5.4.21",
+    "vite": "^6.4.4",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
