@@ -27,8 +27,9 @@ summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 err=$(mktemp)
 trap 'rm -f "$err"' EXIT
 
-# get-rest-apis pages through every API itself. One call gives both counts.
-if apis=$(aws apigateway get-rest-apis --output json 2>"$err") &&
+# get-rest-apis pages through every API itself. One call gives both counts,
+# with more attempts than the CLI default so one throttled call doesn't fail.
+if apis=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws apigateway get-rest-apis --output json 2>"$err") &&
 	counts=$(jq -er '(.items // []) | [length, (map(select(.endpointConfiguration.types // [] | index("EDGE"))) | length)] | @tsv' \
 		<<<"$apis" 2>>"$err"); then
 	read -r total edge <<<"$counts"
@@ -41,7 +42,7 @@ fi
 
 # The CLI's error starts with a blank line, so take the first non-blank one.
 # Account ids are masked: the log of a public repository is public.
-reason=$(grep -m 1 -v '^[[:space:]]*$' "$err" | head -c 500 | sed -E 's/[0-9]{12}/<account>/g' || true)
+reason=$(grep -m 1 -v '^[[:space:]]*$' "$err" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
 reason=${reason:-no error output}
 echo "::error::could not count REST APIs, so the EDGE quota ($cap) is unchecked: ${reason//%/%25}"
 echo "- REST APIs remaining: unknown, the listing failed: $reason" | tee -a "$summary"
