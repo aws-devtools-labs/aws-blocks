@@ -123,6 +123,11 @@ describe('HostingConstruct — frontDoor.features', () => {
     template.resourceCountIs('AWS::CloudWatch::Alarm', 2);
   });
 
+  it('ALB: alarms are on when monitoring is unset, the HostingProps.monitoring default the CloudFront door uses', () => {
+    synth({ frontDoor: { kind: 'alb' } }).template.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+    assert.ok(Object.keys(synth({}).template.findResources('AWS::CloudWatch::Alarm')).length > 0, 'CloudFront too');
+  });
+
   it('ALB: a BYO REGIONAL web ACL is associated, not created', () => {
     const { template } = synth({ frontDoor: { kind: 'alb', features: { waf: { enabled: true, webAclArn: REGIONAL_ACL } } } });
     template.resourceCountIs('AWS::WAFv2::WebACL', 0);

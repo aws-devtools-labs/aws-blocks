@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
-import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
+import { doorCapabilitiesFor, HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
 const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
 const WARNING = '@aws-blocks/hosting:DoorRulesNotApplied';
@@ -179,4 +179,30 @@ describe("regional doors apply the app's redirects, header rules and error pages
     const spaInner: DeployManifest = { ...spa(), redirects: inner().redirects };
     assert.deepEqual(redirectWarnings({ kind: 'apiGateway' }, spaInner), []);
   });
+
+  it("each door's declared capabilities match what synth reports (wildcardRoutes, appliesRules)", () => {
+    const domain = { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' };
+    const innerWildcard = (): DeployManifest => ({
+      ...ssr(),
+      routes: [{ pattern: '/assets/*.js', target: 'static' }, ...ssr().routes],
+    });
+    const warned = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor'], id: string, extra = {}) => {
+      const stack = new Stack(new App(), 'Caps', { env: { account: '111111111111', region: 'us-west-2' } });
+      new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, backendApi: { url: API_URL }, ...extra });
+      return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(id)).length > 0;
+    };
+    for (const [frontDoor, extra] of [
+      [undefined, {}],
+      [{ kind: 'alb' }, {}],
+      [{ kind: 'stackedRouter' }, {}],
+      [{ kind: 'apiGateway' }, {}],
+      [{ kind: 'apiGateway', api: 'rest' }, { domain }],
+    ] as const) {
+      const caps = doorCapabilitiesFor(frontDoor);
+      const label = JSON.stringify(frontDoor ?? 'cloudfront');
+      assert.equal(warned(innerWildcard(), frontDoor, 'RouteNotExpressible', extra), caps.wildcardRoutes === false, `${label} wildcardRoutes`);
+      assert.equal(warned(ssr(), frontDoor, 'DoorRulesNotApplied', extra), caps.appliesRules === false, `${label} appliesRules`);
+    }
+  });
 });
+
