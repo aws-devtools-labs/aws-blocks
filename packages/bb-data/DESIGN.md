@@ -97,13 +97,14 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
+| Aurora Serverless v2 cluster | PostgreSQL database with the RDS Data API enabled. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
 | Automated backups | On by default, retained 15 days; `pointInTimeRecovery` controls the window (`true` → 15 days, `{ retentionDays: n }` → 1–35 days, `false` → clamps to the 1-day minimum since Aurora cannot disable backups); also the PITR window |
 | CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
 | LogRetention custom resource | Setting the engine log group's retention adds a CDK `LogRetention` custom resource — a per-stack singleton Lambda + IAM role — because RDS owns the engine log group name via a token id, so CDK can't create the `LogGroup` directly. Intended/unavoidable for this knob |
+| Runtime configuration | Cluster ARN, secret ARN, and database name for the application runtime |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
@@ -156,7 +157,7 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ## Schema Migrations (External Databases)
 
-The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResource** (Aurora is unreachable from the deploy host). **External** connection-string databases (managed PostgreSQL, via `fromExisting()`) are publicly reachable, so their migrations run **host-side** as a pre-`cdk deploy` lifecycle step — reusing the same engine-agnostic `runMigrations` + `PgClientEngine` (no new runner). Code: `src/migrations/external-migrations.ts`, `src/migrations/baseline.ts`, and the lifecycle step in `@aws-blocks/core` (`scripts/external-migrations-step.ts`).
+The Aurora path above runs `.sql` migrations from a Lambda-backed CustomResource through the RDS Data API. **External** connection-string databases (managed PostgreSQL, via `fromExisting()`) run migrations **host-side** as a pre-`cdk deploy` lifecycle step — reusing the same engine-agnostic `runMigrations` + `PgClientEngine` (no new runner). Code: `src/migrations/external-migrations.ts`, `src/migrations/baseline.ts`, and the lifecycle step in `@aws-blocks/core` (`scripts/external-migrations-step.ts`).
 
 - **Where it runs:** `npm run dev` applies pending `./migrations` to the dev DB (and refreshes generated types); `npm run sandbox` / `npm run deploy` apply to the sandbox / production DB before `cdk deploy`. `core` invokes the `bb-data` CLI as a **subprocess** (core must not depend on bb-data — the dependency runs the other way); the connection string is passed via the `BLOCKS_MIGRATE_URL` env var, never argv.
 - **Session port:** the runner rewrites the stored runtime string to the **5432 session port** (`toSessionPortUrl`) — DDL, multi-statement file transactions, and a session-held advisory lock all need a stable session, which the 6543 transaction pooler doesn't guarantee.
