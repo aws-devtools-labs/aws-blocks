@@ -117,7 +117,9 @@ function jobsOf(yml) {
  * read the way GitHub reads them. In a script, shell comment lines are
  * dropped, then line continuations are joined. A group's
  * `needs.<job>.outputs.` is written `needs.*.outputs.`, so two jobs that read
- * the same slot output from different jobs compare equal.
+ * the same slot output from different jobs compare equal. It reads `run:`
+ * steps only: a deploy inside a composite action or a called reusable
+ * workflow is not seen.
  */
 function testVpcDeployers(dir) {
 	const found = [];
