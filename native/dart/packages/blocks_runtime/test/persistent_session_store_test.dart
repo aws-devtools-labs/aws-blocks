@@ -200,6 +200,31 @@ void main() {
       );
     });
 
+    test('a Path with a trailing slash is not sent to the path without it', () {
+      final s = store()..setCookies('a=1; Path=/admin/', requestUri: api);
+      expect(s.cookieHeaderFor(Uri.parse('https://example.com/admin/')), 'a=1');
+      expect(
+        s.cookieHeaderFor(Uri.parse('https://example.com/admin/users')),
+        'a=1',
+      );
+      expect(s.cookieHeaderFor(Uri.parse('https://example.com/admin')), isNull);
+    });
+
+    test('paths are compared in the encoded form the request is sent with', () {
+      final s = store()..setCookies('a=1; Path=/foo%2Fbar', requestUri: api);
+      expect(
+        s.cookieHeaderFor(Uri.parse('https://example.com/foo%2Fbar')),
+        'a=1',
+      );
+      expect(s.cookieHeaderFor(Uri.parse('https://example.com/foo')), isNull);
+      // `%76` is an escaped unreserved character, which `Uri` normalizes to
+      // `v`; the request goes out as `/private`, so the cookie applies.
+      final p = store()..setCookies('b=2; Path=/private', requestUri: api);
+      final normalized = Uri.parse('https://example.com/pri%76ate');
+      expect(normalized.path, '/private');
+      expect(p.cookieHeaderFor(normalized), 'b=2');
+    });
+
     test('without a Path the cookie applies to the request directory', () {
       final s = store()..setCookies('a=1', requestUri: api);
       expect(
@@ -291,6 +316,16 @@ void main() {
         s.cookieHeaderFor(Uri.parse('https://example.com/foo')),
         'a=3; a=1',
       );
+    });
+
+    test('the most specific path is listed first', () {
+      final s = store()
+        ..setCookies('a=api; Path=/aws-blocks/api', requestUri: api)
+        ..setCookies(
+          'a=root; Path=/',
+          requestUri: Uri.parse('https://example.com/other'),
+        );
+      expect(s.cookieHeaderFor(api), 'a=api; a=root');
     });
 
     test('a cookie replaces same-named cookies that match the request', () {

@@ -225,6 +225,20 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertFalse(stored.matches(URL(string: "https://example.com/foobar")!))
     }
 
+    func testTrailingSlashPathIsNotSentToPathWithoutIt() throws {
+        let stored = try cookie("auth_session=token123; Path=/admin/")
+        XCTAssertTrue(stored.matches(URL(string: "https://example.com/admin/")!))
+        XCTAssertTrue(stored.matches(URL(string: "https://example.com/admin/users")!))
+        XCTAssertFalse(stored.matches(URL(string: "https://example.com/admin")!))
+    }
+
+    func testPathIsComparedPercentEncoded() throws {
+        let plain = try cookie("a=1; Path=/private")
+        XCTAssertFalse(plain.matches(URL(string: "https://example.com/pri%76ate")!))
+        let encoded = try cookie("a=1; Path=/foo%2Fbar")
+        XCTAssertTrue(encoded.matches(URL(string: "https://example.com/foo%2Fbar")!))
+    }
+
     func testCookieWithoutPathAppliesToRequestDirectory() throws {
         let stored = try cookie("auth_session=token123")
         XCTAssertEqual(stored.path, "/aws-blocks")
@@ -290,7 +304,8 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertTrue(legacy.matches(URL(string: "http://example.com/aws-blocks/api")!))
     }
 
-    private final class InMemoryCookieItems: CookieItemStore {
+    /// Only touched under the `CookieJar` lock, or after concurrent work has finished.
+    private final class InMemoryCookieItems: CookieItemStore, @unchecked Sendable {
         var items: [String: String] = [:]
         func loadAll() -> [String: String] { items }
         func set(name: String, value: String) { items[name] = value }
@@ -334,6 +349,26 @@ final class BlocksClientTests: XCTestCase {
 
         jar.save(setCookie: "auth_session=; Max-Age=0; Path=/", requestURL: apiURL, now: now)
         XCTAssertNil(jar.cookieHeader(for: apiURL, now: now))
+    }
+
+    func testJarListsSameNamedCookiesMostSpecificPathFirst() {
+        let jar = CookieJar(items: InMemoryCookieItems())
+        // Set from a request the `/aws-blocks/api` cookie is not sent on, so it is not replaced.
+        jar.save(setCookie: "a=api; Path=/aws-blocks/api", requestURL: apiURL, now: now)
+        jar.save(setCookie: "a=root; Path=/", requestURL: URL(string: "https://example.com/other")!, now: now)
+        XCTAssertEqual(jar.cookieHeader(for: apiURL, now: now), "a=api; a=root")
+    }
+
+    func testConcurrentReplacementsLeaveOneCookie() {
+        let items = InMemoryCookieItems()
+        let jar = CookieJar(items: items)
+        let url = apiURL
+        let now = now
+        DispatchQueue.concurrentPerform(iterations: 200) { index in
+            let path = index.isMultiple(of: 2) ? "/" : "/aws-blocks"
+            jar.save(setCookie: "a=\(index); Path=\(path)", requestURL: url, now: now)
+        }
+        XCTAssertEqual(items.items.count, 1)
     }
 
     func testCorruptRecordIsNotReadAsEarlierVersionItem() {

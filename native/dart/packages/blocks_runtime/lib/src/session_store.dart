@@ -74,14 +74,20 @@ class _StoredCookie {
 
   /// Host, `Path` and `Secure` matching, following the rules the Kotlin
   /// runtime applies through Ktor's `Cookie.matches`.
+  ///
+  /// A request path matches when it equals [path] or continues past it at a
+  /// `/` (RFC 6265 section 5.1.4). [Uri.path] is the percent-encoded path —
+  /// what the request is sent with — so it is compared with [path] as is.
   bool matches(Uri uri) {
     if (host != null && host!.toLowerCase() != uri.host.toLowerCase()) {
       return false;
     }
     if (secure && uri.scheme != 'https' && uri.scheme != 'wss') return false;
     if (path == '/') return true;
-    final requestPath = _withTrailingSlash(uri.path.isEmpty ? '/' : uri.path);
-    return requestPath.startsWith(_withTrailingSlash(path));
+    final requestPath = uri.path.isEmpty ? '/' : uri.path;
+    if (requestPath == path) return true;
+    if (!requestPath.startsWith(path)) return false;
+    return path.endsWith('/') || requestPath[path.length] == '/';
   }
 
   Map<String, dynamic> toJson() => {
@@ -92,9 +98,6 @@ class _StoredCookie {
     'secure': secure,
     'expiresAt': expiresAt,
   };
-
-  static String _withTrailingSlash(String path) =>
-      path.endsWith('/') ? path : '$path/';
 }
 
 /// In-memory session store — cookies are lost when the process exits.
@@ -146,9 +149,13 @@ class InMemorySessionStore implements SessionStore {
   @override
   String? get cookieHeader => _header(_live);
 
+  /// Cookies with longer paths come first, so a server that reads the first
+  /// of several same-named cookies gets the most specific one.
   @override
-  String? cookieHeaderFor(Uri requestUri) =>
-      _header(_live.where((c) => c.matches(requestUri)));
+  String? cookieHeaderFor(Uri requestUri) => _header(
+    _live.where((c) => c.matches(requestUri)).toList()
+      ..sort((a, b) => b.path.length.compareTo(a.path.length)),
+  );
 
   @override
   void clear() => _cookies.clear();
@@ -281,10 +288,10 @@ class InMemorySessionStore implements SessionStore {
 
 /// A [SessionStore] that persists cookies via an injected [TokenStore].
 ///
-/// All cookie logic (parsing Set-Cookie, the name→value map, building the
-/// Cookie header) is platform-agnostic and lives here. Byte persistence is
-/// delegated to the [TokenStore]: the cookie map is serialized to JSON and
-/// stored under a single key.
+/// All cookie logic (parsing Set-Cookie, applying each cookie's attributes,
+/// building the Cookie header) is platform-agnostic and lives here. Byte
+/// persistence is delegated to the [TokenStore]: the cookie records are
+/// serialized as a JSON list and stored under a single key.
 ///
 /// The [SessionStore] interface is synchronous but [TokenStore] I/O is async,
 /// so an in-memory cache is the synchronous source of truth; mutations

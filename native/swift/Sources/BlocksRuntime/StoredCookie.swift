@@ -108,7 +108,8 @@ struct StoredCookie: Codable, Equatable, Sendable {
     }
 
     /// Whether this cookie belongs on a request to `url`: same host, a path under `path`, and
-    /// `https`/`wss` when `Secure`.
+    /// `https`/`wss` when `Secure`. Paths are compared in their percent-encoded form, and a request
+    /// path matches when it equals `path` or continues past it at a `/` (RFC 6265 section 5.1.4).
     func matches(_ url: URL) -> Bool {
         guard let requestHost = url.host, requestHost.caseInsensitiveCompare(host) == .orderedSame else {
             return false
@@ -118,9 +119,11 @@ struct StoredCookie: Codable, Equatable, Sendable {
             guard scheme == "https" || scheme == "wss" else { return false }
         }
         if path == "/" { return true }
-        let requestPath = StoredCookie.encodedPath(of: url)
-        return StoredCookie.withTrailingSlash(requestPath.isEmpty ? "/" : requestPath)
-            .hasPrefix(StoredCookie.withTrailingSlash(path))
+        let encodedRequestPath = StoredCookie.encodedPath(of: url)
+        let requestPath = encodedRequestPath.isEmpty ? "/" : encodedRequestPath
+        if requestPath == path { return true }
+        guard requestPath.hasPrefix(path) else { return false }
+        return path.hasSuffix("/") || requestPath.dropFirst(path.count).first == "/"
     }
 
     // MARK: - Private
@@ -137,10 +140,6 @@ struct StoredCookie: Codable, Equatable, Sendable {
 
     private static func encodedPath(of url: URL) -> String {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? url.path
-    }
-
-    private static func withTrailingSlash(_ path: String) -> String {
-        path.hasSuffix("/") ? path : path + "/"
     }
 
     private static let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]

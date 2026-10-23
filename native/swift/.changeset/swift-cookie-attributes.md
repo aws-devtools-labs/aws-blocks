@@ -11,7 +11,9 @@ under its `Path`, and, when `Secure`, only over `https`. A cookie without a `Pat
 directory of the request path that set it. `Max-Age` takes precedence over `Expires`; a cookie
 whose `Max-Age` is zero or less, or whose `Expires` has passed, is removed, and a stored cookie
 stops being sent once its expiry arrives. A new cookie replaces the same-named cookies that would be
-sent on that request.
+sent on that request. When several same-named cookies apply to a request, the one with the longest
+`Path` is listed first in the `Cookie` header. Cookie reads and updates are applied one at a time, so
+responses that arrive together leave the same cookies as if they had arrived in sequence.
 
 Each Keychain item is now keyed by `host|path|name` and holds a JSON record of the cookie and its
 attributes. Items written by earlier versions, keyed by `host|name` and holding the bare value,

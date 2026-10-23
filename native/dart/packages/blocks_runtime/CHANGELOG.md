@@ -14,8 +14,9 @@
   zero or less, or whose `Expires` has passed, is removed. Cookies are keyed by
   host, path and name rather than by name alone, and a new cookie replaces the
   same-named cookies that would be sent on that request, as in the Kotlin
-  runtime. `BlocksClient` and `OidcClient` pass the request URL to both.
-  `cookieHeader` still returns every unexpired cookie.
+  runtime. `cookieHeaderFor` lists the cookie with the longest `Path` first
+  when several same-named cookies apply. `BlocksClient` and `OidcClient` pass
+  the request URL to both. `cookieHeader` still returns every unexpired cookie.
 - `PersistentSessionStore` now stores a JSON list of cookie records. The
   name → value map written by earlier versions is still read: those cookies
   keep `Path=/`, no `Secure` and no expiry, as before, until the server sets
