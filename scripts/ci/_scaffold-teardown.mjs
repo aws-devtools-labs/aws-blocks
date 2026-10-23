@@ -9,11 +9,13 @@
 // scheduled Windows E2E run leaked one bucket that nothing reclaimed.
 //
 // Trade-off: no CI job deploys the RETAIN posture to AWS any more (every test
-// app deploys the sandbox preset). The rewrite also turns on the log bucket's
-// autoDeleteObjects custom resource, so this stack is not exactly the customer's
-// production stack. The RETAIN synth stays covered by
-// packages/core/src/cdk/config-registry.test.ts ("log bucket inherits the
-// production preset posture").
+// app CI deploys uses the sandbox preset). The rewrite also turns on the log
+// bucket's autoDeleteObjects custom resource, so this stack is not exactly the
+// customer's production stack, and it brings the late-access-log BucketNotEmpty
+// race that config-registry.ts notes for non-sandbox DESTROY (`npm run destroy`
+// empties the bucket and retries before giving up). The RETAIN synth stays
+// covered by packages/core/src/cdk/config-registry.test.ts ("log bucket
+// inherits the production preset posture").
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
