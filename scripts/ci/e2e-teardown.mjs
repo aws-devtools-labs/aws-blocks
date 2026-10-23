@@ -30,10 +30,11 @@
 // stack cancelled mid-create may keep reporting CREATE_IN_PROGRESS while
 // CloudFormation finishes in-flight resources before the accepted delete; that
 // is a warning.
-// A passing job whose suite left a stack (its test.after destroy returned but
-// did not delete everything) fails, after re-issuing the delete unless one is
-// already running: that destroy is product code (destroySandbox()), and this
-// is the job that tests it. A stack listed mid-delete gets the budget to go.
+// A passing job whose suite left a stack gets a warning and, unless one is
+// running, a new delete. With E2E_TEARDOWN_STRICT set (a job whose suite
+// destroy is product code, e.g. destroySandbox(); ignored with
+// BLOCKS_SANDBOX_KEEP) it fails instead, and a stack listed mid-delete gets
+// the budget to go first.
 //
 // With BLOCKS_SANDBOX_KEEP set the suite keeps its stacks on purpose, so this
 // step is the job's teardown: the job no longer waits ~12-22 minutes for the
@@ -41,7 +42,7 @@
 // not yet gone go to the `stacks` step output (space-separated) for that job.
 //
 // Env: JOB_STATUS (`job.status`), BLOCKS_STACK_SUFFIX (the job's, optional),
-// BLOCKS_SANDBOX_KEEP, GITHUB_OUTPUT,
+// BLOCKS_SANDBOX_KEEP, E2E_TEARDOWN_STRICT, GITHUB_OUTPUT,
 // E2E_TEARDOWN_BUDGET_SECONDS (default 85: with the calls a deadline lets
 // finish, under the step's 2-minute timeout).
 
@@ -93,6 +94,7 @@ if (!appDir) {
 const jobStatus = process.env.JOB_STATUS || 'unknown';
 const suffix = process.env.BLOCKS_STACK_SUFFIX || '';
 const kept = Boolean(process.env.BLOCKS_SANDBOX_KEEP);
+const strict = Boolean(process.env.E2E_TEARDOWN_STRICT) && !kept;
 const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 85) * 1000;
 const pollMs = Number(process.env.E2E_TEARDOWN_POLL_MS ?? 10_000);
 
@@ -198,7 +200,7 @@ async function main() {
 		// A passing suite's destroy waits for its delete, so a stack still listed
 		// mid-delete is most likely a lagging list: wait for it to go before
 		// calling it left behind.
-		const settle = !kept && jobStatus === 'success' && was === 'DELETE_IN_PROGRESS';
+		const settle = strict && jobStatus === 'success' && was === 'DELETE_IN_PROGRESS';
 		let now = statusOf(name);
 		while (now !== 'gone' && (settle || now !== 'DELETE_IN_PROGRESS') && Date.now() + pollMs < Math.min(until, deadline)) {
 			await sleep(pollMs);
@@ -225,12 +227,13 @@ async function main() {
 			continue;
 		}
 		const what = was === 'DELETE_IN_PROGRESS' ? `${name} is still being deleted` : `Deleting ${name}`;
-		if (jobStatus === 'success') {
+		if (strict && jobStatus === 'success') {
 			error(`${what}: the tests passed but the suite's own destroy left it ${was} (now ${now}).`);
 			failed = true;
 			continue;
 		}
-		warning(`${what}: this ${jobStatus} job left it ${was} (now ${now}).`);
+		const why = jobStatus === 'success' ? "the tests passed but the suite's own destroy left it" : `this ${jobStatus} job left it`;
+		warning(`${what}: ${why} ${was} (now ${now}).`);
 	}
 	return failed ? 1 : 0;
 }
