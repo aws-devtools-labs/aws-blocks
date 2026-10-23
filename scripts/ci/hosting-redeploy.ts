@@ -32,13 +32,28 @@ const hostingUrl = (): string => {
   if (!raw) throw new Error(`HostingHostingUrl* missing from outputs: ${JSON.stringify(stackOutputs)}`);
   return (raw.startsWith('http') ? raw : `https://${raw}`).replace(/\/$/, '');
 };
+/** A fetch that answers `undefined` on a network error (a reset socket right after an update), never throws. */
+const tryFetch = async (url: string, init?: RequestInit): Promise<Response | undefined> => {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return undefined;
+  }
+};
 const buildIdAt = async (url: string): Promise<string | undefined> => {
-  const res = await fetch(`${url}/.blocks-sandbox/config.json?__redeploy=${Date.now()}`);
-  if (res.status !== 200) return undefined;
+  const res = await tryFetch(`${url}/.blocks-sandbox/config.json?__redeploy=${Date.now()}`);
+  if (res?.status !== 200) return undefined;
   return ((await res.json()) as { __blocksBuildId?: string }).__blocksBuildId;
 };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const before = await buildIdAt(hostingUrl());
+// The build the suite left serving (retried: the load balancer can reset a connection while it settles).
+let before: string | undefined;
+for (let attempt = 1; attempt <= 10 && before === undefined; attempt++) {
+  before = await buildIdAt(hostingUrl());
+  if (before === undefined) await sleep(6000);
+}
+if (before === undefined) throw new Error('could not read the build id the e2e suite left serving');
 process.chdir(appDir);
 const { startSandbox } = await import('@aws-blocks/blocks/scripts');
 await startSandbox({ backendPath: join(appDir, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
@@ -48,18 +63,18 @@ let last = 'no response';
 let ok = false;
 for (let attempt = 1; attempt <= 20 && !ok; attempt++) {
   const buildId = await buildIdAt(url);
-  const home = await fetch(`${url}/?__redeploy=${Date.now()}`);
-  const html = await home.text();
+  const home = await tryFetch(`${url}/?__redeploy=${Date.now()}`);
+  const html = home ? await home.text() : '';
   const script = html.match(/\/assets\/[^"']+\.js/)?.[0];
-  const asset = script ? await fetch(`${url}${script}`) : undefined;
-  const rpc = await fetch(`${url}/aws-blocks/api`, {
+  const asset = script ? await tryFetch(`${url}${script}`) : undefined;
+  const rpc = await tryFetch(`${url}/aws-blocks/api`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'api.getPublicStats', params: [] }),
   });
-  ok = buildId !== undefined && buildId !== before && home.status === 200 && asset?.status === 200 && rpc.status === 200;
-  last = `build ${before} → ${buildId}, / ${home.status}, ${script ?? 'no script'} ${asset?.status ?? '-'}, rpc ${rpc.status}`;
-  if (!ok) await new Promise((r) => setTimeout(r, 6000));
+  ok = buildId !== undefined && buildId !== before && home?.status === 200 && asset?.status === 200 && rpc?.status === 200;
+  last = `build ${before} → ${buildId}, / ${home?.status ?? 'no response'}, ${script ?? 'no script'} ${asset?.status ?? '-'}, rpc ${rpc?.status ?? 'no response'}`;
+  if (!ok) await sleep(6000);
 }
 if (!ok) throw new Error(`redeploy did not serve the new build: ${last}`);
 console.log(`✅ redeploy served the new build (${last})`);
