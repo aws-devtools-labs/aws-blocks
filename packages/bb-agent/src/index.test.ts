@@ -542,6 +542,21 @@ describe('conversation ownership on write paths', () => {
 		);
 	});
 
+	test('resume() rejects an invalid tool context before persisting any approval', async () => {
+		const agent = new Agent(new Scope('test-own-resume-ctx'), 'ctx', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			toolContextSchema: z.object({ tenant: z.string() }),
+		});
+		const convId = await agent.createConversationId(ownerId);
+		await assert.rejects(
+			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: ownerId }),
+			(err: any) => err.name === AgentErrors.InvalidModelConfig,
+		);
+		const history = await agent.getConversation(convId, ownerId);
+		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
+	});
+
 	test('resume() rejects an unscopable userId before persisting any approval', async () => {
 		const { agent } = approvalAgent('test-own-resume-unscopable');
 		const loneSurrogate = String.fromCharCode(0xd800);
@@ -4115,6 +4130,23 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.ok((sent[0].runtimeSessionId ?? '').length >= 33, 'AgentCore needs a session id of at least 33 characters');
 		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[0].payload)).conversationId, undefined);
 		assert.strictEqual(sent[1].runtimeSessionId, ownerConv, 'a conversation keeps routing to its own session');
+	});
+
+	test('the session id of a conversation-less turn never throws and keeps (userId, channelId) pairs apart', async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session-io'), 'acsio', { systemPrompt: 'test', inferenceOnly: true });
+		const sent: Array<{ runtimeSessionId?: string }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: String.fromCharCode(0xd800) });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a/b' });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'b/c', userId: 'a' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^[0-9a-f]{64}$/);
+		assert.notStrictEqual(sent[1].runtimeSessionId, sent[2].runtimeSessionId);
 	});
 
 	test('the AgentCore entry does not turn the session id into a conversationId', async () => {

@@ -19,7 +19,8 @@ import { BedrockModels } from './models.js';
  * AgentCore requires a `runtimeSessionId` of at least 33 characters. Conversation/channel ids
  * are UUIDs (36 chars) in the normal path and pass through unchanged; anything shorter is hashed
  * to a stable 64-char hex id — stable per input, so a conversation keeps routing to one warm
- * microVM across turns/resumes.
+ * microVM across turns/resumes. Only conversation ids reach it now: a turn without a
+ * conversation is hashed from its user and channel (see {@link runtimeSessionIdFor}).
  */
 function toRuntimeSessionId(base: string): string {
 	return base.length >= 33 ? base : createHash('sha256').update(base).digest('hex');
@@ -86,7 +87,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	 * and responds immediately, so this `InvokeAgentRuntime` call does NOT hold the connection for
 	 * the turn's duration — the loop keeps running server-side for up to the 8h session lifetime.
 	 * `runtimeSessionId` is keyed by conversationId so a conversation's turns/resumes reuse one
-	 * warm microVM.
+	 * warm microVM; a turn without a conversation gets its own session (see runtimeSessionIdFor).
 	 *
 	 * @internal Internal compute seam; not customer API.
 	 */
