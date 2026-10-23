@@ -141,6 +141,10 @@ test.before(async () => {
 });
 
 test.after(async (t) => {
+  // Children started by the background suites test must not outlive the
+  // server or stack they call (see BackgroundSuites.settle()).
+  await background.settle();
+
   if (server) {
     console.log('\n🛑 Stopping local server...');
     // Kill the entire process group (npm + tsx grandchild)
@@ -247,7 +251,8 @@ test('AuthBasic - full purge clears every code record and leaves other keys alon
 // succeeds if its own /token call lands on the issuing instance again. Serial
 // traffic happens to route it back there; the background suites' load breaks
 // that routing and the bearer refresh test fails. The stub IdP itself needs
-// self-contained refresh tokens to fix this.
+// self-contained refresh tokens to fix this: see
+// https://github.com/aws-devtools-labs/aws-blocks/issues/988.
 oidcAuthTests(() => api);
 
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
