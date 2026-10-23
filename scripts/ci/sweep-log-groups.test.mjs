@@ -265,8 +265,9 @@ describe('log-group sweep step', () => {
 	});
 
 	it('starts the time budget after the listings, so a slow listing still leaves time to delete', () => {
-		const dir = fixture({ 'log-groups.tsv': group('/aws/lambda/bb-test-a-Fn-1', 30), 'list-delay': '2' });
-		const r = run(dir, { LOG_GROUP_SWEEP_BUDGET_SECONDS: '1' });
+		// Bash SECONDS counts whole seconds, so a budget of N is N-1 to N seconds: 2 keeps a margin.
+		const dir = fixture({ 'log-groups.tsv': group('/aws/lambda/bb-test-a-Fn-1', 30), 'list-delay': '3' });
+		const r = run(dir, { LOG_GROUP_SWEEP_BUDGET_SECONDS: '2' });
 		assert.equal(r.status, 0, r.stderr);
 		assert.deepEqual(r.deleted, ['/aws/lambda/bb-test-a-Fn-1']);
 	});
