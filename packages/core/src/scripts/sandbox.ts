@@ -635,6 +635,7 @@ export function buildSandboxDestroyArgs(backendPath: string, platform: NodeJS.Pl
 /**
  * Resolve the sandbox app's stack names via `cdk ls` (best-effort; [] on error).
  *
+ * @throws if `backendPath` cannot be quoted for the shell (see {@link quoteCdkAppPath}).
  * @internal Exported for tests.
  */
 export function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): string[] {
