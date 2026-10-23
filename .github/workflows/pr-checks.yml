@@ -869,24 +869,28 @@ jobs:
     environment: e2e
     strategy:
       fail-fast: false
-      # teardown-delay (seconds) spreads the legs' stack deletes. All nine run
-      # in one account, which allows one REST API delete every 30 seconds;
-      # spa, astro, astro-default404, sveltekit and nuxt otherwise start
-      # deleting within about two minutes of each other, and CloudFormation
-      # marks the stack DELETE_FAILED when it can't delete a REST API within
-      # about 4.5 minutes. Only legs that usually finish well before the
-      # slowest E2E job of the run (usually E2E Production or E2E Compute
-      # Smoke) get a delay, and a leg that has already run 30 minutes skips
-      # it. Replayed over 23 recent runs, these values about halve the time
-      # the matrix's deletes wait on each other, and in none of those runs do
-      # they move the end of the slowest E2E job. Keep 0 for a leg that is
-      # often the run's slowest.
+      # teardown-at (seconds from the job's start; the legs start together)
+      # spreads the legs' stack deletes. All nine run in one account, which
+      # allows one REST API delete every 30 seconds; spa, astro,
+      # astro-default404, sveltekit and nuxt otherwise start deleting within
+      # about two minutes of each other, and CloudFormation marks the stack
+      # DELETE_FAILED when it can't delete a REST API within about 4.5
+      # minutes. A leg that is done sooner waits for its slot; a later one
+      # doesn't wait. Re-derive the values with
+      # scripts/ci/hosting-teardown-replay.mjs, which replays recent runs'
+      # deletes through the quota (its header lists the inputs and what the
+      # model leaves out, such as other jobs' deletes). Over the 23 runs it
+      # lists, they cut the modeled time the matrix's deletes wait on each
+      # other by 60% (42-44% for values searched on half the runs and
+      # checked on the other half), cost about 17 runner-minutes per run,
+      # and in none of those full runs move the end of the slowest E2E job
+      # (usually E2E Production or E2E Compute Smoke).
       matrix:
         include:
           - framework: spa
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
-            teardown-delay: 240
+            teardown-at: 960
           # The same SPA suite behind the regional ALB door (HOSTING_FRONT_DOOR),
           # then a redeploy of the kept sandbox. The other built-in doors are
           # covered by template tests and run as follow-up lanes.
@@ -897,36 +901,39 @@ jobs:
           - framework: nextjs
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
-            teardown-delay: 150
+            teardown-at: 1200
           - framework: nuxt
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
-            teardown-delay: 240
+            teardown-at: 750
           - framework: astro
             app-dir: test-apps/hosting-ssr-astro
             script: test:e2e:hosting-ssr-astro
-            teardown-delay: 180
           - framework: astro-default404
             app-dir: test-apps/hosting-ssr-astro-default404
             script: test:e2e:hosting-ssr-astro-default404
+            teardown-at: 480
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+            teardown-at: 660
           # Same suite with the SSR server on AWS Lambda Web Functions
           # (compute.type: 'web-function'); the app reads HOSTING_COMPUTE_TYPE.
           - framework: sveltekit-web-function
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
             compute-type: web-function
+            teardown-at: 690
           - framework: nextjs-web-function
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
             compute-type: web-function
+            teardown-at: 990
           - framework: nuxt-web-function
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
             compute-type: web-function
-            teardown-delay: 240
+            teardown-at: 780
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
@@ -942,7 +949,7 @@ jobs:
           echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
           exit 1
 
-      # For Destroy sandbox, which skips its delay on a leg that is already slow.
+      # For Destroy sandbox, which waits for this leg's teardown-at.
       - name: Record the job start
         run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
 
@@ -989,27 +996,27 @@ jobs:
         run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
 
       # Runs whenever the suite ran, passed or failed, like the suite's own
-      # afterAll destroy did. A failed destroy fails a lambda job, as it did
-      # from the afterAll; Web Function jobs only report it (before, only
-      # Cleanup sandbox destroyed theirs, and ignored a failure). It waits this
-      # leg's teardown-delay first (see the matrix), but only when every step
-      # so far passed and the job has run less than 30 minutes. Cleanup sandbox
-      # retries either way.
+      # afterAll destroy did, and a failed destroy fails the job, as it did
+      # from the afterAll (Web Function legs too; before, only Cleanup sandbox
+      # destroyed theirs, and ignored a failure). When every step so far
+      # passed, it first waits until this leg's teardown-at (see the matrix).
+      # Cleanup sandbox retries when this step didn't succeed.
       - name: Destroy sandbox
+        id: destroy
         if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
-        continue-on-error: ${{ matrix.compute-type == 'web-function' }}
         env:
-          TEARDOWN_DELAY: ${{ job.status == 'success' && matrix.teardown-delay || 0 }}
+          TEARDOWN_AT: ${{ job.status == 'success' && matrix.teardown-at || 0 }}
         run: |
-          if (( TEARDOWN_DELAY > 0 && $(date +%s) - JOB_STARTED_AT < 1800 )); then
-            echo "Waiting ${TEARDOWN_DELAY}s to spread the matrix's stack deletes"
-            sleep "$TEARDOWN_DELAY"
+          secs=$(( TEARDOWN_AT - ($(date +%s) - JOB_STARTED_AT) ))
+          if (( secs > 0 )); then
+            echo "Waiting ${secs}s to spread the matrix's stack deletes"
+            sleep "$secs"
           fi
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
