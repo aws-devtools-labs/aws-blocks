@@ -20,6 +20,8 @@
 # Tests: node --test scripts/ci/rest-api-quota.test.mjs
 
 set -euo pipefail
+# shellcheck source=scripts/ci/aws-error.sh
+. "$(dirname "${BASH_SOURCE[0]}")/aws-error.sh"
 
 cap=120
 warn=${REST_API_EDGE_WARN:-80}
@@ -40,10 +42,7 @@ if apis=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws apigateway get-rest-api
 	exit 0
 fi
 
-# The CLI's error starts with a blank line, so take the first non-blank one.
-# Account ids are masked: the log of a public repository is public.
-reason=$(grep -m 1 -v '^[[:space:]]*$' "$err" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
-reason=${reason:-no error output}
-echo "::error::could not count REST APIs, so the EDGE quota ($cap) is unchecked: ${reason//%/%25}"
-echo "- REST APIs remaining: unknown, the listing failed: $reason" | tee -a "$summary"
+# The reason has account ids masked: the log of a public repository is public.
+aws_annotate error "$err" "could not count REST APIs, so the EDGE quota ($cap) is unchecked"
+echo "- REST APIs remaining: unknown, the listing failed: $(aws_error_reason "$err")" | tee -a "$summary"
 exit 1

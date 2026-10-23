@@ -18,11 +18,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # One cleanup leg per E2E account (count from .github/actions/e2e-slot), plus
-  # publish. publish still holds stacks from runs before the move, and the agent
-  # bench deploys there until #878 merges. Drop publish only after #878 has
-  # merged and the publish leg has reported zero candidates (stacks, REST APIs,
-  # IAM roles) for several scheduled runs in a row.
+  # One cleanup leg per E2E account (count from .github/actions/e2e-slot). There
+  # is no publish leg any more: no E2E job has deployed to publish since #878,
+  # and its role can't list REST APIs or IAM roles, so that leg could only fail
+  # (or, before, pass while counting nothing). The stacks left there from
+  # before the move are cleaned up by hand, once.
   legs:
     runs-on: ubuntu-latest
     outputs:
@@ -40,7 +40,7 @@ jobs:
           ACCOUNTS: ${{ steps.e2e-slot.outputs.accounts }}
         run: |
           matrix=$(jq -cn --argjson n "$ACCOUNTS" \
-            '[range($n) | {name: "e2e account \(. + 1)", environment: "e2e", index: .}] + [{name: "publish", environment: "publish"}]')
+            '[range($n) | {name: "e2e account \(. + 1)", environment: "e2e", index: .}]')
           echo "$matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,8 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
-      # Every leg: the REST API sweep runs scripts/ci/rest-api-quota.sh.
+      # The steps below source scripts/ci/aws-error.sh, and the REST API sweep
+      # runs scripts/ci/rest-api-quota.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
@@ -64,7 +65,6 @@ jobs:
           persist-credentials: false
 
       - name: Configure AWS credentials (E2E account)
-        if: matrix.environment == 'e2e'
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -72,19 +72,13 @@ jobs:
           # Fails the leg if AWS_ROLE_ARNS and the pool size have drifted apart.
           accounts: ${{ needs.legs.outputs.accounts }}
 
-      - name: Configure AWS credentials (publish)
-        if: matrix.environment == 'publish'
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
       - name: Find and delete stale e2e stacks
         run: |
           # errexit + pipefail: a failure anywhere in a pipe (e.g. an aws call on the
           # LEFT of `| jq`) is caught, not masked by the exit status of the last stage
           # — which is what the `|| echo ""` guards throughout this block rely on.
           set -eo pipefail
+          . scripts/ci/aws-error.sh
           CUTOFF=$(date -d '2 hours ago' +%s)
           # Only run the destructive --retain-resources retry against stacks that
           # have been proven stuck, not transiently throttled: a DELETE_FAILED that
@@ -236,17 +230,23 @@ jobs:
           }
 
           # Get all e2e stacks in deletable states across all name patterns.
-          # Guard each list-stacks (|| echo "") so a transient throttle/creds hiccup
-          # on any one prefix can't make the substitution non-zero and abort this
-          # best-effort step under errexit — it just contributes no stacks that pass.
+          # Guard each list-stacks so a transient throttle/creds hiccup on any one
+          # prefix can't abort this best-effort step under errexit; it just
+          # contributes no stacks that pass. The failure is a warning with the
+          # CLI's reason, so a denial doesn't read as "no stacks".
           STACKS=""
+          LIST_ERR=$(mktemp)
           for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke- my-app-; do
-            BATCH=$(aws cloudformation list-stacks \
+            if ! BATCH=$(aws cloudformation list-stacks \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE ROLLBACK_FAILED REVIEW_IN_PROGRESS \
               --query "StackSummaries[?starts_with(StackName, '${PREFIX}')].StackName" \
-              --output text 2>/dev/null || echo "")
+              --output text 2>"$LIST_ERR"); then
+              aws_annotate warning "$LIST_ERR" "list-stacks failed for ${PREFIX}* stacks, so they are not swept this run"
+              BATCH=""
+            fi
             STACKS="$STACKS $BATCH"
           done
+          rm -f "$LIST_ERR"
 
           for STACK in $STACKS; do
             # Stop if we've spent the time budget; remaining stacks are picked up
@@ -380,6 +380,7 @@ jobs:
         run: |
           # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
           set -eo pipefail
+          . scripts/ci/aws-error.sh
           # Amplify Gen2 e2e/interop sandboxes are named amplify-amplifygen2-* and
           # amplify-amplifyinteroptest-* and tagged amplify:deployment-type=sandbox.
           # They are NOT covered by the prefix/tag rules above, so they accumulate
@@ -442,10 +443,18 @@ jobs:
           # The middle identifier segment is matched loosely ([a-z0-9]+) so a future change to
           # Amplify's sandbox naming doesn't silently exclude stacks; the deployment-type tag
           # check below is the real safety gate before any delete.
-          STACKS=$(aws cloudformation list-stacks \
+          # A failed listing is a warning with the CLI's reason, not "no sandboxes".
+          LIST_ERR=$(mktemp)
+          if LISTED=$(aws cloudformation list-stacks \
             --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE ROLLBACK_COMPLETE DELETE_FAILED UPDATE_ROLLBACK_COMPLETE ROLLBACK_FAILED REVIEW_IN_PROGRESS \
             --query "StackSummaries[?starts_with(StackName, 'amplify-amplifygen2-') || starts_with(StackName, 'amplify-amplifyinteroptest-')].StackName" \
-            --output text | tr '\t' '\n' | grep -E '^amplify-(amplifygen2|amplifyinteroptest)-[a-z0-9]+-sandbox-[0-9a-f]+$' || true)
+            --output text 2>"$LIST_ERR"); then
+            STACKS=$(echo "$LISTED" | tr '\t' '\n' | grep -E '^amplify-(amplifygen2|amplifyinteroptest)-[a-z0-9]+-sandbox-[0-9a-f]+$' || true)
+          else
+            aws_annotate warning "$LIST_ERR" "list-stacks failed, so no Amplify sandbox is swept this run"
+            STACKS=""
+          fi
+          rm -f "$LIST_ERR"
 
           for STACK in $STACKS; do
             # Stop if we've spent the time budget; remaining stacks are picked up on
@@ -536,6 +545,7 @@ jobs:
         run: |
           # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
           set -eo pipefail
+          . scripts/ci/aws-error.sh
           # The EDGE REST-API count is the hard quota (120 per region) that reds the
           # deploy-dependent E2E lanes when it saturates. A REST API becomes a
           # stack-less orphan two ways: a stack's delete retained it (the
@@ -571,10 +581,12 @@ jobs:
           OWNERSHIP_INCOMPLETE=0
           # The same fail-safe covers the stack listing itself: if it fails, no
           # stack is known to own anything, so nothing may be deleted this run.
+          # That is a warning with the CLI's reason, so a persistent denial shows.
+          LIST_ERR=$(mktemp)
           if ! LIVE_STACKS=$(aws cloudformation list-stacks \
             --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
-            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u); then
-            echo "  list-stacks failed, so the ownership set is incomplete this run"
+            --query "StackSummaries[].StackName" --output text 2>"$LIST_ERR" | tr '\t' '\n' | sort -u); then
+            aws_annotate warning "$LIST_ERR" "list-stacks failed, so the ownership set is incomplete and no REST API is deleted this run"
             LIVE_STACKS=""
             OWNERSHIP_INCOMPLETE=1
           fi
@@ -600,17 +612,13 @@ jobs:
           # Surface a failed listing instead of reading it as "no APIs": a silent
           # failure here hid both the orphan sweep and the EDGE-quota warning
           # below while the account filled up. It fails the step once the
-          # summary has printed. The CLI's error starts with a blank line, so
-          # take the first non-blank one, with account ids masked (public log).
-          # More attempts than the CLI default, so one throttled call doesn't
-          # fail the leg.
+          # summary has printed. aws_annotate prints the CLI's reason with
+          # account ids masked (public log). More attempts than the CLI
+          # default, so one throttled call doesn't fail the leg.
           LIST_FAILED=0
-          LIST_ERR=$(mktemp)
           if ! APIS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws apigateway get-rest-apis \
             --query "items[].[id,name,createdDate]" --output text 2>"$LIST_ERR"); then
-            REASON=$(grep -m 1 -v '^[[:space:]]*$' "$LIST_ERR" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
-            REASON=${REASON:-no error output}
-            echo "::error::apigateway get-rest-apis failed, orphaned REST APIs were not swept: ${REASON//%/%25}"
+            aws_annotate error "$LIST_ERR" "apigateway get-rest-apis failed, orphaned REST APIs were not swept"
             APIS=""
             LIST_FAILED=1
           fi
@@ -747,6 +755,7 @@ jobs:
         run: |
           # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
           set -eo pipefail
+          . scripts/ci/aws-error.sh
           # CDK's RestApi defaults `cloudWatchRole: true` with
           # `cloudWatchRoleRemovalPolicy: RETAIN`, so every destroyed stack that
           # carried one left its `*CloudWatchRole*` IAM role behind, owned by no
@@ -773,6 +782,13 @@ jobs:
           # set or reading the account setting sets OWNERSHIP_INCOMPLETE, and then
           # nothing is deleted this run (the next scheduled run retries).
           OWNERSHIP_INCOMPLETE=0
+          # A region or role listing that fails is an error with the CLI's reason,
+          # and fails the step once the summary has printed: without it nothing
+          # is swept and the role count against the quota is unknown. The two
+          # calls retry more than the CLI default, so one throttled call doesn't
+          # fail the leg. The per-region reads below are warnings.
+          LIST_FAILED=0
+          LIST_ERR=$(mktemp)
 
           # (d) Ownership set: PhysicalResourceId of every AWS::IAM::Role owned by a
           # live stack in ANY region — IAM is account-global, so a stack in another
@@ -783,8 +799,10 @@ jobs:
           # list-stacks and the listing still resolves by ID (its roles just read
           # as owned this run and are swept on the next), whereas a lookup by name
           # errors and would block the whole sweep on a busy account.
-          if ! REGIONS=$(aws ec2 describe-regions --query 'Regions[].RegionName' --output text 2>/dev/null); then
-            echo "  ⚠️ describe-regions failed — ownership set is incomplete this run"
+          if ! REGIONS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws ec2 describe-regions \
+            --query 'Regions[].RegionName' --output text 2>"$LIST_ERR"); then
+            aws_annotate error "$LIST_ERR" "ec2 describe-regions failed, so no CloudWatch role is swept this run"
+            LIST_FAILED=1
             OWNERSHIP_INCOMPLETE=1
             REGIONS=""
           fi
@@ -792,8 +810,8 @@ jobs:
           for R in $REGIONS; do
             if ! LIVE_STACKS=$(aws cloudformation list-stacks --region "$R" \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS DELETE_FAILED UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE CREATE_FAILED ROLLBACK_FAILED UPDATE_ROLLBACK_FAILED \
-              --query "StackSummaries[].StackId" --output text 2>/dev/null); then
-              echo "  ⚠️ list-stacks failed in $R — ownership set is incomplete this run"
+              --query "StackSummaries[].StackId" --output text 2>"$LIST_ERR"); then
+              aws_annotate warning "$LIST_ERR" "list-stacks failed in $R, so the ownership set is incomplete this run"
               OWNERSHIP_INCOMPLETE=1
               continue
             fi
@@ -827,10 +845,10 @@ jobs:
           # a FAILED read is not — we can't prove the role is unreferenced.
           ACCOUNT_ROLES=""
           for R in $REGIONS; do
-            if ARN=$(aws apigateway get-account --region "$R" --query cloudwatchRoleArn --output text 2>/dev/null); then
+            if ARN=$(aws apigateway get-account --region "$R" --query cloudwatchRoleArn --output text 2>"$LIST_ERR"); then
               [ -n "$ARN" ] && [ "$ARN" != "None" ] && ACCOUNT_ROLES="$ACCOUNT_ROLES"$'\n'"${ARN##*/}"
             else
-              echo "  ⚠️ apigateway get-account failed in $R — cannot verify the active CloudWatch role"
+              aws_annotate warning "$LIST_ERR" "apigateway get-account failed in $R, so the active CloudWatch role is unknown"
               OWNERSHIP_INCOMPLETE=1
             fi
           done
@@ -839,11 +857,15 @@ jobs:
           # principal exactly apigateway.amazonaws.com, and created before the cutoff.
           # The listing is kept so the summary can count roles without a second scan.
           CUTOFF_ISO=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%S)
-          if ! ROLES_JSON=$(aws iam list-roles --output json 2>/dev/null); then
-            echo "  ⚠️ iam list-roles failed — nothing to sweep this run"
+          ROLES_LISTED=1
+          if ! ROLES_JSON=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws iam list-roles --output json 2>"$LIST_ERR"); then
+            aws_annotate error "$LIST_ERR" "iam list-roles failed, so no CloudWatch role is swept and the role count is unknown"
+            LIST_FAILED=1
+            ROLES_LISTED=0
             ROLES_JSON='{"Roles":[]}'
             OWNERSHIP_INCOMPLETE=1
           fi
+          rm -f "$LIST_ERR"
           CANDIDATES=$(echo "$ROLES_JSON" | jq -r --arg cutoff "$CUTOFF_ISO" '
             .Roles[]
             | select(.RoleName | test("^(blocks-test-|blocks-hosting-|bb-test-|bb-telemetry-|bb-vpc-smoke-|my-app-)"))
@@ -904,10 +926,10 @@ jobs:
 
           # Count from the listing above (jq on the merged pages — a JMESPath
           # length() would be applied per page by the CLI paginator).
-          if [ "$(echo "$ROLES_JSON" | jq '.Roles | length')" -gt 0 ]; then
+          if [ "$ROLES_LISTED" -eq 1 ]; then
             TOTAL=$(( $(echo "$ROLES_JSON" | jq '.Roles | length') - DELETED ))
           else
-            TOTAL="?"
+            TOTAL="unknown, the listing failed"
           fi
 
           echo ""
@@ -918,8 +940,14 @@ jobs:
           echo "- Failed (will retry next run): $FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Deferred to next run (incomplete ownership set or 15-min budget): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- IAM roles in account: $TOTAL (quota 3000)" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$TOTAL" != "?" ] && [ "$TOTAL" -ge 2700 ] 2>/dev/null; then
+          if [ "$ROLES_LISTED" -eq 1 ] && [ "$TOTAL" -ge 2700 ]; then
             echo "::warning::$TOTAL/3000 IAM roles in use — approaching the RolesPerAccount quota"
+          fi
+          if [ "$DEFERRED" -gt 0 ]; then
+            echo "::warning::IAM role sweep deferred $DEFERRED candidate(s) to the next scheduled run (incomplete ownership set or 15-min budget)"
+          fi
+          if [ "$LIST_FAILED" -ne 0 ]; then
+            exit 1
           fi
 
       - name: Cleanup orphaned CloudFront Response Headers Policies
@@ -927,11 +955,19 @@ jobs:
         run: |
           # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
           set -eo pipefail
+          . scripts/ci/aws-error.sh
           echo "🔍 Checking for orphaned CloudFront Response Headers Policies..."
-          POLICIES=$(aws cloudfront list-response-headers-policies \
+          # A failed listing is a warning with the CLI's reason, not "none found".
+          LIST_ERR=$(mktemp)
+          if ! POLICIES=$(aws cloudfront list-response-headers-policies \
             --type custom \
             --query "ResponseHeadersPolicyList.Items[*].[ResponseHeadersPolicy.Id,ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name]" \
-            --output text 2>/dev/null || echo "")
+            --output text 2>"$LIST_ERR"); then
+            aws_annotate warning "$LIST_ERR" "cloudfront list-response-headers-policies failed, so no policy is swept this run"
+            rm -f "$LIST_ERR"
+            exit 0
+          fi
+          rm -f "$LIST_ERR"
 
           if [ -z "$POLICIES" ]; then
             echo "✅ No custom Response Headers Policies found"
