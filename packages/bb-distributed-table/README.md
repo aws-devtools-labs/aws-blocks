@@ -71,7 +71,7 @@ const settings = new DistributedTable(scope, 'settings', {
 await settings.get({ settingId: 'theme' });
 ```
 
-**Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. `query()` on an index and `scan()` stay eventually consistent.
+**Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. On AWS every other read (`getBatch()`, `query()`, `scan()`) stays eventually consistent.
 
 ```typescript
 // Sees a put() that has just completed, on AWS as well as locally

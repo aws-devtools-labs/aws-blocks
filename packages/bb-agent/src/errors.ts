@@ -29,7 +29,7 @@ export const AgentErrors = {
 	InterruptRequired: 'InterruptRequiredException',
 	/** The conversation does not exist or does not belong to the calling user. */
 	ConversationNotFound: 'ConversationNotFoundException',
-	/** A client-side usage precondition was violated (e.g. subscribe() with no channel). */
+	/** A usage precondition was violated (e.g. subscribe() with no channel, or a server method called without the caller's userId). */
 	InvalidUsage: 'InvalidUsageException',
 } as const;
 
