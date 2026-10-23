@@ -58,7 +58,7 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<CreateItemResult> createItem() async {
-    final result = await _client.call('api.createItem', <String, dynamic>{});
+    final result = await _client.call('api.createItem', const <dynamic>[]);
     return CreateItemResult.fromJson(result as Map<String, dynamic>);
   }
 }

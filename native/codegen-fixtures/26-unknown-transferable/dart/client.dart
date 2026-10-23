@@ -55,17 +55,17 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<UnknownTransferable> getDeviceHandle({required String deviceId}) async {
-    final params = <String, dynamic>{
-      'deviceId': deviceId,
-    };
+    final params = <dynamic>[
+      deviceId,
+    ];
     final result = await _client.call('api.getDeviceHandle', params);
     return UnknownTransferable.fromJson(result, expectedTag: 'example-iot/device-handle');
   }
 
   Future<UnknownTransferable> connectDevice({required String deviceId}) async {
-    final params = <String, dynamic>{
-      'deviceId': deviceId,
-    };
+    final params = <dynamic>[
+      deviceId,
+    ];
     final result = await _client.call('api.connectDevice', params);
     return UnknownTransferable.fromJson(result, expectedTag: 'example-iot/device-link');
   }
