@@ -113,9 +113,16 @@ public final class BlocksClient: Sendable {
     /// Executes a JSON-RPC request and returns the raw JSON `Data` of the `result` field.
     /// The generated code is responsible for decoding this into typed models.
     ///
+    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+    /// `reports.build`), so a namespace that runs on its own compute is served by it.
+    ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        guard let requestURL = URL(string: url) else {
+        // Validate the base first: appending the namespace can turn an invalid base (e.g. "")
+        // into a relative URL that only fails later, as a transport error.
+        guard URL(string: url) != nil,
+              let requestURL = URL(string: BlocksClient.rpcURL(base: url, method: request.method))
+        else {
             throw RPCError(message: "Invalid URL: \(url)")
         }
 
@@ -192,6 +199,25 @@ public final class BlocksClient: Sendable {
     private var host: String {
         URL(string: url)?.host ?? "unknown"
     }
+
+    /// The URL a call to `method` is POSTed to: `{base}/{namespace}`, where the namespace is the
+    /// part of `method` before the first `.` — the path the TypeScript client uses, so the backend's
+    /// gateway can route each namespace to the compute that hosts it. The body still carries the
+    /// full `namespace.method`, which is what the server dispatches on. A `method` without a
+    /// namespace goes to `base` unchanged.
+    static func rpcURL(base: String, method: String) -> String {
+        guard let dot = method.firstIndex(of: "."), dot != method.startIndex else { return base }
+        let namespace = String(method[..<dot])
+        let segment = namespace.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? namespace
+        var trimmed = Substring(base)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return "\(trimmed)/\(segment)"
+    }
+
+    /// Characters allowed in a single path segment: a path's characters, without its `/` separator.
+    private static let pathSegmentAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
 
     /// Base URL for raw routes — strips the RPC path suffix but keeps the stage prefix.
     /// Base URL for raw routes. Raw routes share the same origin and stage

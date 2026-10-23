@@ -5,7 +5,69 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime/src/user_agent.dart';
 import 'package:test/test.dart';
 
+/// The URL `client.call(method, …)` POSTs to, for a client built on [baseUrl].
+Future<String> _requestedUrl(String baseUrl, String method) async {
+  Uri? requested;
+  final mockClient = MockClient((req) async {
+    requested = req.url;
+    return http.Response(
+      jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+      200,
+    );
+  });
+  await BlocksClient(baseUrl: baseUrl, client: mockClient).call(method, {});
+  return requested.toString();
+}
+
 void main() {
+  group('BlocksClient request URL', () {
+    test('posts to the method\'s namespace path', () async {
+      expect(
+        await _requestedUrl(
+          'https://d123.cloudfront.net/aws-blocks/api',
+          'reports.build',
+        ),
+        'https://d123.cloudfront.net/aws-blocks/api/reports',
+      );
+      expect(
+        await _requestedUrl(
+          'https://a.example/prod/aws-blocks/api//',
+          'reports.build',
+        ),
+        'https://a.example/prod/aws-blocks/api/reports',
+      );
+    });
+
+    test('only the first `.` separates the namespace', () async {
+      expect(
+        await _requestedUrl('https://a.example/aws-blocks/api', 'ns.a.b'),
+        'https://a.example/aws-blocks/api/ns',
+      );
+    });
+
+    test('sends path-safe characters as they are, encodes others', () async {
+      expect(
+        await _requestedUrl('https://a.example/aws-blocks/api', r'$ns.m'),
+        r'https://a.example/aws-blocks/api/$ns',
+      );
+      expect(
+        await _requestedUrl('https://a.example/aws-blocks/api', 'café.m'),
+        'https://a.example/aws-blocks/api/caf%C3%A9',
+      );
+    });
+
+    test('leaves the base URL for a method without namespace', () async {
+      expect(
+        await _requestedUrl('https://a.example/aws-blocks/api', 'greet'),
+        'https://a.example/aws-blocks/api',
+      );
+      expect(
+        await _requestedUrl('https://a.example/aws-blocks/api', '.greet'),
+        'https://a.example/aws-blocks/api',
+      );
+    });
+  });
+
   group('BlocksClient', () {
     test('sends JSON-RPC envelope', () async {
       Map<String, dynamic>? sentBody;

@@ -81,7 +81,12 @@ public actor OIDCClient: AuthProvider {
 
     public static func generateVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        // Fail closed: never return the zero-filled buffer when the system RNG call fails.
+        // Traps like the standard library's SystemRandomNumberGenerator, keeping this API non-throwing.
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with OSStatus \(status)")
+        }
         return base64URLEncode(Data(bytes))
     }
 

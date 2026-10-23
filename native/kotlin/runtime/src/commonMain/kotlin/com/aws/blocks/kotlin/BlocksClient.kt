@@ -10,6 +10,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.Url
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -18,11 +19,30 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** JSON-RPC client that executes requests against an AWS Blocks backend endpoint. */
-class BlocksClient(
-    internal val server: BlocksServer
+/** Reported by anything that runs on an engine a [Blocks] instance has already closed. */
+internal const val CLOSED_MESSAGE: String =
+    "This Blocks instance is closed. Build a new one rather than reusing a closed instance."
+
+/**
+ * JSON-RPC client that executes requests against an AWS Blocks backend endpoint.
+ *
+ * Obtained from [Blocks.client]; a [Blocks] instance owns one and closes it.
+ */
+class BlocksClient internal constructor(
+    internal val server: BlocksServer,
+    internal val httpClient: HttpClient = defaultHttpClient(),
 ) {
-    internal val httpClient: HttpClient = defaultHttpClient()
+
+    private var closed = false
+
+    /**
+     * Shuts down the HTTP engine. Later calls to [execute] report the closed state rather than
+     * failing inside Ktor with a cancellation that a caller cannot tell from its own.
+     */
+    internal fun close() {
+        closed = true
+        httpClient.close()
+    }
 
     companion object {
         /**
@@ -34,10 +54,16 @@ class BlocksClient(
         }
     }
 
+    /**
+     * POSTs [request] to `{server.url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+     * `reports.build`), so a namespace that runs on its own compute is served by it.
+     */
     suspend fun execute(request: BlocksRequest): JsonElement {
+        if (closed) throw BlocksException(CLOSED_MESSAGE)
+
         val json = Json.encodeToString(request)
 
-        val response = httpClient.post(server.url) {
+        val response = httpClient.post(rpcUrl(server.url.toString(), request.method)) {
             contentType(ContentType.Application.Json)
             setBody(json)
         }
@@ -69,4 +95,17 @@ class BlocksClient(
 
         return resultElement
     }
+}
+
+/**
+ * The URL a call to [method] is POSTed to: `{baseUrl}/{namespace}`, where the namespace is the
+ * part of [method] before the first `.` — the path the TypeScript client uses, so the backend's
+ * gateway can route each namespace to the compute that hosts it. The body still carries the full
+ * `namespace.method`, which is what the server dispatches on. A [method] without a namespace goes
+ * to [baseUrl] unchanged.
+ */
+internal fun rpcUrl(baseUrl: String, method: String): String {
+    val dot = method.indexOf('.')
+    if (dot <= 0) return baseUrl
+    return baseUrl.trimEnd('/') + "/" + method.substring(0, dot).encodeURLPathPart()
 }

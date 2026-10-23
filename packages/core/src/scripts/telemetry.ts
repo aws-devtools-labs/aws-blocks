@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { getTelemetryStatus, getGlobalConfigPath, getProjectConfigPath } from '../telemetry/consent.js';
+import { getTelemetryStatus, getGlobalConfigPath, getProjectConfigPath, isDisableValue, type TelemetryStatus } from '../telemetry/consent.js';
 import { writeConfigTelemetry } from '../telemetry/config-writer.js';
 
 export interface TelemetryOptions {
@@ -18,6 +18,7 @@ function printUsage(): void {
 
 Options:
   --enable           Enable telemetry collection
+                     A disable from any other mechanism still wins; see --status
   --disable          Disable telemetry collection
   --status           Show current telemetry status
   --global           Apply globally (~/.blocks/config.json)
@@ -70,6 +71,17 @@ function parseFlags(argv: string[]): ParsedFlags {
   return { action, global };
 }
 
+/**
+ * Branches in the order `getTelemetryStatus` resolves the mechanisms. Only called
+ * when `status.enabled` is false, so one of the three always holds and the final
+ * `return` needs no guard.
+ */
+function describeDisable(status: TelemetryStatus): string {
+  if (isDisableValue(status.envVar)) return `AWS_BLOCKS_DISABLE_TELEMETRY="${status.envVar}"`;
+  if (status.projectConfig === false) return `the project config (${getProjectConfigPath()})`;
+  return `the global config (${getGlobalConfigPath()})`;
+}
+
 function handleEnable(global: boolean): void {
   const configPath = global ? getGlobalConfigPath() : getProjectConfigPath();
 
@@ -87,6 +99,12 @@ function handleEnable(global: boolean): void {
   } else {
     console.log('✅ Telemetry enabled for this project.');
     console.log(`   Config: ${configPath}`);
+  }
+
+  const status = getTelemetryStatus();
+  if (!status.enabled) {
+    console.warn(`⚠️  Telemetry is still disabled by ${describeDisable(status)}.`);
+    console.warn('   Any disable wins, so this file cannot override it. Run --status to see every mechanism.');
   }
 }
 
@@ -149,7 +167,7 @@ function handleStatus(): void {
  * Parses CLI flags from `process.argv` (or custom argv) and performs the
  * requested action:
  *
- * - `--enable` / `--disable` — toggle telemetry (project-level by default, `--global` for global)
+ * - `--enable` / `--disable` — write `telemetry.enabled` (project-level by default, `--global` for global)
  * - `--status` — display current telemetry status and mechanism values
  * - bare invocation (no flags) — prints help/usage text
  *

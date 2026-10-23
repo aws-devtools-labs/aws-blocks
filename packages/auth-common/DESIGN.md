@@ -12,7 +12,7 @@ All auth Building Blocks should look and work the same from the customer's persp
 
 1. `BlocksAuth` — server-side interface all auth BBs implement
 2. Auth state machine types — drive a provider-agnostic Authenticator component
-3. UI components — `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`
+3. UI components — `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`, and `StatusMessage` (a presentational status-line primitive; see the README for its full API)
 
 ## State Machine Design
 
