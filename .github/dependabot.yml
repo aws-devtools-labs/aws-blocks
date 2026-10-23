@@ -23,7 +23,9 @@
 #     need code or config changes, and one grouped PR with many of them can't
 #     land. Majors are raised as their own PRs, but only on runs where this
 #     group has no open PR (dependabot/dependabot-core#14202). Check
-#     `npm outdated --workspaces` for dev majors before each release.
+#     `npm outdated` (root and workspaces) for dev majors before each release.
+#     Majors of vite, @vitejs/* and @sveltejs/* are ignored: they move together
+#     with TypeScript 6 as one migration (issue #984).
 #   - Cooldown: version updates wait until a release is 3 days old. This is
 #     Dependabot's default; it is set explicitly so it can't silently change
 #     and nobody lowers it by accident. Security updates are not delayed.
@@ -37,6 +39,15 @@ updates:
       default-days: 3
     open-pull-requests-limit: 10
     ignore:
+      # SvelteKit 3 and the Vite 8 plugins peer-depend on Vite 8, and SvelteKit
+      # 3 on TypeScript 6, so single major PRs can't resolve: a deliberate
+      # migration (issue #984).
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/*"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/node"
