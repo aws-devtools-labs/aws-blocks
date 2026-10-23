@@ -82,7 +82,7 @@ if [ "$vpc_root" = 'cd test-apps/vpc-smoke && npm run test:e2e:sandbox' ] && [[ 
 	[[ " $changed $selected " == *' sandbox-vpc '* ]]; then
 	vpc_skip="E2E VPC Smoke is left out: test-apps/vpc-smoke's tests are switched off (https://github.com/aws-devtools-labs/aws-blocks/issues/987)."
 	echo "::warning::$vpc_skip"
-	echo "$vpc_skip" >> "$GITHUB_STEP_SUMMARY"
+	printf '%s\n\n' "$vpc_skip" >> "$GITHUB_STEP_SUMMARY"
 	without_vpc() {
 		local key out=''
 		for key in $1; do
