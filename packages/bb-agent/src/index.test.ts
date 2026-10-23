@@ -4132,7 +4132,7 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.strictEqual(sent[1].runtimeSessionId, ownerConv, 'a conversation keeps routing to its own session');
 	});
 
-	test('the session id of a conversation-less turn never throws and keeps (userId, channelId) pairs apart', async () => {
+	test('each conversation-less turn gets a fresh session, whatever its userId or channelId', async () => {
 		const agent = new AwsAgent(new Scope('test-ac-session-io'), 'acsio', { systemPrompt: 'test', inferenceOnly: true });
 		const sent: Array<{ runtimeSessionId?: string }> = [];
 		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
@@ -4140,13 +4140,13 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
 		try {
 			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: String.fromCharCode(0xd800) });
-			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a/b' });
-			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'b/c', userId: 'a' });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a' });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a' });
 		} finally {
 			delete process.env[arnKey];
 		}
-		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^[0-9a-f]{64}$/);
-		assert.notStrictEqual(sent[1].runtimeSessionId, sent[2].runtimeSessionId);
+		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^turn-[0-9a-f-]{36}$/);
+		assert.strictEqual(new Set(sent.map(s => s.runtimeSessionId)).size, 3, 'no two conversation-less turns share a session');
 	});
 
 	test('the AgentCore entry does not turn the session id into a conversationId', async () => {

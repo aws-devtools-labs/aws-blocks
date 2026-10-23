@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getConfig, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -20,7 +20,7 @@ import { BedrockModels } from './models.js';
  * are UUIDs (36 chars) in the normal path and pass through unchanged; anything shorter is hashed
  * to a stable 64-char hex id — stable per input, so a conversation keeps routing to one warm
  * microVM across turns/resumes. Only conversation ids are passed to it: a turn without a
- * conversation is hashed from its user and channel instead (see {@link runtimeSessionIdFor}).
+ * conversation gets a fresh session instead (see {@link runtimeSessionIdFor}).
  */
 function toRuntimeSessionId(base: string): string {
 	return base.length >= 33 ? base : createHash('sha256').update(base).digest('hex');
@@ -28,14 +28,14 @@ function toRuntimeSessionId(base: string): string {
 
 /**
  * The AgentCore session for a turn. A conversation routes to its own session (its id). A turn
- * without a conversation gets a session derived from its user and channel instead of the bare
- * channelId: the channelId is caller-chosen, so it could otherwise equal another user's
- * conversation id and land the turn in that user's session.
+ * without a conversation has no state to keep, so it gets a fresh session of its own
+ * (`turn-<uuid>`, 41 characters, never a UUID) instead of the bare channelId: the channelId is
+ * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
+ * in that user's session.
  */
-function runtimeSessionIdFor(payload: { conversationId?: string; channelId: string; userId: string }): string {
+function runtimeSessionIdFor(payload: { conversationId?: string }): string {
 	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
-	// JSON keeps the (userId, channelId) pair unambiguous and, unlike encodeURIComponent, never throws.
-	return createHash('sha256').update(`turn:${JSON.stringify([payload.userId, payload.channelId])}`).digest('hex');
+	return `turn-${randomUUID()}`;
 }
 
 /**
