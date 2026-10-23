@@ -102,11 +102,12 @@ export interface ApiNamespaceOptions {
    * export const reports = new ApiNamespace(scope, 'reports', (context) => ({ … }), { compute: reportsCompute });
    * ```
    *
-   * The TypeScript client calls the namespace exactly as before: the shared API
-   * gateway routes `/aws-blocks/api/<export name>` to the namespace's compute, on
-   * every `apiFrontDoor` tier and behind `Hosting`. Calls to the bare
-   * `/aws-blocks/api` endpoint — which today's Swift, Kotlin and Dart clients use
-   * — still run on the default compute. API calls stay capped at ~29 seconds by
+   * The TypeScript, Swift, Kotlin and Dart clients call the namespace exactly as
+   * before: the shared API gateway routes `/aws-blocks/api/<export name>` to the
+   * namespace's compute, on every `apiFrontDoor` tier and behind `Hosting`. A
+   * call to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a
+   * native client released before per-namespace paths — still runs on the
+   * default compute. API calls stay capped at ~29 seconds by
    * the gateway whatever the compute's `maxTimeoutSeconds`; run longer work in an
    * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). Only a
    * `serverless` compute can serve API namespaces today. In local dev every

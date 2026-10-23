@@ -175,4 +175,4 @@ function readMigrationsDir(dir: string): Record<string, string> {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
-export type { DistributedDatabaseOptions } from './types.js';
+export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';
