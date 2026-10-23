@@ -50,9 +50,10 @@ jobs:
     runs-on: ubuntu-latest
     # The steps' own time budgets (stack sweep 40 min, Amplify sandbox sweep
     # 40, REST API and CloudWatch role sweeps 15 each, log group sweep 5) add
-    # up to more than this. They only bind on a backlog run; the log group
-    # sweep runs last, so it is the one this timeout cuts off. Don't add a
-    # budgeted step without checking the total.
+    # up to more than this. They only bind on a backlog run: then the timeout
+    # can land as early as the Amplify sandbox sweep, and every step after
+    # it, the log group sweep included, waits for the next scheduled run.
+    # Don't add a budgeted step without checking the total.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -954,9 +955,9 @@ jobs:
           # outside CloudFormation, so the group outlives the stack. Every test
           # stack runs CDK helper functions that get no CloudFormation log group
           # (BucketDeployment, S3 auto-delete, AwsCustomResource, LogRetention,
-          # custom-resource provider frameworks), which left about 1,100-1,700
-          # such groups per account per day (measured over about one day of
-          # data), none of them expiring. RDS engine log groups outlive their
+          # custom-resource provider frameworks), which left up to about
+          # 1,100-1,700 such groups per account per day (measured over about one
+          # day of data), none of them expiring. RDS engine log groups outlive their
           # cluster the same way. Tests: scripts/ci/sweep-log-groups.test.mjs.
           #
           # A group is deleted only if ALL of these hold:
@@ -975,9 +976,6 @@ jobs:
           LAMBDA_PREFIXES=(amplify-amplifygen2- amplify-amplifyinteroptes bb-compute-smoke- bb-telemetry- bb-test- bb-vpc-smoke- blocks-hosting- blocks-test-)
           RDS_PREFIXES=(bb-test-)
           CUTOFF_MS=$((($(date +%s) - 24 * 3600) * 1000))
-          # 5 minutes: at about 1 s per delete that is a few hundred deletes a
-          # run, every 2 hours, which is more than the daily inflow.
-          DEADLINE=$((SECONDS + ${LOG_GROUP_SWEEP_BUDGET_SECONDS:-300}))
           SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/null}
           # More attempts than the CLI default, so one throttled page doesn't fail the listing.
           export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8
@@ -1018,6 +1016,10 @@ jobs:
             fail_closed "lambda list-functions failed"
           CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[].[DBClusterIdentifier]' --output text 2>"$ERR" |
             tr '[:upper:]' '[:lower:]') || fail_closed "rds describe-db-clusters failed"
+          # Delete budget, counted from here so slow or retried listings don't
+          # eat into it. 5 minutes at about 1 s per delete is a few hundred
+          # deletes a run, every 2 hours: more than the daily inflow.
+          DEADLINE=$((SECONDS + ${LOG_GROUP_SWEEP_BUDGET_SECONDS:-300}))
 
           DELETED=0
           SKIPPED_YOUNG=0
