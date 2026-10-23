@@ -10,7 +10,7 @@
 #     aws_annotate error "$ERR" "<what failed, and what that means for this run>"
 #   fi
 #
-# Tests: node --test scripts/ci/rest-api-quota.test.mjs
+# Tests: node --test scripts/ci/cleanup-listings.test.mjs scripts/ci/rest-api-quota.test.mjs
 
 # The reason in a CLI error file: its first non-blank line (AWS CLI v2 starts
 # its error with a blank line), at most 500 bytes, with 12-digit numbers masked
