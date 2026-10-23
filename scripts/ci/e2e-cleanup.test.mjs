@@ -12,7 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -79,19 +79,19 @@ describe('parsePsLines', () => {
 });
 
 describe('always() cleanup steps', () => {
-	// Every command line, in any workflow, that tears a stack down, of a step that can run after a cancel:
-	// always(), cancelled() or failure() in its if, but not a negated !cancelled() (function names are
-	// case-insensitive). `negated` collects the !cancelled() ones instead.
-	const teardowns = (negated) =>
-		WORKFLOWS.flatMap((file) => {
-			const wf = parse(readFileSync(join(ROOT, '.github/workflows', file), 'utf8'));
-			return Object.entries(wf.jobs).flatMap(([job, def]) =>
+	// Every command line that tears a stack down, in the given workflows, of a step that runs after a cancel
+	// or a step timeout: always(), cancelled() or failure() in its if, but not a negated !cancelled()
+	// (function names are case-insensitive; a double negation cancels out). `negated` collects the
+	// !cancelled() ones instead.
+	const teardowns = (workflows, negated) =>
+		workflows.flatMap(({ file, wf }) =>
+			Object.entries(wf.jobs).flatMap(([job, def]) =>
 				(def.steps ?? [])
 					.map((s, index) => ({ ...s, index }))
 					.filter((s) => {
-						const cond = String(s.if ?? '');
-						const afterCancel = /always\(\)|(?<!!\s*)cancelled\(\)|failure\(\)/i.test(cond);
-						return s.run && (negated ? !afterCancel && /!\s*cancelled\(\)/i.test(cond) : afterCancel);
+						const cond = String(s.if ?? '').replace(/!\s*!/g, '');
+						const afterCancel = /always\s*\(|(?<!!\s*)cancelled\s*\(|failure\s*\(/i.test(cond);
+						return s.run && (negated ? !afterCancel && /!\s*cancelled\s*\(/i.test(cond) : afterCancel);
 					})
 					.flatMap((s) =>
 						s.run
@@ -105,9 +105,25 @@ describe('always() cleanup steps', () => {
 								index: s.index,
 							})),
 					),
-			);
-		});
-	const teardownLines = teardowns(false);
+			),
+		);
+	const workflows = WORKFLOWS.map((file) => ({
+		file,
+		wf: parse(readFileSync(join(ROOT, '.github/workflows', file), 'utf8')),
+	}));
+	const teardownLines = teardowns(workflows, false);
+
+	/** The !cancelled() teardown lines that end in `|| true` or that no later wrapped cleanup step retries. */
+	const unretried = (wfs) => {
+		const wrapped = teardowns(wfs, false);
+		return teardowns(wfs, true)
+			.filter(
+				({ where, line, index }) =>
+					/\|\| *true/.test(line) ||
+					!wrapped.some((t) => t.where === where && t.index > index && t.line.endsWith(line)),
+			)
+			.map(({ where, line }) => `${where}: ${line}`);
+	};
 
 	it('finds the teardown steps of the hosting, telemetry, amplify and native jobs', () => {
 		assert.ok(teardownLines.length >= 8, JSON.stringify(teardownLines, null, 2));
@@ -115,9 +131,13 @@ describe('always() cleanup steps', () => {
 
 	it('run only once the job has AWS credentials', () => {
 		for (const { where, if: cond, steps, index } of teardownLines) {
-			// Further conditions may follow (e.g. skip a retry the job no longer needs), but no ||, which
-			// would bypass the credentials check.
-			assert.match(cond, /^always\(\) && steps\.aws-creds\.outcome == 'success'( && [^|]+)?$/, where);
+			// Only conditions that skip a retry the job no longer needs may follow: no ||, which would
+			// bypass the credentials check, and nothing that turns the step off after a cancel.
+			assert.match(
+				cond,
+				/^always\(\) && steps\.aws-creds\.outcome == 'success'( && steps\.[\w-]+\.outcome != 'success')*$/,
+				where,
+			);
 			const creds = steps.findIndex((s) => /e2e-aws-credentials|configure-aws-credentials/.test(s.uses ?? ''));
 			assert.ok(creds >= 0 && creds < index, `${where}: credentials step must come before the cleanup`);
 			assert.equal(steps[creds].id, 'aws-creds', `${where}: the first credentials step must have id aws-creds`);
@@ -132,12 +152,21 @@ describe('always() cleanup steps', () => {
 	});
 
 	// A !cancelled() step still runs after a step timeout, which can leave a cdk holding the lock too.
-	it('a !cancelled() teardown is followed by one of these steps, which retries it', () => {
-		for (const { where, line, index } of teardowns(true)) {
-			assert.doesNotMatch(line, /\|\| *true/, `${where}: ${line}`);
-			const retry = teardownLines.some((t) => t.where === where && t.index > index);
-			assert.ok(retry, `${where}: no always() cleanup step after: ${line}`);
-		}
+	it('a !cancelled() teardown is retried by a later one of these steps with the same command', () => {
+		assert.deepEqual(unretried(workflows), []);
+	});
+
+	it('flags a !cancelled() teardown that nothing retries', () => {
+		const step = (name, cond, run) => ({ name, if: cond, run });
+		const wrappedRun = 'node scripts/ci/e2e-cleanup.mjs -- npx tsx test/sandbox-destroy.ts app.ts';
+		const wf = (steps) => [{ file: 'fixture.yml', wf: { jobs: { e2e: { steps } } } }];
+		const destroy = step('Destroy', "${{ !cancelled() && steps.e2e.outcome != 'skipped' }}", 'npx tsx test/sandbox-destroy.ts app.ts');
+		const cleanup = step('Cleanup', "always() && steps.aws-creds.outcome == 'success'", wrappedRun);
+		assert.deepEqual(unretried(wf([destroy, cleanup])), []);
+		assert.equal(unretried(wf([destroy])).length, 1, 'no cleanup step');
+		assert.equal(unretried(wf([cleanup, destroy])).length, 1, 'cleanup comes first');
+		assert.equal(unretried(wf([{ ...destroy, run: `${destroy.run} || true` }, cleanup])).length, 1, '|| true');
+		assert.equal(unretried(wf([{ ...destroy, run: 'npx tsx other-destroy.ts' }, cleanup])).length, 1, 'other stack');
 	});
 });
 
@@ -290,10 +319,11 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 			const r = await run(dir, process.execPath, [SCRIPT, '--', ...destroy], id);
 			assert.equal(r.status, 0, r.output);
 			assert.doesNotMatch(r.output, /currently (reading|synthing)|E2E cleanup failed/);
-			// The holder is a node process (bash only if it is listed before it execs).
+			// The holder runs this node (bash only if it is listed before it execs); comm keeps 15 characters.
+			const node = basename(process.execPath).slice(0, 15).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 			assert.match(
 				r.output,
-				new RegExp(`Stopping 1 process\\(es\\) left by an earlier step: ${holder.pid} \\((node|bash)\\)`),
+				new RegExp(`Stopping 1 process\\(es\\) left by an earlier step: ${holder.pid} \\((${node}|bash)\\)`),
 			);
 			assert.doesNotMatch(r.output, /SIGKILL:/); // SIGTERM stopped it
 			assert.equal(deleted.length, 1, r.output);
