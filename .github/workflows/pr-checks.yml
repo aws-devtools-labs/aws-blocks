@@ -54,6 +54,9 @@ jobs:
   # passing, so a skip would let the trailer merge a PR past E2E. Push a
   # commit without the trailer before merging.
   #
+  # E2E VPC Smoke is left out while test-apps/vpc-smoke's tests are switched
+  # off (its test:e2e:sandbox script only echoes), since it would test nothing.
+  #
   # The logic lives in scripts/ci/e2e-selection.sh, tested by
   # scripts/ci/e2e-selection.test.mjs (in Build, Unit Tests, E2E Local).
   detect-changes:
@@ -430,6 +433,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
+    # detect-changes doesn't start this job while test-apps/vpc-smoke's
+    # test:e2e:sandbox script only echoes; it starts again by itself once the
+    # script runs the tests. Switching them on (or removing the suite) is
+    # tracked in https://github.com/aws-devtools-labs/aws-blocks/issues/987.
+    # Before that, this job must share one concurrency group with every other
+    # job that deploys BlocksTestVpc: e2e-selection.test.mjs fails once the
+    # tests are on and the groups differ.
+    #
     # Serialize across PRs: the smoke app provisions private-DNS interface
     # endpoints into the shared persistent test VPC, and AWS permits only one
     # per service per VPC. Without this, two open PRs collide on the endpoints
