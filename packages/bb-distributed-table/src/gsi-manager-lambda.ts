@@ -121,11 +121,14 @@ async function deleteKeepsIndexes(
 	} catch (e) {
 		if (UPDATE_CLEANUP.has(status)) {
 			// The failure reason travels in the custom resource response, capped at 4 KB.
-			const shown = indexNames.slice(0, 10).join(', ');
-			const more = indexNames.length > 10 ? ` and ${indexNames.length - 10} more` : '';
+			const shown = indexNames.slice(0, 5).join(', ');
+			const more = indexNames.length > 5 ? ` and ${indexNames.length - 5} more` : '';
 			const indexes = indexNames.length > 0 ? ` (${shown}${more})` : '';
-			const rolledBack = 'The update was rolled back: an index it added may remain, and a later deploy reuses it.';
-			const removed = 'If the table is still in your app, delete the indexes it no longer configures with UpdateTable.';
+			const rolledBack =
+				'The update was rolled back: an index it added may remain. A later deploy that adds it again ' +
+				'with the same keys reuses it; otherwise delete it with UpdateTable.';
+			const removed =
+				'If the table is still in your app, delete the indexes it no longer configures with UpdateTable.';
 			const next = status === 'UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS' ? rolledBack : removed;
 			const cause = e instanceof Error ? e.message : String(e);
 			throw new Error(
