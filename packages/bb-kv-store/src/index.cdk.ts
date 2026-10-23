@@ -13,7 +13,7 @@ import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
 
 export class KVStore extends BuildingBlockScope {
 	private table: ITable;

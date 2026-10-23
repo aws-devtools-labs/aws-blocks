@@ -36,6 +36,41 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertNotNil(result)
     }
 
+    // MARK: - Request URL
+
+    func testExecutePostsToTheMethodsNamespacePath() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        var requestedURL: URL?
+        MockURLProtocol.handler = { request in
+            requestedURL = request.url
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"jsonrpc":"2.0","result":"ok","id":1}"#.utf8))
+        }
+
+        let client = BlocksClient(url: "https://d123.cloudfront.net/aws-blocks/api", session: session)
+        _ = try await client.execute(BlocksRequest(method: "reports.build", params: [], id: 1))
+
+        XCTAssertEqual(requestedURL?.absoluteString, "https://d123.cloudfront.net/aws-blocks/api/reports")
+    }
+
+    func testRpcURLAppendsTheNamespaceSegment() {
+        XCTAssertEqual(BlocksClient.rpcURL(base: "http://localhost:3001/aws-blocks/api", method: "api.greet"), "http://localhost:3001/aws-blocks/api/api")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/prod/aws-blocks/api//", method: "reports.build"), "https://a.example/prod/aws-blocks/api/reports")
+        // Only the first `.` separates the namespace.
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "ns.a.b"), "https://a.example/aws-blocks/api/ns")
+        // Path-safe characters are sent as they are; others are percent-encoded.
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "$ns.m"), "https://a.example/aws-blocks/api/$ns")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "café.m"), "https://a.example/aws-blocks/api/caf%C3%A9")
+    }
+
+    func testRpcURLLeavesTheBaseForAMethodWithoutNamespace() {
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: "greet"), "https://a.example/aws-blocks/api")
+        XCTAssertEqual(BlocksClient.rpcURL(base: "https://a.example/aws-blocks/api", method: ".greet"), "https://a.example/aws-blocks/api")
+    }
+
     // MARK: - Response Parsing
 
     func testExecuteReturnsDataForObjectResult() async throws {
