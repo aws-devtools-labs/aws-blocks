@@ -43,6 +43,17 @@ export function apiNamespaceComputeTests(ctx: ComputeTestContext) {
       assert.notStrictEqual(onDefault.memoryMb, '512', 'the default compute keeps its own size');
     });
 
+    test('a call to the bare endpoint runs on the default compute', async () => {
+      // Raw HTTP callers, and native clients released before per-namespace paths,
+      // POST every call to the bare `/aws-blocks/api`: it dispatches by the body, on
+      // the default compute, even for a namespace that has its own.
+      const onDefault = await whereAmI('api');
+      const reply = await rpcCall(ctx.apiUrl(), 'reports.whereAmI');
+      const served = reply.result as WhereAmI;
+      assert.strictEqual(served.functionName, onDefault.functionName, 'the default compute served it');
+      assert.notStrictEqual(served.memoryMb, '512');
+    });
+
     test('a path naming a different namespace than the body is rejected', async () => {
       // The path names `reports`, the body asks for `api.whereAmI`: neither is run.
       // (That `/reports` reaches the reports compute is proven by the previous test.)
