@@ -214,11 +214,27 @@ export async function isPortOpen(port: number, host?: string, timeoutMs = 200): 
   return v4 || v6;
 }
 
-/** Wait for a port to accept TCP connections. */
-async function waitForPort(port: number, maxAttempts = 60): Promise<void> {
+/**
+ * Probe `port` once on both loopback families. Resolves with the address that
+ * accepted, formatted as a URL host (`127.0.0.1` when both families do, else
+ * `[::1]`), or `null` when neither does. Never rejects.
+ */
+async function findLoopbackListener(port: number, timeoutMs: number): Promise<string | null> {
+  const [v4, v6] = await Promise.all([isPortOpen(port, '127.0.0.1', timeoutMs), isPortOpen(port, '::1', timeoutMs)]);
+  if (v4) return '127.0.0.1';
+  return v6 ? '[::1]' : null;
+}
+
+/**
+ * Wait for a port to accept TCP connections on a loopback address. Resolves with
+ * the address that answered, as a URL host (see {@link findLoopbackListener}),
+ * so callers can dial the family the listener is actually bound to.
+ */
+async function waitForPort(port: number, maxAttempts = 60): Promise<string> {
   const { setTimeout: sleep } = await import('node:timers/promises');
   for (let i = 0; i < maxAttempts; i++) {
-    if (await isPortOpen(port, undefined, 300)) return;
+    const host = await findLoopbackListener(port, 300);
+    if (host) return host;
     await sleep(500);
   }
   throw new Error(`Frontend server on port ${port} did not start within ${maxAttempts * 500}ms`);
@@ -751,11 +767,29 @@ export async function startDevServer(options: DevServerOptions) {
   let frontendProcess: ChildProcess | null = null;
   // Reuse frontend sockets so repeated page loads do not exhaust ephemeral ports.
   const frontendAgent = frontendCommand ? new Agent({ keepAlive: true }) : undefined;
+  // A frontend started without a host (e.g. `vite --port 3100`) binds whichever
+  // address `localhost` resolves to first, which can be `::1` only, while this
+  // process may resolve `localhost` to `127.0.0.1`. Until the frontend is ready
+  // the target is `localhost`; `announceFrontendReady` then points it at the
+  // loopback address the frontend answered on.
+  let frontendTarget = `http://localhost:${frontendPort}`;
   const frontendProxy = frontendCommand
-    ? httpProxy.createProxyServer({ target: `http://localhost:${frontendPort}`, ws: true, agent: frontendAgent })
+    ? httpProxy.createProxyServer({ ws: true, agent: frontendAgent })
     : null;
 
-  frontendProxy?.on('error', (_err, _req, res) => {
+  // Vite restarts its server in-process on config changes and can rebind to the
+  // other loopback family, so a refused dial re-probes both families and updates
+  // the target. Concurrent failures share one probe, and the 502 is sent after
+  // it so the client's next request or HMR reconnect reaches the new address.
+  let frontendReprobe: Promise<void> | null = null;
+  frontendProxy?.on('error', async (err, _req, res) => {
+    if ('code' in err && err.code === 'ECONNREFUSED') {
+      frontendReprobe ??= findLoopbackListener(frontendPort, 300).then((host) => {
+        if (host) frontendTarget = `http://${host}:${frontendPort}`;
+        frontendReprobe = null;
+      });
+      await frontendReprobe;
+    }
     if (!res || typeof (res as any).writeHead !== 'function') return;
     if ((res as ServerResponse).headersSent) return;
     (res as ServerResponse).writeHead(502);
@@ -808,7 +842,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   const announceFrontendReady = async (child: ChildProcess | null, suffix = ''): Promise<void> => {
     try {
-      await waitForPort(frontendPort);
+      frontendTarget = `http://${await waitForPort(frontendPort)}:${frontendPort}`;
       // Reset the restart budget only when OUR child is the one now bound to
       // `:3100`. `waitForPort` is a liveness-only probe — it cannot tell our
       // Vite from a foreign listener (a leftover Vite or a second dev server),
@@ -996,7 +1030,7 @@ export async function startDevServer(options: DevServerOptions) {
 
     // ── Frontend requests ──────────────────────────────────────────────
     if (frontendProxy) {
-      frontendProxy.web(req, res);
+      frontendProxy.web(req, res, { target: frontendTarget });
     } else {
       res.writeHead(404);
       res.end();
@@ -1012,7 +1046,7 @@ export async function startDevServer(options: DevServerOptions) {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/realtime') return; // handled by dev attachment (noServer mode)
     if (frontendProxy) {
-      frontendProxy.ws(req, socket, head);
+      frontendProxy.ws(req, socket, head, { target: frontendTarget });
     } else {
       socket.destroy();
     }
