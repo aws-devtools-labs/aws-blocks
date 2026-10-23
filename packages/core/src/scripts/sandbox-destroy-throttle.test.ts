@@ -206,9 +206,45 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					random: () => 1,
 				}),
 			);
+			assert.strictEqual(attempts, 4);
 			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
 			assert.match(printed, /Earlier attempts were throttled by AWS and used up the retry time/);
 			assert.doesNotMatch(printed, /The last attempt was throttled/);
+		} finally {
+			errors.mock.restore();
+		}
+	});
+
+	it('keeps both ordinary retries for slow attempts that were never throttled', async () => {
+		// Attempts of 25 min put every failure past the 20-min throttle budget,
+		// which must only cut ordinary retries after a throttle retry.
+		const errors = mock.method(console, 'error', () => {});
+		try {
+			const clock = fakeClock(25 * MIN);
+			let attempts = 0;
+			const sleeps: number[] = [];
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						attempts++;
+						clock.attempt();
+						throw new Error('distribution still deleting');
+					},
+					listStackNames: () => ['stackA'],
+					emptyBuckets: async () => {},
+					isThrottled: async () => false,
+					sleep: async (ms) => {
+						sleeps.push(ms);
+						clock.advance(ms);
+					},
+					now: clock.now,
+				}),
+				/distribution still deleting/,
+			);
+			assert.strictEqual(attempts, 3);
+			assert.deepStrictEqual(sleeps, [60_000, 120_000]);
+			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
+			assert.doesNotMatch(printed, /throttled/);
 		} finally {
 			errors.mock.restore();
 		}
