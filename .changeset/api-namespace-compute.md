@@ -22,11 +22,13 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 }), { compute: reportsCompute });
 ```
 
-- The TypeScript client is unchanged: it still calls `POST /aws-blocks/api/reports`,
-  and the stack's shared API gateway routes that path to the namespace's compute —
-  on every `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain.
-  Calls to the bare `/aws-blocks/api` endpoint, which today's Swift, Kotlin and
-  Dart clients use, still run on the default compute.
+- Clients are unchanged: the TypeScript client, and the Swift, Kotlin and Dart
+  clients from `aws-blocks-swift` 0.2.0, `aws-blocks-kotlin` 0.3.0 and the matching
+  Dart `blocks_runtime`, call `POST /aws-blocks/api/reports`, and the stack's
+  shared API gateway routes that path to the namespace's compute — on every
+  `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. Calls to
+  the bare `/aws-blocks/api` endpoint — raw HTTP calls and older native clients —
+  still run on the default compute.
 - API calls stay capped at ~29 seconds by the gateway whatever the compute's
   `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
 - Routing follows the export name (what the frontend imports), not the second

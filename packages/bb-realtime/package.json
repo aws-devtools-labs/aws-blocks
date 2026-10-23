@@ -29,6 +29,7 @@
   ],
   "exports": {
     ".": {
+      "browser": "./dist/index.browser.js",
       "cdk": {
         "types": "./dist/index.cdk.d.ts",
         "default": "./dist/index.cdk.js"

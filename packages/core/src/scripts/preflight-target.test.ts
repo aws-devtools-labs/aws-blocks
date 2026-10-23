@@ -31,10 +31,13 @@ const stop = new Error('fixture stopped before CDK');
 // SDK clients remain real; no credential provider or request is ever executed.
 const { STSClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-sts'))});
 const { SSMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-ssm'))});
+const { AccountClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-account'))});
+const { FreeTierClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-freetier'))});
+const { IAMClient } = await import(${JSON.stringify(import.meta.resolve('@aws-sdk/client-iam'))});
 mock.method(STSClient.prototype, 'send', async function () {
   assert.equal(this.config.profile, explicitProfile);
   seen.push(['sts', await this.config.region()]);
-  return { $metadata: {} };
+  return { Arn: 'arn:aws:sts::123456789012:assumed-role/WorkspaceAdminAccess/fixture', $metadata: {} };
 });
 mock.method(SSMClient.prototype, 'send', async function (command) {
   assert.equal(command.constructor.name, 'GetParameterCommand');
@@ -42,6 +45,26 @@ mock.method(SSMClient.prototype, 'send', async function (command) {
   seen.push(['ssm', await this.config.region()]);
   return { Parameter: { Value: 'fixture-connection' }, $metadata: {} };
 });
+// The metadata reads must reuse the credentials that STS resolved, for the same profile and Region.
+const destroyed = [];
+const managedTrust = { Statement: [{ Effect: 'Allow', Principal: { Service: 'account-access.amazonaws.com' } }] };
+for (const [name, Client, response] of [
+  ['account', AccountClient, { AccountId: '123456789012', AccountName: 'Fixture project' }],
+  ['freetier', FreeTierClient, { accountPlanType: 'PAID', accountPlanStatus: 'ACTIVE' }],
+  ['iam', IAMClient, { Role: { Path: '/managed/', AssumeRolePolicyDocument: encodeURIComponent(JSON.stringify(managedTrust)) } }],
+]) {
+  mock.method(Client.prototype, 'send', async function () {
+    assert.equal(this.config.profile, explicitProfile);
+    assert.equal((await this.config.credentials()).accessKeyId, 'AKIAFIXTURETARGET');
+    seen.push([name, await this.config.region()]);
+    return { ...response, $metadata: {} };
+  });
+  const destroy = Client.prototype.destroy;
+  mock.method(Client.prototype, 'destroy', function () {
+    destroyed.push(name);
+    return destroy.call(this);
+  });
+}
 mock.method(childProcess, 'execFileSync', () => Buffer.alloc(0));
 syncBuiltinESMExports();
 
@@ -83,14 +106,17 @@ const run = command === 'deploy'
   ? () => import(moduleUrl('deploy')).then(({ deploy }) => deploy({ projectRoot: process.cwd(), cdkAppPath: 'unused' }))
   : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', deployOnly: true }));
 await assert.rejects(run, (error) => error === stop);
-assert.deepEqual(seen, [['sts', expectedRegion], ['ssm', expectedRegion], ['cdk']]);
+assert.deepEqual(seen[0], ['sts', expectedRegion]);
+assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);
+assert.deepEqual(seen.slice(4), [['ssm', expectedRegion], ['cdk']]);
+assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 `;
 }
 
 describe('deploy/sandbox configured target', () => {
 	for (const command of ['deploy', 'sandbox'] as const) {
 		for (const source of ['profile', 'default-region', 'environment', 'cdk-profile', 'cdk-region'] as const) {
-			it(`${command} resolves ${source} for STS and SSM without changing CDK's environment`, async () => {
+			it(`${command} resolves ${source} for STS, metadata and SSM, prints it, and keeps CDK's environment`, async () => {
 				const directory = await mkdtemp(join(tmpdir(), 'blocks-target-'));
 				try {
 					await mkdir(join(directory, '.blocks'));
@@ -101,7 +127,10 @@ describe('deploy/sandbox configured target', () => {
 					const credentials = join(directory, 'credentials');
 					// CDK prefers credentials-file Region; SDK normally prefers config.
 					await writeFile(config, '[default]\nregion=us-east-1\n[profile deployment]\nregion=eu-west-1\n');
-					await writeFile(credentials, '[deployment]\nregion=cn-north-1\n');
+					await writeFile(
+						credentials,
+						'[deployment]\nregion=cn-north-1\naws_access_key_id=AKIAFIXTURETARGET\naws_secret_access_key=fixture\n',
+					);
 					if (source === 'cdk-profile')
 						await writeFile(join(directory, 'cdk.json'), '{"profile":"deployment"}');
 					if (source === 'cdk-region')
@@ -129,18 +158,21 @@ describe('deploy/sandbox configured target', () => {
 						'cdk-profile': 'cn-north-1',
 						'cdk-region': 'eu-north-1',
 					}[source];
-					assert.doesNotThrow(() =>
-						execFileSync(
-							process.execPath,
-							[
-								'--experimental-test-module-mocks',
-								'--input-type=module',
-								'-e',
-								commandFixture(command, expected, source === 'cdk-profile' ? 'deployment' : undefined),
-							],
-							{ cwd: directory, env, encoding: 'utf8', stdio: 'pipe', timeout: 15_000 },
-						),
+					const stdout = execFileSync(
+						process.execPath,
+						[
+							'--experimental-test-module-mocks',
+							'--input-type=module',
+							'-e',
+							commandFixture(command, expected, source === 'cdk-profile' ? 'deployment' : undefined),
+						],
+						{ cwd: directory, env, encoding: 'utf8', stdio: 'pipe', timeout: 15_000 },
 					);
+					assert.ok(stdout.includes(`Deployment target: AWS profile deployment, Region ${expected}`), stdout);
+					assert.match(stdout, /Account name: Fixture project$/m);
+					assert.match(stdout, /Account plan: Paid \(active\)$/m);
+					assert.match(stdout, /^💳 Spend limit: https:\/\/settings\.aws\.com\/billing \(/m);
+					assert.doesNotMatch(stdout, /123456789012|AKIAFIXTURETARGET/);
 				} finally {
 					await rm(directory, { recursive: true, force: true });
 				}

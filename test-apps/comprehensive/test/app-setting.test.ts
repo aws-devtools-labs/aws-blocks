@@ -4,6 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
+import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
 import type { api as apiType } from 'aws-blocks';
 
 export function appSettingTests(getApi: () => typeof apiType) {
@@ -46,7 +47,7 @@ export function appSettingTests(getApi: () => typeof apiType) {
         // Assert the rejection round-trips as a *branded* BB error over the
         // wire (so isBlocksError matches), not merely a message substring —
         // the wire sanitizer drops the raw message but preserves the name.
-        (e: unknown) => isBlocksError(e, 'ValidationFailedException'),
+        (e: unknown) => isBlocksError(e, AppSettingErrors.ValidationFailed),
       );
     });
 
