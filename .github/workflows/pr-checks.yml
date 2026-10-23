@@ -192,6 +192,9 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      # Same npm as the Release job, which builds and publishes with it.
+      - uses: ./.github/actions/setup-pinned-npm
+
       - name: Build
         run: npm run build
 
