@@ -90,7 +90,10 @@ final class GeneratedEntryPointTests: XCTestCase {
         XCTAssertEqual(users, ["ada"])
         XCTAssertEqual([pong, defaultPong], ["pong", "pong"])
         XCTAssertEqual(RecordingURLProtocol.methods, ["users.list", "client.ping", "ping"])
-        XCTAssertEqual(RecordingURLProtocol.urls, [URL(string: Servers.local.url)])
+        // One client, one base URL: each call goes to its namespace's path under it.
+        XCTAssertEqual(RecordingURLProtocol.urls, [
+            URL(string: "\(Servers.local.url)/users"), URL(string: "\(Servers.local.url)/client"), URL(string: Servers.local.url)
+        ])
     }
 
     func testNamespacePropertiesAreStable() {
