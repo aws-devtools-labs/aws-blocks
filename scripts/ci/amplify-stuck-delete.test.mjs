@@ -617,7 +617,7 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 
 	it('does not read the resources of a nested stack that lived under 5 hours (an ordinary teardown)', () => {
 		const r = runLeftovers(
-			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T19:40:00.000000+00:00' })) })),
+			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T19:40:01.123000+00:00' })) })),
 		);
 		assert.equal(r.status, 0, r.stdout);
 		assert.equal(r.report, '');
@@ -636,13 +636,14 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 		const r = runLeftovers(fixture(afterRetain({ [`table-denied-${REAL_TABLE}`]: '' })));
 		assert.equal(r.status, 0, r.stdout);
 		assert.match(r.report, /^- leftover: TodoTable /m);
+		assert.match(r.stdout, new RegExp(`DescribeTable failed for ${REAL_TABLE}, so whether it still exists is unknown: .*AccessDeniedException`));
 		assert.match(r.stdout, /^::warning::1 DynamoDB table/m);
 		assert.doesNotMatch(r.stdout + r.stderr, NO_ACCOUNT);
 	});
 
 	it('reports a stack that lived just over 5 hours', () => {
 		const r = runLeftovers(
-			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T20:20:01.123000+00:00' })) })),
+			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T20:00:01.123000+00:00' })) })),
 		);
 		assert.equal(r.status, 0, r.stdout);
 		assert.match(r.report, /^- leftover: TodoTable /m);
@@ -687,6 +688,14 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 		assert.doesNotMatch(r.calls, /list-stack-resources/);
 	});
 
+	it('reports nothing for a retained resource that is not a table', () => {
+		const r = runLeftovers(
+			fixture(afterRetain({ [`resources-${key(TODO)}.json`]: resources(resource('TodoIAMRole', 'AWS::IAM::Role', 'DELETE_SKIPPED', 'role')) })),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.equal(r.report, '');
+	});
+
 	it('reports nothing for a table resource the delete removed', () => {
 		const r = runLeftovers(
 			fixture(afterRetain({ [`resources-${key(TODO)}.json`]: resources(resource('TodoTable', TABLE, 'DELETE_COMPLETE', TABLE_ID)) })),
@@ -699,7 +708,7 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 	it('warns, without the account id, when the deleted stacks cannot be listed', () => {
 		const r = runLeftovers(fixture(afterRetain({ 'list-deleted-fails': TODO })));
 		assert.equal(r.status, 0, r.stdout);
-		assert.match(r.stdout, /::warning::could not list deleted stacks/);
+		assert.match(r.stdout, /::warning::could not list deleted stacks, .*: An error occurred \(Throttling\)/);
 		assert.doesNotMatch(r.stdout + r.stderr, NO_ACCOUNT);
 	});
 
@@ -755,14 +764,14 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 	});
 
 	it('only retries plainly while a DELETE_FAILED sandbox is younger than 6 hours', () => {
-		const created = new Date(Date.now() - 5 * 3600_000).toISOString();
+		const created = new Date(Date.now() - (6 * 60 - 10) * 60_000).toISOString();
 		const r = runStep(sandbox(), { created });
 		assert.equal(r.status, 0, r.stdout);
 		assert.deepEqual(r.deletes, [`cloudformation delete-stack --stack-name ${ROOT}`]);
 	});
 
 	it('retains for a DELETE_FAILED sandbox just over 6 hours old', () => {
-		const created = new Date(Date.now() - 7 * 3600_000).toISOString();
+		const created = new Date(Date.now() - (6 * 60 + 10) * 60_000).toISOString();
 		const r = runStep(sandbox(), { created });
 		assert.equal(r.status, 0, r.stdout);
 		assert.deepEqual(r.deletes, [RETAIN_TODO]);
