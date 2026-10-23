@@ -1,10 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, test } from 'node:test';
+import { describe, test, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { extractUserAttributes, memoizePerContext, toCognitoApiError, AuthCognitoErrors } from './index.aws.js';
-import { ApiError } from '@aws-blocks/core';
+import { inspect } from 'node:util';
+import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-blocks/auth-common';
+import { AuthCognito, extractUserAttributes, memoizePerContext, toCognitoApiError, AuthCognitoErrors } from './index.aws.js';
+import { ApiError, Scope } from '@aws-blocks/core';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
 	test('passes through standard OIDC attributes', () => {
@@ -229,5 +232,52 @@ describe('toCognitoApiError (wire-safe SDK error translation)', () => {
 			assert.ok(!Object.keys(err).includes(key), `raw SDK field '${key}' was copied onto the ApiError`);
 		}
 		assert.ok(!JSON.stringify(err).includes('req-123456789012'));
+	});
+});
+
+// AWS-runtime `setAuthState` catch. SDK errors reach it already mapped to an
+// ApiError (toCognitoApiError); anything else — a storage, config or hook
+// failure — must not put its raw text in the AuthState returned to clients.
+describe('setAuthState error redaction (aws runtime)', () => {
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ssm:GetParameter';
+
+	afterEach(() => {
+		mock.restoreAll();
+	});
+
+	function setup(failure: unknown): AuthStateApi {
+		const auth = new AuthCognito(new Scope(`aws-redact-${Math.random().toString(36).slice(2, 8)}`), 'auth', { selfSignUp: true });
+		mock.method(auth, 'signUp', async () => {
+			throw failure;
+		});
+		const ctx = {
+			request: { headers: new Headers(), body: null, json: async () => ({}), text: async () => '', url: new URL('http://localhost:3000/'), params: {} },
+			response: { headers: new Headers(), status: 200, send: () => {} },
+		} as unknown as BlocksContext;
+		return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx);
+	}
+
+	test('an unbranded error is returned as a generic message and logged', async () => {
+		const consoleError = mock.method(console, 'error', () => {});
+		const api = setup(new Error(RAW_DETAIL));
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'alice', password: 'Password!1' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.error, 'Internal error');
+		assert.strictEqual(next.errorName, undefined);
+		assert.ok(!JSON.stringify(next).includes('123456789012'), 'no account id in the returned AuthState');
+		assert.ok(inspect(consoleError.mock.calls.map((c) => c.arguments)).includes(RAW_DETAIL), 'the original error is logged server-side');
+	});
+
+	test('a mapped SDK error (ApiError) keeps its message and name', async () => {
+		const sdk = new Error('raw sdk text');
+		sdk.name = AuthCognitoErrors.UserAlreadyExists;
+		const api = setup(toCognitoApiError(sdk));
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'alice', password: 'Password!1' });
+
+		assert.strictEqual(next.errorName, AuthCognitoErrors.UserAlreadyExists);
+		assert.ok(next.error && next.error !== 'Internal error' && !next.error.includes('raw sdk text'), `got ${next.error}`);
 	});
 });

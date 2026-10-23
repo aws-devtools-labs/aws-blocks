@@ -867,7 +867,9 @@ describe('CannedProvider', () => {
 		const result = await agent.stream('hello', { userId: 'test-user' });
 		await assert.rejects(() => result.complete(), (err: any) => {
 			assert.strictEqual(err.name, 'StreamFailedException');
-			assert.ok(err.message.includes('simulated mid-stream failure'));
+			// The model error is unbranded raw text, so it is redacted to a generic message.
+			assert.ok(err.message.includes('Internal error'), `expected a generic message, got: ${err.message}`);
+			assert.ok(!err.message.includes('simulated mid-stream failure'));
 			return true;
 		});
 	});
@@ -3840,3 +3842,171 @@ describe('createChat loadConversation + metadata narrowing', () => {
 	});
 });
 
+
+// ── invokeTurn error redaction ──────────────────────────────────────────────
+//
+// A runAgent failure is published as an `error` chunk, persisted to the
+// conversation's history, and re-thrown by `complete()` as a branded
+// StreamFailed (whose message crosses the RPC wire). None of those surfaces may
+// carry raw backend text (Bedrock/DynamoDB/S3 errors embed account ids and
+// ARNs): only a branded Building Block error keeps its message there; anything
+// else becomes a generic message, with the original logged server-side.
+
+import { AgentBase } from './agent.js';
+import { blocksError } from '@aws-blocks/core';
+
+describe('invokeTurn error redaction', () => {
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: s3:GetObject';
+
+	function recordingLog(): { log: ChildLogger; errors: { message: string; context?: Record<string, unknown> }[] } {
+		const errors: { message: string; context?: Record<string, unknown> }[] = [];
+		const log: ChildLogger = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				errors.push({ message, context });
+			},
+			child: () => log,
+		};
+		return { log, errors };
+	}
+
+	// Session storage whose snapshot read fails the way an S3 AccessDenied does:
+	// the error reaches runAgent's catch from inside the Strands session restore.
+	function failingStorage(error: Error): SnapshotStorage {
+		return {
+			async loadSnapshot(): Promise<Snapshot | null> {
+				throw error;
+			},
+			async loadManifest(): Promise<SnapshotManifest> {
+				throw error;
+			},
+			async saveSnapshot(): Promise<void> {},
+			async saveManifest(): Promise<void> {},
+			async listSnapshotIds(): Promise<string[]> {
+				return [];
+			},
+			async deleteSession(): Promise<void> {},
+		};
+	}
+
+	async function runFailingTurn(scopeId: string, error: Error) {
+		const { log, errors } = recordingLog();
+		const agent = new AgentBase(
+			new Scope(scopeId),
+			'redact',
+			{ systemPrompt: 'test', logger: log, model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } },
+			[{ provider: 'canned' }],
+			() => failingStorage(error),
+		);
+		const conversationId = await agent.createConversationId('test-user');
+		// Subscribe before dispatch so the in-process turn's error chunk can't be missed.
+		const channel = await agent.getChannel(conversationId);
+		const errorChunk = new Promise<AgentStreamChunk>((resolve) => {
+			channel.subscribe((chunk: AgentStreamChunk) => {
+				if (chunk.type === 'error') resolve(chunk);
+			});
+		});
+		const result = await agent.stream('hello', { userId: 'test-user', conversationId });
+		const rejection = await result.complete().then(
+			() => assert.fail('complete() should reject on a failed turn'),
+			(err: unknown) => err,
+		);
+		const chunk = await errorChunk;
+		const history = await agent.getConversation(conversationId);
+		const persisted = history.filter((m) => m.role === 'assistant').map((m) => m.metadata);
+		return { chunk, rejection, persisted, errors };
+	}
+
+	test('an unbranded backend error is published, persisted and rethrown as a generic message', async () => {
+		const { chunk, rejection, persisted, errors } = await runFailingTurn('test-redact-raw', new Error(RAW_DETAIL));
+
+		assert.strictEqual(chunk.error, 'Internal error', 'the realtime error chunk carries a generic message');
+		assert.ok(!JSON.stringify(chunk).includes('123456789012'), 'no account id in the error chunk');
+
+		assert.deepStrictEqual(persisted, [{ error: 'Internal error' }], 'persisted history carries the generic message');
+
+		assert.ok(rejection instanceof Error);
+		assert.strictEqual(rejection.name, AgentErrors.StreamFailed);
+		assert.ok(!rejection.message.includes('arn:aws'), `complete() must not rethrow raw backend text, got: ${rejection.message}`);
+
+		const logged = JSON.stringify(errors);
+		assert.ok(logged.includes(RAW_DETAIL), 'the original error is logged server-side');
+	});
+
+	test('a branded Building Block error keeps its message on every client-visible surface', async () => {
+		const branded = blocksError('SessionUnavailableException', 'Saved session could not be restored');
+		const { chunk, rejection, persisted } = await runFailingTurn('test-redact-branded', branded);
+
+		assert.strictEqual(chunk.error, branded.message, 'a branded message is published unchanged');
+		assert.deepStrictEqual(persisted, [{ error: branded.message }], 'a branded message is persisted unchanged');
+		assert.ok(rejection instanceof Error);
+		assert.strictEqual(rejection.name, AgentErrors.StreamFailed);
+		assert.ok(rejection.message.includes(branded.message), 'complete() carries the branded message');
+	});
+
+	// Strands wraps a provider error and keeps the original as `cause`, so the outer error
+	// carries no brand. The branded cause's message is reported — never the wrapper's text.
+	test('an unbranded wrapper around a branded cause reports the branded message', async () => {
+		const branded = blocksError(AgentErrors.InvalidModelConfig, 'Malformed canned responses JSON');
+		const wrapper = new Error(RAW_DETAIL, { cause: branded });
+		const { chunk, persisted } = await runFailingTurn('test-redact-wrapped', wrapper);
+
+		assert.strictEqual(chunk.error, branded.message, 'the branded cause message is published');
+		assert.deepStrictEqual(persisted, [{ error: branded.message }]);
+	});
+
+	test('an unbranded wrapper around an unbranded cause stays generic', async () => {
+		const wrapper = new Error('SessionError: S3 error reading snapshot', { cause: new Error(RAW_DETAIL) });
+		const { chunk } = await runFailingTurn('test-redact-wrapped-raw', wrapper);
+
+		assert.strictEqual(chunk.error, 'Internal error');
+	});
+
+	// The canned provider's dictionary errors are branded (their message reaches the client), so
+	// they must not echo the file's contents (V8's SyntaxError message quotes the malformed text)
+	// or the absolute server path. The detail stays in the server log.
+	test('a malformed canned dictionary never echoes its contents or server path to the client', async () => {
+		const MARKER = 'TOPSECRET-CANNED-MARKER-5c1e';
+		const fileName = `.bb-agent-canned-leak-${process.pid}-${Date.now()}.json`;
+		const filePath = join(process.cwd(), fileName);
+		const { log, errors } = recordingLog();
+		const agent = new Agent(new Scope('test-redact-canned'), 'canned-leak', {
+			systemPrompt: 'test',
+			logger: log,
+			model: { local: { provider: 'canned', cannedResponses: fileName } },
+		});
+		try {
+			writeFileSync(filePath, `{ "release": ${MARKER} }`);
+			const conversationId = await agent.createConversationId('test-user');
+			const channel = await agent.getChannel(conversationId);
+			const errorChunk = new Promise<AgentStreamChunk>((resolve) => {
+				channel.subscribe((chunk: AgentStreamChunk) => {
+					if (chunk.type === 'error') resolve(chunk);
+				});
+			});
+			const result = await agent.stream('release', { userId: 'test-user', conversationId });
+			const rejection = await result.complete().then(
+				() => assert.fail('complete() should reject on a malformed dictionary'),
+				(err: unknown) => err,
+			);
+			const chunk = await errorChunk;
+			const history = await agent.getConversation(conversationId);
+
+			const clientVisible = JSON.stringify({
+				chunk,
+				persisted: history.filter((m) => m.role === 'assistant').map((m) => m.metadata),
+				rejection: rejection instanceof Error ? rejection.message : rejection,
+			});
+			// V8 truncates the quoted snippet, so check the marker's prefix, not the whole marker.
+			assert.ok(!clientVisible.includes('TOPSECRET'), `file contents reached the client: ${clientVisible}`);
+			assert.ok(!clientVisible.includes(process.cwd()), `the server path reached the client: ${clientVisible}`);
+			assert.match(chunk.error ?? '', /InvalidModelConfigException: Malformed canned responses JSON in '\.bb-agent-canned-leak-[^']+\.json'\./);
+			// V8 may truncate the quoted snippet, so match the SyntaxError itself rather than the marker.
+			assert.match(JSON.stringify(errors), /not valid JSON|Unexpected token/, 'the SyntaxError detail is logged server-side');
+		} finally {
+			rmSync(filePath, { force: true });
+		}
+	});
+});

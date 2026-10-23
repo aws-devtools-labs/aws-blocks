@@ -10,7 +10,7 @@
  *   await email.send('user@example.com', { subject: 'Hi', body: 'Hello' });
  * } catch (e: unknown) {
  *   if (isBlocksError(e, EmailErrors.SendFailed)) {
- *     // General send failure — check error message for details
+ *     // General send failure — the SES error is logged server-side and kept on `e.cause`
  *   }
  *   if (isBlocksError(e, EmailErrors.InvalidInput)) {
  *     // malformed input (e.g. invalid email address)

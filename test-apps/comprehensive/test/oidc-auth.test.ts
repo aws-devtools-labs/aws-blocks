@@ -372,6 +372,43 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
+    // The `oidc-auth-hookfail` instance's onSignIn throws. An unbranded error
+    // (what a driver or AWS SDK raises, with an account id and ARN in its
+    // message) must reach the browser only as a generic 500, while an ApiError
+    // keeps its status, name and message.
+    describe('onSignIn hook failure', () => {
+      async function callbackAfterSignIn(provider: string): Promise<Response> {
+        const baseUrl = getBaseUrl();
+        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/hookfail/signin/${provider}`, { redirect: 'manual' });
+        assert.strictEqual(signinResp.status, 302, `signin kickoff should 302, got ${signinResp.status}`);
+        const cookies = collectCookies(signinResp);
+        const authResp = await fetch(signinResp.headers.get('location')!, { redirect: 'manual' });
+        assert.strictEqual(authResp.status, 302, `stub IdP should 302, got ${authResp.status}`);
+        return fetch(authResp.headers.get('location')!, {
+          redirect: 'manual',
+          headers: { cookie: cookies.join('; ') },
+        });
+      }
+
+      test('an unbranded hook error is a generic 500 with no backend detail', async () => {
+        const cbResp = await callbackAfterSignIn('hookfail-raw');
+        const text = await cbResp.text();
+        assert.strictEqual(cbResp.status, 500, `expected 500, got ${cbResp.status}: ${text}`);
+        assert.deepStrictEqual(JSON.parse(text), { error: 'Internal error' });
+        assert.ok(!text.includes('111122223333'), `response must not carry the hook's raw message: ${text}`);
+      });
+
+      test('an ApiError from the hook keeps its status, name and message', async () => {
+        const cbResp = await callbackAfterSignIn('hookfail-api');
+        const text = await cbResp.text();
+        assert.strictEqual(cbResp.status, 403, `expected 403, got ${cbResp.status}: ${text}`);
+        assert.deepStrictEqual(JSON.parse(text), {
+          error: 'Sign-in is disabled for this account',
+          name: 'SignInBlockedException',
+        });
+      });
+    });
+
     describe('userId format', () => {
       test('userId is ${iss}:${sub}', async () => {
         const baseUrl = getBaseUrl();
