@@ -1261,6 +1261,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { username: u.username, enabled: u.enabled };
   },
+  async authCAdminCreateUserWithName(username: string, temporaryPassword: string, name: string) {
+    // Seeds the standard `name` attribute (filterable by ListUsers, unlike custom
+    // attributes) so authCAdminScan can check how filter values are escaped.
+    const u = await authC.admin.createUser(username, {
+      temporaryPassword,
+      attributes: { name, email: `${username}@example.com` },
+      suppressInvite: true,
+    });
+    return { username: u.username, enabled: u.enabled };
+  },
   async authCAdminGetUser(username: string) {
     const u = await authC.admin.getUser(username);
     if (!u) return null;

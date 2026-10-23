@@ -7,7 +7,8 @@
  *
  * Runs only when BLOCKS_TEST_ENV=sandbox|production (the unified e2e harness
  * deploys + tears down the stack). Verifies the admin IAM grant is wired and
- * the surface behaves end-to-end against real Cognito.
+ * the surface behaves end-to-end against real Cognito. The scan filter-escaping
+ * suite at the end also runs locally, against the mock.
  */
 
 import { describe, test } from 'node:test';
@@ -204,6 +205,32 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 
 			await api.authCAdminDeleteUser(a);
 			await api.authCAdminDeleteUser(b);
+		});
+	});
+
+	// `admin.scan` escapes `\` and `"` in the filter value before sending it as a
+	// ListUsers Filter. Only Cognito decides how the escaped string is read (the
+	// mock compares the raw value), so on a sandbox this checks the escaping
+	// against the real service; locally it pins the mock to the same results.
+	describe('AuthCognito admin.scan filter values with backslashes and quotes', () => {
+		test('equals and startsWith match a value holding \\, " and \\" literally', async () => {
+			const api = getApi();
+			const u = uniqueUser();
+			const base = `scanesc-${u}`;
+			const name = `${base} a\\b "c" \\"d\\"`; // scanesc-... a\b "c" \"d\"
+			await api.authCAdminCreateUserWithName(u, PW, name);
+			try {
+				assert.deepStrictEqual(await api.authCAdminScan({ attribute: 'name', match: 'equals', value: name }), [u]);
+				// A prefix that ends in a backslash: unescaped, it would escape the closing quote.
+				const prefix = `${base} a\\b "c" \\`;
+				assert.deepStrictEqual(await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: prefix }), [u]);
+				// Two backslashes where the user has one must not match: each backslash is
+				// escaped on its own, so the service never reads the pair back as one.
+				const near = `${base} a\\\\b "c" \\"d\\"`;
+				assert.deepStrictEqual(await api.authCAdminScan({ attribute: 'name', match: 'equals', value: near }), []);
+			} finally {
+				await api.authCAdminDeleteUser(u);
+			}
 		});
 	});
 }
