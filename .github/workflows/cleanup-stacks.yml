@@ -346,14 +346,21 @@ jobs:
           # and not cleared this run). Best-effort — surfaced as a warning so the
           # silent backlog growth that exhausted the quota can't recur unnoticed,
           # without hard-failing this best-effort cleanup job.
+          # A tally it can't read is a warning and prints as unknown, not 0.
           STILL_FAILED=0
+          LIST_ERR=$(mktemp)
           for PREFIX in blocks-test- blocks-hosting- bb-test- bb-telemetry- bb-vpc-smoke- my-app-; do
-            CNT=$(aws cloudformation list-stacks \
+            if ! CNT=$(aws cloudformation list-stacks \
               --stack-status-filter DELETE_FAILED \
               --query "length(StackSummaries[?starts_with(StackName, '${PREFIX}')])" \
-              --output text 2>/dev/null || echo 0)
+              --output text 2>"$LIST_ERR"); then
+              aws_annotate warning "$LIST_ERR" "list-stacks failed, so the DELETE_FAILED e2e stacks can't be counted"
+              STILL_FAILED=unknown
+              break
+            fi
             STILL_FAILED=$((STILL_FAILED + CNT))
           done
+          rm -f "$LIST_ERR"
 
           echo ""
           echo "## Stack Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -371,7 +378,7 @@ jobs:
           fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$STILL_FAILED" -gt 0 ]; then
+          if [ "$STILL_FAILED" != unknown ] && [ "$STILL_FAILED" -gt 0 ]; then
             echo "::warning::$STILL_FAILED e2e stack(s) still in DELETE_FAILED after cleanup"
           fi
 
@@ -518,10 +525,16 @@ jobs:
           # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
           # DELETE_FAILED (commonly the managed DynamoDB table) surfaced as a warning
           # so the backlog can't grow silently and exhaust the AppSync API quota.
-          STILL_FAILED=$(aws cloudformation list-stacks \
+          # A tally it can't read is a warning with the reason (the count shows 0).
+          LIST_ERR=$(mktemp)
+          if ! STILL_FAILED=$(aws cloudformation list-stacks \
             --stack-status-filter DELETE_FAILED \
             --query "length(StackSummaries[?starts_with(StackName, 'amplify-amplifygen2-') || starts_with(StackName, 'amplify-amplifyinteroptest-')])" \
-            --output text 2>/dev/null || echo 0)
+            --output text 2>"$LIST_ERR"); then
+            aws_annotate warning "$LIST_ERR" "list-stacks failed, so the DELETE_FAILED Amplify sandboxes can't be counted"
+            STILL_FAILED=0
+          fi
+          rm -f "$LIST_ERR"
 
           echo ""
           echo "## Amplify Sandbox Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -807,11 +820,16 @@ jobs:
             REGIONS=""
           fi
           OWNED_ROLES=""
+          # One warning per kind of per-region failure, naming the regions, with
+          # the first region's reason (GitHub shows at most 10 per step).
+          STACKS_FAILED_IN=""
+          STACKS_ERR=$(mktemp)
           for R in $REGIONS; do
             if ! LIVE_STACKS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks --region "$R" \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS DELETE_FAILED UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE CREATE_FAILED ROLLBACK_FAILED UPDATE_ROLLBACK_FAILED \
               --query "StackSummaries[].StackId" --output text 2>"$LIST_ERR"); then
-              aws_annotate warning "$LIST_ERR" "list-stacks failed in $R, so the ownership set is incomplete this run"
+              [ -z "$STACKS_FAILED_IN" ] && cp "$LIST_ERR" "$STACKS_ERR"
+              STACKS_FAILED_IN="$STACKS_FAILED_IN $R"
               OWNERSHIP_INCOMPLETE=1
               continue
             fi
@@ -833,25 +851,38 @@ jobs:
                 NAMES=$(echo "$NAMES" | tr '\t' '\n')
                 [ -n "$NAMES" ] && OWNED_ROLES="$OWNED_ROLES"$'\n'"$NAMES"
               else
-                echo "  ⚠️ list-stack-resources failed for $S — ownership set is incomplete this run"
+                # By name: the stack id is an ARN, which carries the account id.
+                NAME=${S#*:stack/}
+                echo "  list-stack-resources failed for ${NAME%%/*}, so the ownership set is incomplete this run"
                 OWNERSHIP_INCOMPLETE=1
               fi
             done
           done
           OWNED_ROLES=$(echo "$OWNED_ROLES" | sed '/^$/d;/^None$/d' | sort -u)
+          if [ -n "$STACKS_FAILED_IN" ]; then
+            aws_annotate warning "$STACKS_ERR" "list-stacks failed in ${STACKS_FAILED_IN# }, so the ownership set is incomplete this run"
+          fi
+          rm -f "$STACKS_ERR"
 
           # (e) The role the account-level API Gateway setting points at, in every
           # region (the setting is per region). An empty setting ("None") is fine;
           # a FAILED read is not — we can't prove the role is unreferenced.
           ACCOUNT_ROLES=""
+          ACCOUNT_FAILED_IN=""
+          ACCOUNT_ERR=$(mktemp)
           for R in $REGIONS; do
             if ARN=$(aws apigateway get-account --region "$R" --query cloudwatchRoleArn --output text 2>"$LIST_ERR"); then
               [ -n "$ARN" ] && [ "$ARN" != "None" ] && ACCOUNT_ROLES="$ACCOUNT_ROLES"$'\n'"${ARN##*/}"
             else
-              aws_annotate warning "$LIST_ERR" "apigateway get-account failed in $R, so the active CloudWatch role is unknown"
+              [ -z "$ACCOUNT_FAILED_IN" ] && cp "$LIST_ERR" "$ACCOUNT_ERR"
+              ACCOUNT_FAILED_IN="$ACCOUNT_FAILED_IN $R"
               OWNERSHIP_INCOMPLETE=1
             fi
           done
+          if [ -n "$ACCOUNT_FAILED_IN" ]; then
+            aws_annotate warning "$ACCOUNT_ERR" "apigateway get-account failed in ${ACCOUNT_FAILED_IN# }, so the active CloudWatch role is unknown"
+          fi
+          rm -f "$ACCOUNT_ERR"
 
           # (a)+(b)+(c) candidates straight from list-roles: name prefix, trust
           # principal exactly apigateway.amazonaws.com, and created before the cutoff.

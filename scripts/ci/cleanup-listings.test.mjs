@@ -166,6 +166,29 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 		assert.match(r.summary, /^- IAM roles in account: unknown, the listing failed \(quota 3000\)$/m);
 	});
 
+	it('IAM step: names every failing region in one warning', () => {
+		const r = runStep(IAM, {
+			...iamOk,
+			'ec2.describe-regions.out': 'us-east-1\teu-west-1\tap-south-1\n',
+			'cloudformation.list-stacks.err': denied('ListStacks'),
+			'apigateway.get-account.err': denied('GetAccount'),
+		});
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.stdout, /^::warning::list-stacks failed in us-east-1 eu-west-1 ap-south-1, so/m);
+		assert.match(r.stdout, /^::warning::apigateway get-account failed in us-east-1 eu-west-1 ap-south-1, so/m);
+		assert.equal(r.stdout.match(/::warning::/g).length, 2);
+	});
+
+	it('IAM step: names a stack it cannot read by name, never by its ARN', () => {
+		const r = runStep(IAM, {
+			...iamOk,
+			'cloudformation.list-stacks.out': 'arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-live/0000-1111\n',
+			'cloudformation.list-stack-resources.err': denied('ListStackResources'),
+		});
+		assert.match(r.stdout, /list-stack-resources failed for bb-test-live, so/);
+		assert.doesNotMatch(r.stdout, NO_ACCOUNT);
+	});
+
 	it('IAM step: warns with the reason, and deletes nothing, when one region cannot list its stacks', () => {
 		const r = runStep(IAM, {
 			...iamOk,
@@ -174,6 +197,7 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 		});
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.match(r.stdout, /^::warning::list-stacks failed in us-east-1, .*: An error occurred \(AccessDenied\)/m);
+		assert.equal(r.stdout.match(/list-stacks failed in/g).length, 1);
 		assert.match(r.stdout, /^::warning::IAM role sweep deferred 1 candidate/m);
 		assert.equal(r.writes, '');
 	});
@@ -181,6 +205,8 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 	it('e2e stack step: warns with the reason when the stacks cannot be listed', () => {
 		const r = runStep('Find and delete stale e2e stacks', { 'cloudformation.list-stacks.err': denied('ListStacks') });
 		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.stdout, /^::warning::list-stacks failed, so the DELETE_FAILED e2e stacks can't be counted: An error/m);
+		assert.match(r.summary, /^- Still DELETE_FAILED: unknown$/m);
 		assert.match(
 			r.stdout,
 			/^::warning::list-stacks failed for blocks-test-\* stacks, .*: An error occurred \(AccessDenied\) when calling the ListStacks/m,
@@ -194,7 +220,8 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 			'cloudformation.list-stacks.err': denied('ListStacks'),
 		});
 		assert.equal(r.status, 0, r.stdout + r.stderr);
-		assert.match(r.stdout, /^::warning::list-stacks failed, .*Amplify.*: An error occurred \(AccessDenied\)/m);
+		assert.match(r.stdout, /^::warning::list-stacks failed, so no Amplify sandbox is swept this run: An error occurred \(AccessDenied\)/m);
+		assert.match(r.stdout, /^::warning::list-stacks failed, so the DELETE_FAILED Amplify sandboxes can't be counted: An error/m);
 		assert.doesNotMatch(r.stdout, NO_ACCOUNT);
 		assert.equal(r.writes, '');
 	});
@@ -246,6 +273,10 @@ describe('aws-error.sh', () => {
 
 	it('says so when the CLI wrote nothing', () => {
 		assert.equal(reason(''), '::error::listing failed: no error output\n');
+	});
+
+	it('masks an account id before cutting the reason to 500 bytes', () => {
+		assert.equal(reason(`\n${'x'.repeat(494)}123456789012\n`), `::error::listing failed: ${'x'.repeat(494)}<accou\n`);
 	});
 
 	it('keeps the reason to 500 bytes', () => {
