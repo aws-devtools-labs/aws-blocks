@@ -1,7 +1,7 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/bb-compute": patch
-"@aws-blocks/blocks": patch
+"@aws-blocks/blocks": minor
 ---
 
 feat(core): run an API namespace on its own compute
@@ -39,3 +39,5 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   compute is a type error.
 - Namespaces without a `compute`, `RawRoute`s and auth routes stay on the
   default compute. In local dev every namespace still runs in the dev server.
+- A `compute` created in a different `BlocksBackend` can't serve this backend's
+  API: synth warns, and the namespace runs on this backend's default compute.

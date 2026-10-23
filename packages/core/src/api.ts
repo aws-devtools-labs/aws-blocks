@@ -82,6 +82,16 @@ import type { ScopeParent } from './common/index.js';
  */
 export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
 
+/**
+ * Symbol under which an `ApiNamespace` records `true` when it was given its own
+ * {@link ApiNamespaceOptions.compute}. The shared API gateway reads it to warn
+ * when that compute belongs to another backend, which it can't route to; a
+ * compute inherited from the scope is skipped there silently by design.
+ *
+ * @internal
+ */
+export const API_NAMESPACE_EXPLICIT_COMPUTE = Symbol.for('blocks:ApiNamespaceExplicitCompute');
+
 /** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
 type ComputeResolvingScope = { compute?: unknown };
 
@@ -251,6 +261,7 @@ export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
         : scope && typeof scope === 'object'
           ? (scope as ComputeResolvingScope).compute
           : undefined;
+    if (compute) handler[API_NAMESPACE_EXPLICIT_COMPUTE] = true;
     // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }
