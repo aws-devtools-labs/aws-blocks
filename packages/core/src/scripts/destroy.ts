@@ -48,7 +48,7 @@ export async function destroy(options: DestroyOptions) {
     // [60s, 120s] backoff (the Telemetry E2E timeout this guards against). The
     // retry loop is for transient teardown blockers (bucket-blocked delete,
     // DeleteRestApi 429 throttle, ENI detach), never auth.
-    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot });
+    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot, accountDetails: false });
 
     const cdkEnv = {
       ...process.env,

@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { ApiNamespace, API_NAMESPACE_MARKER } from './api.js';
+import { ApiNamespace, API_NAMESPACE_COMPUTE, API_NAMESPACE_MARKER } from './api.js';
 import { Scope } from './common/index.js';
 
 const scope = new Scope('test');
@@ -24,27 +24,42 @@ test('Different ApiNamespace names should not collide', () => {
   assert.strictEqual((api2 as any)[API_NAMESPACE_MARKER], 'api2');
 });
 
-// ApiNamespace records its name on the scope's resolved compute (CDK
-// synth), while staying a silent no-op where no compute is resolvable.
-test('ApiNamespace records its name on a resolvable compute', () => {
-  const compute = { namespaces: [] as string[] };
-  new ApiNamespace({ id: 'app', compute } as never, 'myapi', () => ({ ping: () => 'ok' }));
-  assert.deepStrictEqual(compute.namespaces, ['myapi']);
+// ApiNamespace exposes a resolver for its compute, so the shared gateway can
+// resolve it at synth — after the backend module is imported — rather than at
+// construction.
+test('ApiNamespace resolves its compute from its scope when asked', () => {
+  const compute = { id: 'orders-compute' };
+  const handler = new ApiNamespace({ id: 'app', compute } as never, 'myapi', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((handler as any)[API_NAMESPACE_COMPUTE](), compute);
 });
 
-test('ApiNamespace is a no-op recorder when the scope has no compute', () => {
-  // The common Scope (mock/runtime) has no `compute`; recording must not throw
-  // and the handler is still tagged and returned unchanged.
+test('ApiNamespace resolves no compute without a scope that has one', () => {
+  const scopeless = new ApiNamespace(undefined as never, 'scopeless', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((scopeless as any)[API_NAMESPACE_COMPUTE](), undefined);
+  const mockScope = new ApiNamespace(new Scope('mock'), 'mockapi', () => ({ ping: () => 'ok' }));
+  assert.strictEqual((mockScope as any)[API_NAMESPACE_COMPUTE](), undefined);
+});
+
+test('ApiNamespace does not resolve the compute at construction', () => {
+  // Reading `scope.compute` here would freeze routing at construction time and
+  // throw before create() has built the default compute.
+  let reads = 0;
+  const scopeLike = {
+    id: 'app',
+    get compute() {
+      reads += 1;
+      return { id: 'late-compute' };
+    },
+  };
+  const handler = new ApiNamespace(scopeLike as never, 'late', () => ({ ping: () => 'ok' }));
+  assert.strictEqual(reads, 0, 'not read at construction');
+  (handler as any)[API_NAMESPACE_COMPUTE]();
+  assert.strictEqual(reads, 1, 'read when resolved');
+});
+
+test('ApiNamespace is still tagged and returned unchanged in the mock/runtime Scope', () => {
   const handler = new ApiNamespace(new Scope('no-compute'), 'plainapi', () => ({ x: () => 1 }));
   assert.strictEqual((handler as any)[API_NAMESPACE_MARKER], 'plainapi');
-});
-
-test('ApiNamespace records a namespace at most once per compute', () => {
-  // `namespaces` is a set of names: recording the same name twice (e.g. a
-  // re-imported module during synth) must not append a duplicate.
-  const compute = { namespaces: [] as string[] };
-  const scopeLike = { id: 'app', compute } as never;
-  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
-  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
-  assert.deepStrictEqual(compute.namespaces, ['dup']);
+  // Symbol keys stay invisible to export scanning and serialization.
+  assert.deepStrictEqual(Object.keys(handler), []);
 });

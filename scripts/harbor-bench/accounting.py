@@ -1,5 +1,11 @@
-"""Claude 2.1.296 result modelUsage is session-cumulative; streams are per invocation."""
+"""Claude 2.1.296 result modelUsage is session-cumulative; streams are per invocation.
+
+Per-call input usage in a stream's assistant events is exact; per-call output_tokens there is a
+partial streaming count, so output always comes from the result's cumulative usage.
+"""
 import json
+
+from pins import PRICE_CACHE_READ, PRICE_CACHE_WRITE, PRICE_OUTPUT
 
 TOKEN_FIELDS = {
     'input_tokens': 'inputTokens',
@@ -37,6 +43,44 @@ def skill_use(text):
     return 'none'
 
 
+def call_contexts(stream):
+    """Input tokens each distinct model call processed, in order, per agent thread; None if any is missing.
+
+    Threads are keyed by parent_tool_use_id (None is the main session); repeated events of one
+    message carry the same usage and count once.
+    """
+    threads, seen = {}, set()
+    for event in stream:
+        message = event.get('message') or {}
+        if event.get('type') != 'assistant' or message.get('id') in seen:
+            continue
+        seen.add(message.get('id'))
+        usage = message.get('usage') or {}
+        values = [usage.get(key) for key in
+                  ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')]
+        if not message.get('id') or not all(type(v) is int and v >= 0 for v in values):
+            return None
+        threads.setdefault(event.get('parent_tool_use_id'), []).append(sum(values))
+    return threads
+
+
+def context_growth(threads, start):
+    """New context the calls added: the sum of each call's rise over the previous call of its thread.
+
+    The main thread continues from `start`, the session's last context in the previous phase; other
+    threads start empty. A shrinking context (compaction) has to be rebuilt, so only rises count.
+    """
+    growth, end = 0, start
+    for parent, contexts in threads.items():
+        last = start if parent is None else 0
+        for context in contexts:
+            growth += max(0, context - last)
+            last = context
+        if parent is None:
+            end = last
+    return growth, end
+
+
 def summarize(text, previous=None):
     stream = events(text)
     results = [event for event in stream if event.get('type') == 'result']
@@ -64,6 +108,24 @@ def summarize(text, previous=None):
             errors.append(f'nonmonotonic_{field}')
         else:
             delta[field] = current - before
+    inputs = [delta[field] for field in ('input_tokens', 'cache_write_tokens', 'cache_read_tokens')]
+    processed = sum(inputs) if None not in inputs else None
+    delta['input_processed_tokens'] = processed
+    # Cache-neutral cost prices the phase as if its session wrote every context token to the cache
+    # once: growth at the cache-write rate, everything re-read at the cache-read rate. It ignores
+    # prefixes served from another session's cache and rewrites after an expiry.
+    threads = call_contexts(stream)
+    start = previous.get('context_end') if previous else 0
+    neutral = context_end = None
+    if (threads is not None and start is not None and processed is not None
+            and delta['output_tokens'] is not None
+            and sum(map(sum, threads.values())) == processed):  # The stream holds every counted call.
+        growth, context_end = context_growth(threads, start)
+        neutral = (growth * PRICE_CACHE_WRITE + (processed - growth) * PRICE_CACHE_READ
+                   + delta['output_tokens'] * PRICE_OUTPUT)
+    else:
+        errors.append('unavailable_cache_neutral_cost_usd')
+    delta['cache_neutral_cost_usd'] = neutral
     messages, tools = set(), set()
     for event in stream:
         if event.get('type') != 'assistant':
@@ -76,7 +138,7 @@ def summarize(text, previous=None):
                 tools.add(block['id'])
     inits = [event for event in stream if event.get('type') == 'system' and event.get('subtype') == 'init']
     return {
-        'session_id': session, 'cumulative': cumulative, 'usage': delta,
+        'session_id': session, 'cumulative': cumulative, 'usage': delta, 'context_end': context_end,
         'accounting_errors': errors, 'turns': final.get('num_turns'),
         'tool_calls': len(tools), 'llm_calls': len(messages),
         'duration_ms': final.get('duration_ms'), 'duration_api_ms': final.get('duration_api_ms'),
