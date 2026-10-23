@@ -29,6 +29,7 @@ import {
   rmSync,
   cpSync,
   symlinkSync,
+  readdirSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
@@ -317,8 +318,23 @@ const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 /** App entries a group copy needs. The generated client is left out. */
 const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aws-blocks'];
 
-/** Real-HOME entries a group HOME links to: AWS config and SSO cache, npm cache and config. */
-const HOME_LINKS = ['.aws', '.npm', '.npmrc'];
+/**
+ * App entries a group copy leaves out: the tests and docs, and state the CLI,
+ * the dev server or a group writes. Every other top-level entry fails
+ * prepareCloudGroup until it is added to one of the two lists, so the AWS
+ * groups never deploy a different app than the local group runs.
+ */
+const APP_EXCLUDED = [
+  'test', 'README.md', '.gitignore', 'node_modules', 'dist',
+  'cdk.out', 'cdk.context.json', '.blocks-sandbox', '.bb-data', '.e2e-groups',
+];
+
+/**
+ * Real-HOME entries a group HOME links to: AWS config and SSO cache, npm cache
+ * and config, and the CDK user settings (`profile`/`region` there pick the
+ * deployment target, see packages/core/src/scripts/deployment-target.ts).
+ */
+const HOME_LINKS = ['.aws', '.npm', '.npmrc', '.cdk.json'];
 
 /**
  * API Gateway allows one edge-optimized CreateRestApi, and one DeleteRestApi,
@@ -369,6 +385,12 @@ function writeSandboxId(projectRoot: string, sandboxId: string): void {
 }
 
 function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
+  const unlisted = readdirSync(APP_ROOT).filter((entry) => !APP_ENTRIES.includes(entry) && !APP_EXCLUDED.includes(entry));
+  assert.deepStrictEqual(
+    unlisted,
+    [],
+    'test-apps/telemetry has top-level entries in neither APP_ENTRIES (copied into the AWS groups) nor APP_EXCLUDED',
+  );
   const generatedClient = join(APP_ROOT, 'aws-blocks', 'client.js');
   for (const entry of APP_ENTRIES) {
     cpSync(join(APP_ROOT, entry), join(group.root, entry), {

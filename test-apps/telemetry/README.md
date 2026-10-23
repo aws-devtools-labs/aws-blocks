@@ -41,10 +41,13 @@ The copy keeps the CLI state that lives in the project root apart: `cdk.out`
 (two cdk processes on one `cdk.out` collide on its lock), `.blocks-sandbox/`
 and the generated client. The HOME keeps the local group's global-config
 cases from disabling telemetry for a cloud command; it is seeded with the
-pinned installation-id and links to the real `~/.aws`, `~/.npm` and
-`~/.npmrc`. AWS credentials must therefore come from the environment (as in CI)
-or from `~/.aws`; a credential helper that keeps its state elsewhere in HOME
-won't find it.
+pinned installation-id and links to the real `~/.aws`, `~/.npm`, `~/.npmrc`
+and `~/.cdk.json` (whose `profile` and `region` pick the deployment target).
+AWS credentials must therefore come from the environment (as in CI) or from
+`~/.aws`; a credential helper that keeps its state elsewhere in HOME won't
+find it. The copy takes the app entries listed in the test's `APP_ENTRIES`;
+a new top-level entry in this directory fails the run until it is added
+there or to `APP_EXCLUDED`.
 
 A suite-level `before()` writes one fresh sandbox id to this directory and to
 both copies. Sandbox and production stack names differ
