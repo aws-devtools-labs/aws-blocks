@@ -180,6 +180,11 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
+		// Lambda's 3 s default is too tight for a cold start plus one serial SSM
+		// call per secret: a slow cold start timed out and rolled the deploy back.
+		// Two minutes (the AwsCustomResource default) covers many secrets and SDK
+		// retries under SSM throttling, while a hung call still fails the deploy quickly.
+		timeout: cdk.Duration.minutes(2),
 		// Own the log group so its retention follows the stack-wide default
 		// instead of AWS's infinite retention.
 		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {
