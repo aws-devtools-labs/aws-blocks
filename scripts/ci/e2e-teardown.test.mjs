@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-teardown.mjs', import.meta.url));
 const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
+const SUITE = new URL('../../test-apps/comprehensive/test/e2e.test.ts', import.meta.url);
 const ID = 'runner-k3x9q2';
 
 // A stand-in for the AWS CLI: serves list-stacks / describe-stacks /
@@ -40,7 +41,10 @@ switch (args[1]) {
 		break;
 	case 'describe-stacks': {
 		const s = state.stacks.find((x) => x.StackName === name && x.StackStatus !== 'DELETE_COMPLETE');
-		if (!s) fail('An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id ' + name + ' does not exist');
+		// Scripted statuses per call, then gone.
+		const seq = (state.describeSeq || {})[name];
+		if (seq && seq.length) { const st = seq.shift(); save(); process.stdout.write(JSON.stringify(st)); break; }
+		if (!s || seq) fail('An error occurred (ValidationError) when calling the DescribeStacks operation: Stack with id ' + name + ' does not exist');
 		process.stdout.write(JSON.stringify(s.StackStatus));
 		break;
 	}
@@ -141,6 +145,16 @@ describe('e2e-teardown.mjs', () => {
 		const r = run({ stacks: [stack(`bb-test-${ID}-pr-9-1`, 'DELETE_IN_PROGRESS')] });
 		assert.equal(r.status, 0, r.out);
 		assert.deepEqual(deletes(r.calls), []);
+		// Hands it over at once: only a passing job without KEEP waits for it to go.
+		assert.equal(r.calls.filter((c) => c[1] === 'describe-stacks').length, 1);
+	});
+
+	it("doesn't wait for a stack being deleted in a passing job that kept it", () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name, 'DELETE_IN_PROGRESS')], jobStatus: 'success', keep: '1', budget: '30' });
+		assert.equal(r.status, 0, r.out);
+		assert.equal(r.calls.filter((c) => c[1] === 'describe-stacks').length, 1);
+		assert.equal(r.output, `stacks=${name}\n`);
 	});
 
 	it('retries a delete CloudFormation rejects while an operation is in progress', () => {
@@ -220,12 +234,33 @@ describe('e2e-teardown.mjs', () => {
 		assert.match(r.out, /::error title=E2E teardown::.*DELETE_FAILED/);
 	});
 
-	it("warns, without failing, when a passing job's suite left its stack", () => {
+	it("fails, after re-issuing the delete, when a passing job's suite left its stack", () => {
 		const name = `bb-test-${ID}-pr-9-1`;
 		const r = run({ stacks: [stack(name, 'DELETE_FAILED')], jobStatus: 'success' });
-		assert.equal(r.status, 0, r.out);
+		assert.equal(r.status, 1, r.out);
 		assert.deepEqual(deletes(r.calls), [name]);
-		assert.match(r.out, /::warning title=E2E teardown::.*tests passed but the suite's own destroy left it DELETE_FAILED/);
+		assert.match(r.out, /::error title=E2E teardown::.*tests passed but the suite's own destroy left it DELETE_FAILED/);
+		assert.equal(r.output, `stacks=${name}\n`);
+	});
+
+	it("doesn't fail a passing job for a stack listed mid-delete that is gone by the time it looks", () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		// Still deleting on the first two looks, then gone.
+		const r = run({ stacks: [stack(name, 'DELETE_IN_PROGRESS')], describeSeq: { [name]: ['DELETE_IN_PROGRESS', 'DELETE_IN_PROGRESS'] }, jobStatus: 'success' });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), []);
+		assert.doesNotMatch(r.out, /::(error|warning)/);
+		assert.match(r.out, /is gone now/);
+		assert.equal(r.output, '');
+	});
+
+	it("fails a passing job for a stack still being deleted when the budget runs out, without a new delete", () => {
+		const name = `bb-test-${ID}-pr-9-1`;
+		const r = run({ stacks: [stack(name, 'DELETE_IN_PROGRESS')], jobStatus: 'success', budget: '1' });
+		assert.equal(r.status, 1, r.out);
+		assert.deepEqual(deletes(r.calls), []);
+		assert.match(r.out, new RegExp(`::error title=E2E teardown::${name} is still being deleted: the tests passed`));
+		assert.equal(r.output, `stacks=${name}\n`);
 	});
 
 	it('retries a throttled ListStacks', () => {
@@ -279,8 +314,9 @@ describe('e2e-teardown.mjs', () => {
 			keep: '1',
 		});
 		assert.equal(r.status, 1, r.out);
-		// One line per stack handed over; GitHub keeps the last.
-		assert.equal(r.output.trim().split('\n').at(-1), `stacks=${denied} ${deleting}`);
+		// One line per stack handed over, written as it goes (a step cut off by its
+		// timeout keeps what it got to); GitHub keeps the last.
+		assert.deepEqual(r.output.trim().split('\n'), [`stacks=${denied}`, `stacks=${denied} ${deleting}`]);
 	});
 
 	it('outputs no stack when the suite cleaned up', () => {
@@ -305,6 +341,8 @@ describe('pr-checks.yml', () => {
 			.slice(job.indexOf('\n    steps:\n'))
 			.split(/^(?= {6}- )/m)
 			.slice(1);
+	// A job's lines before its steps (env, outputs, if, ...).
+	const headOf = (job) => job.slice(0, job.indexOf('\n    steps:\n'));
 	const ifOf = (step) => step.match(/^ {6}[- ] if: (.*)$/m)?.[1] ?? '';
 	const CREDENTIALS = 'uses: ./.github/actions/e2e-aws-credentials';
 
@@ -350,23 +388,55 @@ describe('pr-checks.yml', () => {
 	}
 
 	// The jobs whose suite keeps its stacks and whose teardown doesn't wait for
-	// the delete: E2E Teardown Verify must wait for each of them.
-	const ASYNC = ['e2e-sandbox', 'e2e-production', 'e2e-compute-smoke'];
+	// the delete. Not E2E Sandbox: it is the required job that runs the
+	// product's destroySandbox() (the comprehensive suite's test.after), so it
+	// must keep running it. Compute Smoke's suite destroy is a raw `cdk
+	// destroy`, and Telemetry E2E runs the product's destroy().
+	const KEEPING = ['e2e-production', 'e2e-compute-smoke'];
+	// The jobs whose teardown hands the stacks it is deleting to E2E Teardown
+	// Verify, which must wait for each of them.
+	const ASYNC = ['e2e-sandbox', ...KEEPING];
 	const teardownStep = (id) => stepsOf(jobs[id]).find((st) => /run: node scripts\/ci\/e2e-teardown\.mjs /.test(st));
 
 	it('finds every job that leaves its delete to E2E Teardown Verify', () => {
 		const keeping = deploying.filter((id) => /^ {6}BLOCKS_SANDBOX_KEEP: '1'$/m.test(jobs[id]) && teardownStep(id));
-		assert.deepEqual(keeping.sort(), [...ASYNC].sort());
+		assert.deepEqual(keeping.sort(), [...KEEPING].sort());
 	});
 
-	for (const id of ASYNC) {
-		it(`${id} keeps its stacks and hands the teardown's stacks to E2E Teardown Verify`, () => {
-			const head = jobs[id].slice(0, jobs[id].indexOf('\n    steps:\n'));
+	for (const id of KEEPING) {
+		it(`${id} keeps its stacks`, () => {
+			const head = headOf(jobs[id]);
 			assert.match(head, /^ {4}env:\n(?: {6}.*\n)*? {6}BLOCKS_SANDBOX_KEEP: '1'$/m, `${id}: set BLOCKS_SANDBOX_KEEP in the job env`);
+		});
+	}
+
+	for (const id of ASYNC) {
+		it(`${id} hands the teardown's stacks to E2E Teardown Verify`, () => {
+			const head = headOf(jobs[id]);
 			assert.match(head, /^ {4}outputs:\n {6}teardown-stacks: \$\{\{ steps\.teardown\.outputs\.stacks \}\}$/m);
 			assert.match(teardownStep(id), /^ {8}id: teardown$/m);
 		});
 	}
+
+	it("e2e-sandbox runs the suite's destroySandbox() in-job and fails when it fails", () => {
+		// Anywhere in the job (job env, step env, a shell export), not just the job
+		// env, nor in the workflow env or the npm scripts the job runs.
+		const keep = /^[^#\n]*BLOCKS_SANDBOX_KEEP/m;
+		assert.doesNotMatch(jobs['e2e-sandbox'], keep, 'e2e-sandbox must not keep its stack');
+		assert.doesNotMatch(yml.slice(0, yml.indexOf('\njobs:\n')), keep, 'the workflow env must not keep stacks');
+		const scripts = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')).scripts;
+		assert.doesNotMatch(scripts('../../package.json')['test:e2e:sandbox'], /BLOCKS_SANDBOX_KEEP/);
+		const app = scripts('../../test-apps/comprehensive/package.json');
+		for (const s of ['test:e2e:sandbox', 'test:sandbox']) assert.doesNotMatch(app[s], /BLOCKS_SANDBOX_KEEP/, s);
+		assert.ok(stepsOf(jobs['e2e-sandbox']).some((st) => /^ {8}run: npm run test:e2e:sandbox$/m.test(st)));
+		// The suite destroys in test.after unless KEEP is set; run directly, a
+		// throwing after() hook exits 0, so the suite sets the exit code itself.
+		const suite = readFileSync(SUITE, 'utf8');
+		const after = suite.slice(suite.indexOf('test.after('));
+		assert.match(after, /ENV === 'sandbox'\s*\?\s*'test\/sandbox-destroy\.ts'/);
+		assert.match(after, /catch \(e\) \{\n(?:[^\n]*\n)*?\s*process\.exitCode = 1;\n\s*\}\n/);
+		assert.match(readFileSync(new URL('sandbox-destroy.ts', SUITE), 'utf8'), /await destroySandbox\(/);
+	});
 
 	describe('teardown-verify', () => {
 		const job = jobs['teardown-verify'];

@@ -24,13 +24,15 @@
 // stack cancelled mid-create may keep reporting CREATE_IN_PROGRESS while
 // CloudFormation finishes in-flight resources before the accepted delete; that
 // is a warning.
-// A passing job whose suite left a stack (its test.after destroy failed, which
-// node:test does not turn into a failed run) gets a warning and a new delete.
+// A passing job whose suite left a stack (its test.after destroy returned but
+// did not delete everything) fails, after re-issuing the delete unless one is
+// already running: that destroy is product code (destroySandbox()), and this
+// is the job that tests it. A stack listed mid-delete gets the budget to go.
 //
 // With BLOCKS_SANDBOX_KEEP set the suite keeps its stacks on purpose, so this
 // step is the job's teardown: the job no longer waits ~12-22 minutes for the
-// delete, and E2E Teardown Verify waits for it instead. The stacks not yet gone
-// go to the `stacks` step output (space-separated) for that job.
+// delete, and E2E Teardown Verify waits for it instead. Either way, the stacks
+// not yet gone go to the `stacks` step output (space-separated) for that job.
 //
 // Env: JOB_STATUS (`job.status`), BLOCKS_SANDBOX_KEEP, GITHUB_OUTPUT,
 // E2E_TEARDOWN_BUDGET_SECONDS (default 85: with the calls a deadline lets
@@ -175,8 +177,12 @@ async function main() {
 		// DeleteStack can be accepted without starting a delete; wait until it has.
 		// A create still finishing may hold the delete for minutes, so give it 2 polls.
 		const until = was === 'CREATE_IN_PROGRESS' || was === 'REVIEW_IN_PROGRESS' ? Date.now() + 2 * pollMs : deadline;
+		// A passing suite's destroy waits for its delete, so a stack still listed
+		// mid-delete is most likely a lagging list: wait for it to go before
+		// calling it left behind.
+		const settle = !kept && jobStatus === 'success' && was === 'DELETE_IN_PROGRESS';
 		let now = statusOf(name);
-		while (now !== 'DELETE_IN_PROGRESS' && now !== 'gone' && Date.now() + pollMs < Math.min(until, deadline)) {
+		while (now !== 'gone' && (settle || now !== 'DELETE_IN_PROGRESS') && Date.now() + pollMs < Math.min(until, deadline)) {
 			await sleep(pollMs);
 			now = statusOf(name);
 		}
@@ -194,8 +200,19 @@ async function main() {
 			console.log(`Deleting ${name} (was ${was}, now ${now}); E2E Teardown Verify waits for the delete.`);
 			continue;
 		}
-		const why = jobStatus === 'success' ? "the tests passed but the suite's own destroy left it" : `this ${jobStatus} job left it`;
-		warning(`Deleting ${name}: ${why} ${was} (now ${now}).`);
+		// Listed while its delete was finishing: the suite's destroy did delete
+		// it, and nothing was deleted here.
+		if (was === 'DELETE_IN_PROGRESS' && now === 'gone') {
+			console.log(`${name} was still listed as ${was} and is gone now.`);
+			continue;
+		}
+		const what = was === 'DELETE_IN_PROGRESS' ? `${name} is still being deleted` : `Deleting ${name}`;
+		if (jobStatus === 'success') {
+			error(`${what}: the tests passed but the suite's own destroy left it ${was} (now ${now}).`);
+			failed = true;
+			continue;
+		}
+		warning(`${what}: this ${jobStatus} job left it ${was} (now ${now}).`);
 	}
 	return failed ? 1 : 0;
 }
