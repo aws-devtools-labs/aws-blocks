@@ -10,12 +10,13 @@ import Security
 
 /// Persists cookies in the iOS/macOS Keychain so auth sessions survive app restarts.
 ///
-/// Each cookie is stored as a separate Keychain item keyed by `host|cookieName`.
-
+/// Each cookie is stored as a separate Keychain item keyed by `host|path|cookieName`, holding a
+/// JSON-encoded `StoredCookie` with the cookie's attributes. Items written by earlier versions,
+/// keyed by `host|cookieName` and holding the bare value, are still read (see `StoredCookie.decode`).
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.
-final class KeychainCookieStore {
+final class KeychainCookieStore: CookieItemStore {
     private let service: String
 
     init(service: String = "com.aws.blocks.swift.cookies") {

@@ -97,5 +97,99 @@ void main() {
       await client.call('test', {});
       expect(sentHeaders!['cookie'], 'token=xyz');
     });
+
+    Future<String?> cookieSentTo(
+      String baseUrl,
+      InMemorySessionStore store,
+    ) async {
+      String? sent;
+      final mockClient = MockClient((req) async {
+        sent = req.headers['cookie'];
+        return http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+        );
+      });
+      await BlocksClient(
+        baseUrl: baseUrl,
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      return sent;
+    }
+
+    test('stores cookies scoped to the responding host', () async {
+      final store = InMemorySessionStore();
+      final mockClient = MockClient(
+        (req) async => http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+          headers: {'set-cookie': 'session=abc123; Path=/; HttpOnly'},
+          request: req,
+        ),
+      );
+      await BlocksClient(
+        baseUrl: 'http://test/aws-blocks/api',
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(
+        await cookieSentTo('http://test/aws-blocks/api', store),
+        'session=abc123',
+      );
+      expect(await cookieSentTo('http://other/aws-blocks/api', store), isNull);
+    });
+
+    test('sends a Secure cookie only over https', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/; Secure',
+          requestUri: Uri.parse('https://test/aws-blocks/api'),
+        );
+      expect(
+        await cookieSentTo('https://test/aws-blocks/api', store),
+        'session=s',
+      );
+      expect(await cookieSentTo('http://test/aws-blocks/api', store), isNull);
+    });
+
+    test('sends a cookie only to paths under its Path', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/prod',
+          requestUri: Uri.parse('https://test/prod/aws-blocks/api'),
+        );
+      expect(
+        await cookieSentTo('https://test/prod/aws-blocks/api', store),
+        'session=s',
+      );
+      expect(
+        await cookieSentTo('https://test/beta/aws-blocks/api', store),
+        isNull,
+      );
+    });
+
+    test('drops a cookie the server expires', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/',
+          requestUri: Uri.parse('https://test/aws-blocks/api'),
+        );
+      final mockClient = MockClient(
+        (req) async => http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+          headers: {'set-cookie': 'session=; Max-Age=0; Path=/'},
+          request: req,
+        ),
+      );
+      await BlocksClient(
+        baseUrl: 'https://test/aws-blocks/api',
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(store.cookies, isEmpty);
+      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+    });
   });
 }

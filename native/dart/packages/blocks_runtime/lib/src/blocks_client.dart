@@ -67,7 +67,7 @@ class BlocksClient {
         headers['authorization'] = 'Bearer $token';
       }
     } else {
-      final cookie = sessionStore.cookieHeader;
+      final cookie = sessionStore.cookieHeaderFor(Uri.parse(baseUrl));
       if (cookie != null) {
         headers['cookie'] = cookie;
       }
@@ -78,7 +78,10 @@ class BlocksClient {
 
   dynamic _parseResponse(http.Response response) {
     // Parse set-cookie headers
-    sessionStore.setCookies(response.headers['set-cookie']);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: response.request?.url ?? Uri.parse(baseUrl),
+    );
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     if (json.containsKey('error')) {
