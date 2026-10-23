@@ -1,0 +1,8 @@
+import { AuthCognito, type AuthCognitoOptions } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+const shared: AuthCognitoOptions = { selfSignUp: true };
+
+export const byRef = new AuthCognito(scope, 'by-ref', shared);
+export const spread = new AuthCognito(scope, 'spread', { ...shared, groups: ['ops'], futureOption: 1 });
