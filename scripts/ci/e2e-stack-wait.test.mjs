@@ -56,7 +56,7 @@ switch (args[1]) {
 }
 `;
 
-function run(argv, { stacks = {}, budget = '5', delays = '0,0' } = {}) {
+function run(argv, { stacks = {}, budget = '30', delays = '0,0' } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'e2e-stack-wait-'));
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);

@@ -562,11 +562,11 @@ jobs:
     # The stacks the teardown is deleting, for E2E Teardown Verify.
     outputs:
       teardown-stacks: ${{ steps.teardown.outputs.stacks }}
+    # No BLOCKS_SANDBOX_KEEP here, unlike E2E Production: this is the required
+    # job that runs the product's destroySandbox() (the suite's test.after) and
+    # fails when it fails, so it waits for that delete.
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
-      # The suite keeps its stack instead of waiting for its delete; the
-      # always() teardown at the end deletes it (see there).
-      BLOCKS_SANDBOX_KEEP: '1'
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       # A failed or cancelled Detect Changes would otherwise skip this job, and
@@ -614,15 +614,15 @@ jobs:
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
 
-      # Delete what this checkout deployed. The suite keeps its stack
-      # (BLOCKS_SANDBOX_KEEP above), and this also runs when the job is
-      # cancelled (a new push cancels the run), times out or crashes. It waits
-      # only until the delete has started: E2E Teardown Verify waits for the
-      # rest (~12 minutes, most of it the RDS instance) outside this required
-      # check. Skipped when nothing was synthesized. Fresh credentials, since
-      # the first session can expire before a long or timed-out job gets here.
-      # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
-      # steps get 3 minutes together.
+      # The suite destroys its stack in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes.
+      # Delete what this checkout deployed: skipped when nothing was synthesized,
+      # one ListStacks call when the suite cleaned up. A stack the suite's
+      # destroy left after the tests passed fails the job. It waits only until
+      # the delete has started; E2E Teardown Verify waits for the rest. Fresh
+      # credentials, since the first session can expire before a long or
+      # timed-out job gets here. GitHub force-stops a cancelled job 5 minutes
+      # after the cancel, so the two steps get 3 minutes together.
       - name: Configure AWS credentials for teardown
         if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
         timeout-minutes: 1
@@ -897,7 +897,11 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       # The suite keeps its stack instead of waiting for its delete; the
-      # always() teardown at the end deletes it (see there).
+      # always() teardown at the end deletes it (see there). This also turns
+      # off the suite's run of the product destroy() (test/production-destroy.ts
+      # in test.after), not just the local-dev stack reuse it is named for: E2E
+      # Sandbox keeps running destroySandbox() in-job, and Telemetry E2E runs
+      # destroy() against a real stack.
       BLOCKS_SANDBOX_KEEP: '1'
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
@@ -1249,8 +1253,9 @@ jobs:
           npx tsx aws-blocks/scripts/sandbox-destroy.ts || true
           npx tsx aws-blocks/scripts/destroy.ts || true
 
-  # Waits for the stack deletes that E2E Sandbox, E2E Production and E2E
-  # Compute Smoke start in their last step but no longer wait for. Fails,
+  # Waits for the stack deletes that E2E Production and E2E Compute Smoke
+  # start in their last step but no longer wait for, and for any stack E2E
+  # Sandbox's teardown had to delete (its suite destroys its own). Fails,
   # naming each stack and what blocked it, when a delete ends DELETE_FAILED
   # after retries or is not done in time; cleanup-stacks.yml then reclaims the
   # stack. Not a required check and not in the Build and Test gate, so the
