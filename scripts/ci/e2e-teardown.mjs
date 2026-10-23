@@ -12,8 +12,10 @@
 // The app's CDK entry puts a random id, written once per checkout to
 // <app-dir>/.blocks-sandbox/sandbox-id.txt, into every stack name. Another run
 // of the same PR (same BLOCKS_STACK_SUFFIX) has another id, so this deletes
-// only what this job deployed. When the suite cleaned up, it makes one
-// ListStacks call and exits.
+// only what this job deployed. When BLOCKS_STACK_SUFFIX is set, a stack must
+// carry it as a token too, so a bad id file can't reach another PR's or another
+// attempt's stacks. When the suite cleaned up, it makes one ListStacks call and
+// exits.
 //
 // It waits until each delete has started, not until it finishes: GitHub
 // force-stops a cancelled job 5 minutes after the cancel, and a production
@@ -26,8 +28,9 @@
 // A passing job whose suite left a stack (its test.after destroy failed, which
 // node:test does not turn into a failed run) gets a warning and a new delete.
 //
-// Env: JOB_STATUS (`job.status`), E2E_TEARDOWN_BUDGET_SECONDS (default 85: with
-// the calls a deadline lets finish, under the step's 2-minute timeout).
+// Env: JOB_STATUS (`job.status`), BLOCKS_STACK_SUFFIX (the job's, optional),
+// E2E_TEARDOWN_BUDGET_SECONDS (default 85: with the calls a deadline lets
+// finish, under the step's 2-minute timeout).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -75,6 +78,7 @@ if (!appDir) {
 	process.exit(2);
 }
 const jobStatus = process.env.JOB_STATUS || 'unknown';
+const suffix = process.env.BLOCKS_STACK_SUFFIX || '';
 const deadline = Date.now() + Number(process.env.E2E_TEARDOWN_BUDGET_SECONDS ?? 85) * 1000;
 const pollMs = Number(process.env.E2E_TEARDOWN_POLL_MS ?? 10_000);
 
@@ -118,10 +122,14 @@ async function main() {
 		return 0;
 	}
 	const id = readFileSync(idFile, 'utf8').trim();
-	// The app writes `<user>-<6 base36 chars>`; anything much shorter could
-	// match another run's stack.
+	// The apps write an id of at least 6 characters with a random part;
+	// anything shorter could match another run's stack.
 	if (!/^[A-Za-z0-9-]{6,}$/.test(id)) {
 		error(`Unexpected sandbox id '${id}' in ${idFile}; not deleting anything.`);
+		return 1;
+	}
+	if (suffix && !/^[A-Za-z0-9-]+$/.test(suffix)) {
+		error(`Unexpected BLOCKS_STACK_SUFFIX '${suffix}'; not deleting anything.`);
 		return 1;
 	}
 
@@ -137,11 +145,13 @@ async function main() {
 		error(`Could not list stacks: ${list.err}`);
 		return 1;
 	}
-	const token = new RegExp(`(^|-)${id}(-|$)`);
+	const token = (t) => new RegExp(`(^|-)${t}(-|$)`);
+	const [idToken, suffixToken] = [token(id), suffix && token(suffix)];
+	const ours = (name) => idToken.test(name) && (!suffixToken || suffixToken.test(name));
 	// Nested stacks go with their root stack.
-	const mine = JSON.parse(list.out || '[]').filter((s) => !s.ParentId && token.test(s.StackName));
+	const mine = JSON.parse(list.out || '[]').filter((s) => !s.ParentId && ours(s.StackName));
 	if (mine.length === 0) {
-		console.log(`No stack with id ${id} is left: nothing left to delete.`);
+		console.log(`No stack with id ${id}${suffix ? ` and suffix ${suffix}` : ''} is left: nothing left to delete.`);
 		return 0;
 	}
 

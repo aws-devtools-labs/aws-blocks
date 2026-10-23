@@ -57,7 +57,7 @@ switch (args[1]) {
 }
 `;
 
-function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', ...extra } = {}) {
+function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', suffix = '', ...extra } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'e2e-teardown-'));
 	const app = join(dir, 'app');
 	mkdirSync(app);
@@ -81,6 +81,7 @@ function run({ id = ID, stacks = [], jobStatus = 'cancelled', budget = '5', ...e
 			FAKE_AWS_STATE: statePath,
 			FAKE_AWS_LOG: logPath,
 			JOB_STATUS: jobStatus,
+			BLOCKS_STACK_SUFFIX: suffix,
 			E2E_TEARDOWN_BUDGET_SECONDS: budget,
 			E2E_TEARDOWN_POLL_MS: '10',
 		},
@@ -125,6 +126,7 @@ describe('e2e-teardown.mjs', () => {
 				stack(`bb-test-${ID}-pr-9-1-Nested-ABC`, 'CREATE_COMPLETE', 'arn:parent'),
 				// The id only as a substring of another token.
 				stack(`bb-test-prod-pr-9-1-x${ID}`),
+				stack(`bb-test-${ID}0-pr-9-1`),
 			],
 		});
 		assert.equal(r.status, 0, r.out);
@@ -252,6 +254,31 @@ describe('e2e-teardown.mjs', () => {
 		const r = run({ id: 'ab', stacks: [stack('bb-test-ab-pr-9-1')] });
 		assert.equal(r.status, 1, r.out);
 		assert.deepEqual(r.calls, []);
+		assert.match(r.out, /::error title=E2E teardown::Unexpected sandbox id 'ab'/);
+	});
+
+	it("deletes only stacks that also carry this run's BLOCKS_STACK_SUFFIX", () => {
+		const r = run({
+			suffix: 'pr-9-1',
+			stacks: [
+				stack(`bb-test-${ID}-pr-9-1`),
+				stack(`bb-test-prod-pr-9-1-${ID}`),
+				// The same id under another PR or attempt (a bad id file).
+				stack(`bb-test-${ID}-pr-9-2`),
+				stack(`bb-test-prod-pr-19-1-${ID}`),
+				stack(`bb-test-${ID}-pr-9-10`),
+				stack(`bb-test-${ID}-xpr-9-1`),
+			],
+		});
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls).sort(), [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${ID}`].sort());
+	});
+
+	it('refuses a BLOCKS_STACK_SUFFIX that is not a plain token', () => {
+		const r = run({ suffix: 'pr-.*', stacks: [stack(`bb-test-${ID}-pr-9-1`)] });
+		assert.equal(r.status, 1, r.out);
+		assert.deepEqual(r.calls, []);
+		assert.match(r.out, /::error title=E2E teardown::Unexpected BLOCKS_STACK_SUFFIX 'pr-\.\*'/);
 	});
 });
 
@@ -327,6 +354,10 @@ describe('pr-checks.yml', () => {
 			const guard = "always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''";
 			assert.equal(ifOf(teardown), guard);
 			assert.ok(refresh.includes(CREDENTIALS), `${id}: the teardown must follow a credentials step`);
+			const withOf = (step) => step.slice(step.indexOf('        with:\n')).trim();
+			const deploy = steps.slice(0, -2).find((s) => s.includes(CREDENTIALS));
+			assert.ok(deploy, `${id}: no deploy credentials step before the teardown`);
+			assert.equal(withOf(refresh), withOf(deploy), `${id}: the teardown must assume the same account as the deploy`);
 			assert.equal(ifOf(refresh), guard);
 			assert.match(teardown, /JOB_STATUS: \$\{\{ job\.status \}\}/);
 			// GitHub force-stops a cancelled job 5 minutes after the cancel; both
