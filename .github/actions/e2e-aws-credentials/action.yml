@@ -1,0 +1,48 @@
+name: E2E AWS credentials
+description: >-
+  Assumes the E2E role of one pool account. Picks the role ARN from the
+  AWS_ROLE_ARNS secret by index (see .github/actions/e2e-slot) and masks it,
+  because a value taken out of a JSON secret is not redacted on its own.
+inputs:
+  role-arns:
+    description: The AWS_ROLE_ARNS secret, a JSON array of role ARNs (account 1 first)
+    required: true
+  index:
+    description: 0-based account index, from .github/actions/e2e-slot
+    required: false
+    default: '0'
+  accounts:
+    description: When set, fail unless AWS_ROLE_ARNS has exactly this many entries
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - id: pick
+      shell: bash
+      env:
+        ROLE_ARNS: ${{ inputs.role-arns }}
+        INDEX: ${{ inputs.index }}
+        ACCOUNTS: ${{ inputs.accounts }}
+      run: |
+        if ! jq -e 'type == "array"' > /dev/null 2>&1 <<< "$ROLE_ARNS"; then
+          echo "::error::AWS_ROLE_ARNS is missing or not a JSON array of role ARNs."
+          exit 1
+        fi
+        count=$(jq 'length' <<< "$ROLE_ARNS")
+        if [ -n "$ACCOUNTS" ] && [ "$count" != "$ACCOUNTS" ]; then
+          echo "::error::AWS_ROLE_ARNS has $count entries, but .github/actions/e2e-slot counts $ACCOUNTS E2E accounts."
+          exit 1
+        fi
+        arn=$(jq -r --argjson i "$INDEX" '.[$i] // empty' <<< "$ROLE_ARNS")
+        if [ -z "$arn" ]; then
+          echo "::error::AWS_ROLE_ARNS has $count entries, so there is no E2E account $((INDEX + 1))."
+          exit 1
+        fi
+        echo "::add-mask::$arn"
+        echo "role-arn=$arn" >> "$GITHUB_OUTPUT"
+
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ steps.pick.outputs.role-arn }}
+        aws-region: us-east-1

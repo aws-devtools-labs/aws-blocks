@@ -23,11 +23,13 @@ import {
   type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
+import type { AddBehaviorOptions } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
-import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
+import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
+import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -595,6 +597,10 @@ export class Hosting extends Construct {
    */
   constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
+    // Stack/stage children before Hosting builds anything, so the fronted
+    // backend's role coverage also reaches the singletons and helper stacks it
+    // adds (step 12).
+    const childrenBefore = snapshotForHosting(this);
 
     const root = resolve(props.root);
 
@@ -997,6 +1003,18 @@ export class Hosting extends Construct {
         description: 'S3 bucket for framework build caches',
       });
     }
+
+    // ── 12. Role coverage ────────────────────────────────────────
+    // Count every role Hosting created as one of the fronted backend's Blocks
+    // roles — including those in the separate us-east-1 stacks (Lambda@Edge,
+    // CloudFront monitoring) and the cross-region reference providers, which no
+    // aspect on this stack reaches — so the backend's permissions boundary and
+    // IAM report cover them (see cdk/blocks-roles.ts).
+    const boundaryOwner = isBlocksBackendRoot(props.api) ? props.api : findBackendRoot(this);
+    // Duck-typed (`edgeArn`) rather than `instanceof`, which fails across
+    // duplicate aws-cdk-lib copies (hosting's vs core's).
+    const edgeFunctions = [...hosting.computeFunctions.values()].filter((fn) => 'edgeArn' in fn);
+    coverHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
   }
 
   /**
@@ -1043,8 +1061,18 @@ export class Hosting extends Construct {
     // `originPath` (see httpOriginFromEndpoint).
     const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    // Attach the same security-headers / CSP policy the distribution's static,
+    // SSR and image behaviors carry. Without it the API and auth responses go
+    // to the viewer with no security headers, while the static root has them —
+    // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
+    // behaviors.
+    const apiBehaviorOptions: AddBehaviorOptions = {
+      ...API_BEHAVIOR_OPTIONS,
+      responseHeadersPolicy: hosting.securityHeadersPolicy,
+    };
+
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -1053,7 +1081,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -1084,7 +1112,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, apiBehaviorOptions);
     }
   }
 }

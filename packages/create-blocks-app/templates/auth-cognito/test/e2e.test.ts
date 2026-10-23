@@ -83,12 +83,10 @@ test('greet returns message and timestamp', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('KV Store - set and get', async () => {
-  const setResult = await api.setValue('test-key', 'test-value');
-  assert.strictEqual(setResult.success, true);
-
-  const value = await api.getValue('test-key');
-  assert.strictEqual(value, 'test-value');
+test('KV Store - rejects signed-out callers', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.getValue('test-key'), { status: 401 });
+  await assert.rejects(api.setValue('test-key', 'test-value'), { status: 401 });
 });
 
 // AuthCognito (passwordless USER_AUTH + EMAIL_OTP) — exercised entirely on
@@ -99,7 +97,7 @@ test('KV Store - set and get', async () => {
 // The installed cookie jar carries the autoSignIn bridging session + the
 // signed-in session cookie across calls, exactly like the browser.
 //
-// Like greet/KV above, these run against the sample API the template ships
+// Like greet above, these run against the sample API the template ships
 // with. When you replace the sample API, update or delete these tests to
 // exercise your own methods instead — they depend on the sample `whoAmI` and
 // `getLastCode` methods.
@@ -195,4 +193,22 @@ test('AuthCognito - returning user signs in via EMAIL_OTP (no password)', async 
   // The OTP-issued session cookie authorises a requireAuth-gated call too.
   const me = await api.whoAmI();
   assert.strictEqual(me.username, email);
+});
+
+test('KV Store - set and get (signed in, keys isolated per user)', async (t) => {
+  if (!isLocalMock) {
+    t.skip('needs the local mock: getLastCode() is null against a deployed backend');
+    return;
+  }
+  await signUpAndAutoSignIn(uniqueEmail());
+  const setResult = await api.setValue('test-key', 'test-value');
+  assert.strictEqual(setResult.success, true);
+  assert.strictEqual(await api.getValue('test-key'), 'test-value');
+
+  // A different user sees their own namespace, not the first user's value.
+  await authApi.setAuthState({ action: 'signOut' });
+  await signUpAndAutoSignIn(uniqueEmail());
+  assert.strictEqual(await api.getValue('test-key'), null);
+
+  await authApi.setAuthState({ action: 'signOut' });
 });

@@ -37,6 +37,7 @@ import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
@@ -80,8 +81,10 @@ const ASTROJS_NODE_PIN = '@astrojs/node@^9';
  * `sharp` version installed into the SSR bundle for Astro's default image
  * service (`/_image`). Matches the range the IPX image-opt bundle uses so
  * both image paths ship the same native libvips. See installSharpForAstroSsr.
+ * Both read the shared {@link SHARP_VERSION_RANGE}, which also carries the
+ * security floor (GHSA-wq5f-xc86-pv6w).
  */
-const ASTRO_SHARP_VERSION = '^0.34.0';
+const ASTRO_SHARP_VERSION = SHARP_VERSION_RANGE;
 
 /**
  * Verified Astro version range. Exported for the X.1 cross-adapter
@@ -102,7 +105,7 @@ const ASTRO_SHARP_VERSION = '^0.34.0';
  * consumed by the X.1 cross-adapter version-pin test, which asserts it
  * stays a parseable range with an explicit upper bound.
  */
-export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
+export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <8.0.0';
 
 /**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
@@ -631,7 +634,14 @@ const loadAstroConfig = (projectDir: string): AstroConfigShape => {
   const configPath = findAstroConfigPath(projectDir);
   if (!configPath) return {};
   try {
-    const jiti = createJiti(projectDir, { interopDefault: true });
+    // `tryNative`: import the config natively first. Astro 7's `astro/config`
+    // pulls in a Vite build that uses `import.meta.require`, which jiti's
+    // CJS transform rejects, silently dropping the whole config (redirects,
+    // trailingSlash, image settings).
+    const jiti = createJiti(projectDir, {
+      interopDefault: true,
+      tryNative: true,
+    });
     const mod = jiti(configPath) as
       | AstroConfigShape
       | { default?: AstroConfigShape };
@@ -812,20 +822,18 @@ export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
  * `arch` defaults to the adapter run's target ({@link targetComputeArch}):
  * `x64` for Lambda, `arm64` for Lambda Web Functions (`compute.type:
  * 'web-function'`), which installs `@img/sharp-linux-arm64` instead.
+ *
+ * Idempotent only for a sharp already within {@link SHARP_VERSION_RANGE}: a
+ * bundled sharp below that floor is vulnerable (GHSA-wq5f-xc86-pv6w) and is
+ * reinstalled.
  * @internal
  */
 export const installSharpForAstroSsr = (
   serverDir: string,
   arch: ComputeArch = targetComputeArch(),
 ): void => {
-  // Idempotent: skip if a linux-<arch> sharp is already present.
-  const existing = path.join(
-    serverDir,
-    'node_modules',
-    '@img',
-    `sharp-linux-${arch}`,
-  );
-  if (fs.existsSync(existing)) return;
+  // Idempotent: skip if a patched linux-<arch> sharp is already present.
+  if (hasPatchedLinuxSharp(serverDir, arch)) return;
 
   fs.mkdirSync(serverDir, { recursive: true });
   // A minimal package.json so `npm install <pkg>` writes into THIS dir's

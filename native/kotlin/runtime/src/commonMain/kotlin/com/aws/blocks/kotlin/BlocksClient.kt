@@ -18,11 +18,30 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** JSON-RPC client that executes requests against an AWS Blocks backend endpoint. */
-class BlocksClient(
+/** Reported by anything that runs on an engine a [Blocks] instance has already closed. */
+internal const val CLOSED_MESSAGE: String =
+    "This Blocks instance is closed. Build a new one rather than reusing a closed instance."
+
+/**
+ * JSON-RPC client that executes requests against an AWS Blocks backend endpoint.
+ *
+ * Obtained from [Blocks.client]; a [Blocks] instance owns one and closes it.
+ */
+class BlocksClient internal constructor(
     internal val server: BlocksServer
 ) {
     internal val httpClient: HttpClient = defaultHttpClient()
+
+    private var closed = false
+
+    /**
+     * Shuts down the HTTP engine. Later calls to [execute] report the closed state rather than
+     * failing inside Ktor with a cancellation that a caller cannot tell from its own.
+     */
+    internal fun close() {
+        closed = true
+        httpClient.close()
+    }
 
     companion object {
         /**
@@ -35,6 +54,8 @@ class BlocksClient(
     }
 
     suspend fun execute(request: BlocksRequest): JsonElement {
+        if (closed) throw BlocksException(CLOSED_MESSAGE)
+
         val json = Json.encodeToString(request)
 
         val response = httpClient.post(server.url) {

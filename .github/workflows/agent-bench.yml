@@ -2,17 +2,18 @@ name: Agent Bench
 
 # Per-PR LLM-agent benchmark: each cell scaffolds a template, a builder agent builds it, then
 # build + Playwright spec run and a judge agent grades. Runs entirely on the GitHub runner.
-# Requires (publish env): AWS_ROLE_ARN secret (OIDC role with bedrock InvokeModelWithResponseStream
-# + Converse on the bench model, and s3 Put/Get on bench/* in the registry bucket) and S3_BUCKET var.
+# Requires (agent-bench env): BENCH_ROLE_ARN secret (OIDC role with bedrock InvokeModelWithResponseStream
+# + Converse on the bench model, and s3 Put/Get on bench/* in the bench bucket) and BENCH_BUCKET var.
+# Both come from test-infra/github-oidc-stack.ts.
 # Invoked by pr-agent-bench.yml, which owns the triggers + same-repo gate; the OIDC steps and
-# `environment: publish` live on the jobs here because a `uses:` caller job cannot set environment.
+# `environment: agent-bench` live on the jobs here because a `uses:` caller job cannot set environment.
 #
 # LEAST PRIVILEGE: the bench job's initial OIDC session is narrowed to Bedrock only via
 # an inline session policy, so the shell-capable "2. Agent run" step (and judge/analysis) cannot
 # reach s3:PutObject even though the role grants it. The same role is re-assumed WITHOUT a session
 # policy immediately before "Persist to S3" so only that step regains the s3 write. See the
 # "Configure AWS credentials (OIDC)" step below for the canonical explanation of how the inline
-# session policy works (intersection semantics, why the shared AWS_ROLE_ARN is untouched, and the
+# session policy works (intersection semantics, why the BENCH_ROLE_ARN role is untouched, and the
 # exact allow-list). The `summary` job holds the full role (Bedrock + S3 baseline) but has no
 # shell-capable agent (tracked as follow-up).
 
@@ -71,7 +72,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    environment: publish
+    environment: agent-bench
     # Gate cells on the single upstream build+pack; if it breaks, cells skip (one loud failure).
     needs: build-blocks
     strategy:
@@ -182,7 +183,7 @@ jobs:
         if: steps.initresult.outcome == 'success'
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           # Extend the OIDC session past the ~1h default so it survives slow cells (AWS clamps
           # to the role's max if lower).
@@ -190,8 +191,8 @@ jobs:
           # LEAST PRIVILEGE (canonical explanation): the effective session permissions are the
           # INTERSECTION of the role's policy and this inline policy, so this narrows the initial
           # session to Bedrock model-invocation ONLY — steps 1→4b (agent, judge, per-cell analysis) run
-          # with no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
-          # workflow that uses it are untouched — no new IAM roles or environment secrets. The
+          # with no s3:PutObject. It cannot widen the role, so the BENCH_ROLE_ARN role itself and the
+          # later steps that re-assume it are untouched. The
           # allow-list is exactly the model-invocation actions with a verified call site: the Strands
           # `BedrockModel` (builder/judge stream — see the ModelStreamUpdateEvent hook in 2-agent-run.ts
           # and 4-judge.ts) calls `bedrock:InvokeModelWithResponseStream`, and the CLI
@@ -442,7 +443,7 @@ jobs:
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       # Archive the raw per-cell result under a COMMIT-keyed prefix; the summary job builds the
@@ -453,7 +454,7 @@ jobs:
         timeout-minutes: 3
         env:
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          BUCKET: ${{ vars.S3_BUCKET }}
+          BUCKET: ${{ vars.BENCH_BUCKET }}
           # Surface (don't swallow) a silent archival gap: if the re-assume above failed, the session
           # is still Bedrock-only and this upload will AccessDenied. That never reds the cell (the PR
           # summary aggregates from GitHub artifacts, not S3), but it drops this cell's commit-keyed
@@ -476,8 +477,8 @@ jobs:
       id-token: write
       contents: read
       pull-requests: write
-    # `publish` env holds AWS_ROLE_ARN / S3_BUCKET, needed to read + write the S3 baseline.
-    environment: publish
+    # `agent-bench` env holds BENCH_ROLE_ARN / BENCH_BUCKET, needed to read + write the S3 baseline.
+    environment: agent-bench
     # Defense-in-depth same-repo gate (caller already gates). always() so the table renders even
     # when bench cells fail.
     if: >-
@@ -506,7 +507,7 @@ jobs:
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: us-east-1
 
       # Fetch the baseline aggregate the overview diffs against. Best-effort (a miss => "no baseline").
@@ -519,7 +520,7 @@ jobs:
         if: steps.oidc.outcome == 'success'
         continue-on-error: true
         env:
-          BUCKET: ${{ vars.S3_BUCKET }}
+          BUCKET: ${{ vars.BENCH_BUCKET }}
           EVENT_NAME: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
@@ -634,7 +635,7 @@ jobs:
       - name: Persist baseline to S3 (best-effort)
         if: always() && steps.oidc.outcome == 'success'
         env:
-          BUCKET: ${{ vars.S3_BUCKET }}
+          BUCKET: ${{ vars.BENCH_BUCKET }}
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AGG: ${{ github.workspace }}/bench-aggregate.json
         run: |
@@ -649,7 +650,7 @@ jobs:
       - name: Persist Athena NDJSON to S3 (best-effort)
         if: always() && steps.oidc.outcome == 'success'
         env:
-          BUCKET: ${{ vars.S3_BUCKET }}
+          BUCKET: ${{ vars.BENCH_BUCKET }}
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           NDJSON: ${{ github.workspace }}/bench-athena.ndjson
         run: |
