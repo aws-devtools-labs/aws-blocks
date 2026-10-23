@@ -13,8 +13,12 @@
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
-#   - versioning-strategy: increase raises the minimum version in package.json
-#     to the new release (^3.2.0 -> ^3.3.1), not only the lockfile.
+#   - versioning-strategy: increase raises the minimum in package.json to the
+#     new release (^3.2.0 -> ^3.3.1), as the ncu job does. It pins what "auto"
+#     already resolves to here (the root package.json is not detected as a
+#     library). Dependabot doesn't read peerDependencies (it only rewrites a
+#     peer range identical to the one it bumps, none here), so the
+#     aws-cdk-lib/constructs peer floors stay manual.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
 #     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
 #     project-reference build in one grouped PR). So they are excluded from the
