@@ -236,28 +236,32 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 					if (i > 0) await new Promise((r) => setTimeout(r, 1000));
 					all = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: base });
 				}
+				// Record a rejected filter as its error name, so one run shows every case.
+				const scan = (filter: Parameters<typeof api.authCAdminScan>[0]) =>
+					api.authCAdminScan(filter).catch((e: unknown) => [`error: ${e instanceof Error ? e.name : String(e)}`]);
 				const results: Record<string, string[]> = { all: [...all].sort() };
 				for (const [key, name] of Object.entries(names)) {
-					results[`${key} equals`] = await api.authCAdminScan({ attribute: 'name', match: 'equals', value: name });
+					results[`${key} equals`] = await scan({ attribute: 'name', match: 'equals', value: name });
 				}
 				// Prefixes that end in a backslash: unescaped, it would escape the closing quote.
-				results['backslash startsWith'] = await api.authCAdminScan({
+				results['backslash startsWith'] = await scan({
 					attribute: 'name',
 					match: 'startsWith',
 					value: `${base} b\\`,
 				});
-				results['mixed startsWith'] = await api.authCAdminScan({
+				results['mixed startsWith'] = await scan({
 					attribute: 'name',
 					match: 'startsWith',
 					value: `${base} a\\b "c" \\`,
 				});
 				// Two backslashes where the user has one must not match: each backslash is
 				// escaped on its own, so the service never reads the pair back as one.
-				results['doubled backslash equals'] = await api.authCAdminScan({
+				results['doubled backslash equals'] = await scan({
 					attribute: 'name',
 					match: 'equals',
 					value: `${base} b\\\\x`,
 				});
+				console.log(`scan escaping results: ${JSON.stringify(results)}`);
 				assert.deepStrictEqual(results, {
 					all: Object.values(users).sort(),
 					'plain equals': [users.plain],
