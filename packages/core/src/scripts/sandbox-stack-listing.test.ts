@@ -24,11 +24,11 @@ const calls = [];
 mock.module(moduleUrl('run-command'), {
   namedExports: {
     runCapture: (command, args, options) => {
-      calls.push({ fn: 'runCapture', command, args, cwd: options?.cwd ?? null });
+      calls.push({ fn: 'runCapture', command, args, cwd: options?.cwd ?? null, nodeOptions: options?.env?.NODE_OPTIONS ?? null });
       return 'StackA\\n  StackB  \\n\\n';
     },
     runSync: (command, args, options) => {
-      calls.push({ fn: 'runSync', command, args, cwd: options?.cwd ?? null });
+      calls.push({ fn: 'runSync', command, args, cwd: options?.cwd ?? null, nodeOptions: options?.env?.NODE_OPTIONS ?? null });
     },
     spawnCommand: () => { throw new Error('unexpected watch process'); },
   },
@@ -42,7 +42,9 @@ mock.module(new URL('../telemetry/trackCommand.js', scripts).href, {
 
 const sandbox = await import(moduleUrl('sandbox'));
 const { destroy, listProductionStackNames } = await import(moduleUrl('destroy'));
-const backendPath = 'aws-blocks/index.cdk.ts';
+// A single quote in the path makes the quoted POSIX form differ from a bare
+// '\${backendPath}' wrap, so re-inlining the old argv at a call site fails too.
+const backendPath = "aws-blocks/bob's app/index.cdk.ts";
 const projectRoot = process.cwd();
 const result = {
   projectRoot,
@@ -71,15 +73,31 @@ describe('destroy stack listing and teardown go through run-command', () => {
 					timeout: 30_000,
 				},
 			);
-			const out = JSON.parse(stdout.slice(stdout.indexOf('{"projectRoot"')));
+			const start = stdout.indexOf('{"projectRoot"');
+			assert.ok(start >= 0, `fixture printed no result: ${stdout}`);
+			const out = JSON.parse(stdout.slice(start));
 			assert.deepEqual(out.sandboxStacks, ['StackA', 'StackB']);
 			assert.deepEqual(out.productionStacks, ['StackA', 'StackB']);
 			const root = out.projectRoot;
+			// Both destroys must run CDK with --conditions=cdk; the listers get the env their caller passes ({} here).
+			const app = process.platform === 'win32'
+				? `npm exec tsx -- -C cdk "aws-blocks/bob's app/index.cdk.ts"`
+				: `npm exec tsx -- -C cdk 'aws-blocks/bob'\\''s app/index.cdk.ts'`;
+			const ls = ['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', app];
+			const destroy = ['exec', 'cdk', '--', 'destroy', '--force', '--context', 'sandboxMode=true', '--app', app];
+			assert.deepEqual(out.lsArgs, ls);
+			assert.deepEqual(out.destroyArgs, destroy);
 			assert.deepEqual(out.calls, [
-				{ fn: 'runCapture', command: 'npm', args: out.lsArgs, cwd: null },
-				{ fn: 'runCapture', command: 'npx', args: ['cdk', 'ls', '--context', `projectRoot=${root}`], cwd: root },
-				{ fn: 'runSync', command: 'npm', args: out.destroyArgs, cwd: null },
-				{ fn: 'runSync', command: 'npx', args: ['cdk', 'destroy', '--force', '--context', `projectRoot=${root}`], cwd: root },
+				{ fn: 'runCapture', command: 'npm', args: ls, cwd: null, nodeOptions: null },
+				{ fn: 'runCapture', command: 'npx', args: ['cdk', 'ls', '--context', `projectRoot=${root}`], cwd: root, nodeOptions: null },
+				{ fn: 'runSync', command: 'npm', args: destroy, cwd: null, nodeOptions: '--conditions=cdk' },
+				{
+					fn: 'runSync',
+					command: 'npx',
+					args: ['cdk', 'destroy', '--force', '--context', `projectRoot=${root}`],
+					cwd: root,
+					nodeOptions: '--conditions=cdk',
+				},
 			]);
 		} finally {
 			await rm(directory, { recursive: true, force: true });

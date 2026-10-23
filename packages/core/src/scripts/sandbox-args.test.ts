@@ -233,6 +233,25 @@ describe('quoteCdkAppPath', () => {
   });
 });
 
+// synth and deploy quote the `--app` path the same way. Literals for both
+// shells, so the Windows form is pinned on a POSIX test runner too.
+describe('buildSandboxSynthArgs / buildSandboxDeployArgs --app quoting', () => {
+  const base = { outDir: 'o', projectRoot: '/a' };
+  it('double-quotes the path on Windows', () => {
+    const backendPath = 'D:\\a\\my app\\aws-blocks\\index.cdk.ts';
+    const expected = 'npm exec tsx -- -C cdk "D:\\a\\my app\\aws-blocks\\index.cdk.ts"';
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs({ ...base, backendPath, platform: 'win32' }), '--app'), expected);
+    assert.strictEqual(valueAfter(buildSandboxDeployArgs({ ...base, backendPath, platform: 'win32' }), '--app'), expected);
+  });
+
+  it('single-quotes and escapes the path on POSIX', () => {
+    const backendPath = "/tmp/bob's app/index.cdk.ts";
+    const expected = "npm exec tsx -- -C cdk '/tmp/bob'\\''s app/index.cdk.ts'";
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs({ ...base, backendPath, platform: 'linux' }), '--app'), expected);
+    assert.strictEqual(valueAfter(buildSandboxDeployArgs({ ...base, backendPath, platform: 'darwin' }), '--app'), expected);
+  });
+});
+
 // destroy and `cdk ls` were the two `--app` strings behind the Windows
 // `sandbox:destroy` failure: single quotes, which cmd.exe keeps as part of the
 // path. Each is asserted with a literal for both shells, so a revert to

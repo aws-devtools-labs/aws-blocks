@@ -64,6 +64,8 @@ export interface SandboxDeployArgsOptions {
    * the framework build runs only once.
    */
   assemblyDir?: string;
+  /** Shell the `--app` command string is quoted for (see {@link quoteCdkAppPath}). Default: `process.platform`. */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -71,14 +73,14 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, platform }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`,
   ];
 }
 
@@ -134,6 +136,7 @@ export function buildSandboxDeployArgs({
   backendPath,
   express = true,
   assemblyDir,
+  platform,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
@@ -144,7 +147,7 @@ export function buildSandboxDeployArgs({
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`,
   ];
 }
 
@@ -635,10 +638,11 @@ export function buildSandboxDestroyArgs(backendPath: string, platform: NodeJS.Pl
  * @internal Exported for tests.
  */
 export function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): string[] {
+	const args = buildSandboxLsArgs(backendPath);
 	try {
 		const out = runCapture(
 			'npm',
-			buildSandboxLsArgs(backendPath),
+			args,
 			// runCapture captures stderr so a genuine synth/`cdk ls` failure can be
 			// logged below rather than being indistinguishable from "app has zero stacks".
 			{ env: cdkEnv },
