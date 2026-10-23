@@ -239,6 +239,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
+      # unblock Amplify sandboxes stuck in DELETE_FAILED.
+      - name: Test the stuck Amplify sandbox delete
+        run: node --test scripts/ci/amplify-stuck-delete.test.mjs
+
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
       - name: Test the E2E job selection
