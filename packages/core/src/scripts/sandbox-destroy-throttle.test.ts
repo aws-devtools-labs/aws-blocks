@@ -2,10 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 
-import { isThrottleReason, runDestroyWithRetries, stackDeleteThrottled, throttleBackoffDelay } from './sandbox.js';
+import { productionDestroyDeps } from './destroy.js';
+import {
+	destroyWasThrottled,
+	emptySandboxBuckets,
+	isThrottleReason,
+	runDestroyWithRetries,
+	sandboxDestroyDeps,
+	stackDeleteThrottled,
+	throttleBackoffDelay,
+} from './sandbox.js';
 
 // API Gateway allows one DeleteRestApi per 30s per account (a fixed quota), so
 // parallel teardowns in one account fail with `Too Many Requests (Service:
@@ -35,19 +44,24 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 	it('retries an API Gateway 429 destroy with jittered exponential backoff until it succeeds', async () => {
 		const clock = fakeClock(5 * MIN);
 		const sleeps: number[] = [];
+		const steps: string[] = [];
 		let attempts = 0;
 		await runDestroyWithRetries({
 			runDestroy: () => {
 				attempts++;
+				steps.push('destroy');
 				clock.attempt();
 				// Fails 3 times (the old schedule's whole allowance), succeeds on the 4th.
 				if (attempts <= 3)
 					throw new Error('DELETE_FAILED: Too Many Requests (Service: ApiGateway, Status Code: 429)');
 			},
 			listStackNames: () => ['stackA'],
-			emptyBuckets: async () => {},
+			emptyBuckets: async (stackNames) => {
+				steps.push(`empty ${stackNames.join(',')}`);
+			},
 			isThrottled: async () => true,
 			sleep: async (ms) => {
+				steps.push('sleep');
 				sleeps.push(ms);
 				clock.advance(ms);
 			},
@@ -57,6 +71,10 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		assert.strictEqual(attempts, 4, 'a throttled destroy gets more than the ordinary 3 attempts');
 		// Equal jitter around 60s * 2^n: d/2 + 0.5 * d/2 = 0.75 d.
 		assert.deepStrictEqual(sleeps, [45_000, 90_000, 180_000]);
+		// A bucket that blocks the delete is the reason this loop exists, so a
+		// throttle retry must empty the buckets too, before it waits.
+		const retry = ['destroy', 'empty stackA', 'sleep'];
+		assert.deepStrictEqual(steps, [...retry, ...retry, ...retry, 'destroy']);
 	});
 
 	it('spreads parallel throttled destroys apart (jitter), within [d/2, d] of the exponential step', async () => {
@@ -107,6 +125,86 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		assert.strictEqual(attempts, 4);
 		assert.deepStrictEqual(sleeps, [60_000, 120_000, 240_000]);
 		assert.strictEqual(clock.now(), 27 * MIN, 'gives up right after the attempt that follows the last wait');
+	});
+
+	it('counts the pending wait against the budget: no throttle retry whose wait would end past it', async () => {
+		// Attempts of 5, 5 and 9 min: fail@5, wait 1 -> fail@11, wait 2 -> fail@22,
+		// 17 min after the first failure. The next step is 4 min (random 1), so its
+		// wait would end 21 min after the first failure, past the 20-min budget.
+		const durations = [5 * MIN, 5 * MIN, 9 * MIN];
+		let t = 0;
+		let attempts = 0;
+		const sleeps: number[] = [];
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					t += durations[attempts++] ?? 5 * MIN;
+					throw new Error('Too Many Requests (Service: ApiGateway, Status Code: 429)');
+				},
+				listStackNames: () => ['stackA'],
+				emptyBuckets: async () => {},
+				isThrottled: async () => true,
+				sleep: async (ms) => {
+					sleeps.push(ms);
+					t += ms;
+				},
+				now: () => t,
+				random: () => 1,
+			}),
+			/Too Many Requests/,
+		);
+		assert.strictEqual(attempts, 3);
+		assert.deepStrictEqual(sleeps, [60_000, 120_000]);
+	});
+
+	it('says AWS throttling is the cause when the budget runs out on a throttle', async () => {
+		const errors = mock.method(console, 'error', () => {});
+		try {
+			const clock = fakeClock(5 * MIN);
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						clock.attempt();
+						throw new Error('Too Many Requests (Service: ApiGateway, Status Code: 429)');
+					},
+					listStackNames: () => ['stackA'],
+					emptyBuckets: async () => {},
+					isThrottled: async () => true,
+					sleep: async (ms) => clock.advance(ms),
+					now: clock.now,
+					random: () => 1,
+				}),
+				/Too Many Requests/,
+			);
+			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
+			assert.match(printed, /Destroy failed after retries/);
+			assert.match(printed, /AWS is still throttling resource deletes in this account/);
+		} finally {
+			errors.mock.restore();
+		}
+	});
+
+	it('prints no throttle hint when the last failure was not a throttle', async () => {
+		const errors = mock.method(console, 'error', () => {});
+		try {
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						throw new Error('bucket not empty');
+					},
+					listStackNames: () => ['stackA'],
+					emptyBuckets: async () => {},
+					isThrottled: async () => false,
+					sleep: async () => {},
+				}),
+				/bucket not empty/,
+			);
+			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
+			assert.match(printed, /Destroy failed after retries/);
+			assert.doesNotMatch(printed, /throttling/);
+		} finally {
+			errors.mock.restore();
+		}
 	});
 
 	it('never gives a non-throttle failure more than the ordinary [60s, 120s], whatever throttles came between', async () => {
@@ -242,6 +340,36 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		assert.deepStrictEqual(seen, [0, 6 * MIN, 13 * MIN]);
 		// ...and when the previous attempt failed, so its events are not read as this one's.
 		assert.deepStrictEqual(previous, [undefined, 5 * MIN, 11 * MIN]);
+	});
+});
+
+describe('destroy call sites', () => {
+	// Deleting either `isThrottled` line would silently turn throttle backoff off
+	// on that path while every runDestroyWithRetries test stays green.
+	it('sandbox:destroy detects throttles and empties buckets before a retry', () => {
+		const deps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {});
+		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
+		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
+	});
+
+	it('production destroy detects throttles and empties buckets before a retry', () => {
+		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {});
+		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
+		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
+		assert.strictEqual(deps.successLabel, 'Production stack');
+	});
+
+	it('destroyWasThrottled is false for no stacks, without calling AWS', async () => {
+		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+		const send = mock.method(CloudFormationClient.prototype, 'send', async () => {
+			throw new Error('must not call AWS');
+		});
+		try {
+			assert.strictEqual(await destroyWasThrottled([], 0), false);
+			assert.strictEqual(send.mock.callCount(), 0);
+		} finally {
+			send.mock.restore();
+		}
 	});
 });
 

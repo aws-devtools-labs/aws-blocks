@@ -791,7 +791,12 @@ export interface DestroyRetryDeps {
  * `throttleBackoff.budgetMs` after the first failure is spent. Every other
  * failure keeps the `retryDelays` schedule: at most `retryDelays.length`
  * ordinary retries per call, whatever throttled retries came between them,
- * and none once a throttle backoff has used up the budget.
+ * and none once a throttle backoff has used up the budget. A failure counts as
+ * throttled when any resource delete in that attempt was throttled, so another
+ * resource that failed for a different reason in the same attempt gets the
+ * throttle schedule too: it is retried later, not hidden, and still fails the
+ * call once the budget is spent. With 5-minute attempts a call can run for
+ * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
@@ -833,6 +838,12 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			}
 			if (delayMs === undefined) {
 				console.error('\n❌ Destroy failed after retries.');
+				if (throttled) {
+					console.error(
+						'   AWS is still throttling resource deletes in this account (API Gateway allows one REST API ' +
+							'delete every 30 s). Wait a few minutes and run destroy again.',
+					);
+				}
 				throw error;
 			}
 			if (stackNames.length > 0) {
@@ -870,21 +881,30 @@ export async function destroySandbox(backendPath: string) {
       if (e.code !== 'ENOENT') throw e;
     }
 
-    const cdkArgs = [
-      "exec", "cdk", "--", "destroy",
-      "--force",
-      "--context", "sandboxMode=true",
-      // Single-quote backendPath: CDK re-runs the --app string through a shell,
-      // so an unquoted path containing a space would split.
-      "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
-    ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
-    await runDestroyWithRetries({
-      runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
-      listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
-      emptyBuckets: emptySandboxBuckets,
-      isThrottled: destroyWasThrottled,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    });
+    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv));
   });
+}
+
+/**
+ * The {@link runDestroyWithRetries} dependencies `destroySandbox` runs with.
+ * A separate function so a test can pin the wiring (throttle detection, bucket
+ * emptying) without spawning cdk.
+ */
+export function sandboxDestroyDeps(backendPath: string, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+  const cdkArgs = [
+    "exec", "cdk", "--", "destroy",
+    "--force",
+    "--context", "sandboxMode=true",
+    // Single-quote backendPath: CDK re-runs the --app string through a shell,
+    // so an unquoted path containing a space would split.
+    "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+  ];
+  return {
+    runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+    listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
+    emptyBuckets: emptySandboxBuckets,
+    isThrottled: destroyWasThrottled,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  };
 }

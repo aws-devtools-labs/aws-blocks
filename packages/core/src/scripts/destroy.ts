@@ -6,7 +6,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
-import { destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -56,12 +56,6 @@ export async function destroy(options: DestroyOptions) {
       NODE_OPTIONS: '--conditions=cdk',
       ...getCdkTelemetryEnv('production'),
     };
-    const cdkArgs = [
-      'cdk', 'destroy',
-      '--force',
-      '--context', `projectRoot=${options.projectRoot}`,
-    ];
-
     // Reuse the sandbox path's shipped teardown-retry machinery: on a failed
     // destroy, empty the stacks' versioned S3 buckets (the autoDeleteObjects
     // Lambda never provisions on a failed CREATE, so the bucket blocks the
@@ -70,13 +64,27 @@ export async function destroy(options: DestroyOptions) {
     // (DeleteRestApi 429), which single-shot `cdk destroy` surfaced as a hard
     // teardown failure with no recovery. A failure whose stack events show such
     // a throttle gets a longer, jittered backoff (see runDestroyWithRetries).
-    await runDestroyWithRetries({
-      runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
-      listStackNames: () => listProductionStackNames(options, cdkEnv),
-      emptyBuckets: emptySandboxBuckets,
-      isThrottled: destroyWasThrottled,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      successLabel: 'Production stack',
-    });
+    await runDestroyWithRetries(productionDestroyDeps(options, cdkEnv));
   });
+}
+
+/**
+ * The {@link runDestroyWithRetries} dependencies the production `destroy`
+ * runs with. A separate function so a test can pin the wiring (throttle
+ * detection, bucket emptying) without spawning cdk.
+ */
+export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+  const cdkArgs = [
+    'cdk', 'destroy',
+    '--force',
+    '--context', `projectRoot=${options.projectRoot}`,
+  ];
+  return {
+    runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
+    listStackNames: () => listProductionStackNames(options, cdkEnv),
+    emptyBuckets: emptySandboxBuckets,
+    isThrottled: destroyWasThrottled,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    successLabel: 'Production stack',
+  };
 }

@@ -9,7 +9,11 @@ throttle (most often API Gateway's `DeleteRestApi` quota of one request every
 once), the retry backs off exponentially with randomized waits (up to about 1,
 2, 4, then 5 minutes) and keeps retrying for about 20 minutes after the first
 failure, instead of giving up after the fixed 60s and 120s waits. The
-randomization keeps parallel teardowns from retrying in lockstep.
+randomization keeps parallel teardowns from retrying in lockstep. Because each
+delete attempt can itself take several minutes, a destroy that stays throttled
+can now run for about 30 minutes before it fails (about 18 minutes before this
+change). When it does fail on a throttle, it says so and suggests waiting a few
+minutes before running destroy again.
 
 Failures that are not throttles keep the existing schedule (60s, then 120s).
 Detection reads the stack events with the caller's credentials
