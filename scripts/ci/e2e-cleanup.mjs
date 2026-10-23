@@ -26,6 +26,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -89,6 +90,38 @@ export function parsePsLines(text) {
 		out.push({ pid: Number(m[1]), ppid: Number(m[2]), trackingId: id?.[1] });
 	}
 	return out;
+}
+
+/**
+ * `pid (name)` for each pid, the executable's name as /proc/<pid>/stat
+ * (Linux) or `ps -o comm=` (macOS) gives it, for the log. A pid whose name
+ * can't be read stays bare.
+ */
+export function describePids(pids) {
+	const names = new Map();
+	if (process.platform === 'linux') {
+		for (const pid of pids) {
+			try {
+				const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+				names.set(pid, stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')')));
+			} catch {
+				// exited meanwhile
+			}
+		}
+	} else if (process.platform === 'darwin' && pids.length > 0) {
+		const r = spawnSync('ps', ['-o', 'pid=,comm=', '-p', pids.join(',')], { encoding: 'utf8' });
+		for (const line of r.stdout?.split('\n') ?? []) {
+			const m = line.match(/^\s*(\d+)\s(.*)$/);
+			if (m) names.set(Number(m[1]), basename(m[2].trim()));
+		}
+	}
+	return pids
+		.map((pid) => {
+			// A process sets its own name: keep control characters out of the log.
+			const name = names.get(pid)?.replace(/[\x00-\x1f\x7f]/g, '?');
+			return name ? `${pid} (${name})` : String(pid);
+		})
+		.join(' ');
 }
 
 /**
@@ -163,17 +196,17 @@ export async function stopOrphans({ trackingId = process.env[TRACKING_VAR], grac
 	const stopped = new Set();
 	const deadline = Date.now() + graceMs;
 	for (let pids = find(); pids.length > 0 && Date.now() < deadline; pids = find()) {
-		console.log(`Stopping ${pids.length} process(es) left by an earlier step: ${pids.join(' ')}`);
+		console.log(`Stopping ${pids.length} process(es) left by an earlier step: ${describePids(pids)}`);
 		for (const pid of pids) stopped.add(pid);
 		signal(pids, 'SIGTERM');
 		await waitGone(pids, Math.min(2000, deadline - Date.now()));
 	}
 	const left = find();
-	if (left.length > 0) console.log(`SIGKILL: ${left.join(' ')}`);
+	if (left.length > 0) console.log(`SIGKILL: ${describePids(left)}`);
 	signal(left, 'SIGKILL');
 	await waitGone(left, 2000);
 	const survivors = left.filter(alive);
-	if (survivors.length > 0) console.log(`Still present after SIGKILL: ${survivors.join(' ')}`);
+	if (survivors.length > 0) console.log(`Still present after SIGKILL: ${describePids(survivors)}`);
 	return { stopped: [...stopped], survivors };
 }
 
