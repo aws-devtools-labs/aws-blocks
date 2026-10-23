@@ -244,6 +244,12 @@ jobs:
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
 
+      # The scheduled stack cleanup (cleanup-stacks.yml): a REST API or IAM role
+      # count it can't read must fail its leg, and no listing failure may read
+      # as "nothing to sweep".
+      - name: Test the stack cleanup's listing failures
+        run: node --test scripts/ci/rest-api-quota.test.mjs scripts/ci/cleanup-listings.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
