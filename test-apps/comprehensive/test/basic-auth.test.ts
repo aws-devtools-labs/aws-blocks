@@ -493,26 +493,43 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const username = uniqueUser();
 
-        // Start from a known-empty set: the mock store persists to disk between
-        // local runs, so leftovers from an earlier build would mask what this
-        // delivery actually wrote.
-        await api.authPurgeDeliveredCodes();
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        // Exactly one key. An unkeyed "latest code" slot is what made this
+        // Exactly one key for this user, and no record keyed by anything but
+        // its own username. An unkeyed "latest code" slot is what made this
         // flaky in the first place: whoever delivered last owned it, so a
         // reader could be handed another user's code. Nothing reads one, so
         // nothing writes one — and that also halves the writes per delivery.
-        const codeKeys = (await api.kvScan())
-          .map((e) => e.key)
-          .filter((key) => key.startsWith('__last-code:'));
-
-        assert.deepStrictEqual(codeKeys, [`__last-code:auth:${username}`]);
+        //
+        // Checked as an invariant over every code record rather than "this is
+        // the only key": the store also holds other users' records, from the
+        // Agent suite signing up users in a background process at the same
+        // time (./background-suites.ts) and, locally, from earlier runs
+        // persisted in .bb-data/. Every record must be keyed by the username
+        // it holds, so a shared slot fails here whoever delivered last.
+        const codeEntries = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
+        for (const { key, value } of codeEntries) {
+          // key = __last-code:<channel>:<username>
+          const keyedUser = key.split(':').slice(2).join(':');
+          let held: unknown;
+          try {
+            held = (JSON.parse(value) as { username?: unknown }).username;
+          } catch {
+            held = undefined;
+          }
+          assert.strictEqual(held, keyedUser, `code record ${key} must hold the username it is keyed by`);
+        }
+        assert.deepStrictEqual(
+          codeEntries.map((e) => e.key).filter((key) => key.endsWith(`:${username}`)),
+          [`__last-code:auth:${username}`],
+        );
       });
 
-      // Runs last in this suite: it clears every channel's codes, and the
-      // suites that follow deliver their own.
+      // Purges only this test's user: a purge of every code would delete one
+      // the Agent suite, running in a background process at the same time, is
+      // still waiting to read (./background-suites.ts). e2e.test.ts tests the
+      // full purge before those suites start.
       test('purge clears code records and leaves other keys alone', async () => {
         const api = getApi();
         const username = uniqueUser();
@@ -521,8 +538,8 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignUp(username, 'password123');
         await pollForCode(api, username);
 
-        const { deleted } = await api.authPurgeDeliveredCodes();
-        assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+        const { deleted } = await api.authPurgeDeliveredCodes(username);
+        assert.strictEqual(deleted, 1, `expected this user's one record purged, got ${deleted}`);
 
         assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
         assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
