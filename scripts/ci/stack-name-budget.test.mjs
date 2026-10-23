@@ -79,6 +79,9 @@ describe('E2E stack names leave room for every derived resource name', () => {
 			.filter(([job, block]) => /^\s+BLOCKS_STACK_SUFFIX:/m.test(block) && !listed.has(job))
 			.map(([job]) => job);
 		assert.deepEqual(unlisted, [], 'add these jobs to JOBS (or to SKIP with a reason)');
+		const jobs = jobBlocks();
+		const stale = Object.keys(SKIP).filter((job) => !jobs.has(job) || JOBS.some((j) => j.job === job));
+		assert.deepEqual(stale, [], 'remove these SKIP entries: the job is gone or is checked in JOBS');
 	});
 
 	for (const { job, app, sandboxMode, sandboxId } of JOBS) {
@@ -94,10 +97,12 @@ describe('E2E stack names leave room for every derived resource name', () => {
 				// CDK CLI) so the lookup falls back to CDK's placeholder VPC offline.
 				if (app !== 'comprehensive') context.vpcId = 'vpc-0123456789abcdef0';
 				const nodeOptions = process.env.NODE_OPTIONS ?? '';
-				const res = spawnSync('npx', ['tsx', '-C', 'cdk', 'aws-blocks/index.cdk.ts'], {
+				// tsx as an in-process loader (not `npx tsx`), so the timeout kills the synth itself.
+				const res = spawnSync(process.execPath, ['--import', 'tsx', 'aws-blocks/index.cdk.ts'], {
 					cwd: join(ROOT, 'test-apps', app),
 					encoding: 'utf8',
 					timeout: 180_000,
+					maxBuffer: 64 * 1024 * 1024,
 					env: {
 						...process.env,
 						BLOCKS_STACK_SUFFIX: suffix,
@@ -111,7 +116,8 @@ describe('E2E stack names leave room for every derived resource name', () => {
 							: `${nodeOptions} --conditions=cdk`.trim(),
 					},
 				});
-				assert.equal(res.status, 0, `synth with BLOCKS_STACK_SUFFIX=${suffix} failed:\n${res.stderr}`);
+				const why = [res.error?.code, res.signal].filter(Boolean).join(' ');
+				assert.equal(res.status, 0, `synth with BLOCKS_STACK_SUFFIX=${suffix} failed ${why}:\n${res.stderr}`);
 
 				const tooLong = [];
 				let checked = 0;
