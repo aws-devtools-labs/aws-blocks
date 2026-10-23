@@ -3,7 +3,13 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { extractUserAttributes, memoizePerContext, toCognitoApiError, toCognitoFilter, AuthCognitoErrors } from './index.aws.js';
+import {
+	extractUserAttributes,
+	memoizePerContext,
+	toCognitoApiError,
+	toCognitoFilter,
+	AuthCognitoErrors,
+} from './index.aws.js';
 import { ApiError } from '@aws-blocks/core';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
