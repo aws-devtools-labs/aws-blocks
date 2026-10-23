@@ -723,7 +723,8 @@ function isHttpApiDoor(frontDoor: HostingProps['frontDoor']): boolean {
  * @throws HostingError('UnsupportedHostingSettingError') naming the setting and the door.
  */
 function assertDoorSupportsSettings(props: HostingProps): void {
-  const door = props.frontDoor;
+  // `frontDoor: null` is the default door, as when it is omitted.
+  const door = props.frontDoor ?? undefined;
   const doorName =
     door === undefined
       ? "'cloudfront' (the default)"
@@ -747,7 +748,7 @@ function assertDoorSupportsSettings(props: HostingProps): void {
   const edgeCached =
     door === undefined ||
     door === 'cloudfront' ||
-    (typeof door === 'object' && door !== null && (!('kind' in door) || door.kind === undefined || door.kind === 'cloudfront' || door.kind === 'stacked'));
+    (typeof door === 'object' && (!('kind' in door) || door.kind === undefined || door.kind === 'cloudfront' || door.kind === 'stacked'));
   if (props.buildId === 'fixed' && edgeCached) {
     fail("buildId: 'fixed'", 'an edge cache would keep serving the files each deploy overwrites');
   }
