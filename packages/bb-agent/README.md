@@ -411,7 +411,7 @@ try {
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
 | `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
-| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without the caller's `userId` (with persistence enabled). |
+| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key (with persistence enabled). |
 
 ### Streaming Mode
 

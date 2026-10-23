@@ -282,9 +282,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * entrypoint (agentcore-entry.ts) calls it as a background async task on AWS, and locally
 	 * {@link dispatchTurn} calls it in-process. Errors are caught and published as an `error`
 	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
-	 * The one exception is a turn whose channel can't be scoped to its user (stream()/resume()
-	 * reject that before dispatching): it is logged and persisted, but no chunk is published,
-	 * since the bare caller-chosen channelId may be another user's channel.
+	 * Two cases publish no chunk and are only logged (and persisted): a turn whose channel can't
+	 * be scoped to its user (stream()/resume() reject that before dispatching; the bare
+	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
+	 * itself fails to publish (e.g. a channel path over Realtime's size limit).
 	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
@@ -689,15 +690,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
 	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
 		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
+		const rtChannel = this.chunksChannel(channelId, userId);
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
-		const rtChannel = this.chunksChannel(channelId, userId);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
 		const channel = this.rt.getChannel('chunks', rtChannel);
 		// Most callers never await `channel`; don't let a rejection go unhandled.
@@ -738,6 +740,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws ConversationNotFound when `options.conversationId` does not belong to `options.userId`,
 	 *   before any approval is persisted or the turn is dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws InterruptRequired when `responses` is empty or `options.conversationId` is missing.
+	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
@@ -759,12 +764,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		}
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
-		// Before anything is persisted or dispatched: a non-owner must not be able to
-		// approve (or `trust`) someone else's pending tool call.
-		await this.assertOwnsConversation(conversationId, userId);
-		// Also before anything is persisted: fail here, not in the background turn, if the
-		// channel can't be scoped (see chunksChannel).
+		// Every check runs before anything is persisted or dispatched, so a rejected resume
+		// leaves no approval behind. Scope the channel (it throws, rather than failing in the
+		// background turn, for a userId that can't be scoped; see chunksChannel) and validate
+		// the tool context first: both are local checks.
 		this.chunksChannel(channelId, userId);
+		const context = this.resolveContext(options?.context);
+		// A non-owner must not be able to approve (or `trust`) someone else's pending tool call.
+		await this.assertOwnsConversation(conversationId, userId);
 		// Persist each decision to conversation history
 		if (conversationId && this.messages) {
 			for (const r of responses) {
@@ -777,7 +784,6 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			interruptId: r.interruptId,
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
-		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
 	}
 
