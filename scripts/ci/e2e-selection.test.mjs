@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-selection.sh', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
@@ -108,31 +109,32 @@ function jobsOf(yml) {
 
 /**
  * Every job in the workflow files under `dir` that runs `cdk deploy` on the
- * BlocksTestVpc stack, with its job-level concurrency group. A group's
+ * BlocksTestVpc stack in a `run:` step, with its job-level concurrency group.
+ * The files are parsed as YAML, so quoting, comments and block scalars are
+ * read the way GitHub reads them. In a script, shell comment lines are
+ * dropped, then line continuations are joined. A group's
  * `needs.<job>.outputs.` is written `needs.*.outputs.`, so two jobs that read
  * the same slot output from different jobs compare equal.
  */
 function testVpcDeployers(dir) {
 	const found = [];
 	for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
-		for (const [job, block] of Object.entries(jobsOf(readFileSync(join(dir, file), 'utf8')))) {
-			// Whole-line comments out and shell line continuations joined, so a
-			// deploy split over lines still counts.
-			const code = block
-				.split('\n')
-				.filter((line) => !line.trim().startsWith('#'))
-				.join('\n')
-				.replace(/\\\n[ \t]*/g, ' ');
-			if (!/\bcdk deploy\b[^\n]*(?<![\w-])BlocksTestVpc(?![\w-])/.test(code)) continue;
-			// The job's own concurrency block, trailing YAML comments off; `group`
-			// may be the inline value, a key below it, or inside a flow mapping.
-			const block4 = /^ {4}concurrency:[ \t]*([^\n]*)((?:\n {6}.*)*)/m.exec(code);
-			const uncomment = (text) => text.replace(/(?:^|[ \t]+)#.*$/gm, '');
-			const inline = uncomment(block4?.[1] ?? '').trim();
-			const raw = inline.startsWith('{')
-				? (/\bgroup:[ \t]*('[^']*'|"[^"]*"|(?:\$\{\{.*?\}\}|[^,}])+)/.exec(inline)?.[1].trim() ?? null)
-				: inline || (/^ {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(uncomment(block4?.[2] ?? ''))?.[1] ?? null);
-			const group = raw?.replace(/^(['"])(.*)\1$/, '$2').replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') ?? null;
+		const workflow = parseYaml(readFileSync(join(dir, file), 'utf8')) ?? {};
+		for (const [job, def] of Object.entries(workflow.jobs ?? {})) {
+			const deploys = (def?.steps ?? []).some((step) => {
+				if (typeof step?.run !== 'string') return false;
+				const script = step.run
+					.replace(/\r\n/g, '\n')
+					.split('\n')
+					.filter((line) => !line.trim().startsWith('#'))
+					.join('\n')
+					.replace(/\\\n[ \t]*/g, ' ');
+				return /\bcdk deploy\b[^\n]*(?<![\w-])BlocksTestVpc(?![\w-])/.test(script);
+			});
+			if (!deploys) continue;
+			const { concurrency } = def;
+			const raw = typeof concurrency === 'string' ? concurrency : concurrency?.group;
+			const group = typeof raw === 'string' ? raw.replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') : null;
 			found.push({ job: `${file} ${job}`, group });
 		}
 	}
@@ -458,8 +460,10 @@ describe('pr-checks.yml', () => {
 		);
 		assertOneTestVpcGroup(testVpcDeployers(dir));
 
-		// A ` # ` inside a run script doesn't hide the deploy after it; a flow
-		// mapping without a group has none; a blank line ends a continuation.
+		// A `#` inside a block-scalar script doesn't hide the deploy after it;
+		// a trailing YAML comment is not part of the command; a flow mapping
+		// gives its group, or none; a blank line ends a continuation; a shell
+		// comment line between a continuation's parts is not a deploy.
 		writeFileSync(
 			join(dir, 'c.yml'),
 			[
@@ -468,17 +472,27 @@ describe('pr-checks.yml', () => {
 				'  hashed:',
 				'    concurrency: { cancel-in-progress: false }',
 				'    steps:',
-				'      - run: echo "step # 1" && npx cdk deploy BlocksTestVpc',
+				'      - run: |',
+				'          echo "step # 1" && npx cdk deploy BlocksTestVpc',
 				'  flow:',
 				"    concurrency: { group: 'blocks-test-vpc-${{ needs.e2e-slot.outputs.e2e-index }}', cancel-in-progress: false }",
 				'    steps:',
 				'      - run: npx cdk deploy BlocksTestVpc',
+				'  commented:',
+				'    steps:',
+				'      - run: npx cdk deploy BlocksComputeTestVpc # not BlocksTestVpc',
 				'  not-a-deploy:',
 				'    steps:',
 				'      - run: |',
 				'          npx cdk deploy \\',
 				'',
 				'          echo BlocksTestVpc',
+				'  comment-between:',
+				'    steps:',
+				'      - run: |',
+				'          npx cdk deploy \\',
+				'          # BlocksTestVpc',
+				'          OtherStack',
 				'',
 			].join('\n'),
 		);
