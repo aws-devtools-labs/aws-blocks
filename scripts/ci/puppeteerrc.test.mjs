@@ -14,16 +14,30 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RC = fileURLToPath(new URL('../../.puppeteerrc.cjs', import.meta.url));
-/** Puppeteer's config loader, from the repo's own install (absent once Puppeteer leaves the lockfile). */
-const GET_CONFIGURATION = fileURLToPath(
-	new URL('../../node_modules/puppeteer/lib/cjs/puppeteer/getConfiguration.js', import.meta.url),
-);
+const requireFromRoot = createRequire(new URL('../../package.json', import.meta.url));
+
+/**
+ * Puppeteer's config loader from the repo's own install, through Puppeteer's
+ * exports map; null when Puppeteer isn't installed (it is only there through
+ * md-to-pdf and mermaid-cli). Once Puppeteer is installed, a loader it no
+ * longer exports throws here and fails the run instead of skipping it.
+ */
+function resolveGetConfiguration() {
+	try {
+		requireFromRoot.resolve('puppeteer');
+	} catch {
+		return null;
+	}
+	return requireFromRoot.resolve('puppeteer/internal/getConfiguration.js');
+}
+const GET_CONFIGURATION = resolveGetConfiguration();
 
 const root = mkdtempSync(join(tmpdir(), 'puppeteerrc-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -37,7 +51,9 @@ for (const dir of Object.values(installs)) mkdirSync(dir, { recursive: true });
 
 /** `skipDownload` as Puppeteer itself resolves it for an install running in `cwd` on GitHub Actions. */
 function puppeteerSkips(cwd) {
-	const env = { ...process.env, GITHUB_ACTIONS: 'true', GET_CONFIGURATION };
+	// HOME and XDG_CONFIG_HOME point into the tree: Puppeteer also reads a
+	// per-user config there, which a developer's own would otherwise override.
+	const env = { ...process.env, GITHUB_ACTIONS: 'true', GET_CONFIGURATION, HOME: root, XDG_CONFIG_HOME: root };
 	for (const name of Object.keys(env)) if (name.startsWith('PUPPETEER_')) delete env[name];
 	const r = spawnSync(
 		process.execPath,
@@ -85,7 +101,7 @@ describe('.puppeteerrc.cjs', () => {
 	// honouring the file fails here.
 	it(
 		"skips the download through Puppeteer's own config lookup only for the repo node_modules",
-		{ skip: existsSync(GET_CONFIGURATION) ? false : 'Puppeteer is not installed' },
+		{ skip: GET_CONFIGURATION ? false : 'Puppeteer is not installed' },
 		() => {
 			assert.equal(puppeteerSkips(installs['the repo node_modules']), true);
 			assert.equal(puppeteerSkips(installs['an app inside the repo']), null);
