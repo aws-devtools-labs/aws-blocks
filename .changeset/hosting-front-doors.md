@@ -41,15 +41,16 @@ distribution as before.
 
 Every door serves the API on the app's own origin (except `'none'`, where the
 browser calls the API cross-origin): `/aws-blocks/*` (RPC and sign-in) and each
-of the backend's raw routes. An HTTPS door also claims the backend's API
-front-door role, so `apiFrontDoor: 'cloudfront'` does not build a second
-distribution; a plain-HTTP door doesn't (its URL's scheme is read through a
-token too), so native clients keep the backend's HTTPS API URL, and it warns at
-synth (`PlainHttpFrontDoor`). The backend's trusted origin
+of the backend's raw routes. Only a CloudFront-backed door (the default, or
+the stacked door's edge) claims the backend's API front-door role, so
+`apiFrontDoor: 'cloudfront'` builds no second distribution there. Behind the
+ALB, API Gateway or a bring-your-own door, the API keeps the distribution
+`apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it for native
+clients. A plain-HTTP door warns at synth (`PlainHttpFrontDoor`). The backend's trusted origin
 (`BLOCKS_PUBLIC_ORIGIN`, where the OIDC callback lands and whose scheme sets
 the session cookie's `Secure`) belongs to the door that serves `/aws-blocks/*`
-to browsers: a managed `cloudfront` API distribution built beside a plain-HTTP
-door doesn't overwrite it. `'none'` publishes none (the bucket serves no
+to browsers: a managed `cloudfront` API distribution built beside such a door
+doesn't overwrite it. `'none'` publishes none (the bucket serves no
 `/aws-blocks/*`), and its `config.json` names the same API URL as `ApiUrl`.
 
 Each door kind takes the settings the app asks it for as `features`, typed for
