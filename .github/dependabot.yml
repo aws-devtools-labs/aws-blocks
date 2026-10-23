@@ -10,8 +10,11 @@
 # Dependabot opens:
 #   - npm version-update PRs run weekly, Monday 06:00 Europe/Berlin, so they
 #     are waiting at the start of the working week.
-#   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
-#     and dev-dependencies (build/test only, low blast radius). Production deps
+#   - Three groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep;
+#     dev-dependencies (build/test only, low blast radius); and
+#     production-dependencies, minor and patch only, so a weekly run opens a
+#     few PRs rather than one per package. Production majors (only on runs
+#     where that group has no open PR, dependabot/dependabot-core#14202)
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
@@ -49,6 +52,18 @@ updates:
         exclude-patterns:
           - "typescript"
           - "@types/node"
+          # A group without patterns takes every match; keep the SDK together.
+          - "@aws-sdk/*"
+          - "@smithy/*"
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - "minor"
+          - "patch"
+        # As above: the SDK stays in the aws-sdk group.
+        exclude-patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
