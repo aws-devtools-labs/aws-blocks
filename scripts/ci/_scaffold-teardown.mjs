@@ -8,8 +8,12 @@
 // stack must leave nothing behind, and the CI role can't delete buckets, so each
 // scheduled Windows E2E run leaked one bucket that nothing reclaimed.
 //
-// Trade-off: no CI job deploys the RETAIN / deletion-protection posture to AWS
-// any more (every test app deploys the sandbox preset); unit tests cover its synth.
+// Trade-off: no CI job deploys the RETAIN posture to AWS any more (every test
+// app deploys the sandbox preset). The rewrite also turns on the log bucket's
+// autoDeleteObjects custom resource, so this stack is not exactly the customer's
+// production stack. The RETAIN synth stays covered by
+// packages/core/src/cdk/config-registry.test.ts ("log bucket inherits the
+// production preset posture").
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -21,9 +25,10 @@ const DISPOSABLE_PRESET = `{ ...${PRODUCTION_PRESET}, removalPolicy: cdk.Removal
  * Rewrite the production preset in a scaffolded `aws-blocks/index.cdk.ts` to
  * `{ ...BlocksPresets.production, removalPolicy: DESTROY, deletionProtection: false }`:
  * every other production default is kept. Deletion protection goes too, so a
- * stateful block added to the template later can't leave the stack DELETE_FAILED. Throws, leaving the file as is, when
- * the file doesn't import `cdk` or doesn't use the preset exactly once (the
- * template changed shape), so the run fails up front instead of leaking again.
+ * stateful block added to the template later can't leave the stack
+ * DELETE_FAILED. Throws, leaving the file as is, when the file doesn't import
+ * `cdk` or doesn't use the preset exactly once (the template changed shape), so
+ * the run fails up front instead of leaking again.
  */
 export function makeProductionDeployDisposable(cdkEntryPath) {
 	const source = readFileSync(cdkEntryPath, 'utf-8');
