@@ -23,3 +23,5 @@ export {
   PGLITE_DATA_LAYER_RECOVERED_SENTINEL,
 } from './pglite-init.js';
 export type { PgliteLike, PgliteInitRetryOptions } from './pglite-init.js';
+export { closeOnProcessExit, pgliteUnrefTimersExtension, runWithUnrefTimers } from './pglite-process.js';
+export type { PgliteExtensionLike } from './pglite-process.js';

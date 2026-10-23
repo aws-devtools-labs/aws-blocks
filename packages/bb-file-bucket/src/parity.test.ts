@@ -24,7 +24,8 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope, isBlocksError } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
+import { deriveBucketName } from './bucket-name.js';
 import { FileBucket as MockFileBucket, FileBucketErrors } from './index.mock.js';
 import { FileBucket as AwsFileBucket } from './index.aws.js';
 
@@ -247,4 +248,24 @@ describe('deleteBatch rejects a mixed valid/invalid batch atomically on both lay
 		);
 		assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
 	});
+});
+
+describe('derived bucket name agrees between the AWS runtime and the mock', () => {
+	// The CDK layer provisions `deriveBucketName(fullId)` (index.cdk.test.ts); the
+	// runtime must resolve that same physical name, and the mock its `mock-` twin.
+	for (const [label, parentId] of [
+		['under the 63-char limit (unchanged)', 'root'],
+		['over the 63-char limit (shortened)', 'p'.repeat(60)],
+	] as const) {
+		test(label, () => {
+			const id = uniqueId();
+			const aws = new AwsFileBucket(new Scope(`${parentId}-aws`), id);
+			const mock = new MockFileBucket(new Scope(`${parentId}-mock`), id);
+			const awsName = getSdkIdentifiers(aws).bucketName;
+			assert.strictEqual(awsName, deriveBucketName(aws.fullId));
+			assert.strictEqual(getSdkIdentifiers(mock).bucketName, `mock-${deriveBucketName(mock.fullId)}`);
+			assert.ok(awsName.length <= 63, awsName);
+			if (aws.fullId.length <= 63) assert.strictEqual(awsName, aws.fullId);
+		});
+	}
 });

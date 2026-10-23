@@ -11,3 +11,5 @@ export class AppSetting {
 	}
 	constructor(...args: any[]) {}
 }
+
+export { AppSettingErrors } from './errors.js';
