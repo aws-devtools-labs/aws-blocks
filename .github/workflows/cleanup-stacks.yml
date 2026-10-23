@@ -485,6 +485,13 @@ jobs:
           fi
           rm -f "$LIST_ERR"
 
+          # Tables retained on earlier runs, reported again on every run until
+          # CloudFormation drops the deleted stack's record (90 days). Read before
+          # the loop, so a table retained in this run is reported once, as
+          # retained, and not also as a leftover.
+          AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh --leftovers ||
+            echo "::warning::amplify-stuck-delete.sh --leftovers failed; tables retained on earlier runs are not reported this run"
+
           for STACK in $STACKS; do
             # Stop if we've spent the time budget; remaining stacks are picked up on
             # the next scheduled run (so this step can't starve the REST-API sweep).
@@ -601,11 +608,6 @@ jobs:
               TRIGGER_FAILED=$((TRIGGER_FAILED + 1))
             fi
           done
-
-          # Tables retained on earlier runs, reported again on every run until
-          # CloudFormation drops the deleted stack's record (90 days).
-          AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh --leftovers ||
-            echo "::warning::amplify-stuck-delete.sh --leftovers failed; tables retained on earlier runs are not reported this run"
 
           # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
           # DELETE_FAILED (commonly the managed DynamoDB table) surfaced as a warning

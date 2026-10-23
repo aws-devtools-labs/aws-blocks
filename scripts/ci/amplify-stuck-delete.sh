@@ -31,15 +31,17 @@
 # its next run, once the nested stack is gone.
 #
 # Retaining the resource does not delete the real table, and no sweep deletes
-# DynamoDB tables (the sweeper role has no DynamoDB access). So each retained
+# DynamoDB tables (the sweeper role can at most describe them). So each retained
 # resource is reported with the real table name, resolved from the nested
 # stack's template and parameters, as a table to delete by hand.
 #
 # With --leftovers it reports those tables again, on every run: it reads the
 # retained resources of the deleted model stacks. CloudFormation keeps a
 # deleted stack's record, resources and template for 90 days, so a leftover
-# table is reported for that long. The role can't read DynamoDB, so whether
-# the table still exists is not checked.
+# table is reported for that long, as one warning per run and a line per
+# table in the step summary, unless DescribeTable says the table is gone
+# (deleted by hand). Any other DescribeTable error, such as a role without
+# that grant, reports the table as before.
 #
 # Why the nested stack and not the root: --retain-resources on the root can
 # only name the data stack, which would orphan the AppSync API the sweep
@@ -224,18 +226,31 @@ walk() {
 }
 
 # The tables retained on earlier runs: a table resource in DELETE_SKIPPED in a
-# deleted nested stack of a sandbox. Only stacks that lived at least 5 hours
-# are read. The retain only runs on a sandbox created more than 6 hours
-# earlier (the step's STUCK_CUTOFF), and an ordinary teardown deletes its
-# nested stacks within the hour, so this skips almost every deleted stack.
+# deleted stack of a sandbox. Only stacks that lived at least 5 hours are
+# read. The retain only runs on a sandbox created more than 6 hours earlier
+# (the step's STUCK_CUTOFF), and an ordinary teardown deletes its stacks
+# within the hour, so this skips almost every deleted stack. DeletionTime is
+# the time of the delete that succeeded, not of the first failed attempt.
+# Deleted nested stacks carry no ParentId in list-stacks, so roots are read
+# too (a root holds no table resource, so it reports nothing). More attempts
+# than the CLI default: the listing pages through 90 days of deleted stacks.
+# Whether DescribeTable reports table $1 as not found. Any other outcome,
+# including a denied call, reads as "may still exist".
+gone() {
+	local out
+	out=$(aws dynamodb describe-table --table-name "$1" --query 'Table.TableStatus' --output text </dev/null 2>&1) && return 1
+	[[ "$out" == *ResourceNotFoundException* ]]
+}
+
 leftovers() {
-	local listed candidates id stack when rows names logical table
+	local listed candidates id stack when rows names logical table found=0
 	local ids=()
-	if ! listed=$(aws cloudformation list-stacks --stack-status-filter DELETE_COMPLETE --output json </dev/null) ||
+	if ! listed=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks \
+		--stack-status-filter DELETE_COMPLETE --output json </dev/null) ||
 		! candidates=$(jq -r '
 			def ts: .[0:19] + "Z" | fromdateiso8601;
 			.StackSummaries[]
-			| select(.ParentId != null and (.StackName | test("^amplify-amplify(gen2|interoptest)-")))
+			| select(.StackName | test("^amplify-amplify(gen2|interoptest)-"))
 			| select(.DeletionTime != null and ((.DeletionTime | ts) - (.CreationTime | ts)) >= 5 * 3600)
 			| [.StackId, .StackName, .DeletionTime[0:10]] | @tsv' <<<"$listed"); then
 		echo "::warning::could not list deleted stacks, so tables retained on earlier runs are not reported this run"
@@ -254,11 +269,19 @@ leftovers() {
 		names=$(table_names "$id" "${ids[@]}")
 		for logical in "${ids[@]}"; do
 			table=$(awk -F'\t' -v id="$logical" '$1 == id { print $2; exit }' <<<"$names")
+			if [ -n "$table" ] && gone "$table"; then
+				echo "  $stack retained $logical; DynamoDB table $table is gone"
+				continue
+			fi
 			table=${table:-"(name unresolved, see the stack template)"}
-			echo "::warning::$stack retained $logical when it was deleted on $when; DynamoDB table $table may still exist, and no sweep deletes it"
+			echo "  $stack retained $logical when it was deleted on $when; DynamoDB table $table may still exist"
 			echo "- leftover: $logical ($table_type) of $stack, deleted $when; delete DynamoDB table $table by hand if it still exists" >>"$report"
+			found=$((found + 1))
 		done
 	done <<<"$candidates"
+	if [ "$found" -gt 0 ]; then
+		echo "::warning::$found DynamoDB table(s) retained by earlier sweeps may still exist, and no sweep deletes them; see the step summary"
+	fi
 }
 
 if [ "$root" = '--leftovers' ]; then

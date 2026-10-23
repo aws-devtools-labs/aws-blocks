@@ -39,6 +39,9 @@ const STEP = 'Find and delete stale Amplify sandbox stacks';
 //   list-stack-resources           -> resources-<key>.json; exit 254 if
 //                                     list-fails-<key> exists
 //   describe-stack-events          -> events-<key>.json, else exit 254
+//   dynamodb describe-table        -> ACTIVE; exit 254 with ResourceNotFound
+//                                     if table-gone-<name> exists, AccessDenied
+//                                     if table-denied-<name> exists
 //   delete-stack                   -> appends the call to deletes.txt; exit 254
 //                                     if delete-fails-<key> exists
 // Its errors quote the stack id, ARN and all, as the real CLI's do.
@@ -71,6 +74,11 @@ case "$1 $2" in
 	cat "$d/resources-$k.json" 2>/dev/null || echo '{"StackResourceSummaries":[]}' ;;
 'cloudformation describe-stack-events')
 	cat "$d/events-$k.json" 2>/dev/null || { echo "throttled" >&2; exit 254; } ;;
+'dynamodb describe-table')
+	t=$(arg --table-name "$@")
+	if [ -f "$d/table-gone-$t" ]; then echo "An error occurred (ResourceNotFoundException) when calling the DescribeTable operation: Requested resource not found: Table: $t not found" >&2; exit 254; fi
+	if [ -f "$d/table-denied-$t" ]; then echo "An error occurred (AccessDeniedException) when calling the DescribeTable operation: User: arn:aws:sts::123456789012:assumed-role/x is not authorized" >&2; exit 254; fi
+	echo ACTIVE ;;
 'cloudformation delete-stack')
 	echo "$*" >> "$d/deletes.txt"
 	if [ -f "$d/delete-fails-$k" ]; then
@@ -564,10 +572,11 @@ describe('amplify-stuck-delete.sh', () => {
 // The model stack after the retain, as list-stacks reports it once deleted:
 // CloudFormation keeps a deleted stack's record, resources and template for
 // 90 days. It lived from the failed deploy to the retain, over 6 h later.
+// Like the real record of the stuck sandbox, it has no ParentId, and its
+// DeletionTime is that of the delete that succeeded.
 const deletedTodo = (over = {}) => ({
 	StackId: TODO,
 	StackName: TODO_NAME,
-	ParentId: DATA,
 	StackStatus: 'DELETE_COMPLETE',
 	CreationTime: '2026-10-19T14:50:01.123000+00:00',
 	DeletionTime: '2026-10-21T08:12:40.456000+00:00',
@@ -594,8 +603,11 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 		assert.deepEqual(r.deletes, []);
 		assert.match(
 			r.stdout,
-			new RegExp(`^::warning::${TODO_NAME} retained TodoTable when it was deleted on 2026-10-21; DynamoDB table ${REAL_TABLE} may still exist`, 'm'),
+			new RegExp(`^  ${TODO_NAME} retained TodoTable when it was deleted on 2026-10-21; DynamoDB table ${REAL_TABLE} may still exist$`, 'm'),
 		);
+		// One warning per run, however many tables: the summary lists them.
+		assert.match(r.stdout, /^::warning::1 DynamoDB table\(s\) retained by earlier sweeps may still exist/m);
+		assert.equal(r.stdout.match(/::warning::/g).length, 1);
 		assert.match(
 			r.report,
 			new RegExp(`^- leftover: TodoTable \\(${TABLE}\\) of ${TODO_NAME}, deleted 2026-10-21; delete DynamoDB table ${REAL_TABLE} by hand if it still exists$`, 'm'),
@@ -612,13 +624,63 @@ describe('amplify-stuck-delete.sh --leftovers', () => {
 		assert.doesNotMatch(r.calls, /list-stack-resources/);
 	});
 
-	it('ignores a deleted root stack, and stacks of other apps', () => {
+	it('says nothing more of a table that DescribeTable reports gone', () => {
+		const r = runLeftovers(fixture(afterRetain({ [`table-gone-${REAL_TABLE}`]: '' })));
+		assert.equal(r.status, 0, r.stdout);
+		assert.equal(r.report, '');
+		assert.doesNotMatch(r.stdout, /::warning::/);
+		assert.match(r.stdout, new RegExp(`DynamoDB table ${REAL_TABLE} is gone`));
+	});
+
+	it('still reports the table when DescribeTable is denied', () => {
+		const r = runLeftovers(fixture(afterRetain({ [`table-denied-${REAL_TABLE}`]: '' })));
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.report, /^- leftover: TodoTable /m);
+		assert.match(r.stdout, /^::warning::1 DynamoDB table/m);
+		assert.doesNotMatch(r.stdout + r.stderr, NO_ACCOUNT);
+	});
+
+	it('reports a stack that lived just over 5 hours', () => {
+		const r = runLeftovers(
+			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T20:20:01.123000+00:00' })) })),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.report, /^- leftover: TodoTable /m);
+	});
+
+	it('counts every table of every deleted stack in its one warning', () => {
+		const OTHER_NAME = TODO_NAME.replace('TodoNestedStackTodoNestedStackR-1MQN5NRL6HFG7', 'NoteNestedStackNoteNestedStackR-2ABC');
+		const OTHER = arn(OTHER_NAME, '11111111-2222-3333-4444-555555555555');
 		const r = runLeftovers(
 			fixture(
 				afterRetain({
-					'deleted.json': deleted(deletedTodo({ ParentId: undefined }), deletedTodo({ StackName: 'amplify-myapp-x-sandbox-1-y' })),
+					'deleted.json': deleted(deletedTodo(), deletedTodo({ StackId: OTHER, StackName: OTHER_NAME })),
+					[`resources-${key(TODO)}.json`]: resources(
+						resource('TodoTable', TABLE, 'DELETE_SKIPPED', TABLE_ID),
+						resource('TagTable', TABLE, 'DELETE_SKIPPED', `${TABLE_ID}-tag`),
+					),
+					[`resources-${key(OTHER)}.json`]: resources(resource('NoteTable', TABLE, 'DELETE_SKIPPED', 'note')),
 				}),
 			),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.stdout, /^::warning::3 DynamoDB table\(s\) retained by earlier sweeps/m);
+		assert.deepEqual(
+			r.report.split('\n').filter(Boolean).map((l) => l.split(' ')[2]),
+			['TodoTable', 'TagTable', 'NoteTable'],
+		);
+	});
+
+	it('warns and goes on when one deleted stack cannot be listed', () => {
+		const r = runLeftovers(fixture(afterRetain({ [`list-fails-${key(TODO)}`]: '' })));
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.stdout, new RegExp(`^::warning::could not list the resources of deleted stack ${TODO_NAME}`, 'm'));
+		assert.doesNotMatch(r.stdout + r.stderr, NO_ACCOUNT);
+	});
+
+	it('ignores the deleted stacks of other apps', () => {
+		const r = runLeftovers(
+			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ StackName: 'amplify-myapp-x-sandbox-1-y' })) })),
 		);
 		assert.equal(r.status, 0, r.stdout);
 		assert.equal(r.report, '');
@@ -699,6 +761,22 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		assert.deepEqual(r.deletes, [`cloudformation delete-stack --stack-name ${ROOT}`]);
 	});
 
+	it('retains for a DELETE_FAILED sandbox just over 6 hours old', () => {
+		const created = new Date(Date.now() - 7 * 3600_000).toISOString();
+		const r = runStep(sandbox(), { created });
+		assert.equal(r.status, 0, r.stdout);
+		assert.deepEqual(r.deletes, [RETAIN_TODO]);
+	});
+
+	it('reads the leftovers before any delete, so a table retained this run is not also a leftover', () => {
+		// A nested delete can finish within the run; read after it, the same
+		// table would be reported twice.
+		const r = runStep(sandbox());
+		assert.equal(r.status, 0, r.stdout);
+		const read = r.calls.indexOf('DELETE_COMPLETE');
+		assert.ok(read !== -1 && read < r.calls.indexOf('--retain-resources'), r.calls);
+	});
+
 	it('only retries plainly a sandbox with no creation time, even after an old stuck one', () => {
 		const ROOT2 = 'amplify-amplifygen2-amp716639251-sandbox-0000000000';
 		const r = runStep({
@@ -715,7 +793,7 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		// The root is gone too: only the deleted model stack's record is left.
 		const r = runStep(afterRetain(), { created: 'None' });
 		assert.equal(r.status, 0, r.stdout);
-		assert.match(r.stdout, new RegExp(`^::warning::${TODO_NAME} retained TodoTable when it was deleted`, 'm'));
+		assert.match(r.stdout, /^::warning::1 DynamoDB table\(s\) retained by earlier sweeps may still exist/m);
 		assert.match(r.summary, new RegExp(`^- leftover: TodoTable .* delete DynamoDB table ${REAL_TABLE} by hand`, 'm'));
 		assert.doesNotMatch(r.summary, NO_ACCOUNT);
 	});
