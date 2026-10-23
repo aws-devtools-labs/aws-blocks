@@ -244,6 +244,11 @@ jobs:
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
 
+      # .puppeteerrc.cjs skips Puppeteer's browser download in CI, but only for
+      # installs under the repo's own node_modules.
+      - name: Test the Puppeteer download gate
+        run: node --test scripts/ci/puppeteerrc.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
