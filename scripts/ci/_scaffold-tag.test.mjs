@@ -62,5 +62,10 @@ describe('Windows E2E stacks are reclaimable by cleanup-stacks.yml', () => {
 		const tagAt = WINDOWS_DRIVER.indexOf('addPurposeTag(');
 		assert.ok(tagAt > 0, 'windows-template-e2e.mjs must call addPurposeTag');
 		assert.ok(tagAt < WINDOWS_DRIVER.indexOf("['run', 'sandbox']"), 'tag must be added before the sandbox deploy');
+		assert.match(WINDOWS_DRIVER, /addPurposeTag\([^)]*\), WINDOWS_E2E_PURPOSE\)/, 'driver must tag with the shared constant');
+	});
+
+	it('the driver fails the run when a teardown failed', () => {
+		assert.match(WINDOWS_DRIVER, /if \(teardownFailures\.length > 0\) \{\s*throw /);
 	});
 });

@@ -39,5 +39,14 @@ describe('runTeardown', () => {
 	it('never throws, so the next teardown still runs', () => {
 		const failures = [];
 		assert.doesNotThrow(() => runTeardown(process.execPath, ['-e', 'process.exit(2)'], {}, ROOT, failures));
+		assert.equal(failures.length, 1);
+	});
+
+	// POSIX only: spawnSync reports a signal kill as status null + signal.
+	it('records a command killed by a signal', { skip: process.platform === 'win32' }, () => {
+		const failures = [];
+		runTeardown(process.execPath, ['-e', "process.kill(process.pid, 'SIGKILL')"], {}, ROOT, failures);
+		assert.equal(failures.length, 1);
+		assert.match(failures[0], /terminated by signal SIGKILL/);
 	});
 });
