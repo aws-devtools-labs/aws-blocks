@@ -160,8 +160,10 @@ describe('log-group sweep step', () => {
 			'no-filter': '',
 			'log-groups.tsv': [
 				group('/aws/lambda/customer-fn', 30),
+				group('/aws/lambda/customer-bb-test-fn', 30),
 				group('/aws/lambda/my-app-Fn-Xy12', 30),
 				group('/aws/rds/cluster/prod-db/postgresql', 30),
+				group('/aws/rds/cluster/prod-bb-test-db/postgresql', 30),
 				group('/aws/lambda/bb-test-a-Fn-1', 30),
 			].join('\n'),
 		});
