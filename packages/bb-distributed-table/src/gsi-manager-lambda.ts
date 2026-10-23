@@ -71,6 +71,10 @@ async function describeTableIfExists(tableName: string) {
 // its indexes, a DESTROY table is deleted right after anyway.
 const STACK_GOING_AWAY = new Set(['DELETE_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS']);
 
+// The cleanup phase of an update or update rollback. A Delete that fails here
+// is reported as a DELETE_FAILED stack event; the update is not rolled back.
+const UPDATE_CLEANUP = new Set(['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS']);
+
 /**
  * Decide whether a Delete must leave the table's indexes in place.
  *
@@ -79,30 +83,71 @@ const STACK_GOING_AWAY = new Set(['DELETE_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS'])
  * leaves the stack (keep them: a RETAIN table is orphaned with its data). In
  * the cleanup phase of an update or update rollback the stack's current
  * template tells the two apart: it still has the table only when the table
- * stays. Any lookup failure keeps the indexes, the non-destructive choice.
+ * stays. A failure to read the stack status keeps the indexes, the
+ * non-destructive choice. A failure to read the template in an update cleanup
+ * keeps them too but throws, so the Delete is reported as failed instead of
+ * silently leaving indexes the config no longer has.
  */
-async function deleteKeepsIndexes(stackId: string | undefined, tableName: string): Promise<boolean> {
+async function deleteKeepsIndexes(stackId: string | undefined, tableName: string, indexNames: string[]): Promise<boolean> {
 	if (!stackId) {
 		console.warn('Delete without a StackId; leaving the indexes in place');
 		return true;
 	}
+	let status: string | undefined;
 	try {
 		const { Stacks } = await cloudformation.send(new DescribeStacksCommand({ StackName: stackId }));
-		const status = Stacks?.[0]?.StackStatus;
-		console.log(`Stack status: ${status}`);
-		if (status === undefined || STACK_GOING_AWAY.has(status)) return true;
+		status = Stacks?.[0]?.StackStatus;
+	} catch (e) {
+		console.warn('Could not read the stack status; leaving the indexes in place:', e);
+		return true;
+	}
+	console.log(`Stack status: ${status}`);
+	if (status === undefined || STACK_GOING_AWAY.has(status)) return true;
 
+	let tableStays: boolean;
+	try {
 		const { TemplateBody } = await cloudformation.send(new GetTemplateCommand({ StackName: stackId, TemplateStage: 'Processed' }));
 		const resources: Record<string, { Type?: string; Properties?: { TableName?: unknown } }> =
 			JSON.parse(TemplateBody ?? '{}').Resources ?? {};
-		const tableStays = Object.values(resources).some(
+		tableStays = Object.values(resources).some(
 			(r) => r.Type === 'AWS::DynamoDB::Table' && r.Properties?.TableName === tableName,
 		);
-		console.log(tableStays ? 'Table stays in the stack' : 'Table is leaving the stack');
-		return !tableStays;
 	} catch (e) {
-		console.warn('Could not read the stack status or template; leaving the indexes in place:', e);
+		if (UPDATE_CLEANUP.has(status)) {
+			const indexes = indexNames.length > 0 ? ` (${indexNames.join(', ')})` : '';
+			throw new Error(
+				`Could not read the stack template to tell whether table ${tableName} stays in the stack, so its ` +
+					`indexes${indexes} were left in place. If the table is still in your app, delete the indexes ` +
+					`it no longer configures with UpdateTable. Cause: ${e instanceof Error ? e.message : String(e)}`,
+			);
+		}
+		console.warn('Could not read the stack template; leaving the indexes in place:', e);
 		return true;
+	}
+	console.log(tableStays ? 'Table stays in the stack' : 'Table is leaving the stack');
+	return !tableStays;
+}
+
+// On Delete a missing table is success: it has no indexes left to remove.
+// Create and Update still fail on a missing table.
+async function describeForRequest(requestType: CfnEvent['RequestType'], tableName: string) {
+	return requestType === 'Delete' ? describeTableIfExists(tableName) : describeTable(tableName);
+}
+
+// Start the next GSI change. Returns false when a Delete finds that the table
+// was deleted after DescribeTable: nothing is left to delete.
+async function initiateNextChangeTolerant(
+	requestType: CfnEvent['RequestType'],
+	tableName: string,
+	table: any,
+	desired: Record<string, IndexConfig>,
+): Promise<boolean> {
+	try {
+		await initiateNextChange(tableName, table, desired);
+		return true;
+	} catch (e) {
+		if (requestType === 'Delete' && isTableNotFound(e)) return false;
+		throw e;
 	}
 }
 
@@ -237,13 +282,13 @@ export async function handler(event: CfnEvent) {
 	// echo back the original ID — CloudFormation rejects changes to it.
 	const physicalId = event.PhysicalResourceId ?? TableName;
 
-	if (event.RequestType === 'Delete' && await deleteKeepsIndexes(event.StackId, TableName)) {
+	if (event.RequestType === 'Delete' && await deleteKeepsIndexes(event.StackId, TableName, Object.keys(Indexes ?? {}))) {
 		console.log('Leaving the indexes in place');
 		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE', [KEEP_INDEXES]: 'true' } };
 	}
 
 	// Check if already done
-	const table = event.RequestType === 'Delete' ? await describeTableIfExists(TableName) : await describeTable(TableName);
+	const table = await describeForRequest(event.RequestType, TableName);
 	if (!table) return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
 	if (gsiMatchesDesired(table, desired) && !isTableBusy(table)) {
 		console.log('Already in desired state');
@@ -258,16 +303,8 @@ export async function handler(event: CfnEvent) {
 
 	// Production path: initiate the first GSI change if table is idle.
 	// If table is busy (prior GSI still updating), just return — isComplete will poll.
-	if (!isTableBusy(table)) {
-		try {
-			await initiateNextChange(TableName, table, desired);
-		} catch (e) {
-			// The table was deleted after DescribeTable: nothing left to delete.
-			if (event.RequestType === 'Delete' && isTableNotFound(e)) {
-				return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
-			}
-			throw e;
-		}
+	if (!isTableBusy(table) && !(await initiateNextChangeTolerant(event.RequestType, TableName, table, desired))) {
+		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
 	}
 
 	return { PhysicalResourceId: physicalId, Data: { Status: 'IN_PROGRESS' } };
@@ -289,7 +326,7 @@ export async function isCompleteHandler(event: any) {
 		return { IsComplete: true };
 	}
 
-	const table = event.RequestType === 'Delete' ? await describeTableIfExists(TableName) : await describeTable(TableName);
+	const table = await describeForRequest(event.RequestType, TableName);
 	if (!table) return { IsComplete: true };
 
 	// If a GSI operation is in progress, wait for it
@@ -305,12 +342,7 @@ export async function isCompleteHandler(event: any) {
 	}
 
 	// Table is idle but doesn't match — initiate the next change
-	try {
-		await initiateNextChange(TableName, table, desired);
-	} catch (e) {
-		if (event.RequestType === 'Delete' && isTableNotFound(e)) return { IsComplete: true };
-		throw e;
-	}
+	if (!(await initiateNextChangeTolerant(event.RequestType, TableName, table, desired))) return { IsComplete: true };
 	return { IsComplete: false };
 }
 
