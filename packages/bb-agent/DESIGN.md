@@ -80,6 +80,14 @@ The server methods (`stream()`/`getChannel()`/`resume()` and the private
 `runAgent()`) are the Realtime path itself and remain the app's backend contract.
 Only the `useChat` client hook is deprecated — superseded by `createChat`.
 
+## Conversation ownership
+
+The conversation record in the `convos` table is keyed by `{ userId, conversationId }` and written by `createConversationId(userId)`, so its presence is the ownership proof. The messages table (partitioned by `conversationId`) and the session snapshot (keyed by session id) are not user-scoped on their own, so every method that touches them checks ownership first (`ownsConversation` in `agent.ts`): `stream()`/`resume()` throw `ConversationNotFound`, `getConversation()`/`getPendingInterrupts()` return `[]`, and `deleteConversation()` is a no-op for a conversation the caller does not own. "Not found" covers a missing and a foreign conversation alike, so the answer does not confirm that someone else's conversation exists.
+
+**The ownership read is strongly consistent** (`DistributedTable.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
+
+**Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, userId)`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, so the runtime session id derivation is unchanged. `inferenceOnly` agents keep no owner and publish on the bare `channelId`, as before.
+
 ## Session Persistence
 
 Two storage backends, same FileBucket BB:

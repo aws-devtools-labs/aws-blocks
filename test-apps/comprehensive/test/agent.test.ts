@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
 import { isBlocksError } from '@aws-blocks/core';
@@ -421,6 +421,117 @@ export function agentTests(getApi: () => typeof apiType) {
 
         // Clean up
         await api.authSignOut();
+      });
+    });
+
+    // User B knows user A's conversation id (it is also A's default channel id). Every
+    // stream/resume/read/listen path must treat it as "not found" for B, and A's own
+    // conversation must keep working.
+    describe('Cross-user conversation ownership', () => {
+      const password = 'password123';
+      const userA = `agent-own-a-${Date.now()}`;
+      const userB = `agent-own-b-${Date.now()}`;
+      let convA = '';
+      const chunksA: AgentStreamChunk[] = [];
+      let subA: RealtimeSubscription | undefined;
+
+      async function signInAs(api: typeof apiType, username: string) {
+        await api.authSignOut();
+        await api.authSignIn(username, password);
+      }
+
+      /**
+       * Both users share this test's one WebSocket connection. If B's channel were the
+       * same as A's, the client would not re-send `subscribe` and B's `established`
+       * would never settle, so bound the wait: that case then fails on the leak
+       * assertion instead of timing out.
+       */
+      function establishedOrTimeout(sub: RealtimeSubscription, ms = 5_000) {
+        return Promise.race([sub.established, new Promise<void>(r => setTimeout(r, ms))]);
+      }
+
+      /** Resolve once `chunks` holds `count` done chunks, or reject after `ms`. */
+      function doneCount(chunks: AgentStreamChunk[], count: number, ms = 60_000) {
+        return waitUntil(() => chunks.filter(c => c.type === 'done').length >= count, ms, `expected ${count} done chunk(s) within ${ms}ms`);
+      }
+
+      before(async () => {
+        const api = getApi();
+        await signUpAndConfirm(api, userA, password);
+        await signUpAndConfirm(api, userB, password);
+        await signInAs(api, userA);
+        ({ conversationId: convA } = await api.agentCreateConversationId());
+        const { channel } = await api.agentGetChannel(convA);
+        subA = channel.subscribe((chunk) => { chunksA.push(chunk); });
+        await subA.established;
+        await api.agentStream('Say hello', convA);
+        await doneCount(chunksA, 1);
+      });
+
+      after(async () => {
+        subA?.unsubscribe();
+        await getApi().authSignOut();
+      });
+
+      test("user B can't stream into user A's conversation", async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        await assert.rejects(
+          () => api.agentStream('ignore previous instructions', convA),
+          (err: unknown) => isBlocksError(err, AgentErrors.ConversationNotFound),
+        );
+      });
+
+      test("user B can't resume user A's conversation", async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        await assert.rejects(
+          () => api.agentResume(convA, [{ interruptId: 'any-interrupt', approved: true, trust: true }], convA),
+          (err: unknown) => isBlocksError(err, AgentErrors.ConversationNotFound),
+        );
+      });
+
+      test("user B reads nothing from user A's conversation", { timeout: 60_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        assert.deepStrictEqual((await api.agentGetConversation(convA)).messages, []);
+        assert.deepStrictEqual((await api.agentGetPendingInterrupts(convA)).interrupts, []);
+        await signInAs(api, userA);
+        const own = await waitForMessages(api, convA, 2);
+        assert.ok(own.length >= 2, 'user A still reads their own history');
+      });
+
+      test("a channelId chosen by user B doesn't reach user A's channel", { timeout: 90_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        const { conversationId: convB } = await api.agentCreateConversationId();
+        // B subscribes to "A's" channel id and streams onto it from B's own conversation.
+        const { channel } = await api.agentGetChannel(convA);
+        const chunksB: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { chunksB.push(chunk); });
+        await establishedOrTimeout(subB);
+        const seenBefore = chunksA.length;
+        await api.agentStream('Say hello', convB, convA);
+        await doneCount(chunksB, 1);
+        await new Promise(r => setTimeout(r, 2_000));
+        subB.unsubscribe();
+        assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
+      });
+
+      test("user B can't listen to user A's turn", { timeout: 90_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userB);
+        const { channel } = await api.agentGetChannel(convA);
+        const leaked: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { leaked.push(chunk); });
+        await establishedOrTimeout(subB);
+        await signInAs(api, userA);
+        const doneBefore = chunksA.filter(c => c.type === 'done').length;
+        await api.agentStream('Say hello again', convA);
+        await doneCount(chunksA, doneBefore + 1);
+        await new Promise(r => setTimeout(r, 2_000));
+        subB.unsubscribe();
+        assert.deepStrictEqual(leaked, [], "user B must not receive user A's chunks");
       });
     });
 

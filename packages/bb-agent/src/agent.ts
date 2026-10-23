@@ -33,7 +33,7 @@ export interface AgentTurnPayload<TContext = DefaultToolContext> {
 	message: string;
 	/** Conversation to persist to / restore the session from (undefined for inferenceOnly). */
 	conversationId?: string;
-	/** Realtime channel the client subscribes to for this turn's chunks. */
+	/** Channel id the caller chose (or the default). Chunks are published on `chunksChannel(channelId, userId)`. */
 	channelId: string;
 	/** Conversation owner. */
 	userId: string;
@@ -287,8 +287,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
 	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+		const channel = this.chunksChannel(payload.channelId, payload.userId);
 		try {
-			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
+			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
@@ -304,7 +305,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				this.log.error('Failed to persist error to history', { error: persistErr });
 			}
 			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
-			await this.rt.publish('chunks', payload.channelId, { type: 'error', error: errorMessage });
+			await this.rt.publish('chunks', channel, { type: 'error', error: errorMessage });
 		}
 	}
 
@@ -340,7 +341,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *
 	 * @param message - the user message that starts the turn (ignored on the resume path)
 	 * @param conversationId - conversation to load/persist history for; undefined means no persistence
-	 * @param channelId - Realtime channel the stream chunks are published to
+	 * @param channelId - Realtime channel the stream chunks are published to (already user-scoped by invokeTurn)
 	 * @param userId - owner of the conversation, stored on every persisted message
 	 * @param interruptResponses - approval responses when resuming a turn paused on a HITL interrupt
 	 * @param context - per-call tool context, threaded to tool handlers via Strands invocationState
@@ -679,13 +680,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
+		const rtChannel = this.chunksChannel(channelId, userId);
 		return {
 			channelId,
 			/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
-			channel: this.rt.getChannel('chunks', channelId),
+			channel: this.rt.getChannel('chunks', rtChannel),
 			/** Wait for the complete response (server-side). Resolves on done, rejects on error. */
 			complete: () => new Promise<AgentStreamChunk>((resolve, reject) => {
-				const unsub = this.rt.subscribe('chunks', channelId, (data) => {
+				const unsub = this.rt.subscribe('chunks', rtChannel, (data) => {
 					const chunk = data as AgentStreamChunk;
 					if (chunk.type === 'done') {
 						unsub();
@@ -752,6 +754,20 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	/**
+	 * The Realtime channel a turn's chunks are published on. With persistence it is
+	 * scoped to the user: the default channelId is the conversation id, and a caller
+	 * may pick any channelId, so an unscoped channel would let a non-owner who knows a
+	 * conversation id publish onto, or subscribe to, the owner's live channel.
+	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
+	 * can never prefix-match another's. inferenceOnly agents have no owner to scope by
+	 * and keep the bare channelId.
+	 */
+	private chunksChannel(channelId: string, userId: string): string {
+		if (!this.conversations) return channelId;
+		return `u/${encodeURIComponent(userId)}/${channelId}`;
+	}
+
+	/**
 	 * Whether `userId` owns `conversationId`. The messages table is partitioned by
 	 * conversationId and snapshot storage is keyed by sessionId alone, so neither is
 	 * user-scoped on its own. The conversation record IS keyed by { userId, conversationId }
@@ -759,7 +775,21 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 */
 	private async ownsConversation(conversationId: string, userId: string): Promise<boolean> {
 		if (!this.conversations) return false;
-		return !!(await this.conversations.get({ userId, conversationId }));
+		// Strongly consistent: the documented flow is createConversationId() followed
+		// straight away by stream(), and an eventually consistent GetItem on AWS can
+		// miss the record that was just written and reject the user's first message.
+		return !!(await this.conversations.get({ userId, conversationId }, { consistentRead: true }));
+	}
+
+	/**
+	 * Throws InvalidUsage when `userId` is missing (or isn't a string), so a caller on
+	 * an older signature without the userId argument fails loudly instead of getting
+	 * an empty result on the mock and an opaque marshalling error on AWS.
+	 */
+	private requireUserId(userId: unknown, method: string, signature: string): asserts userId is string {
+		if (typeof userId !== 'string' || !userId) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires the caller's userId (${signature}). Take it from the authenticated session.`);
+		}
 	}
 
 	/**
@@ -798,9 +828,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		return conversationId;
 	}
 
-	/** Get a Realtime channel for streaming chunks. Use this to subscribe before calling stream(). */
-	getChannel(channelId: string) {
-		return this.rt.getChannel('chunks', channelId);
+	/** Get a Realtime channel for streaming chunks. Use this to subscribe before calling stream().
+	 *
+	 * Owner-scoped when persistence is enabled: pass the same `userId` you pass to
+	 * stream()/resume(), taken from the authenticated session. The channel only
+	 * carries that user's turns, so a caller who knows another user's conversation
+	 * id can't listen to it. Throws InvalidUsage without a `userId` unless the agent
+	 * is `inferenceOnly`, where `userId` is not used.
+	 */
+	async getChannel(channelId: string, userId?: string) {
+		if (this.conversations) this.requireUserId(userId, 'getChannel', 'getChannel(channelId, userId)');
+		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId ?? 'anonymous'));
 	}
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
@@ -812,6 +850,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 */
 	async getPendingInterrupts(conversationId: string, userId: string): Promise<Array<{ id: string; name: string; reason?: any }>> {
 		if (!this.messages) return [];
+		this.requireUserId(userId, 'getPendingInterrupts', 'getPendingInterrupts(conversationId, userId)');
 		if (!(await this.ownsConversation(conversationId, userId))) return [];
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
@@ -844,18 +883,22 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Get messages in a conversation (for frontend display).
 	 * Returns the most recent messages when `limit` is specified.
 	 *
-	 * ⚠️ Does NOT verify ownership — it reads by conversationId alone. The caller must
-	 * authorize the request (e.g. confirm the conversation belongs to the authenticated
-	 * user via listConversations(userId)) before returning messages. See the
-	 * "Authorization" section in the README.
+	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
+	 * caller who knows another user's conversation id can't read its history. Pass the
+	 * `userId` from the authenticated session (see the "Authorization" section in the
+	 * README). Throws InvalidUsage when `userId` is missing.
 	 *
+	 * @param userId - The caller's user id; the conversation must have been created by
+	 *   createConversationId(userId).
 	 * @param options.limit - Maximum number of (most recent) messages to return.
 	 *   A `limit` of `0` returns an empty array, and any negative value is treated
 	 *   the same as `0` (returns no messages). Omit `limit` to return all messages.
 	 * TODO: support pagination
 	 */
-	async getConversation(id: string, options?: { limit?: number }): Promise<Message[]> {
+	async getConversation(id: string, userId: string, options?: { limit?: number }): Promise<Message[]> {
 		if (!this.messages) throw blocksAgentError(AgentErrors.PersistenceRequired, 'getConversation() requires persistence. Set inferenceOnly: false (default).');
+		this.requireUserId(userId, 'getConversation', 'getConversation(id, userId, options?)');
+		if (!(await this.ownsConversation(id, userId))) return [];
 		// A limit of 0 means "zero messages", and a negative limit is nonsensical
 		// for a message count. The previous `options?.limit && ...` guard treated 0
 		// (and never reached the negative case usefully) as falsy, so the cap was
