@@ -86,11 +86,25 @@ test('settle() also waits for a child that fails, without rejecting', async () =
 
 test('a test filter in NODE_OPTIONS does not reach the child', async () => {
   const previous = process.env.NODE_OPTIONS;
-  process.env.NODE_OPTIONS = `${previous ?? ''} --test-name-pattern=no-test-has-this-name`.trim();
+  // A quoted value with a space, as test names have, must stay one flag.
+  for (const filter of ['--test-name-pattern=no-test-has-this-name', '--test-name-pattern="no test has this name"']) {
+    process.env.NODE_OPTIONS = `${previous ?? ''} ${filter}`.trim();
+    try {
+      // With the filter the child would run no test and exit 0.
+      const [suite] = backgroundSuites(['fail'], quiet()).suites;
+      await assert.rejects(suite.done(), /fake background test fails/, filter);
+    } finally {
+      if (previous === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = previous;
+    }
+  }
+});
+
+test('a --test-skip-pattern still reaches the child', async () => {
+  const previous = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = `${previous ?? ''} --test-skip-pattern="fake background test fails"`.trim();
   try {
-    // With the filter the child would run no test and exit 0.
-    const [suite] = backgroundSuites(['fail'], quiet()).suites;
-    await assert.rejects(suite.done(), /fake background test fails/);
+    await backgroundSuites(['fail'], quiet()).suites[0].done();
   } finally {
     if (previous === undefined) delete process.env.NODE_OPTIONS;
     else process.env.NODE_OPTIONS = previous;
