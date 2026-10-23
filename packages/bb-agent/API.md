@@ -58,6 +58,7 @@ export const AgentErrors: {
     readonly BrowserNotSupported: "BrowserNotSupportedException";
     readonly StreamFailed: "StreamFailedException";
     readonly InterruptRequired: "InterruptRequiredException";
+    readonly ConversationNotFound: "ConversationNotFoundException";
     readonly InvalidUsage: "InvalidUsageException";
 };
 
@@ -280,7 +281,6 @@ export const OllamaModels: {
 export interface StreamOptions<TContext = DefaultToolContext> {
     channelId?: string;
     context?: TContext;
-    // (undocumented)
     conversationId?: string;
     userId?: string;
 }

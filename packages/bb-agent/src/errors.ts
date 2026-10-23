@@ -12,7 +12,7 @@ import { blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/co
  * import { AgentErrors } from '@aws-blocks/bb-agent';
  *
  * try {
- *   await agent.getConversation(id);
+ *   await agent.getConversation(id, userId);
  * } catch (e) {
  *   if (isBlocksError(e, AgentErrors.PersistenceRequired)) {
  *     // agent is in inferenceOnly mode
@@ -27,7 +27,9 @@ export const AgentErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	StreamFailed: 'StreamFailedException',
 	InterruptRequired: 'InterruptRequiredException',
-	/** A client-side usage precondition was violated (e.g. subscribe() with no channel). */
+	/** The conversation does not exist or does not belong to the calling user. */
+	ConversationNotFound: 'ConversationNotFoundException',
+	/** A usage precondition was violated (e.g. subscribe() with no channel, or a server method called without the caller's userId). */
 	InvalidUsage: 'InvalidUsageException',
 } as const;
 

@@ -32,7 +32,7 @@ export class DistributedTable<T, K extends TableKeyConfig<T> = TableKeyConfig<T>
     // (undocumented)
     static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     // (undocumented)
-    get(key: TableKey<T, K>): Promise<T | null>;
+    get(key: TableKey<T, K>, options?: GetOptions): Promise<T | null>;
     // (undocumented)
     getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]>;
     // @internal
@@ -87,6 +87,11 @@ export interface ExternalTableRef {
     readonly __brand: 'ExternalTableRef';
     // (undocumented)
     readonly tableName: string;
+}
+
+// @public
+export interface GetOptions {
+    consistentRead?: boolean;
 }
 
 // @public
