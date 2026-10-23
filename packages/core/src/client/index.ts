@@ -148,7 +148,7 @@ export interface BlocksRequest {
   /**
    * The namespace this call targets: the backend **export** name (e.g. `'api'`,
    * `'authApi'` for `export const authApi = auth.createApi()`), not the
-   * `ApiNamespace` constructor's `name` argument. The request URL's
+   * `ApiNamespace` constructor's `label` argument. The request URL's
    * `/{namespace}` segment is built from this value after middleware runs, so a
    * middleware that changes it changes both the path and the body.
    */

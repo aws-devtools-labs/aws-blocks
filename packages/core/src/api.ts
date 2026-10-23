@@ -72,7 +72,7 @@ import type { ScopeParent } from './common/index.js';
  * scope's compute (`scope.compute` — the nearest compute assigned up the scope
  * chain, else the default); a per-namespace compute option, once it exists,
  * takes precedence over it. Routes key on the **export** name (what the client
- * sends and dispatch resolves), not the constructor's `name`.
+ * sends and dispatch resolves), not the constructor's `label`.
  *
  * A symbol key, like {@link API_NAMESPACE_MARKER}, so `Object.entries`,
  * `JSON.stringify` and the client/spec generators never see it.
@@ -176,12 +176,17 @@ type ComputeResolvingScope = { compute?: unknown };
  * - Use Building Blocks (KVStore, DistributedTable) for state
  */
 export interface ApiNamespaceConstructor {
-  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, name: string, handler: ApiHandler<T>): AsyncAPI<T>;
+  /**
+   * @param label - Marks the handler as an API namespace. Clients never send it: they call the
+   *   namespace by the name it is exported under from the backend module, so
+   *   `export const api = new ApiNamespace(scope, 'todos', handler)` is called as `api.list()`.
+   */
+  new <T extends Record<string, (...args: any[]) => any>>(scope: ScopeParent, label: string, handler: ApiHandler<T>): AsyncAPI<T>;
 }
 
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
-  constructor(scope: ScopeParent, name: string, handler: any) {
-    handler[API_NAMESPACE_MARKER] = name;
+  constructor(scope: ScopeParent, label: string, handler: any) {
+    handler[API_NAMESPACE_MARKER] = label;
     // How synth-time routing finds this namespace's compute (see
     // API_NAMESPACE_COMPUTE): resolved when called, never here. A scopeless
     // namespace resolves to undefined and routes to the default compute.
