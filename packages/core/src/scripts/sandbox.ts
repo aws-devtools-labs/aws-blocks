@@ -771,7 +771,7 @@ export async function destroySandbox(backendPath: string) {
     // credential error is deterministic and retrying only burns the backoff.
     // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
     // teardown blockers, not auth.
-    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd(), accountDetails: false });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {

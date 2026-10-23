@@ -18,7 +18,7 @@ dist-registry/
 
 # Harbor benchmark runtime (raw sessions may contain credentials; never commit).
 .harbor-bench/
-scripts/harbor-bench/__pycache__/
+scripts/harbor-bench/**/__pycache__/
 
 # Generated client code (hosting apps commit theirs for CI)
 test-apps/comprehensive/aws-blocks/client.js
