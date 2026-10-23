@@ -281,7 +281,6 @@ export const OllamaModels: {
 export interface StreamOptions<TContext = DefaultToolContext> {
     channelId?: string;
     context?: TContext;
-    // (undocumented)
     conversationId?: string;
     userId?: string;
 }

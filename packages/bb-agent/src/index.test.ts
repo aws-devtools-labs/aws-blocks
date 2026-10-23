@@ -256,10 +256,10 @@ describe('inferenceOnly error handling', () => {
 	});
 
 	// The per-user channel scoping only applies with persistence: an inferenceOnly
-	// agent has no owner to scope by, so getChannel(channelId) works as before.
-	test('getChannel(channelId) without a userId still receives the turn', async () => {
+	// agent has no owner to scope by, so its channel is the bare channelId.
+	test("the channel is not user-scoped (getChannel's userId is not used)", async () => {
 		const channelId = crypto.randomUUID();
-		const channel = await agent.getChannel(channelId);
+		const channel = await agent.getChannel(channelId, 'someone-else');
 		const received: unknown[] = [];
 		const sub = channel.subscribe((chunk) => { received.push(chunk); });
 		await (await agent.stream('hello', { channelId })).complete();
@@ -2759,7 +2759,8 @@ describe('OllamaModels presets', () => {
 // drives the mock/local path, so this covers agent.aws.ts by spying the S3Storage ctor.
 
 import { Agent as DeployedAgent } from './index.aws.js';
-import { createDeployedSnapshotStorage } from './agent.aws.js';
+import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
+import { toTurnPayload } from './agentcore-entry.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -4056,3 +4057,34 @@ describe('createChat loadConversation + metadata narrowing', () => {
 	});
 });
 
+// ── AgentCore dispatch for a turn without a conversation ────────────────────
+
+describe('AgentCore: a turn without a conversation never runs in another session', () => {
+	// Regression: on AWS a turn with no conversationId used the caller-chosen channelId as
+	// the AgentCore runtimeSessionId, and the AgentCore entry fell back to that session id
+	// as the conversationId. stream({ channelId: <another user's conversation id> }) then
+	// ran inside that user's session (history, trusted tools) without any ownership check.
+	test("the runtime session id is not the caller's channelId", async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session'), 'acs', { systemPrompt: 'test' });
+		const sent: Array<{ runtimeSessionId?: string; payload?: Uint8Array }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		const ownerConv = crypto.randomUUID();
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: ownerConv, userId: 'attacker-2' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: ownerConv, channelId: ownerConv, userId: 'owner-1' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		assert.notStrictEqual(sent[0].runtimeSessionId, ownerConv, 'a conversation-less turn must not reuse a conversation id as its session');
+		assert.ok((sent[0].runtimeSessionId ?? '').length >= 33, 'AgentCore needs a session id of at least 33 characters');
+		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[0].payload)).conversationId, undefined);
+		assert.strictEqual(sent[1].runtimeSessionId, ownerConv, 'a conversation keeps routing to its own session');
+	});
+
+	test('the AgentCore entry does not turn the session id into a conversationId', () => {
+		assert.strictEqual(toTurnPayload({ prompt: 'hi', channelId: 'chan-1', userId: 'u-1' }).conversationId, undefined);
+		assert.strictEqual(toTurnPayload({ prompt: '', channelId: 'chan-1', conversationId: 'conv-1', userId: 'u-1' }).conversationId, 'conv-1');
+	});
+});

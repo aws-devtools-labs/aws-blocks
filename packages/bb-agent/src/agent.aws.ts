@@ -26,6 +26,17 @@ function toRuntimeSessionId(base: string): string {
 }
 
 /**
+ * The AgentCore session for a turn. A conversation routes to its own session (its id). A turn
+ * without a conversation gets a session derived from its user and channel instead of the bare
+ * channelId: the channelId is caller-chosen, so it could otherwise equal another user's
+ * conversation id and land the turn in that user's session.
+ */
+function runtimeSessionIdFor(payload: { conversationId?: string; channelId: string; userId: string }): string {
+	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
+	return createHash('sha256').update(`turn:${encodeURIComponent(payload.userId)}/${payload.channelId}`).digest('hex');
+}
+
+/**
  * Builds the deployed Agent's snapshot storage, pinning S3Storage to the Lambda
  * execution region (`AWS_REGION`) so non-us-east-1 deploys use the correct regional
  * endpoint (#120). `S3StorageImpl` is injectable so tests can assert the resulting
@@ -104,7 +115,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 		await this._agentCore.send(
 			new InvokeAgentRuntimeCommand({
 				agentRuntimeArn: runtimeArn,
-				runtimeSessionId: toRuntimeSessionId(payload.conversationId ?? payload.channelId),
+				runtimeSessionId: runtimeSessionIdFor(payload),
 				contentType: 'application/json',
 				accept: 'application/json',
 				payload: new TextEncoder().encode(JSON.stringify(body)),

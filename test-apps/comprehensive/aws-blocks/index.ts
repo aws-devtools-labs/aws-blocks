@@ -2026,7 +2026,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const ch = await agent.getChannel(channelId, user?.userId ?? 'anonymous');
     const raw = ch.toJSON() as Record<string, unknown>;
     const { __blocks, ...rest } = raw;
-    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/{channelId}`
+    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/u/{user}/{channelId}`
     // path) typed as a string, so a consumer's `refresh` callback can spread this into a
     // ChatChannelDescriptor cast-free — the fresh token must resubscribe under the SAME
     // key the transport stored it under, so this channel must NOT be overridden downstream.
