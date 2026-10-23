@@ -26,7 +26,7 @@ import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { apiNamespaceComputeTests } from './api-namespace-compute.test.js';
 import { containerJobTests } from './container-jobs.test.js';
-import { apiRpc, type ComputeTestContext, FRONT_DOORS, type FrontDoor } from './context.js';
+import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from './context.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';
@@ -49,15 +49,17 @@ const ctx: ComputeTestContext = {
 
 /**
  * A new CloudFront distribution reports CREATE_COMPLETE before its domain
- * resolves at the edge, and a failed lookup is cached negatively — poll until a
- * call succeeds. Under 'apigateway' the first call answers.
+ * resolves at the edge, and a failed lookup is cached negatively — poll until the
+ * API answers. Any JSON-RPC reply, even an error, means the front door is
+ * reachable, so only transport and HTTP failures are retried. Under 'apigateway'
+ * the first call answers.
  */
 async function waitForFrontDoor(budgetMs = 300_000): Promise<void> {
   const deadline = Date.now() + budgetMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
-      await apiRpc(ctx, 'whereAmI');
+      await rpcCall(ctx.apiUrl(), 'api.whereAmI');
       return;
     } catch (error) {
       lastError = error;
@@ -98,8 +100,11 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
           env: { ...process.env, NODE_OPTIONS: '' },
         });
         console.log('✅ Stack destroyed');
-      } catch {
-        console.log('⚠️  Stack destroy failed (non-fatal — cleanup will be retried next run)');
+      } catch (error) {
+        // In CI a failed teardown fails the run (the job's last step retries the
+        // destroy); a stack left behind would keep its endpoints in the shared VPC.
+        if (process.env.CI) throw error;
+        console.log('⚠️  Stack destroy failed — run test/sandbox-destroy.ts again, or the scheduled cleanup removes it');
       }
     }
   });

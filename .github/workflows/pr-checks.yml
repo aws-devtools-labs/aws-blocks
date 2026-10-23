@@ -513,9 +513,12 @@ jobs:
       cancel-in-progress: false
     strategy:
       fail-fast: false
+      # Every leg provisions the same endpoints into the one compute test VPC, so
+      # legs run one after another. The concurrency group is not a queue: it holds
+      # one running and one pending job, and a newer pending job (another PR on
+      # this account) cancels the pending one.
+      max-parallel: 1
       matrix:
-        # One leg while every leg provisions endpoints into the one compute test
-        # VPC: the concurrency group above would run a second leg after the first.
         front-door: [cloudfront]
     env:
       # The app adds the leg (`-cf` / `-gw`) to the stack name itself.
@@ -556,6 +559,7 @@ jobs:
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
+        id: vpc-id
         run: |
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
@@ -563,12 +567,18 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
-      # The test tears its stack down itself; this catches a cancelled or timed-out
-      # run, which would otherwise leave the stack (and its distribution) behind.
+      # The test tears its stack down itself and fails the run if it can't. This
+      # retries after a failed, cancelled or timed-out run, which would otherwise
+      # leave the stack (its distribution and its endpoints in the shared VPC)
+      # behind. Nothing is deployed before the VPC ID is exported.
       - name: Destroy stack (if left behind)
-        if: always()
+        if: (failure() || cancelled()) && steps.vpc-id.outcome == 'success'
         working-directory: test-apps/compute-smoke
-        run: npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
+        run: |
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || {
+            echo "::error::Could not destroy the compute suite's stack; the scheduled stack cleanup will retry."
+            exit 1
+          }
 
   e2e-production:
     permissions:

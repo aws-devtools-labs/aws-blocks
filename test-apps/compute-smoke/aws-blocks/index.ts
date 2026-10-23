@@ -14,8 +14,8 @@
  *   (512 MB), so a call through the front door must be served by that function,
  *   while `api` stays on the default compute.
  *
- * The front door is the suite's variant axis: CI deploys this same app once per
- * `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
+ * The front door is the suite's variant axis: each CI leg deploys this same app
+ * with one `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
  *
  * This app runs against the persistent test VPC (injected via
  * `defaults.vpc.network`), so it adds zero new VPCs per run — the reason

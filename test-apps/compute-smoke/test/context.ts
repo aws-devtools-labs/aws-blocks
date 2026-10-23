@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** What every scenario module gets from the harness (`compute-smoke.test.ts`). */
+// What every scenario module gets from the harness (`compute-smoke.test.ts`).
 
 export const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
 export type FrontDoor = (typeof FRONT_DOORS)[number];

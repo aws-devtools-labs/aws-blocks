@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Destroy ALL stacks created by the compute-smoke app (main + vpc-ref lookup
- * stack). Uses `cdk destroy --all` to ensure complete cleanup.
+ * Destroy every stack the compute-smoke app synthesizes for the leg selected by
+ * `COMPUTE_API_FRONT_DOOR` (default cloudfront): the main stack and its vpc-ref
+ * lookup stack. Uses `cdk destroy --all` to ensure complete cleanup. Run it once
+ * per leg you deployed.
  */
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
