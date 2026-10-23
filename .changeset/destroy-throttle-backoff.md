@@ -15,7 +15,8 @@ can now run for about 30 minutes before it fails (about 18 minutes before this
 change). When it does fail on a throttle, it says so and suggests waiting a few
 minutes before running destroy again.
 
-Failures that are not throttles keep the existing schedule (60s, then 120s).
+Failures that are not throttles keep the existing schedule (60s, then 120s),
+except that none is retried once throttling has used up the 20-minute budget.
 Detection reads the stack events with the caller's credentials
 (`cloudformation:DescribeStackEvents`); if they cannot be read, a warning is
 printed and the failure is treated as not throttled.

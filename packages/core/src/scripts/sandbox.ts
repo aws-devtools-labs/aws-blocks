@@ -830,18 +830,25 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				);
 			}
 			let delayMs: number | undefined;
+			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
 			if (throttled) {
 				const next = throttleBackoffDelay(throttleRetries, deps.throttleBackoff ?? {}, random);
 				if (now() - firstFailureAt + next <= budgetMs) delayMs = next;
-			} else if (ordinaryRetries < retryDelays.length && !(throttleRetries > 0 && now() - firstFailureAt > budgetMs)) {
+			} else if (ordinaryRetries < retryDelays.length && !throttleBudgetSpent) {
 				delayMs = retryDelays[ordinaryRetries];
 			}
 			if (delayMs === undefined) {
 				console.error('\n❌ Destroy failed after retries.');
 				if (throttled) {
 					console.error(
-						'   AWS is still throttling resource deletes in this account (API Gateway allows one REST API ' +
-							'delete every 30 s). Wait a few minutes and run destroy again.',
+						'   The last attempt was throttled by AWS (for example, API Gateway allows one REST API ' +
+							'delete every 30s per account). Wait a few minutes and run destroy again; if it fails ' +
+							'again, check the stack events for other errors.',
+					);
+				} else if (ordinaryRetries < retryDelays.length) {
+					console.error(
+						'   Earlier attempts were throttled by AWS and used up the retry time. Check the stack ' +
+							'events for this failure, then run destroy again.',
 					);
 				}
 				throw error;

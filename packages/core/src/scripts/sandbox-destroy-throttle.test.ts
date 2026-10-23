@@ -178,7 +178,37 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 			);
 			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
 			assert.match(printed, /Destroy failed after retries/);
-			assert.match(printed, /AWS is still throttling resource deletes in this account/);
+			assert.match(printed, /The last attempt was throttled by AWS/);
+			assert.doesNotMatch(printed, /used up the retry time/);
+		} finally {
+			errors.mock.restore();
+		}
+	});
+
+	it('says throttling used up the retry time when an ordinary failure comes after the budget', async () => {
+		const errors = mock.method(console, 'error', () => {});
+		try {
+			const clock = fakeClock(5 * MIN);
+			let attempts = 0;
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						attempts++;
+						clock.attempt();
+						throw new Error('x');
+					},
+					listStackNames: () => ['stackA'],
+					emptyBuckets: async () => {},
+					// Throttled 3 times (fail@5, 11, 18), then an ordinary failure at 27, past the budget.
+					isThrottled: async () => attempts <= 3,
+					sleep: async (ms) => clock.advance(ms),
+					now: clock.now,
+					random: () => 1,
+				}),
+			);
+			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
+			assert.match(printed, /Earlier attempts were throttled by AWS and used up the retry time/);
+			assert.doesNotMatch(printed, /The last attempt was throttled/);
 		} finally {
 			errors.mock.restore();
 		}
@@ -201,7 +231,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 			);
 			const printed = errors.mock.calls.map((c) => String(c.arguments[0])).join('\n');
 			assert.match(printed, /Destroy failed after retries/);
-			assert.doesNotMatch(printed, /throttling/);
+			assert.doesNotMatch(printed, /throttled/);
 		} finally {
 			errors.mock.restore();
 		}
@@ -359,7 +389,7 @@ describe('destroy call sites', () => {
 		assert.strictEqual(deps.successLabel, 'Production stack');
 	});
 
-	it('destroyWasThrottled is false for no stacks, without calling AWS', async () => {
+	it('destroyWasThrottled returns false for no stacks and calls no AWS API', async () => {
 		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
 		const send = mock.method(CloudFormationClient.prototype, 'send', async () => {
 			throw new Error('must not call AWS');
