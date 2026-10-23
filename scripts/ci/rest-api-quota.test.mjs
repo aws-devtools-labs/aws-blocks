@@ -46,12 +46,12 @@ case "$1 $2" in
 	for f in "$d/get-rest-apis.err" "$d/get-rest-apis-$form.err"; do
 		if [ -f "$f" ]; then cat "$f" >&2; exit 254; fi
 	done
-	if [ "$form" = query ]; then cat "$d/rest-apis.txt" 2>/dev/null; else cat "$d/rest-apis.json"; fi ;;
+	if [ "$form" = query ]; then cat "$d/rest-apis.txt" 2>/dev/null || true; else cat "$d/rest-apis.json"; fi ;;
 'cloudformation list-stacks')
 	if [ -f "$d/list-stacks.err" ]; then cat "$d/list-stacks.err" >&2; exit 254; fi
-	cat "$d/stacks.txt" 2>/dev/null ;;
+	cat "$d/stacks.txt" 2>/dev/null || true ;;
 'cloudformation describe-stack-resources')
-	cat "$d/resources-$4.txt" 2>/dev/null ;;
+	cat "$d/resources-$4.txt" 2>/dev/null || true ;;
 'apigateway delete-rest-api')
 	echo "$4" >> "$d/deleted.txt" ;;
 *) echo "stub aws: unexpected call: $*" >&2; exit 2 ;;
@@ -227,6 +227,7 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		const r = runStep(fixture({ 'rest-apis.txt': '', 'rest-apis.json': apis(api('a', ['EDGE'])) }));
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.match(r.summary, /^- REST APIs remaining: 1 total, 1 EDGE \(cap 120\)$/m);
+		assert.doesNotMatch(r.stdout, /::(warning|error)::/);
 	});
 
 	it('still deletes an old unowned test API and spares the stack-owned one', () => {
@@ -239,6 +240,7 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 			}),
 		);
 		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.doesNotMatch(r.stdout, /::(warning|error)::/);
 		assert.equal(r.deleted, 'orphan1\n');
 		assert.match(r.summary, /- Orphaned REST APIs deleted: 1/);
 		assert.match(r.summary, /- Skipped \(owned by live stack\): 1/);

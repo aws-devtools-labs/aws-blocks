@@ -107,6 +107,16 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 		})),
 	});
 	const iamOk = { 'ec2.describe-regions.out': 'us-east-1\n', 'apigateway.get-account.out': 'None\n', 'iam.list-roles.out': roles };
+	// One old role of the CloudWatch role shape: deleted only if every gate holds.
+	const candidate = JSON.stringify({
+		Roles: [
+			{
+				RoleName: 'bb-test-x-CloudWatchRole',
+				CreateDate: '2020-01-01T00:00:00Z',
+				AssumeRolePolicyDocument: { Statement: [{ Principal: { Service: 'apigateway.amazonaws.com' } }] },
+			},
+		],
+	});
 
 	it('IAM step: counts the roles and passes when every listing works', () => {
 		const r = runStep(IAM, iamOk);
@@ -125,25 +135,38 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 		assert.equal(r.writes, '');
 	});
 
-	it('IAM step: fails the leg, with the CLI error, when the regions cannot be listed', () => {
-		const r = runStep(IAM, { ...iamOk, 'ec2.describe-regions.err': denied('DescribeRegions') });
+	it('IAM step: deletes a candidate role when every gate holds', () => {
+		const r = runStep(IAM, { ...iamOk, 'iam.list-roles.out': candidate });
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.writes, /iam delete-role --role-name bb-test-x-CloudWatchRole/);
+		assert.doesNotMatch(r.stdout, /::(warning|error)::/);
+	});
+
+	it('IAM step: fails the leg, and deletes nothing, when the regions cannot be listed', () => {
+		const r = runStep(IAM, { ...iamOk, 'iam.list-roles.out': candidate, 'ec2.describe-regions.err': denied('DescribeRegions') });
 		assert.notEqual(r.status, 0, 'the step must fail when ec2 describe-regions fails');
 		assert.match(r.stdout, /^::error::ec2 describe-regions failed, .*: An error occurred \(AccessDenied\)/m);
 		assert.doesNotMatch(r.stdout, NO_ACCOUNT);
-		assert.match(r.summary, /^- IAM roles in account: 2 \(quota 3000\)$/m);
+		assert.match(r.summary, /^- IAM roles in account: 1 \(quota 3000\)$/m);
 		assert.equal(r.writes, '');
 	});
 
+	it('IAM step: warns with the reason, and deletes nothing, when a region account setting cannot be read', () => {
+		const r = runStep(IAM, { ...iamOk, 'iam.list-roles.out': candidate, 'apigateway.get-account.err': denied('GetAccount') });
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.stdout, /^::warning::apigateway get-account failed in us-east-1, .*: An error occurred \(AccessDenied\)/m);
+		assert.match(r.stdout, /^::warning::IAM role sweep deferred 1 candidate/m);
+		assert.equal(r.writes, '');
+	});
+
+	it('IAM step: fails the leg on a role listing it cannot parse', () => {
+		const r = runStep(IAM, { ...iamOk, 'iam.list-roles.out': 'not json' });
+		assert.notEqual(r.status, 0);
+		assert.match(r.stdout, /^::error::iam list-roles failed/m);
+		assert.match(r.summary, /^- IAM roles in account: unknown, the listing failed \(quota 3000\)$/m);
+	});
+
 	it('IAM step: warns with the reason, and deletes nothing, when one region cannot list its stacks', () => {
-		const candidate = JSON.stringify({
-			Roles: [
-				{
-					RoleName: 'bb-test-x-CloudWatchRole',
-					CreateDate: '2020-01-01T00:00:00Z',
-					AssumeRolePolicyDocument: { Statement: [{ Principal: { Service: 'apigateway.amazonaws.com' } }] },
-				},
-			],
-		});
 		const r = runStep(IAM, {
 			...iamOk,
 			'iam.list-roles.out': candidate,
@@ -207,5 +230,29 @@ describe('cleanup-stacks.yml legs', () => {
 			{ name: 'e2e account 2', environment: 'e2e', index: 1 },
 		]);
 		assert.doesNotMatch(workflow, /environment == 'publish'|secrets\.AWS_ROLE_ARN\b/);
+	});
+});
+
+describe('aws-error.sh', () => {
+	const reason = (text) => {
+		const dir = fixture({ 'err.txt': text });
+		const r = spawnSync('bash', ['-c', '. scripts/ci/aws-error.sh && aws_annotate error "$1" "listing failed"', '-', join(dir, 'err.txt')], {
+			cwd: ROOT,
+			encoding: 'utf8',
+		});
+		assert.equal(r.status, 0, r.stderr);
+		return r.stdout;
+	};
+
+	it('says so when the CLI wrote nothing', () => {
+		assert.equal(reason(''), '::error::listing failed: no error output\n');
+	});
+
+	it('keeps the reason to 500 bytes', () => {
+		assert.equal(reason(`\n${'x'.repeat(800)}\n`), `::error::listing failed: ${'x'.repeat(500)}\n`);
+	});
+
+	it('escapes "%" before CR, so neither is read as a workflow command escape', () => {
+		assert.equal(reason('\nrate 100%\rnext\n'), '::error::listing failed: rate 100%25%0Dnext\n');
 	});
 });
