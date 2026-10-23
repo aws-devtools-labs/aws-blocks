@@ -1,0 +1,24 @@
+name: Install pinned npm
+description: >-
+  Installs the npm CLI version the Release job publishes with, replacing the
+  npm bundled with Node. npm trusted publishing (OIDC) needs npm >= 11.5.1
+  and Node >= 22.14.0, and the Node 22 release from .nvmrc ships npm 10.
+  Fails if npm's engines range doesn't cover the running Node: npm itself
+  only warns. Used by publish-packages.yml and by release-install-check in
+  pr-checks.yml, so PRs build with the npm that publishes.
+  Run it after actions/setup-node. POSIX/Linux/macOS only (bash).
+runs:
+  using: composite
+  steps:
+    - name: Install pinned npm
+      shell: bash
+      env:
+        NPM_VERSION: '12.2.1'
+      run: |
+        npm install --global --ignore-scripts "npm@${NPM_VERSION}"
+        hash -r
+        test "$(npm --version)" = "${NPM_VERSION}"
+        node -e 'const d = process.argv[1]; const range = require(`${d}/package.json`).engines.node;
+          if (!require(`${d}/node_modules/semver`).satisfies(process.version, range)) {
+            console.error(`Node ${process.version} is outside npm engines ${range}`); process.exit(1); }' \
+          "$(npm root --global)/npm"
