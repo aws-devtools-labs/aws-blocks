@@ -116,17 +116,22 @@ function testVpcDeployers(dir) {
 	const found = [];
 	for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
 		for (const [job, block] of Object.entries(jobsOf(readFileSync(join(dir, file), 'utf8')))) {
-			// Whole-line comments out, trailing ` # ...` comments off, and shell
-			// line continuations joined, so a deploy split over lines still counts.
+			// Whole-line comments out and shell line continuations joined, so a
+			// deploy split over lines still counts.
 			const code = block
 				.split('\n')
 				.filter((line) => !line.trim().startsWith('#'))
-				.map((line) => line.replace(/\s+#\s.*$/, ''))
 				.join('\n')
-				.replace(/\\\n\s*/g, ' ');
+				.replace(/\\\n[ \t]*/g, ' ');
 			if (!/\bcdk deploy\b[^\n]*(?<![\w-])BlocksTestVpc(?![\w-])/.test(code)) continue;
-			const concurrency = /^ {4}concurrency:[ \t]*(\S.*?)?[ \t]*$((?:\n {6}.*)*)/m.exec(code);
-			const raw = concurrency?.[1] ?? /^ {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(concurrency?.[2] ?? '')?.[1] ?? null;
+			// The job's own concurrency block, trailing YAML comments off; `group`
+			// may be the inline value, a key below it, or inside a flow mapping.
+			const block4 = /^ {4}concurrency:[ \t]*([^\n]*)((?:\n {6}.*)*)/m.exec(code);
+			const uncomment = (text) => text.replace(/(?:^|[ \t]+)#.*$/gm, '');
+			const inline = uncomment(block4?.[1] ?? '').trim();
+			const raw = inline.startsWith('{')
+				? (/\bgroup:[ \t]*('[^']*'|"[^"]*"|(?:\$\{\{.*?\}\}|[^,}])+)/.exec(inline)?.[1].trim() ?? null)
+				: inline || (/^ {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(uncomment(block4?.[2] ?? ''))?.[1] ?? null);
 			const group = raw?.replace(/^(['"])(.*)\1$/, '$2').replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') ?? null;
 			found.push({ job: `${file} ${job}`, group });
 		}
@@ -452,6 +457,36 @@ describe('pr-checks.yml', () => {
 			`on: push\njobs:\n${job('quoted', group('"blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}"'), 'BlocksTestVpc')}`,
 		);
 		assertOneTestVpcGroup(testVpcDeployers(dir));
+
+		// A ` # ` inside a run script doesn't hide the deploy after it; a flow
+		// mapping without a group has none; a blank line ends a continuation.
+		writeFileSync(
+			join(dir, 'c.yml'),
+			[
+				'on: push',
+				'jobs:',
+				'  hashed:',
+				'    concurrency: { cancel-in-progress: false }',
+				'    steps:',
+				'      - run: echo "step # 1" && npx cdk deploy BlocksTestVpc',
+				'  flow:',
+				"    concurrency: { group: 'blocks-test-vpc-${{ needs.e2e-slot.outputs.e2e-index }}', cancel-in-progress: false }",
+				'    steps:',
+				'      - run: npx cdk deploy BlocksTestVpc',
+				'  not-a-deploy:',
+				'    steps:',
+				'      - run: |',
+				'          npx cdk deploy \\',
+				'',
+				'          echo BlocksTestVpc',
+				'',
+			].join('\n'),
+		);
+		const deployers = testVpcDeployers(dir).filter((d) => d.job.startsWith('c.yml'));
+		assert.deepEqual(deployers, [
+			{ job: 'c.yml hashed', group: null },
+			{ job: 'c.yml flow', group: 'blocks-test-vpc-${{ needs.*.outputs.e2e-index }}' },
+		]);
 	});
 
 	for (const name of ALL) {
