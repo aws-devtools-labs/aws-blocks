@@ -1,0 +1,157 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.getAttachmentFeed",
+      "params": [],
+      "result": {
+        "name": "GetAttachmentFeedResult",
+        "schema": {
+          "x-blocks-transferable": "realtime/channel",
+          "x-blocks-type-args": [{ "$ref": "#/components/schemas/Attachment" }]
+        }
+      }
+    },
+    {
+      "name": "api.getDownloadFeed",
+      "params": [],
+      "result": {
+        "name": "GetDownloadFeedResult",
+        "schema": {
+          "x-blocks-transferable": "realtime/channel",
+          "x-blocks-type-args": [
+            { "type": "array", "items": { "x-blocks-transferable": "file-bucket/download" } }
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.getLobby",
+      "params": [],
+      "result": {
+        "name": "GetLobbyResult",
+        "schema": { "$ref": "#/components/schemas/Lobby" }
+      }
+    },
+    {
+      "name": "api.getSignInFeed",
+      "params": [],
+      "result": {
+        "name": "GetSignInFeedResult",
+        "schema": {
+          "x-blocks-transferable": "realtime/channel",
+          "x-blocks-type-args": [{ "$ref": "#/components/schemas/SignInOption" }]
+        }
+      }
+    },
+    {
+      "name": "api.getSignInBoard",
+      "params": [],
+      "result": {
+        "name": "GetSignInBoardResult",
+        "schema": { "$ref": "#/components/schemas/SignInBoard" }
+      }
+    },
+    {
+      "name": "api.getProviderDirectory",
+      "params": [],
+      "result": {
+        "name": "GetProviderDirectoryResult",
+        "schema": { "$ref": "#/components/schemas/ProviderDirectory" }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Note": {
+        "type": "object",
+        "properties": { "id": { "type": "string" }, "text": { "type": "string" } },
+        "required": ["id", "text"]
+      },
+      "Attachment": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "x-blocks-transferable": "file-bucket/download" },
+          "previews": { "type": "array", "items": { "x-blocks-transferable": "file-bucket/download" } }
+        },
+        "required": ["name", "file", "previews"]
+      },
+      "Lobby": {
+        "type": "object",
+        "properties": {
+          "rooms": {
+            "x-blocks-transferable": "realtime/channel",
+            "x-blocks-type-args": [
+              {
+                "type": "array",
+                "items": {
+                  "x-blocks-transferable": "realtime/channel",
+                  "x-blocks-type-args": [{ "$ref": "#/components/schemas/Note" }]
+                }
+              }
+            ]
+          },
+          "roomGroups": {
+            "type": "array",
+            "items": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                {
+                  "type": "array",
+                  "items": {
+                    "x-blocks-transferable": "realtime/channel",
+                    "x-blocks-type-args": [{ "$ref": "#/components/schemas/Note" }]
+                  }
+                }
+              ]
+            }
+          },
+          "uploadsByRoom": {
+            "type": "object",
+            "additionalProperties": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [{ "x-blocks-transferable": "file-bucket/upload" }]
+            }
+          }
+        },
+        "required": ["rooms", "roomGroups", "uploadsByRoom"]
+      },
+      "SignInOption": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string" },
+          "client": { "x-blocks-transferable": "oidc/client" }
+        },
+        "required": ["label", "client"]
+      },
+      "SignInBoard": {
+        "type": "object",
+        "properties": {
+          "feeds": {
+            "type": "array",
+            "items": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [{ "$ref": "#/components/schemas/SignInOption" }]
+            }
+          },
+          "clientsByTenant": {
+            "type": "object",
+            "additionalProperties": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [{ "type": "array", "items": { "x-blocks-transferable": "oidc/client" } }]
+            }
+          }
+        },
+        "required": ["feeds", "clientsByTenant"]
+      },
+      "ProviderDirectory": {
+        "type": "object",
+        "properties": { "title": { "type": "string" } },
+        "required": ["title"],
+        "additionalProperties": { "x-blocks-transferable": "oidc/client" }
+      }
+    }
+  }
+}
