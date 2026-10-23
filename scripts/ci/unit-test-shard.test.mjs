@@ -154,7 +154,7 @@ describe('pr-checks.yml', () => {
 	const aggregator = jobs['build-and-test-local'];
 
 	it('has the parts of the local check', () => {
-		assert.deepEqual(parts.sort(), ['local-api', 'local-build', 'local-e2e', 'local-unit']);
+		assert.deepEqual(parts.sort(), ['local-build', 'local-e2e', 'local-unit']);
 	});
 
 	it('keeps the required check name on an always() job that needs every part', () => {
@@ -170,6 +170,30 @@ describe('pr-checks.yml', () => {
 		assert.ok(aggregator.includes(`result=$(jq -r --arg part "$part" '.[$part].result // "missing"' <<<"$NEEDS")`));
 		assert.ok(aggregator.includes('if [ "$result" != success ]; then failed=1; fi'));
 		assert.ok(aggregator.includes('NEEDS: ${{ toJSON(needs) }}'));
+	});
+
+	// Runs the aggregator's own script, so an edit that makes it pass over a
+	// failed part (an `exit 0`, a dropped check) fails here, not only one that
+	// changes its text. jq is on ubuntu-latest; without it locally, this skips.
+	const hasJq = spawnSync('jq', ['--version']).status === 0;
+	it('the aggregator script fails unless every part succeeded', { skip: hasJq ? false : 'jq is not on PATH' }, () => {
+		const script = aggregator.match(/^ {8}run: \|\n((?: {10}.*\n|\n)+)/m)[1].replace(/^ {10}/gm, '');
+		const run = (results) =>
+			spawnSync('bash', ['-c', script], {
+				env: {
+					...process.env,
+					NEEDS: JSON.stringify(
+						Object.fromEntries(Object.entries(results).map(([k, v]) => [k, { result: v, outputs: {} }])),
+					),
+				},
+			}).status;
+		const ok = Object.fromEntries(parts.map((p) => [p, 'success']));
+		assert.equal(run(ok), 0);
+		for (const p of parts) {
+			for (const bad of ['failure', 'skipped', 'cancelled']) assert.equal(run({ ...ok, [p]: bad }), 1, `${p}: ${bad}`);
+			const { [p]: _, ...missing } = ok;
+			assert.equal(run(missing), 1, `${p} missing`);
+		}
 	});
 
 	it('runs shards 1..N, where N is the matrix length the script is given', () => {
