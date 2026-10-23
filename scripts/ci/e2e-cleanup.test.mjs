@@ -83,6 +83,7 @@ describe('always() cleanup steps', () => {
 	// or a step timeout: always(), cancelled() or failure() in its if, but not a negated !cancelled()
 	// (function names are case-insensitive; a double negation cancels out). `negated` collects the
 	// !cancelled() ones instead.
+	const teardownLine = (l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l);
 	const teardowns = (workflows, negated) =>
 		workflows.flatMap(({ file, wf }) =>
 			Object.entries(wf.jobs).flatMap(([job, def]) =>
@@ -96,7 +97,7 @@ describe('always() cleanup steps', () => {
 					.flatMap((s) =>
 						s.run
 							.split('\n')
-							.filter((l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l))
+							.filter(teardownLine)
 							.map((line) => ({
 								where: `${file} ${job}`,
 								line: line.trim(),
@@ -113,6 +114,9 @@ describe('always() cleanup steps', () => {
 	}));
 	const teardownLines = teardowns(workflows, false);
 
+	// The command a teardown line runs, without the wrapper.
+	const command = (line) => line.replace(/^.*scripts\/ci\/e2e-cleanup\.mjs"? -- /, '');
+
 	/** The !cancelled() teardown lines that end in `|| true` or that no later wrapped cleanup step retries. */
 	const unretried = (wfs) => {
 		const wrapped = teardowns(wfs, false);
@@ -120,10 +124,21 @@ describe('always() cleanup steps', () => {
 			.filter(
 				({ where, line, index }) =>
 					/\|\| *true/.test(line) ||
-					!wrapped.some((t) => t.where === where && t.index > index && t.line.endsWith(line)),
+					!wrapped.some(
+						(t) => t.where === where && t.index > index && t.line.endsWith(` -- ${command(line)}`),
+					),
 			)
 			.map(({ where, line }) => `${where}: ${line}`);
 	};
+
+	/** The `steps.<id>.outcome != 'success'` ids of a cleanup's `if` that don't name an earlier teardown step. */
+	const badRetryIds = ({ if: cond, steps, index }) =>
+		[...cond.matchAll(/steps\.([\w-]+)\.outcome != 'success'/g)]
+			.map(([, id]) => id)
+			.filter((id) => {
+				const at = steps.findIndex((s) => s.id === id);
+				return !(at >= 0 && at < index && (steps[at].run ?? '').split('\n').some(teardownLine));
+			});
 
 	it('finds the teardown steps of the hosting, telemetry, amplify and native jobs', () => {
 		assert.ok(teardownLines.length >= 8, JSON.stringify(teardownLines, null, 2));
@@ -138,6 +153,9 @@ describe('always() cleanup steps', () => {
 				/^always\(\) && steps\.aws-creds\.outcome == 'success'( && steps\.[\w-]+\.outcome != 'success')*$/,
 				where,
 			);
+			// ... where each named step is an earlier teardown in this job (the one being retried).
+			const bad = badRetryIds({ if: cond, steps, index });
+			assert.deepEqual(bad, [], `${where}: steps.${bad[0]} is not an earlier teardown step of this job`);
 			const creds = steps.findIndex((s) => /e2e-aws-credentials|configure-aws-credentials/.test(s.uses ?? ''));
 			assert.ok(creds >= 0 && creds < index, `${where}: credentials step must come before the cleanup`);
 			assert.equal(steps[creds].id, 'aws-creds', `${where}: the first credentials step must have id aws-creds`);
@@ -160,13 +178,35 @@ describe('always() cleanup steps', () => {
 		const step = (name, cond, run) => ({ name, if: cond, run });
 		const wrappedRun = 'node scripts/ci/e2e-cleanup.mjs -- npx tsx test/sandbox-destroy.ts app.ts';
 		const wf = (steps) => [{ file: 'fixture.yml', wf: { jobs: { e2e: { steps } } } }];
-		const destroy = step('Destroy', "${{ !cancelled() && steps.e2e.outcome != 'skipped' }}", 'npx tsx test/sandbox-destroy.ts app.ts');
+		const destroy = step(
+			'Destroy',
+			"!cancelled() && steps.e2e.outcome != 'skipped'",
+			'npx tsx test/sandbox-destroy.ts app.ts',
+		);
 		const cleanup = step('Cleanup', "always() && steps.aws-creds.outcome == 'success'", wrappedRun);
 		assert.deepEqual(unretried(wf([destroy, cleanup])), []);
 		assert.equal(unretried(wf([destroy])).length, 1, 'no cleanup step');
 		assert.equal(unretried(wf([cleanup, destroy])).length, 1, 'cleanup comes first');
-		assert.equal(unretried(wf([{ ...destroy, run: `${destroy.run} || true` }, cleanup])).length, 1, '|| true');
-		assert.equal(unretried(wf([{ ...destroy, run: 'npx tsx other-destroy.ts' }, cleanup])).length, 1, 'other stack');
+		const withRun = (run) => wf([{ ...destroy, run }, cleanup]);
+		assert.equal(unretried(withRun(`${destroy.run} || true`)).length, 1, '|| true');
+		assert.equal(unretried(withRun('npx tsx other-destroy.ts')).length, 1, 'other stack');
+		assert.equal(unretried(withRun('tsx test/sandbox-destroy.ts app.ts')).length, 1, 'other command');
+		assert.deepEqual(unretried(withRun(wrappedRun)), [], 'both wrapped');
+	});
+
+	it('flags a retry condition that does not name the step it retries', () => {
+		const steps = [
+			{ id: 'e2e', run: 'npm test' },
+			{ id: 'destroy', run: '# destroy below\nnpx tsx test/sandbox-destroy.ts app.ts' },
+			{ id: 'cleanup' },
+			{ id: 'later', run: 'npx tsx test/sandbox-destroy.ts app.ts' },
+		];
+		const check = (id) => badRetryIds({ if: `always() && steps.${id}.outcome != 'success'`, steps, index: 2 });
+		assert.deepEqual(check('destroy'), []);
+		assert.deepEqual(check('e2e'), ['e2e'], 'not a teardown');
+		assert.deepEqual(check('missing'), ['missing'], 'no such step');
+		assert.deepEqual(check('cleanup'), ['cleanup'], 'itself');
+		assert.deepEqual(check('later'), ['later'], 'a later step');
 	});
 });
 
@@ -320,7 +360,9 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 			assert.equal(r.status, 0, r.output);
 			assert.doesNotMatch(r.output, /currently (reading|synthing)|E2E cleanup failed/);
 			// The holder runs this node (bash only if it is listed before it execs); comm keeps 15 characters.
-			const node = basename(process.execPath).slice(0, 15).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+			const node = basename(process.execPath)
+				.slice(0, 15)
+				.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 			assert.match(
 				r.output,
 				new RegExp(`Stopping 1 process\\(es\\) left by an earlier step: ${holder.pid} \\((${node}|bash)\\)`),
@@ -376,7 +418,12 @@ describe('cleanup while a cancelled step still holds the cdk.out lock', { skip: 
 	it('e2e-cleanup.mjs reports a destroy killed by a signal', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'e2e-cleanup-'));
 		try {
-			const r = await run(dir, process.execPath, [SCRIPT, '--', 'bash', '-c', 'kill -TERM $$'], `test-${process.pid}-f`);
+			const r = await run(
+				dir,
+				process.execPath,
+				[SCRIPT, '--', 'bash', '-c', 'kill -TERM $$'],
+				`test-${process.pid}-f`,
+			);
 			assert.equal(r.status, 0, r.output);
 			assert.match(r.output, /^::warning title=E2E cleanup failed::.*exited with SIGTERM/m);
 			assert.doesNotMatch(r.output, /Cleanup finished/);

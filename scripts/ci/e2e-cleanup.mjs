@@ -118,6 +118,7 @@ export function describePids(pids) {
 	return pids
 		.map((pid) => {
 			// A process sets its own name: keep control characters out of the log.
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
 			const name = names.get(pid)?.replace(/[\x00-\x1f\x7f]/g, '?');
 			return name ? `${pid} (${name})` : String(pid);
 		})
