@@ -379,7 +379,13 @@ export interface SetPasswordOptions {
  * maps to the `^=` prefix operator and `match: 'equals'` to `=`.
  */
 export interface AdminUserFilter {
-	/** Attribute to filter on — e.g. `'email'`, `'username'`, `'status'`. */
+	/**
+	 * Attribute to filter on — e.g. `'email'`, `'username'`, `'status'`.
+	 *
+	 * On AWS it must be one Cognito `ListUsers` can filter on: `username`, `email`, `phone_number`, `name`,
+	 * `given_name`, `family_name`, `preferred_username`, `cognito:user_status`, `status` or `sub`; custom
+	 * attributes are rejected. The mock matches `username`, `status` and stored attributes only.
+	 */
 	attribute: string;
 	/** Comparison operator. Cognito supports prefix (`^=`) and exact (`=`). */
 	match: 'startsWith' | 'equals';
