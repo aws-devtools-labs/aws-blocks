@@ -279,8 +279,8 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
-      # .puppeteerrc.cjs skips Puppeteer's browser download in CI, but only for
-      # installs under the repo's own node_modules.
+      # .puppeteerrc.cjs skips Puppeteer's browser download on GitHub Actions,
+      # but only for installs under the repo's own node_modules.
       - name: Test the Puppeteer download gate
         run: node --test scripts/ci/puppeteerrc.test.mjs
 

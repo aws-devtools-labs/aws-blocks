@@ -6,21 +6,27 @@
 // node_modules, so an app scaffolded inside the checkout still gets its
 // browser. The file is copied into a temporary tree, which then stands in
 // for the repo root (the gate compares the install's cwd with the file's
-// directory).
+// directory). The tree is checked by loading the file directly and, when
+// Puppeteer is installed, through Puppeteer's own config lookup.
 //
 // Run: node --test scripts/ci/puppeteerrc.test.mjs
 
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RC = fileURLToPath(new URL('../../.puppeteerrc.cjs', import.meta.url));
+/** Puppeteer's config loader, from the repo's own install (absent once Puppeteer leaves the lockfile). */
+const GET_CONFIGURATION = fileURLToPath(
+	new URL('../../node_modules/puppeteer/lib/cjs/puppeteer/getConfiguration.js', import.meta.url),
+);
 
 const root = mkdtempSync(join(tmpdir(), 'puppeteerrc-'));
+after(() => rmSync(root, { recursive: true, force: true }));
 copyFileSync(RC, join(root, '.puppeteerrc.cjs'));
 const installs = {
 	'the repo node_modules': join(root, 'node_modules', 'puppeteer'),
@@ -28,6 +34,19 @@ const installs = {
 	'the repo root': root,
 };
 for (const dir of Object.values(installs)) mkdirSync(dir, { recursive: true });
+
+/** `skipDownload` as Puppeteer itself resolves it for an install running in `cwd` on GitHub Actions. */
+function puppeteerSkips(cwd) {
+	const env = { ...process.env, GITHUB_ACTIONS: 'true', GET_CONFIGURATION };
+	for (const name of Object.keys(env)) if (name.startsWith('PUPPETEER_')) delete env[name];
+	const r = spawnSync(
+		process.execPath,
+		['-p', 'JSON.stringify(require(process.env.GET_CONFIGURATION).getConfiguration().skipDownload ?? null)'],
+		{ cwd, env, encoding: 'utf8' },
+	);
+	assert.equal(r.status, 0, r.stderr);
+	return JSON.parse(r.stdout);
+}
 
 /** What the config file exports when Puppeteer's install runs in `cwd`. */
 function config(cwd, githubActions) {
@@ -60,4 +79,17 @@ describe('.puppeteerrc.cjs', () => {
 			});
 		}
 	}
+
+	// The checks above load the file directly; this one goes through
+	// Puppeteer's own lookup, so a Puppeteer upgrade that stops finding or
+	// honouring the file fails here.
+	it(
+		"skips the download through Puppeteer's own config lookup only for the repo node_modules",
+		{ skip: existsSync(GET_CONFIGURATION) ? false : 'Puppeteer is not installed' },
+		() => {
+			assert.equal(puppeteerSkips(installs['the repo node_modules']), true);
+			assert.equal(puppeteerSkips(installs['an app inside the repo']), null);
+			assert.equal(puppeteerSkips(installs['the repo root']), null);
+		},
+	);
 });
