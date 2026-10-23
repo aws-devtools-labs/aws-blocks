@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
   buildSandboxCdkEnv,
+  buildDevServerSpawn,
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
@@ -205,5 +206,25 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
+  });
+});
+
+describe('buildDevServerSpawn', () => {
+  // The dev server runs under `shell: true`. Node 24 emits DEP0190 whenever a
+  // non-empty args array is passed alongside `shell: true` (the args are only
+  // concatenated, not escaped), so the whole command must go to the shell as
+  // one string with no separate args.
+  it('passes the default command as one shell string with no args', () => {
+    assert.deepStrictEqual(buildDevServerSpawn(undefined), {
+      command: 'npx tsx watch aws-blocks/scripts/server.ts',
+      args: [],
+    });
+  });
+
+  it('passes a custom devCommand through unsplit', () => {
+    assert.deepStrictEqual(buildDevServerSpawn('npx next dev --port 3100'), {
+      command: 'npx next dev --port 3100',
+      args: [],
+    });
   });
 });

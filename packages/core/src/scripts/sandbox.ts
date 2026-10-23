@@ -44,6 +44,16 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+/**
+ * How the sandbox spawns the local dev server. It runs under `shell: true`, so
+ * the whole command goes to the shell as one string with no separate args:
+ * Node 24 emits DEP0190 whenever a non-empty args array is combined with
+ * `shell: true`, because the args are only concatenated, never escaped.
+ */
+export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
+  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+}
+
 export interface SandboxDeployArgsOptions {
   /** Directory CDK writes stack outputs to (relative to the project root). */
   outDir: string;
@@ -353,10 +363,9 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(`[CDK Watch] ${data.toString().trim()}`);
   });
 
-  const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
-  const [cmd, ...args] = devServerCmd.split(' ');
-  
-  const devServer = spawnCommand(cmd, args, {
+  const devServerSpawn = buildDevServerSpawn(devCommand);
+
+  const devServer = spawnCommand(devServerSpawn.command, devServerSpawn.args, {
     stdio: "inherit",
     shell: true,
     // Own process group on POSIX so cleanup can signal the whole dev-server
