@@ -881,8 +881,8 @@ jobs:
       # deletes through the quota (its header lists the inputs and what the
       # model leaves out, such as other jobs' deletes). Over the 23 runs it
       # lists, they cut the modeled time the matrix's deletes wait on each
-      # other by 60% (42-44% for values searched on half the runs and
-      # checked on the other half), cost about 17 runner-minutes per run,
+      # other by 59% (24-37% for values searched on half the runs and
+      # checked on the other half), cost about 16 runner-minutes per run,
       # and in none of those full runs move the end of the slowest E2E job
       # (usually E2E Production or E2E Compute Smoke).
       matrix:
