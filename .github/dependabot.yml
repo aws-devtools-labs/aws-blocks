@@ -13,15 +13,17 @@
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
-#   - The dev-dependencies group takes minor and patch updates only. A major
-#     bump of a dev dependency (a framework in a test app, a test runner) can
-#     need code or config changes, and one grouped PR with many of them can't
-#     land. Majors arrive as their own PRs.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
 #     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
 #     project-reference build in one grouped PR). So they are excluded from the
 #     dev-dependencies group (minor/patch arrive as their own PRs) and their
 #     major-version updates are ignored (bump them intentionally, by hand).
+#   - The dev-dependencies group takes minor and patch updates only. A major
+#     bump of a dev dependency (a framework in a test app, a test runner) can
+#     need code or config changes, and one grouped PR with many of them can't
+#     land. Majors are raised as their own PRs, but only on runs where this
+#     group has no open PR (dependabot/dependabot-core#14202). Check
+#     `npm outdated --workspaces` for dev majors before each release.
 #   - Cooldown: version updates wait until a release is 3 days old. This is
 #     Dependabot's default; it is set explicitly so it can't silently change
 #     and nobody lowers it by accident. Security updates are not delayed.
