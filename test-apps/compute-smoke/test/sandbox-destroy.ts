@@ -3,19 +3,10 @@
 
 /**
  * Destroy ALL stacks created by the compute-smoke app (main + vpc-ref lookup
- * stack). Uses `cdk destroy --all` to ensure complete cleanup.
+ * stack) through the product's own `destroySandbox`, which runs
+ * `cdk destroy --all`. That keeps a real AWS check of the multi-stack sandbox
+ * teardown that `npm run sandbox:destroy` runs. Run from the app directory.
  */
-import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { destroySandbox } from '@aws-blocks/blocks/scripts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const cwd = join(__dirname, '..');
-const backendPath = process.argv[2];
-
-execFileSync('npx', [
-  'cdk', 'destroy', '--all', '--force',
-  '--context', 'sandboxMode=true',
-  '--context', `projectRoot=${cwd}`,
-  '--app', `npx tsx -C cdk ${backendPath}`,
-], { cwd, stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' } });
+await destroySandbox(process.argv[2]);
