@@ -1,0 +1,137 @@
+{
+	"$comment": [
+		"DOCUMENTATION SNAPSHOT of AuthOIDC resource identity — NOT a deployment-safety gate.",
+		"Evidence for the auth-unification upgrade table. See src/resource-identity.cdk.test.ts.",
+		"Deleted with this package at the cutover (F1)."
+	],
+	"variants": {
+		"direct": {
+			"construct": "new AuthOIDC(stack, 'auth', { providers: [google({ clientId: async () => 'id', clientSecret: async () => 'secret' })] })",
+			"fullId": "TestStack-auth",
+			"configKeys": {
+				"BLOCKS_AUTH_OIDC_COOKIE_SECRET_TESTSTACK_AUTH": "/TestStack-auth-cookie-secret-auth"
+			},
+			"resources": {
+				"authsessionstable46C26735": {
+					"Type": "AWS::DynamoDB::Table",
+					"path": "TestStack/auth/sessions/table/Resource",
+					"physicalName": "TestStack-auth-sessions"
+				},
+				"BlocksSecretsBulk": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/BlocksSecretsBulk/Default",
+					"physicalName": [
+						"/TestStack-auth-cookie-secret-auth"
+					]
+				}
+			}
+		},
+		"cognitoFederated": {
+			"construct": "new AuthOIDC(stack, 'auth', { providers: [cognitoFederated({ name: 'google', identityProvider: 'Google', cognitoDomain: 'myapp-abc123', region: 'us-east-1', clientId: googleClientId, clientSecret: googleClientSecret })] })",
+			"fullId": "TestStack-auth",
+			"configKeys": {
+				"BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_AUTH_CLIENT_ID": {
+					"Ref": "authcognitopoolappclientE5A599DC"
+				},
+				"BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_AUTH_CLIENT_SECRET": {
+					"Fn::GetAtt": [
+						"authcognitopoolappclientDescribeCognitoUserPoolClient114E6055",
+						"UserPoolClient.ClientSecret"
+					]
+				},
+				"BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_AUTH_DOMAIN": "myapp-abc123",
+				"BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_AUTH_POOL_ID": {
+					"Ref": "authcognitopool48902489"
+				},
+				"BLOCKS_AUTH_OIDC_COGNITO_TESTSTACK_AUTH_REGION": {
+					"Ref": "AWS::Region"
+				},
+				"BLOCKS_AUTH_OIDC_COOKIE_SECRET_TESTSTACK_AUTH": "/TestStack-auth-cookie-secret-auth"
+			},
+			"resources": {
+				"authcognitopool48902489": {
+					"Type": "AWS::Cognito::UserPool",
+					"path": "TestStack/auth/cognito-pool/Resource",
+					"physicalName": "TestStack-auth-federation"
+				},
+				"authcognitopoolappclientDescribeCognitoUserPoolClient114E6055": {
+					"Type": "Custom::DescribeCognitoUserPoolClient",
+					"path": "TestStack/auth/cognito-pool/app-client/DescribeCognitoUserPoolClient/Resource/Default",
+					"physicalName": null
+				},
+				"authcognitopoolappclientDescribeCognitoUserPoolClientCustomResourcePolicyC8EE7253": {
+					"Type": "AWS::IAM::Policy",
+					"path": "TestStack/auth/cognito-pool/app-client/DescribeCognitoUserPoolClient/CustomResourcePolicy/Resource",
+					"physicalName": null
+				},
+				"authcognitopoolappclientE5A599DC": {
+					"Type": "AWS::Cognito::UserPoolClient",
+					"path": "TestStack/auth/cognito-pool/app-client/Resource",
+					"physicalName": null
+				},
+				"authcognitopooldomain62C3B96C": {
+					"Type": "AWS::Cognito::UserPoolDomain",
+					"path": "TestStack/auth/cognito-pool/domain/Resource",
+					"physicalName": "myapp-abc123"
+				},
+				"authidpgoogleA22FC3F1": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/auth/idp-google/Default",
+					"physicalName": "Google"
+				},
+				"authidpregistrationfn4703D05F": {
+					"Type": "AWS::Lambda::Function",
+					"path": "TestStack/auth/idp-registration-fn/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationfninlinePolicyAddedToExecutionRole0447AD910": {
+					"Type": "AWS::IAM::Policy",
+					"path": "TestStack/auth/idp-registration-fn/inlinePolicyAddedToExecutionRole-0/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationfnServiceRole99A311D7": {
+					"Type": "AWS::IAM::Role",
+					"path": "TestStack/auth/idp-registration-fn/ServiceRole/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationfnServiceRoleDefaultPolicyB98CE35A": {
+					"Type": "AWS::IAM::Policy",
+					"path": "TestStack/auth/idp-registration-fn/ServiceRole/DefaultPolicy/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationlogs2DD9CE90": {
+					"Type": "AWS::Logs::LogGroup",
+					"path": "TestStack/auth/idp-registration-logs/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationproviderframeworkonEvent63044601": {
+					"Type": "AWS::Lambda::Function",
+					"path": "TestStack/auth/idp-registration-provider/framework-onEvent/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationproviderframeworkonEventServiceRole31E9A17D": {
+					"Type": "AWS::IAM::Role",
+					"path": "TestStack/auth/idp-registration-provider/framework-onEvent/ServiceRole/Resource",
+					"physicalName": null
+				},
+				"authidpregistrationproviderframeworkonEventServiceRoleDefaultPolicy36F50D66": {
+					"Type": "AWS::IAM::Policy",
+					"path": "TestStack/auth/idp-registration-provider/framework-onEvent/ServiceRole/DefaultPolicy/Resource",
+					"physicalName": null
+				},
+				"authsessionstable46C26735": {
+					"Type": "AWS::DynamoDB::Table",
+					"path": "TestStack/auth/sessions/table/Resource",
+					"physicalName": "TestStack-auth-sessions"
+				},
+				"BlocksSecretsBulk": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/BlocksSecretsBulk/Default",
+					"physicalName": [
+						"/TestStack-auth-cookie-secret-auth"
+					]
+				}
+			}
+		}
+	}
+}
