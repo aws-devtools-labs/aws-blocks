@@ -4,13 +4,13 @@
 ---
 
 AuthBasic now caps the number of failed guesses against a single verification
-code (sign-up confirmation and password-reset OTP), closing a brute-force hole.
-A 6-digit code (~19.8 bits) is exhaustively guessable within its 10-minute
-validity window at any reasonable request rate, so the attempt cap — not the
-code entropy — is what bounds an attacker.
+code (sign-up confirmation and password-reset OTP). A 6-digit code (~19.8 bits)
+is exhaustively guessable within its 10-minute validity window at any reasonable
+request rate, so an always-on per-code attempt cap narrows that exposure.
 
 After 5 consecutive wrong guesses the code is invalidated and the user must
 request a fresh one; a wrong guess never extends the code's life. The error is
 the same generic `InvalidCodeException` on both a wrong guess and an exhausted
-code, so no oracle reveals whether the cap was hit. This is always on, unlike
-the opt-in sign-in `lockout` policy.
+code, so no oracle reveals whether the cap was hit. The cap bounds guesses
+against one code; rate-limiting code issuance volume remains an
+infrastructure-layer concern (WAF / API Gateway throttling).
