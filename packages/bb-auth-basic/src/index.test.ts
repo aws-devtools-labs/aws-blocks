@@ -693,6 +693,96 @@ describe('AuthBasic verification-code attempt limiting', () => {
 		assert.ok(after, 'the row persists');
 		assert.strictEqual(JSON.parse(after!).attempts, 5, 'attempts ends exactly at the cap');
 	});
+
+	test('a correct code is single-use even when a concurrent wrong guess interleaves the delete', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('frank', 'password123');
+		await auth.confirmSignUp('frank', lastCode());
+		await auth.resetPassword('frank');
+		const realCode = lastCode();
+
+		// Hold the FIRST (correct-code) request's delete until a second request has
+		// run, forcing the consume-side interleaving: the correct verifier reserves
+		// attempt 1, then a wrong guess reserves attempt 2 before the first delete
+		// lands — so the first request's `ifValueEquals: reserved` no longer matches.
+		const store = codesStore(auth);
+		const originalDelete = store.delete.bind(store);
+		let release!: () => void;
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		let firstDelete = true;
+		store.delete = async (k: string, o?: { ifValueEquals?: string }) => {
+			if (k === 'reset:frank' && firstDelete) {
+				firstDelete = false;
+				await held; // stall the correct verifier's delete
+			}
+			return originalDelete(k, o);
+		};
+
+		const correct = auth
+			.confirmResetPassword('frank', realCode, 'newpassword123')
+			.then(() => 'ok', () => 'rejected');
+		// Let the correct verifier reserve + reach its (stalled) delete, then run a
+		// wrong guess that advances the row, then release the first delete.
+		await new Promise((r) => setTimeout(r, 20));
+		const wrong = await auth
+			.confirmResetPassword('frank', '000000', 'hijackedpw123')
+			.then(() => 'ok', () => 'rejected');
+		release();
+		const correctResult = await correct;
+		store.delete = originalDelete; // restore
+
+		assert.strictEqual(wrong, 'rejected', 'the interleaved wrong guess is rejected');
+		assert.strictEqual(correctResult, 'ok', 'the correct code still succeeds (its retry consumed the row)');
+
+		// The code must be single-use: the row is gone and a replay is rejected.
+		assert.strictEqual(await codesStore(auth).get('reset:frank'), null, 'the row is consumed, not left behind');
+		await assert.rejects(
+			auth.confirmResetPassword('frank', realCode, 'replayedpw123'),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			'replaying the code after a successful reset is rejected',
+		);
+		// The reset happened exactly once: the first new password works.
+		const user = await auth.signIn('frank', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'frank');
+	});
+
+	test('two concurrent verifiers of the same correct code yield exactly one success', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('grace', 'password123');
+		await auth.confirmSignUp('grace', lastCode());
+		await auth.resetPassword('grace');
+		const realCode = lastCode();
+
+		// Hold the first verifier's delete until the second has run to completion,
+		// so both evaluate the same correct code against the same row.
+		const store = codesStore(auth);
+		const originalDelete = store.delete.bind(store);
+		let release!: () => void;
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		let firstDelete = true;
+		store.delete = async (k: string, o?: { ifValueEquals?: string }) => {
+			if (k === 'reset:grace' && firstDelete) {
+				firstDelete = false;
+				await held;
+			}
+			return originalDelete(k, o);
+		};
+
+		const first = auth.confirmResetPassword('grace', realCode, 'firstpw12345').then(() => 'ok', () => 'rejected');
+		await new Promise((r) => setTimeout(r, 20));
+		const second = await auth.confirmResetPassword('grace', realCode, 'secondpw12345').then(() => 'ok', () => 'rejected');
+		release();
+		const firstResult = await first;
+		store.delete = originalDelete;
+
+		const successes = [firstResult, second].filter((r) => r === 'ok').length;
+		assert.strictEqual(successes, 1, 'exactly one of the two concurrent correct verifications succeeds');
+		assert.strictEqual(await codesStore(auth).get('reset:grace'), null, 'the code is consumed exactly once');
+	});
 });
 
 /**

@@ -355,16 +355,47 @@ export class AuthBasic extends Scope implements BlocksAuth {
 			// on each wrong guess; it self-reaps at the code TTL).
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		// Correct code: consume it. Conditional on the reserved value so a
-		// concurrent fresh issuance (a different row) is never deleted.
-		await this.deleteCodeIfUnchanged(key, reserved);
+		// Correct code: succeed only if THIS request consumes the row. A plain
+		// swallow-on-conflict delete is unsafe here — a ConditionalCheckFailed on
+		// the success path is not only "a fresh code was issued"; it also fires
+		// when another request reserved the NEXT attempt between this request's
+		// reserve and its delete, leaving the row intact (same hmac). Swallowing
+		// that would return success while the code survives, so it could be
+		// replayed. Instead retry against the current row and FAIL CLOSED if the
+		// row is gone (consumed by another verifier) or its hmac changed (replaced
+		// by a fresh issuance). Bounded: a retry only happens when another request
+		// changed the row, and at most MAX_CODE_ATTEMPTS attempts can exist.
+		let current = reserved;
+		for (;;) {
+			try {
+				await this.codes.delete(key, { ifValueEquals: current });
+				return;
+			} catch (e) {
+				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+			}
+			const raw2 = await this.codes.get(key);
+			if (!raw2) {
+				// Already consumed by another verifier — this request did not win.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			const { hmac: curHmac } = JSON.parse(raw2) as { hmac: string };
+			if (curHmac !== hmac) {
+				// Replaced by a fresh issuance — the code this request verified is gone.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			current = raw2; // same code, attempts advanced by a concurrent guess — retry the delete
+		}
 	}
 
 	/**
-	 * Delete a code row only if it still holds exactly `expected` (the serialized
-	 * value previously read/written). A concurrent writer that replaced the row
-	 * (e.g. a fresh `resetPassword` issuance) leaves a ConditionalCheckFailed,
-	 * which is swallowed: the row we meant to remove is already gone.
+	 * Delete a code row only if it still holds exactly `expected`, swallowing a
+	 * ConditionalCheckFailed (another writer already replaced or removed it).
+	 *
+	 * Only safe on the **expired / exhausted** paths, where the code is already
+	 * unusable, so "someone else changed the row" is an acceptable no-op. The
+	 * success (correct-code) path must NOT use this: there, a swallowed conflict
+	 * would let the code survive and be replayed — it requires the fail-closed
+	 * retry loop in `verifyCode` instead.
 	 */
 	private async deleteCodeIfUnchanged(key: string, expected: string): Promise<void> {
 		try {
