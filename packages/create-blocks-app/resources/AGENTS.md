@@ -99,6 +99,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 ## Deploying (requires AWS credentials)
 
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
+- `npm run sandbox:deploy` — deploy backend to AWS once and exit (no watch, no dev server); use this from scripts and CI
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 

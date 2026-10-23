@@ -159,6 +159,30 @@ describe('create-blocks-app template metadata', () => {
     }
     assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
   });
+
+  it('every deployable template has a one-shot sandbox:deploy script', () => {
+    // `npm run sandbox` keeps watching and never exits, so scripts and CI need
+    // a variant that deploys once and returns. It must run the same sandbox
+    // script with --deploy-only, and that script must forward the flag to
+    // startSandbox as `deployOnly`.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      if (!scripts.sandbox) continue;
+      if (scripts['sandbox:deploy'] !== `${scripts.sandbox} --deploy-only`) {
+        problems.push(`${entry.name}: "sandbox:deploy" should be "${scripts.sandbox} --deploy-only"`);
+      }
+      const script = readFileSync(join(templatesDir, entry.name, 'aws-blocks', 'scripts', 'sandbox.ts'), 'utf-8');
+      if (!/deployOnly:\s*process\.argv\.includes\('--deploy-only'\)/.test(script)) {
+        problems.push(`${entry.name}: aws-blocks/scripts/sandbox.ts does not pass deployOnly from --deploy-only`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
 });
 
 describe('create-blocks-app auto-detection', () => {
