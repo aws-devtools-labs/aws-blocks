@@ -169,6 +169,29 @@ void main() {
       );
     });
 
+    test('scopes cookies to the URL the response came from', () async {
+      final store = InMemorySessionStore();
+      final redirectingClient = _FinalUrlClient(
+        Uri.parse('https://final/next/aws-blocks/api'),
+        jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+        headers: {'set-cookie': 'session=abc123; HttpOnly'},
+      );
+      await BlocksClient(
+        baseUrl: 'https://test/aws-blocks/api',
+        client: redirectingClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(
+        await cookieSentTo('https://final/next/aws-blocks/api', store),
+        'session=abc123',
+      );
+      expect(
+        await cookieSentTo('https://final/other/aws-blocks/api', store),
+        isNull,
+      );
+      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+    });
+
     test('drops a cookie the server expires', () async {
       final store = InMemorySessionStore()
         ..setCookies(
@@ -192,4 +215,39 @@ void main() {
       expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
     });
   });
+}
+
+/// Streamed response that reports the URL it was received from, as clients
+/// that follow redirects do.
+class _ResponseWithFinalUrl extends http.StreamedResponse
+    implements http.BaseResponseWithUrl {
+  _ResponseWithFinalUrl(
+    super.stream,
+    super.statusCode, {
+    required this.url,
+    super.request,
+    super.headers,
+  });
+
+  @override
+  final Uri url;
+}
+
+/// Client whose responses report [finalUrl], simulating a followed redirect.
+class _FinalUrlClient extends http.BaseClient {
+  _FinalUrlClient(this.finalUrl, this.body, {this.headers = const {}});
+
+  final Uri finalUrl;
+  final String body;
+  final Map<String, String> headers;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      _ResponseWithFinalUrl(
+        Stream.value(utf8.encode(body)),
+        200,
+        url: finalUrl,
+        request: request,
+        headers: headers,
+      );
 }

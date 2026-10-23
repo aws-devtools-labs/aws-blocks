@@ -244,8 +244,10 @@ public final class BlocksClient: Sendable {
 
             let rawCookies = splitSetCookieHeader("\(value)")
 
+            // After a followed redirect, `response.url` is the URL the cookies came from.
+            let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
-                BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: requestURL)
+                BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
             }
         }
     }

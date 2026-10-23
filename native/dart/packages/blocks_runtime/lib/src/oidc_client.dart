@@ -10,6 +10,7 @@ import 'browser_launcher.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
 import 'oidc_types.dart';
+import 'response_url.dart';
 import 'session_store.dart';
 import 'token_store.dart';
 
@@ -258,12 +259,16 @@ class OidcClient implements AuthProvider {
     final url = Uri.parse(
       '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}',
     );
-    final response = await _httpClient.post(
+    final (:response, url: responseUrl) = await postWithResponseUrl(
+      _httpClient,
       url,
       headers: _jsonHeaders(url),
       body: jsonEncode({'csrf': csrf, 'relayTo': relayTo}),
     );
-    sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: responseUrl,
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OidcCallbackException(
@@ -318,7 +323,8 @@ class OidcClient implements AuthProvider {
     String? iss,
   }) async {
     final url = Uri.parse('$_authBaseUrl$exchangePath');
-    final response = await _httpClient.post(
+    final (:response, url: responseUrl) = await postWithResponseUrl(
+      _httpClient,
       url,
       headers: _jsonHeaders(url),
       body: jsonEncode({
@@ -336,7 +342,10 @@ class OidcClient implements AuthProvider {
 
     // Capture the session cookie set by the backend so the owning
     // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow).
-    sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: responseUrl,
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OidcExchangeException(

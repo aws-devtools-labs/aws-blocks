@@ -8,7 +8,8 @@ fix(swift): parse and enforce the `Secure`, `Path` and `Expires`/`Max-Age` cooki
 `Set-Cookie` response, and applies them when it attaches cookies to a request, following the same
 rules as the Kotlin runtime. A cookie is sent only to the host that set it, only to request paths
 under its `Path`, and, when `Secure`, only over `https`. A cookie without a `Path` applies to the
-directory of the request path that set it. `Max-Age` takes precedence over `Expires`; a cookie
+directory of the request path that set it. When `URLSession` follows a redirect, cookies are scoped
+to the URL of the response that set them. `Max-Age` takes precedence over `Expires`; a cookie
 whose `Max-Age` is zero or less, or whose `Expires` has passed, is removed, and a stored cookie
 stops being sent once its expiry arrives. A new cookie replaces the same-named cookies that would be
 sent on that request. When several same-named cookies apply to a request, the one with the longest

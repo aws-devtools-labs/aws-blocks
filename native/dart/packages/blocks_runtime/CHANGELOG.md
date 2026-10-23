@@ -16,7 +16,9 @@
   same-named cookies that would be sent on that request, as in the Kotlin
   runtime. `cookieHeaderFor` lists the cookie with the longest `Path` first
   when several same-named cookies apply. `BlocksClient` and `OidcClient` pass
-  the request URL to both. `cookieHeader` still returns every unexpired cookie.
+  the request URL to `cookieHeaderFor`, and to `setCookies` the URL of the
+  response, which is the last redirect target when the HTTP client followed
+  redirects. `cookieHeader` still returns every unexpired cookie.
 - `PersistentSessionStore` now stores a JSON list of cookie records. The
   name → value map written by earlier versions is still read: those cookies
   keep `Path=/`, no `Secure` and no expiry, as before, until the server sets

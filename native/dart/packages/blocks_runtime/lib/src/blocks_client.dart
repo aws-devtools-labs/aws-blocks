@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
+import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
 import 'token_store.dart';
@@ -34,7 +35,7 @@ class BlocksClient {
   Future<dynamic> call(String method, Map<String, dynamic> params) async {
     final response = await _doCall(method, params);
 
-    if (response.statusCode == 401 && authProvider != null) {
+    if (response.response.statusCode == 401 && authProvider != null) {
       await authProvider!.onAuthFailure();
       final retry = await _doCall(method, params);
       return _parseResponse(retry);
@@ -43,7 +44,7 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<http.Response> _doCall(
+  Future<ResponseWithUrl> _doCall(
     String method,
     Map<String, dynamic> params,
   ) async {
@@ -73,14 +74,20 @@ class BlocksClient {
       }
     }
 
-    return _httpClient.post(Uri.parse(baseUrl), headers: headers, body: body);
+    return postWithResponseUrl(
+      _httpClient,
+      Uri.parse(baseUrl),
+      headers: headers,
+      body: body,
+    );
   }
 
-  dynamic _parseResponse(http.Response response) {
+  dynamic _parseResponse(ResponseWithUrl result) {
+    final response = result.response;
     // Parse set-cookie headers
     sessionStore.setCookies(
       response.headers['set-cookie'],
-      requestUri: response.request?.url ?? Uri.parse(baseUrl),
+      requestUri: result.url,
     );
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
