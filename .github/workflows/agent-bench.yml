@@ -251,12 +251,15 @@ jobs:
       # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
       # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
       # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      # The install retries an attempt that prints nothing for 8 min (a stalled apt mirror) and
+      # gives up after 23 min in all; timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
         if: steps.init.outcome == 'success'
+        timeout-minutes: 25
         run: |
-          npx playwright@1.60.0 install --with-deps chromium
+          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
           # present on a stock runner (npx install above runs unprivileged and writes it there).
