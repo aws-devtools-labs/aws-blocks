@@ -225,6 +225,17 @@ walk() {
 	done
 }
 
+# Whether DescribeTable reports table $1 as not found. Any other outcome,
+# including a denied call, reads as "may still exist"; an error other than
+# not-found is printed, so a role without the grant shows in the log.
+gone() {
+	local out
+	out=$(aws dynamodb describe-table --table-name "$1" --query 'Table.TableStatus' --output text </dev/null 2>&1) && return 1
+	[[ "$out" == *ResourceNotFoundException* ]] && return 0
+	echo "  DescribeTable failed for $1, so whether it still exists is unknown: $(grep -m 1 -v '^[[:space:]]*$' <<<"$out" | head -c 300)"
+	return 1
+}
+
 # The tables retained on earlier runs: a table resource in DELETE_SKIPPED in a
 # deleted stack of a sandbox. Only stacks that lived at least 5 hours are
 # read. The retain only runs on a sandbox created more than 6 hours earlier
@@ -234,26 +245,20 @@ walk() {
 # Deleted nested stacks carry no ParentId in list-stacks, so roots are read
 # too (a root holds no table resource, so it reports nothing). More attempts
 # than the CLI default: the listing pages through 90 days of deleted stacks.
-# Whether DescribeTable reports table $1 as not found. Any other outcome,
-# including a denied call, reads as "may still exist".
-gone() {
-	local out
-	out=$(aws dynamodb describe-table --table-name "$1" --query 'Table.TableStatus' --output text </dev/null 2>&1) && return 1
-	[[ "$out" == *ResourceNotFoundException* ]]
-}
-
 leftovers() {
-	local listed candidates id stack when rows names logical table found=0
+	local listed candidates id stack when rows names logical table found=0 err
 	local ids=()
+	err=$(mktemp)
 	if ! listed=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks \
-		--stack-status-filter DELETE_COMPLETE --output json </dev/null) ||
+		--stack-status-filter DELETE_COMPLETE --output json </dev/null 2>"$err") ||
 		! candidates=$(jq -r '
 			def ts: .[0:19] + "Z" | fromdateiso8601;
 			.StackSummaries[]
 			| select(.StackName | test("^amplify-amplify(gen2|interoptest)-"))
 			| select(.DeletionTime != null and ((.DeletionTime | ts) - (.CreationTime | ts)) >= 5 * 3600)
-			| [.StackId, .StackName, .DeletionTime[0:10]] | @tsv' <<<"$listed"); then
-		echo "::warning::could not list deleted stacks, so tables retained on earlier runs are not reported this run"
+			| [.StackId, .StackName, .DeletionTime[0:10]] | @tsv' <<<"$listed" 2>>"$err"); then
+		echo "::warning::could not list deleted stacks, so tables retained on earlier runs are not reported this run: $(grep -m 1 -v '^[[:space:]]*$' "$err" | head -c 300 | sed 's/%/%25/g')"
+		rm -f "$err"
 		return 0
 	fi
 	while IFS=$'\t' read -r id stack when; do
@@ -279,6 +284,7 @@ leftovers() {
 			found=$((found + 1))
 		done
 	done <<<"$candidates"
+	rm -f "$err"
 	if [ "$found" -gt 0 ]; then
 		echo "::warning::$found DynamoDB table(s) retained by earlier sweeps may still exist, and no sweep deletes them; see the step summary"
 	fi
