@@ -19,8 +19,8 @@ import { BedrockModels } from './models.js';
  * AgentCore requires a `runtimeSessionId` of at least 33 characters. Conversation/channel ids
  * are UUIDs (36 chars) in the normal path and pass through unchanged; anything shorter is hashed
  * to a stable 64-char hex id — stable per input, so a conversation keeps routing to one warm
- * microVM across turns/resumes. Only conversation ids reach it now: a turn without a
- * conversation is hashed from its user and channel (see {@link runtimeSessionIdFor}).
+ * microVM across turns/resumes. Only conversation ids are passed to it: a turn without a
+ * conversation is hashed from its user and channel instead (see {@link runtimeSessionIdFor}).
  */
 function toRuntimeSessionId(base: string): string {
 	return base.length >= 33 ? base : createHash('sha256').update(base).digest('hex');

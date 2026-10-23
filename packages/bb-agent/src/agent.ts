@@ -691,6 +691,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
@@ -764,10 +765,12 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		}
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
-		// Every check runs before anything is persisted or dispatched, so a rejected resume
-		// leaves no approval behind. Scope the channel (it throws, rather than failing in the
-		// background turn, for a userId that can't be scoped; see chunksChannel) and validate
-		// the tool context first: both are local checks.
+		// Every validation and ownership check runs before any approval is persisted, so a
+		// resume rejected by one of them leaves no approval behind. (A failure to dispatch,
+		// after the approvals are written, still rejects this call with them in place.) Scope
+		// the channel (it throws, rather than failing in the background turn, for a userId that
+		// can't be scoped; see chunksChannel) and validate the tool context first: both are
+		// local checks.
 		this.chunksChannel(channelId, userId);
 		const context = this.resolveContext(options?.context);
 		// A non-owner must not be able to approve (or `trust`) someone else's pending tool call.
