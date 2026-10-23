@@ -319,15 +319,28 @@ const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
 const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aws-blocks'];
 
 /**
- * App entries a group copy leaves out: the tests and docs, and state the CLI,
- * the dev server or a group writes. Every other top-level entry fails
- * prepareCloudGroup until it is added to one of the two lists, so the AWS
- * groups never deploy a different app than the local group runs.
+ * App entries a group copy leaves out: the tests and docs, state the CLI, the
+ * dev server or a group writes, and OS or editor files. Every other top-level
+ * entry fails the suite's before() until it is added to one of the two lists,
+ * so the AWS groups never deploy a different app than the local group runs.
+ * (`node_modules` is listed so the specific check in prepareCloudGroup reports
+ * it.)
  */
 const APP_EXCLUDED = [
   'test', 'README.md', '.gitignore', 'node_modules', 'dist',
   'cdk.out', 'cdk.context.json', '.blocks-sandbox', '.bb-data', '.e2e-groups',
+  '.DS_Store', '.idea', '.vscode',
 ];
+
+/** Fails when the app directory has a top-level entry in neither APP_ENTRIES nor APP_EXCLUDED. */
+function assertAppEntriesListed(): void {
+  const unlisted = readdirSync(APP_ROOT).filter((entry) => !APP_ENTRIES.includes(entry) && !APP_EXCLUDED.includes(entry));
+  assert.deepStrictEqual(
+    unlisted,
+    [],
+    'test-apps/telemetry has top-level entries in neither APP_ENTRIES (copied into the AWS groups) nor APP_EXCLUDED',
+  );
+}
 
 /**
  * Real-HOME entries a group HOME links to: AWS config and SSO cache, npm cache
@@ -385,12 +398,6 @@ function writeSandboxId(projectRoot: string, sandboxId: string): void {
 }
 
 function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
-  const unlisted = readdirSync(APP_ROOT).filter((entry) => !APP_ENTRIES.includes(entry) && !APP_EXCLUDED.includes(entry));
-  assert.deepStrictEqual(
-    unlisted,
-    [],
-    'test-apps/telemetry has top-level entries in neither APP_ENTRIES (copied into the AWS groups) nor APP_EXCLUDED',
-  );
   const generatedClient = join(APP_ROOT, 'aws-blocks', 'client.js');
   for (const entry of APP_ENTRIES) {
     cpSync(join(APP_ROOT, entry), join(group.root, entry), {
@@ -429,6 +436,7 @@ describe('Telemetry E2E', { timeout: 2_400_000, concurrency: true }, () => {
     // and the destroy scripts run from APP_ROOT (the CI "Cleanup stacks"
     // step) still reach the stack either group may have left behind.
     rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
+    assertAppEntriesListed();
     const sandboxId = randomUUID().slice(0, 8);
     writeSandboxId(APP_ROOT, sandboxId);
     prepareCloudGroup(sandboxGroup, sandboxId);
