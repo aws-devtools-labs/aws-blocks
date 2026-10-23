@@ -176,6 +176,18 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(challenge, OIDCClient.generateChallenge(verifier))
     }
 
+    func testRandomValuesAreFullLengthNonZeroAndDistinct() throws {
+        let values = (0 ..< 8).map { _ in OIDCClient.generateVerifier() } + [OIDCClient.generateNonce()]
+        for value in values {
+            // 32 bytes → 43 base64url chars (no padding)
+            XCTAssertEqual(value.count, 43)
+            let bytes = try XCTUnwrap(Data(base64URLDecoded: value))
+            XCTAssertEqual(bytes.count, 32)
+            XCTAssertFalse(bytes.allSatisfy { $0 == 0 }, "random bytes must not be an all-zero buffer")
+        }
+        XCTAssertEqual(Set(values).count, values.count)
+    }
+
     // MARK: - Exchange
 
     func testExchangeStoresTokensAndEmitsSignedIn() async throws {
