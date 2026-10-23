@@ -1239,6 +1239,10 @@ export default async function blocksPinnedBuildIdConfig(phase, ctx) {
  * declares `runtime = 'edge'` — it errors with "OpenNext requires edge
  * runtime function to be defined in a separate function" mid-bundle, so
  * the auto-config has to declare the split function up front.
+ *
+ * Under the build profile's `skipImageOptimization`, also emits
+ * `imageOptimization: { install: false }` so OpenNext installs no `sharp` for
+ * an image function that is never deployed.
  */
 const installGeneratedOpenNextConfig = (
   projectDir: string,
@@ -1254,6 +1258,15 @@ const installGeneratedOpenNextConfig = (
   // build's snapshot instead of re-rendered on every request.
   const dangerousBlock = profile.skipIsr ? `\n  dangerous: {\n    disableTagCache: true,\n  },` : '';
   const queueOverride = profile.skipIsr ? `\n      queue: 'dummy',` : '';
+  // `skipImageOptimization`: no image function is deployed, so stop OpenNext
+  // installing `sharp` into the image bundle it still builds (seconds warm,
+  // about a minute on a cold npm cache). OpenNext has no typed switch for this:
+  // it installs `imageOptimization.install ?? <sharp>` and its installer
+  // returns early on a falsy value, so `false` skips the install. If a later
+  // OpenNext dropped that early return, the build would only install sharp
+  // again. (`install: { packages: [] }` is typed but runs a failing bare
+  // `npm install`.)
+  const imageBlock = profile.skipImageOptimization ? `\n  imageOptimization: {\n    install: false,\n  },` : '';
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
   // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
@@ -1282,7 +1295,7 @@ const config = {
     override: {
       ${defaultOverride}${queueOverride}
     },
-  },${edgeBlock}${dangerousBlock}
+  },${edgeBlock}${imageBlock}${dangerousBlock}
 };
 export default config;
 `;

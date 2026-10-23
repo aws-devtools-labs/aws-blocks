@@ -2414,6 +2414,43 @@ void describe('nextjsAdapter — build profile (HTTP API door, preview trims)', 
     assert.ok(manifest.cache?.seedDirectory, 'the build snapshot still seeds the cache');
   });
 
+  // OpenNext builds an image-optimization bundle on every build and installs
+  // `sharp` into it unless the config's `imageOptimization.install` is falsy.
+  // Record every `npm install` the adapter itself runs, and lay down the image
+  // bundle directory a real OpenNext build leaves behind.
+  const recordInstalls = (): string[][] => {
+    const installs: string[][] = [];
+    mock.restoreAll();
+    mock.method(spawn, 'sync', (bin: string, args: readonly string[]) => {
+      if (bin === 'npm' && args[0] === 'install') {
+        installs.push([...args]);
+        return;
+      }
+      const cfg = path.join(tmpDir, 'open-next.config.ts');
+      if (fs.existsSync(cfg)) configDuringBuild = fs.readFileSync(cfg, 'utf-8');
+      writeOutput();
+      fs.mkdirSync(path.join(tmpDir, '.open-next', 'image-optimization-function'), { recursive: true });
+    });
+    return installs;
+  };
+
+  void it('`skipImageOptimization`: neither OpenNext nor the adapter installs sharp', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const installs = recordInstalls();
+    withBuildProfile({ skipImageOptimization: true }, () => nextjsAdapter({ projectDir: tmpDir }));
+    assert.match(configDuringBuild ?? '', /imageOptimization: \{\s+install: false,\s+\},/);
+    assert.deepStrictEqual(installs, [], 'no sharp install for an image function that is never deployed');
+  });
+
+  void it('the default profile keeps OpenNext’s sharp install and the adapter’s linux-x64 sharp', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const installs = recordInstalls();
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.doesNotMatch(configDuringBuild ?? '', /imageOptimization|install/);
+    assert.strictEqual(installs.length, 1);
+    assert.ok(installs[0].includes('--cpu=x64'), 'the linux-x64 sharp install still runs');
+  });
+
   void it('`edgeToRegional`: an edge route is a regional handler, not Lambda@Edge', () => {
     process.env.HOSTING_LENIENT_PATCHES = '1';
     const manifest = withBuildProfile({ edgeToRegional: true, serverInvoke: 'http-api' }, () =>
