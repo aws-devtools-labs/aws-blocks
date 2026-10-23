@@ -67,7 +67,7 @@ jobs:
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Not the sum of the step caps: the capped steps add up to 125 min (Playwright install 25,
+    # Not the sum of the step caps: the capped steps add up to 112 min (Playwright install 12,
     # agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3), plus the uncapped
     # ones. A cell that runs long in an early step can hit this job timeout in a later step
     # (the judge, the analysis or an upload) before that step's own cap fires. The caps bound
@@ -256,14 +256,16 @@ jobs:
       # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
       # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
       # The install retries an attempt that prints nothing for 8 min (a stalled apt mirror) and
-      # gives up after 23 min in all; timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
+      # gives up after 10 min in all (not the default 23: this step is best-effort, step 3 covers a
+      # failed install, and the job's 85 min must leave the judge and uploads their time);
+      # timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
         if: steps.init.outcome == 'success'
-        timeout-minutes: 25
+        timeout-minutes: 12
         run: |
-          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 chromium
+          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 --deadline-minutes 10 chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
           # present on a stock runner (npx install above runs unprivileged and writes it there).

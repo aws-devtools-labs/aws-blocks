@@ -196,17 +196,24 @@ describe('runWatched', () => {
 	it('keeps a clean exit clean while a leftover process holds its output open', T, async () => {
 		// The child exits 0 at once, but a detached grandchild keeps stdout open for 12s. Only the drain
 		// timer can settle this well before that; without it the call waits for the grandchild.
+		const out = sink();
 		const t0 = Date.now();
 		const r = await runWatched(
 			process.execPath,
 			[
 				'-e',
-				`require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},12000)'],{stdio:'inherit',detached:true}).unref();console.log('done')`,
+				`const c=require('node:child_process').spawn(process.execPath,['-e','setTimeout(()=>{},12000)'],{stdio:'inherit',detached:true});c.unref();console.log('grandchild='+c.pid)`,
 			],
-			{ silenceMs: 300, drainMs: 1000, log: quiet, ...silent() },
+			{ silenceMs: 300, drainMs: 1000, log: quiet, stdout: out, stderr: out },
 		);
-		assert.deepEqual(r, { code: 0, signal: null, killed: null });
-		assert.ok(Date.now() - t0 < 5000, 'waited for the leftover instead of draining');
+		const pid = Number(/grandchild=(\d+)/.exec(out.text)?.[1]);
+		try {
+			assert.deepEqual(r, { code: 0, signal: null, killed: null });
+			assert.ok(Date.now() - t0 < 5000, 'waited for the leftover instead of draining');
+		} finally {
+			// Don't leave the leftover running after the suite.
+			if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+		}
 	});
 
 	it('kills a group member that ignores SIGTERM and holds the output open', T, async () => {
@@ -321,7 +328,7 @@ describe('recordAttempt', () => {
 			recordAttempt(2, 3, 'silence', { log: (l) => lines.push(l), summaryFile });
 			recordAttempt(3, 3, 'ok', { log: (l) => lines.push(l), summaryFile });
 			assert.deepEqual(lines, ['install-playwright: attempt=2/3 result=silence', 'install-playwright: attempt=3/3 result=ok']);
-			assert.equal(readFileSync(summaryFile, 'utf8'), `${lines.join('\n')}\n`);
+			assert.equal(readFileSync(summaryFile, 'utf8'), lines.map((l) => `- ${l}\n`).join(''));
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -329,7 +336,8 @@ describe('recordAttempt', () => {
 
 	it('only logs when there is no step summary, and never throws on a bad one', () => {
 		const lines = [];
-		recordAttempt(1, 3, 'ok', { log: (l) => lines.push(l), summaryFile: undefined });
+		// '' rather than undefined: undefined would fall back to this run's own GITHUB_STEP_SUMMARY in CI.
+		recordAttempt(1, 3, 'ok', { log: (l) => lines.push(l), summaryFile: '' });
 		recordAttempt(1, 3, 'ok', { log: (l) => lines.push(l), summaryFile: join(tmpdir(), 'no-such-dir', 'x', 'summary.md') });
 		assert.equal(lines.length, 2);
 	});
@@ -456,7 +464,7 @@ describe('install-playwright.mjs', () => {
 		assert.equal(await run.exited, 1);
 		assert.match(run.output(), /npx playwright install --with-deps chromium/);
 		assert.match(run.output(), /::error::Playwright install ran out of time on attempt 1\/3/);
-		assert.equal(readFileSync(join(dir, 'summary.md'), 'utf8'), 'install-playwright: attempt=1/3 result=deadline\n');
+		assert.equal(readFileSync(join(dir, 'summary.md'), 'utf8'), '- install-playwright: attempt=1/3 result=deadline\n');
 		assert.ok(run.grandchild() > 0, `no grandchild pid in ${JSON.stringify(run.output())}`);
 		// cleanupApt is Linux-only.
 		if (process.platform === 'linux') assert.match(sudoLog(dir), /dpkg --configure -a/);

@@ -182,7 +182,8 @@ export async function cleanupApt({ run = spawnSync, wait = sleep, platform = pro
 /**
  * Record one attempt's outcome where later runs can be counted: a fixed
  * `install-playwright: attempt=<i>/<n> result=<result>` line in the log, and
- * the same line in the step summary when GITHUB_STEP_SUMMARY is set. A
+ * the same line as a list item in the step summary when GITHUB_STEP_SUMMARY is
+ * set. A
  * recovered stall leaves the step green, so this is what keeps the stall rate
  * measurable. `result` is `ok`, `silence`, `deadline` or `exit-<code or signal>`.
  * Never throws.
@@ -192,7 +193,8 @@ export function recordAttempt(i, attempts, result, { log = console.log, summaryF
 	log(line);
 	if (!summaryFile) return;
 	try {
-		appendFileSync(summaryFile, `${line}\n`);
+		// A list item, so consecutive attempts render as separate lines.
+		appendFileSync(summaryFile, `- ${line}\n`);
 	} catch {
 		/* the summary is best-effort */
 	}
