@@ -174,9 +174,11 @@ describe('pr-checks.yml', () => {
 
 	// Runs the aggregator's own script, so an edit that makes it pass over a
 	// failed part (an `exit 0`, a dropped check) fails here, not only one that
-	// changes its text. jq is on ubuntu-latest; without it locally, this skips.
+	// changes its text. jq is on ubuntu-latest; without it locally, this skips
+	// (never in CI, where a missing jq must fail the test, not hide it).
 	const hasJq = spawnSync('jq', ['--version']).status === 0;
-	it('the aggregator script fails unless every part succeeded', { skip: hasJq ? false : 'jq is not on PATH' }, () => {
+	const skip = hasJq || process.env.CI ? false : 'jq is not on PATH';
+	it('the aggregator script fails unless every part succeeded', { skip }, () => {
 		const script = aggregator.match(/^ {8}run: \|\n((?: {10}.*\n|\n)+)/m)[1].replace(/^ {10}/gm, '');
 		const run = (results) =>
 			spawnSync('bash', ['-c', script], {
