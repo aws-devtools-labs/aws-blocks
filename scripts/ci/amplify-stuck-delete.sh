@@ -6,6 +6,7 @@
 # Amplify sweep in .github/workflows/cleanup-stacks.yml.
 #
 # Usage: amplify-stuck-delete.sh <root-stack>
+#        amplify-stuck-delete.sh --leftovers
 #
 # Amplify's managed DynamoDB table is a custom resource
 # (Custom::AmplifyDynamoDBTable) in a nested model stack: root -> data ->
@@ -34,6 +35,12 @@
 # resource is reported with the real table name, resolved from the nested
 # stack's template and parameters, as a table to delete by hand.
 #
+# With --leftovers it reports those tables again, on every run: it reads the
+# retained resources of the deleted model stacks. CloudFormation keeps a
+# deleted stack's record, resources and template for 90 days, so a leftover
+# table is reported for that long. The role can't read DynamoDB, so whether
+# the table still exists is not checked.
+#
 # Why the nested stack and not the root: --retain-resources on the root can
 # only name the data stack, which would orphan the AppSync API the sweep
 # exists to free. FORCE_DELETE_STACK on the root also skips the nested stacks
@@ -50,13 +57,14 @@
 # Exit status: 0 when nothing was deleted here (the caller retries the root
 # plainly), 3 when a nested stack delete was started (the caller deletes the
 # root on its next run, after the nested delete has finished), 1 on bad usage.
+# With --leftovers it never deletes, and exits 0.
 #
 # Tests: node --test scripts/ci/amplify-stuck-delete.test.mjs
 
 set -euo pipefail
 
 if [ "$#" -ne 1 ] || [ -z "$1" ]; then
-	echo "usage: amplify-stuck-delete.sh <root-stack>" >&2
+	echo "usage: amplify-stuck-delete.sh <root-stack> | --leftovers" >&2
 	exit 1
 fi
 
@@ -198,8 +206,8 @@ walk() {
 		echo "  $(name "$stack") is ${status:-unreadable}, not DELETE_FAILED; left for the plain retry"
 		return 0
 	fi
-	# Resolved before the delete: afterwards the stack's template is still
-	# readable, but nothing reports the table again on a later run.
+	# Resolved before the delete, while the stack is still live. Later runs
+	# report the table again from the deleted stack (--leftovers).
 	names=$(table_names "$stack" "${keep[@]}")
 	echo "  Deleting nested stack $(name "$stack"), retaining the stuck table resource(s): ${keep[*]}"
 	if ! aws cloudformation delete-stack --stack-name "$stack" --retain-resources "${keep[@]}" </dev/null 2>&1; then
@@ -215,6 +223,48 @@ walk() {
 	done
 }
 
+# The tables retained on earlier runs: a table resource in DELETE_SKIPPED in a
+# deleted nested stack of a sandbox. Only stacks that lived at least 5 hours
+# are read. The retain only runs on a sandbox created more than 6 hours
+# earlier (the step's STUCK_CUTOFF), and an ordinary teardown deletes its
+# nested stacks within the hour, so this skips almost every deleted stack.
+leftovers() {
+	local listed candidates id stack when rows names logical table
+	local ids=()
+	if ! listed=$(aws cloudformation list-stacks --stack-status-filter DELETE_COMPLETE --output json </dev/null) ||
+		! candidates=$(jq -r '
+			def ts: .[0:19] + "Z" | fromdateiso8601;
+			.StackSummaries[]
+			| select(.ParentId != null and (.StackName | test("^amplify-amplify(gen2|interoptest)-")))
+			| select(.DeletionTime != null and ((.DeletionTime | ts) - (.CreationTime | ts)) >= 5 * 3600)
+			| [.StackId, .StackName, .DeletionTime[0:10]] | @tsv' <<<"$listed"); then
+		echo "::warning::could not list deleted stacks, so tables retained on earlier runs are not reported this run"
+		return 0
+	fi
+	while IFS=$'\t' read -r id stack when; do
+		[ -z "$id" ] && continue
+		if ! rows=$(aws cloudformation list-stack-resources --stack-name "$id" --output json </dev/null |
+			jq -r --arg type "$table_type" '.StackResourceSummaries[]
+				| select(.ResourceType == $type and .ResourceStatus == "DELETE_SKIPPED") | .LogicalResourceId'); then
+			echo "::warning::could not list the resources of deleted stack $stack; its retained tables are not reported this run"
+			continue
+		fi
+		[ -z "$rows" ] && continue
+		mapfile -t ids <<<"$rows"
+		names=$(table_names "$id" "${ids[@]}")
+		for logical in "${ids[@]}"; do
+			table=$(awk -F'\t' -v id="$logical" '$1 == id { print $2; exit }' <<<"$names")
+			table=${table:-"(name unresolved, see the stack template)"}
+			echo "::warning::$stack retained $logical when it was deleted on $when; DynamoDB table $table may still exist, and no sweep deletes it"
+			echo "- leftover: $logical ($table_type) of $stack, deleted $when; delete DynamoDB table $table by hand if it still exists" >>"$report"
+		done
+	done <<<"$candidates"
+}
+
+if [ "$root" = '--leftovers' ]; then
+	leftovers
+	exit 0
+fi
 walk "$root"
 [ "$started" -eq 1 ] && exit 3
 exit 0
