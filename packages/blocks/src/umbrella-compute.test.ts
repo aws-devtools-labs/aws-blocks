@@ -1,9 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 /**
  * Exercises the real production wiring: `@aws-blocks/blocks`'s `BlocksStack` /
  * `BlocksBackend` wrappers inject `LambdaCompute` as the default-compute factory
@@ -15,6 +12,10 @@ import { dirname, join } from 'node:path';
  * Must run under `--conditions=cdk` so the BB packages resolve their CDK entries
  * (real infra) rather than the default mock stubs.
  */
+
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
