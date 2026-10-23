@@ -26,6 +26,8 @@ const STEP = 'Cleanup orphaned API Gateway REST APIs';
 const DENIED =
 	'\nAn error occurred (AccessDeniedException) when calling the GetRestApis operation: ' +
 	'User: arn:aws:sts::123456789012:assumed-role/ci/run is not authorized to perform: apigateway:GET\n';
+// A reason with a "%", which a workflow command must carry as "%25".
+const PERCENT = '\nAn error occurred (LimitExceededException) when calling the GetRestApis operation: 100% of the rate used\n';
 
 // A stub `aws` that serves canned output from its fixture dir and logs every call.
 //   get-rest-apis with --query  -> rest-apis.txt (the sweep's id/name/date listing)
@@ -170,6 +172,13 @@ describe('rest-api-quota.sh', () => {
 		assert.doesNotMatch(r.stdout + r.summary, /123456789012/);
 	});
 
+	it('escapes a "%" in the reason for the annotation, and keeps it in the summary', () => {
+		const r = run(fixture({ 'get-rest-apis.err': PERCENT }), [SCRIPT]);
+		assert.equal(r.status, 1);
+		assert.match(r.stdout, /^::error::.*: An error occurred \(LimitExceededException\).*: 100%25 of the rate used$/m);
+		assert.match(r.summary, /listing failed: .*: 100% of the rate used$/m);
+	});
+
 	it('fails on output it cannot parse', () => {
 		const r = run(fixture({ 'rest-apis.json': 'not json' }), [SCRIPT]);
 		assert.equal(r.status, 1);
@@ -193,6 +202,11 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		assert.match(r.summary, /## API Gateway REST API Cleanup Summary/);
 		assert.match(r.summary, /REST APIs remaining: unknown/);
 		assert.equal(r.deleted, '');
+	});
+
+	it('escapes a "%" in the reason for the annotation', () => {
+		const r = runStep(fixture({ 'get-rest-apis-query.err': PERCENT, 'rest-apis.json': apis() }));
+		assert.match(r.stdout, /^::error::apigateway get-rest-apis failed, .*: 100%25 of the rate used$/m);
 	});
 
 	it('fails the leg when only the sweep listing fails', () => {
@@ -241,6 +255,10 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		);
 		assert.equal(r.deleted, '', 'an unknown ownership set must not read as "no stack owns any API"');
 		assert.match(r.summary, /- Deferred to next run.*: 1/);
+		assert.match(
+			r.stdout,
+			/^::warning::list-stacks failed, so the ownership set is incomplete and no REST API is deleted this run: An error occurred \(Throttling\)/m,
+		);
 	});
 });
 
