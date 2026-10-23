@@ -32,8 +32,11 @@ const requireFromRoot = createRequire(new URL('../../package.json', import.meta.
 function resolveGetConfiguration() {
 	try {
 		requireFromRoot.resolve('puppeteer');
-	} catch {
-		return null;
+	} catch (e) {
+		// Only a missing package means "not installed"; anything else (a
+		// Puppeteer that no longer resolves for require) fails the run.
+		if (e?.code === 'MODULE_NOT_FOUND') return null;
+		throw e;
 	}
 	return requireFromRoot.resolve('puppeteer/internal/getConfiguration.js');
 }
