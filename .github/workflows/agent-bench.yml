@@ -247,19 +247,29 @@ jobs:
 
       # Provision the browser once, before the agent phase — step 2 used to run with
       # no chromium, so the agent wasted turns hunting for one. `--with-deps` pulls the OS libs;
-      # version-pinned to the verifier's PW_VERSION (1.60.0). Then wrap the system chromium so every
-      # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
-      # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
-      # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      # version-pinned to the verifier's PW_VERSION (1.60.0) by the lockfile in
+      # scripts/ci/agent-bench-playwright: `npm ci` checks every tarball against its integrity, where
+      # `npx playwright@<version>` would run whatever the npm cache restored above holds for that spec
+      # (the browser install needs no package install script, hence --ignore-scripts). Then wrap the
+      # system chromium so every launch (the agent's ad-hoc CDP sessions included) starts cleanly
+      # instead of aborting on crashpad. Best-effort (continue-on-error): a blip must not red the
+      # cell; step 3's guarded fallback covers the install, and an unwrapped chromium still runs,
+      # just less reliably.
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
         if: steps.init.outcome == 'success'
         run: |
-          npx playwright@1.60.0 install --with-deps chromium
+          # Advisory only (never aborts the step): flag a pin that drifted from the verifier's version.
+          want=$(sed -n 's/^PW_VERSION="\(.*\)"$/\1/p' scripts/agent-bench/steps/3-build-and-test.sh 2>/dev/null || true)
+          have=$(node -p "require('./scripts/ci/agent-bench-playwright/package.json').dependencies.playwright" 2>/dev/null || true)
+          [ -n "$want" ] && [ "$want" = "$have" ] ||
+            echo "::warning::scripts/ci/agent-bench-playwright pins Playwright '$have' but the verifier's PW_VERSION is '${want:-not found}'"
+          npm ci --prefix scripts/ci/agent-bench-playwright --ignore-scripts --no-audit --no-fund
+          scripts/ci/agent-bench-playwright/node_modules/.bin/playwright install --with-deps chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
-          # present on a stock runner (npx install above runs unprivileged and writes it there).
+          # present on a stock runner (the install above runs unprivileged and writes it there).
           # The wrapper is root-owned by design (the shim also wraps system-PATH binaries that need
           # root).
           sudo PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" bash scripts/agent-bench/steps/install-chromium-shim.sh
