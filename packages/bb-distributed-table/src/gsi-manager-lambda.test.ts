@@ -38,7 +38,8 @@ let tableExists: boolean;
 /** The table vanishes after DescribeTable: UpdateTable alone reports it missing. */
 let deletedBeforeUpdate: boolean;
 let gsis: FakeIndex[];
-let stackStatus: string | Error;
+/** The stack's status, the DescribeStacks failure, or `null` for a response with no stacks. */
+let stackStatus: string | Error | null;
 /** Whether the stack's current template still declares the table, or the GetTemplate failure. */
 let templateHasTable: boolean | Error;
 let updateTableCalls: unknown[];
@@ -129,6 +130,7 @@ beforeEach(() => {
 			assert.strictEqual(command.input.StackName, STACK_ID);
 			cfnCalls.push('DescribeStacks');
 			if (stackStatus instanceof Error) throw stackStatus;
+			if (stackStatus === null) return { Stacks: [] };
 			return { Stacks: [{ StackName: 'TestStack', StackId: STACK_ID, StackStatus: stackStatus }] };
 		}
 		if (command instanceof GetTemplateCommand) {
@@ -269,13 +271,61 @@ test('GSI manager: if the stack status cannot be read, Delete keeps the indexes'
 	assert.deepStrictEqual(updateTableCalls, []);
 });
 
-test('GSI manager: if the template cannot be read, Delete keeps the indexes', async () => {
+test('GSI manager: if DescribeStacks returns no stack, Delete keeps the indexes without reading the template', async () => {
+	stackStatus = null;
+	await runLifecycle(deleteEvent());
+	assert.deepStrictEqual(updateTableCalls, []);
+	assert.deepStrictEqual(
+		gsis.map((g) => g.name),
+		ALL_INDEXES,
+	);
+	assert.deepStrictEqual(cfnCalls, ['DescribeStacks']);
+});
+
+for (const status of ['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS']) {
+	test(`GSI manager: if the template cannot be read in ${status}, Delete fails naming the table and its indexes`, async () => {
+		// A failed delete in an update's cleanup phase is reported as a
+		// DELETE_FAILED event and does not roll the update back, so failing
+		// makes the leftover indexes visible instead of reporting success.
+		stackStatus = status;
+		templateHasTable = accessDenied('cloudformation:GetTemplate');
+		await assert.rejects(
+			() => handler(deleteEvent()),
+			(e: Error) => {
+				assert.match(e.message, new RegExp(`table ${TABLE}`));
+				assert.match(e.message, /byStatus, byOwner/);
+				assert.match(e.message, /not authorized to perform: cloudformation:GetTemplate/);
+				return true;
+			},
+		);
+		assert.deepStrictEqual(updateTableCalls, [], 'nothing is dropped');
+		assert.deepStrictEqual(
+			gsis.map((g) => g.name),
+			ALL_INDEXES,
+		);
+	});
+}
+
+test('GSI manager: if the template cannot be parsed in an update cleanup, Delete fails and drops nothing', async () => {
+	mock.method(CloudFormationClient.prototype, 'send', async (command: unknown) => {
+		if (command instanceof DescribeStacksCommand) {
+			return { Stacks: [{ StackName: 'TestStack', StackId: STACK_ID, StackStatus: 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS' }] };
+		}
+		return { TemplateBody: 'Resources: {' };
+	});
+	await assert.rejects(() => handler(deleteEvent()), new RegExp(`table ${TABLE}`));
+	assert.deepStrictEqual(updateTableCalls, []);
+});
+
+test('GSI manager: if the template cannot be read in any other stack status, Delete keeps the indexes', async () => {
+	stackStatus = 'UPDATE_ROLLBACK_IN_PROGRESS';
 	templateHasTable = accessDenied('cloudformation:GetTemplate');
 	await runLifecycle(deleteEvent());
 	assert.deepStrictEqual(
 		gsis.map((g) => g.name),
 		ALL_INDEXES,
 	);
+	assert.deepStrictEqual(updateTableCalls, []);
 });
 
 test('GSI manager: a Delete without a StackId keeps the indexes', async () => {
