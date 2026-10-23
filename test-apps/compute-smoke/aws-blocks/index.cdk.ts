@@ -36,6 +36,10 @@ const stackName = sandboxMode
   : `bb-test-cs-prod-${suffix || 'default'}-${id}`;
 
 // The FileBucket's id: Scope 'compute-smoke' + FileBucket 'artifacts' in index.ts.
+// CI deploys sandbox mode only (scripts/ci/e2e-stack-prefixes.test.mjs checks
+// its longest name); production mode runs locally, where the suffix is usually
+// unset. With CI's suffix a production name only fits up to attempt 9 of a
+// 4-digit PR.
 const MAX_STACK_NAME_LENGTH = 63 - '-compute-smoke-artifacts'.length;
 if (stackName.length > MAX_STACK_NAME_LENGTH) {
   throw new Error(
