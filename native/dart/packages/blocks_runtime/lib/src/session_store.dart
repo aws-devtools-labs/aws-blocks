@@ -12,6 +12,11 @@ abstract class SessionStore {
   /// [requestUri] is the URL of the request the response answered. It scopes
   /// each cookie to that host, supplies the default `Path`, and is the moment
   /// `Max-Age` counts from. Without it a cookie is not tied to a host.
+  ///
+  /// A cookie with an empty value (`name=; Path=/`) is treated as a removal:
+  /// it replaces the same-named cookies as any other would, and is not
+  /// stored. This matches the Swift runtime's cookie jar; it is a convention
+  /// of these jars, not an RFC 6265 deletion rule.
   void setCookies(String? setCookieHeader, {Uri? requestUri});
 
   /// Returns the Cookie header string for outgoing requests.
@@ -55,6 +60,11 @@ class _StoredCookie {
   final String value;
 
   /// The host that set the cookie; `null` when it was stored without one.
+  ///
+  /// A cookie read from the name → value map earlier versions wrote has no
+  /// host, because that format never recorded one. Such a cookie matches
+  /// every host until the server sets it again, when the new cookie replaces
+  /// it with a host-scoped one.
   final String? host;
   final String path;
   final bool secure;
@@ -141,8 +151,11 @@ class InMemorySessionStore implements SessionStore {
         );
       }
       // An expired cookie only deletes: `Max-Age=0` or a past `Expires` is how
-      // a server signs a session out.
-      if (!parsed.isExpired(_now)) _cookies[parsed.key] = parsed;
+      // a server signs a session out. An empty value also only deletes, as in
+      // the Swift runtime's cookie jar.
+      if (parsed.value.isNotEmpty && !parsed.isExpired(_now)) {
+        _cookies[parsed.key] = parsed;
+      }
     }
   }
 
@@ -327,7 +340,8 @@ class PersistentSessionStore implements SessionStore {
   /// host, `Path`, `Secure` flag and expiry. A JSON object of name → value is
   /// the format earlier versions wrote; those cookies are kept, with no host,
   /// `Path=/`, no `Secure` and no expiry — what those versions sent — until
-  /// the server sets them again.
+  /// the server sets them again. Having no host, they are sent to every host
+  /// in the meantime; the map format recorded none to scope them by.
   Future<void> load() async {
     final raw = await _store.get(_storageKey);
     if (raw == null || raw.isEmpty) return;
@@ -343,6 +357,8 @@ class PersistentSessionStore implements SessionStore {
             _StoredCookie(
               name: entry.key,
               value: entry.value as String,
+              // The map format stored no host, so there is none to recover;
+              // the cookie applies to any host until the server sets it again.
               host: null,
               path: '/',
               secure: false,

@@ -49,6 +49,12 @@ void main() {
         ),
         'blocks_session=old',
       );
+      // The map format recorded no host, so until the server sets the cookie
+      // again it is sent to any host, as earlier versions did.
+      expect(
+        store.cookieHeaderFor(Uri.parse('https://other.example.com/')),
+        'blocks_session=old',
+      );
 
       // The same cookie set again by a host replaces the adopted one, even
       // without a `Path`, where it is stored for `/aws-blocks`.
@@ -61,6 +67,11 @@ void main() {
           Uri.parse('http://localhost:3001/aws-blocks/api'),
         ),
         'blocks_session=new',
+      );
+      // The replacement is scoped to the host that set it.
+      expect(
+        store.cookieHeaderFor(Uri.parse('https://other.example.com/')),
+        isNull,
       );
 
       store.setCookies(
@@ -244,6 +255,20 @@ void main() {
       final s = store()
         ..setCookies('a=1; Path=/', requestUri: api)
         ..setCookies('a=; Max-Age=0; Path=/', requestUri: api);
+      expect(s.cookies, isEmpty);
+      expect(s.cookieHeaderFor(api), isNull);
+    });
+
+    test('an empty value deletes a stored cookie', () {
+      final s = store()
+        ..setCookies('a=1; Path=/', requestUri: api)
+        ..setCookies('a=; Path=/', requestUri: api);
+      expect(s.cookies, isEmpty);
+      expect(s.cookieHeaderFor(api), isNull);
+    });
+
+    test('an empty value is not stored', () {
+      final s = store()..setCookies('a=; Path=/', requestUri: api);
       expect(s.cookies, isEmpty);
       expect(s.cookieHeaderFor(api), isNull);
     });

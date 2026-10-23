@@ -11,7 +11,9 @@
   Kotlin runtime: a cookie is sent only to the host that set it, only to
   request paths under its `Path`, and, when `Secure`, only over `https`/`wss`.
   `Max-Age` takes precedence over `Expires`, and a cookie whose `Max-Age` is
-  zero or less, or whose `Expires` has passed, is removed. Cookies are keyed by
+  zero or less, or whose `Expires` has passed, is removed. A cookie with an
+  empty value (`name=; Path=/`) is also removed rather than stored, as in the
+  Swift runtime. Cookies are keyed by
   host, path and name rather than by name alone, and a new cookie replaces the
   same-named cookies that would be sent on that request, as in the Kotlin
   runtime. `cookieHeaderFor` lists the cookie with the longest `Path` first
@@ -22,7 +24,10 @@
 - `PersistentSessionStore` now stores a JSON list of cookie records. The
   name → value map written by earlier versions is still read: those cookies
   keep `Path=/`, no `Secure` and no expiry, as before, until the server sets
-  them again.
+  them again. That format recorded no host, so until then those cookies are
+  sent to any host; the Swift runtime instead recovers the host from its
+  earlier storage key. This applies only to cookies written before the upgrade
+  and ends once the server sets each cookie again.
 
 ## 0.1.4
 
