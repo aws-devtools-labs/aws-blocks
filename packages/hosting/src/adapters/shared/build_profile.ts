@@ -14,7 +14,8 @@
  * - `skipIsr` — build without the incremental-regeneration machinery: no tag
  *   cache and no revalidation queue. Prerendered pages are still served from
  *   the build's cache snapshot.
- * - `skipImageOptimization` — build no image-optimization function.
+ * - `skipImageOptimization` — build no image-optimization function, and
+ *   install no `sharp` for one.
  * - `deterministicBuildId` — pin the framework's build id (Next.js
  *   `generateBuildId`), so an unchanged build produces byte-identical static
  *   assets and a re-deploy skips the asset re-upload.

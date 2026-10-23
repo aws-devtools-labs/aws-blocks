@@ -69,6 +69,27 @@ function ssrFixture(root: string, seen: { profile?: BuildProfile }) {
   };
 }
 
+type CfnResourceJson = {
+  Type: string;
+  DependsOn?: string[];
+  Properties?: { Environment?: { Variables?: Record<string, unknown> } };
+};
+
+/**
+ * The upload resources (`Custom::CDKBucketDeployment` and the AWS CLI layers
+ * that come with each) the asset proxy — the function whose environment names
+ * the build (`ASSET_KEY_PREFIX`) — or its role and policy depend on.
+ */
+function deployResourcesTheProxyWaitsOn(resources: Record<string, CfnResourceJson>): string[] {
+  const [proxyId] = Object.keys(resources).filter(
+    (id) => resources[id].Type === 'AWS::Lambda::Function' && resources[id].Properties?.Environment?.Variables?.ASSET_KEY_PREFIX !== undefined,
+  );
+  assert.ok(proxyId, 'an asset proxy');
+  const proxyResources = Object.keys(resources).filter((id) => id === proxyId || id.startsWith(`${proxyId.replace(/[0-9A-F]{8}$/, '')}ServiceRole`));
+  const deps = new Set(proxyResources.flatMap((id) => resources[id].DependsOn ?? []));
+  return [...deps].filter((id) => resources[id]?.Type === 'Custom::CDKBucketDeployment' || resources[id]?.Type === 'AWS::Lambda::LayerVersion').sort();
+}
+
 const newStack = (name: string) =>
   new Stack(new App(), name, { env: { account: '111111111111', region: 'us-east-1' } });
 
@@ -138,6 +159,30 @@ describe('Hosting with HostingPresets.preview', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
     });
+  });
+
+  it('the asset proxy is not ordered after the uploads: a fixed build has no switch-over to gate', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PreviewParallelProxy');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, root: tmpDir, api: MOCK_API });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<string, CfnResourceJson>;
+    const waitsOn = deployResourcesTheProxyWaitsOn(resources);
+    // Neither the asset uploads nor the resolved runtime config (whose
+    // deployment is ordered after the uploads), nor their layers.
+    assert.deepStrictEqual(waitsOn, []);
+  });
+
+  it("per-deploy builds behind the same door keep the proxy after every upload and the runtime config", () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('PerDeployProxy');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, buildId: 'per-deploy', root: tmpDir, api: MOCK_API });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<string, CfnResourceJson>;
+    const waitsOn = deployResourcesTheProxyWaitsOn(resources);
+    const uploads = Object.keys(resources).filter((id) => resources[id].Type === 'Custom::CDKBucketDeployment');
+    assert.ok(uploads.some((id) => id.includes('BlocksConfigDeployment')), 'the runtime config is one of the uploads');
+    for (const u of uploads) assert.ok(waitsOn.includes(u), `the proxy waits for ${u}`);
   });
 
   it('builds the adapter for the HTTP API and with every preview trim', () => {
@@ -286,6 +331,81 @@ describe('Hosting with HostingPresets.preview', () => {
     const t = Template.fromStack(stack);
     t.resourceCountIs('AWS::CloudFront::Distribution', 1);
     t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
+  });
+});
+
+/** The template's AWS CLI layers, split by whether a Lambda function references them. */
+function awsCliLayers(t: Template): { used: string[]; unused: string[] } {
+  const referenced = new Set<string>();
+  for (const fn of Object.values(t.findResources('AWS::Lambda::Function'))) {
+    for (const layer of (fn.Properties?.Layers ?? []) as unknown[]) {
+      if (layer && typeof layer === 'object' && 'Ref' in layer) referenced.add(String(layer.Ref));
+    }
+  }
+  const layers = Object.keys(t.findResources('AWS::Lambda::LayerVersion')).filter((id) => id.includes('AwsCliLayer'));
+  return { used: layers.filter((id) => referenced.has(id)), unused: layers.filter((id) => !referenced.has(id)) };
+}
+
+/** Every bucket-upload custom resource's handler function carries a layer. */
+function everyUploadHandlerHasALayer(t: Template): boolean {
+  const fns = t.findResources('AWS::Lambda::Function');
+  return Object.values(t.findResources('Custom::CDKBucketDeployment')).every((cr) => {
+    const target = JSON.stringify(cr.Properties?.ServiceToken);
+    const handlerId = Object.keys(fns).find((id) => target.includes(`"${id}"`));
+    return Boolean(handlerId && (fns[handlerId].Properties?.Layers ?? []).length > 0);
+  });
+}
+
+describe('AWS CLI layers: only an in-place (preview) build drops the unused ones', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-layers-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearRouteRegistry();
+  });
+
+  it('the default (CloudFront) build keeps every layer, including the unused ones', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersDefault');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+    const t = Template.fromStack(stack);
+    const { used, unused } = awsCliLayers(t);
+    // One layer per upload: the shared handler uses one, the others stay in the template.
+    assert.ok(unused.length > 0, `expected the default build to keep its unused layers (used: ${used.join(', ')})`);
+    assert.strictEqual(used.length + unused.length, Object.keys(t.findResources('Custom::CDKBucketDeployment')).length);
+  });
+
+  it('HostingPresets.production keeps every layer too', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersProduction');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.production, root: tmpDir, api: MOCK_API });
+    assert.ok(awsCliLayers(Template.fromStack(stack)).unused.length > 0);
+  });
+
+  it("buildId: 'fixed' behind the ALB (no preset) also drops them", () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersFixedAlb');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
+    const t = Template.fromStack(stack);
+    assert.deepStrictEqual(awsCliLayers(t).unused, []);
+    assert.ok(everyUploadHandlerHasALayer(t));
+  });
+
+  it('HostingPresets.preview keeps only the layers a handler uses, and every upload still has one', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersPreview');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, root: tmpDir, api: MOCK_API });
+    const t = Template.fromStack(stack);
+    const { used, unused } = awsCliLayers(t);
+    assert.deepStrictEqual(unused, []);
+    assert.ok(used.length > 0);
+    assert.ok(everyUploadHandlerHasALayer(t), 'every upload handler keeps its layer');
+    // The runtime config upload is still in the template.
+    assert.ok(Object.keys(t.findResources('Custom::CDKBucketDeployment')).some((id) => id.startsWith('HostingBlocksConfigDeployment')));
   });
 });
 
