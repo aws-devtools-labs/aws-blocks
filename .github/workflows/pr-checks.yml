@@ -244,6 +244,11 @@ jobs:
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
 
+      # Synthesizes each E2E app with its job's stack suffix at a 5-digit PR
+      # number, so a name that outgrows its AWS limit fails here, not at deploy.
+      - name: Test the E2E stack-name budget
+        run: node --test scripts/ci/stack-name-budget.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -506,7 +511,10 @@ jobs:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
-      BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # `pr-`, not `compute-`: the stack name already starts `bb-compute-smoke-`,
+      # and the extra characters pushed the app's FileBucket name past S3's 63 at
+      # four-digit PR numbers (scripts/ci/stack-name-budget.test.mjs).
+      BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')

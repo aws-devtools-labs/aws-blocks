@@ -29,10 +29,16 @@ const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPe
 // non-empty S3 buckets — its async delete-stack fails again on the
 // same buckets — so each push needs its own name.)
 const id = getSandboxId(projectRoot);
+// The production name keeps only the random half of `<user>-<random>`: the
+// stack name prefixes every derived resource name, and with CI's
+// `pr-<number>-<attempt>` suffix the user half (`runner` in CI) pushed the
+// longest FileBucket name past S3's 63 characters at four-digit PR numbers.
+// scripts/ci/stack-name-budget.test.mjs checks the budget.
+const salt = id.slice(id.lastIndexOf('-') + 1);
 
 const stackName = sandboxMode
   ? `bb-test-${id}${suffix ? `-${suffix}` : ''}`
-  : `bb-test-prod-${suffix || 'default'}-${id}`;
+  : `bb-test-prod-${suffix || 'default'}-${salt}`;
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
