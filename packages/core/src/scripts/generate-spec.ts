@@ -327,7 +327,7 @@ export async function generateSpec(
 
 		// Use the export name for the qualified method name — this matches
 		// how the dev server and Lambda handler register APIs (by export name,
-		// not the ApiNamespace() first argument).
+		// not the ApiNamespace() label).
 		const routingName = exportName;
 
 		// ApiNamespace is a function (context) => { method1, method2, ... }
