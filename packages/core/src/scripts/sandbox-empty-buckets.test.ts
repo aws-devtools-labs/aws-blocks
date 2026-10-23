@@ -65,22 +65,84 @@ describe('listStackBucketNames', () => {
 	it('follows NextToken across pages and returns only S3 buckets', async () => {
 		const seen: Array<string | undefined> = [];
 		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') {
+				return { TemplateBody: JSON.stringify({ Resources: { B1: { Type: 'AWS::S3::Bucket' }, B2: { Type: 'AWS::S3::Bucket' } } }) };
+			}
 			seen.push(cmd.input.NextToken);
 			if (cmd.input.NextToken === undefined) {
 				return {
 					StackResourceSummaries: [
-						{ ResourceType: 'AWS::S3::Bucket', PhysicalResourceId: 'b1' },
-						{ ResourceType: 'AWS::Lambda::Function', PhysicalResourceId: 'fn' },
+						{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B1', PhysicalResourceId: 'b1' },
+						{ ResourceType: 'AWS::Lambda::Function', LogicalResourceId: 'Fn', PhysicalResourceId: 'fn' },
 					],
 					NextToken: 't2',
 				};
 			}
-			return { StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', PhysicalResourceId: 'b2' }] };
+			return { StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B2', PhysicalResourceId: 'b2' }] };
 		};
 		const cfn = { send } as unknown as CloudFormationClient;
 		const buckets = await listStackBucketNames(cfn, 'stack');
 		assert.deepStrictEqual(buckets, ['b1', 'b2']);
 		assert.deepStrictEqual(seen, [undefined, 't2']); // paged exactly twice
+	});
+
+	// A bucket the stack's delete keeps (`RemovalPolicy.RETAIN`, the production
+	// preset's default, or any other non-Delete DeletionPolicy) never blocks the
+	// delete, so emptying it before a retry would only destroy the data the
+	// policy exists to keep. Read the policy from the DEPLOYED template: it is
+	// what CloudFormation acts on, even if the local code changed since.
+	it('skips buckets the stack delete keeps, and buckets already deleted or skipped', async () => {
+		const templateStages: unknown[] = [];
+		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') {
+				templateStages.push(cmd.input.TemplateStage);
+				return {
+					TemplateBody: JSON.stringify({
+						Resources: {
+							Hosting: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' },
+							Scratch: { Type: 'AWS::S3::Bucket' },
+							UserFiles: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' },
+							Logs: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'RetainExceptOnCreate' },
+							Gone: { Type: 'AWS::S3::Bucket' },
+							Skipped: { Type: 'AWS::S3::Bucket' },
+						},
+					}),
+				};
+			}
+			const bucket = (id: string, status = 'CREATE_COMPLETE') => ({
+				ResourceType: 'AWS::S3::Bucket',
+				LogicalResourceId: id,
+				PhysicalResourceId: id.toLowerCase(),
+				ResourceStatus: status,
+			});
+			return {
+				StackResourceSummaries: [
+					bucket('Hosting', 'DELETE_FAILED'),
+					bucket('Scratch'),
+					bucket('UserFiles'),
+					bucket('Logs'),
+					bucket('Gone', 'DELETE_COMPLETE'),
+					bucket('Skipped', 'DELETE_SKIPPED'),
+					bucket('NotInTemplate'),
+				],
+			};
+		};
+		const buckets = await listStackBucketNames({ send } as unknown as CloudFormationClient, 'stack');
+		assert.deepStrictEqual(buckets, ['hosting', 'scratch']);
+		assert.deepStrictEqual(templateStages, ['Processed']);
+	});
+
+	it('empties no bucket of a stack whose deployed template cannot be read', async (t) => {
+		const warn = t.mock.method(console, 'warn', () => {});
+		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') throw new Error('AccessDenied: cloudformation:GetTemplate');
+			return {
+				StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B', PhysicalResourceId: 'b' }],
+			};
+		};
+		assert.deepStrictEqual(await listStackBucketNames({ send } as unknown as CloudFormationClient, 'stack'), []);
+		assert.strictEqual(warn.mock.callCount(), 1);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /stack.*AccessDenied/);
 	});
 });
 
@@ -320,8 +382,13 @@ describe('emptySandboxBuckets', () => {
 				// Only the Region a stack lives in knows it.
 				const home: Record<string, string> = { 'my-app': 'eu-west-1', 'edge-lambda-stack-x': 'us-east-1' };
 				if (home[cmd.input.StackName] !== region) throw new Error(`Stack with id ${cmd.input.StackName} does not exist`);
+				if (cmd.constructor.name === 'GetTemplateCommand') {
+					return { TemplateBody: JSON.stringify({ Resources: { B: { Type: 'AWS::S3::Bucket' } } }) };
+				}
 				return {
-					StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', PhysicalResourceId: `${cmd.input.StackName}-bucket` }],
+					StackResourceSummaries: [
+						{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B', PhysicalResourceId: `${cmd.input.StackName}-bucket` },
+					],
 				};
 			};
 			return { send } as unknown as CloudFormationClient;
@@ -340,7 +407,12 @@ describe('emptySandboxBuckets', () => {
 			],
 			{ cfnFor, s3: { send: s3Send } as unknown as S3Client },
 		);
-		assert.deepStrictEqual(lookups, ['my-app@eu-west-1', 'edge-lambda-stack-x@us-east-1']);
+		assert.deepStrictEqual(lookups, [
+			'my-app@eu-west-1',
+			'my-app@eu-west-1',
+			'edge-lambda-stack-x@us-east-1',
+			'edge-lambda-stack-x@us-east-1',
+		]);
 		assert.deepStrictEqual(emptied, ['my-app-bucket', 'edge-lambda-stack-x-bucket']);
 	});
 });

@@ -1,8 +1,11 @@
 ---
-'@aws-blocks/core': patch
+'@aws-blocks/core': minor
 '@aws-blocks/blocks': patch
+'@aws-blocks/create-blocks-app': patch
 ---
 
 `npm run deploy` and `npm run destroy` now act on every top-level stack in the app (`cdk deploy --all`, `cdk destroy --all`), the same selection `npm run sandbox` already deploys with, and the `cdk watch` loop of `npm run sandbox` now watches each of those stacks too. Stacks inside a CDK `Stage` are not included. Before, an app with more than one stack could not be deployed or destroyed to production: CDK refused with "specify which stacks to use". Examples are an app with `Hosting` and a Lambda@Edge function (an edge-runtime route or Next.js middleware) deployed outside us-east-1, which adds an `edge-lambda-stack-*` stack in us-east-1 (that Region must be bootstrapped too), or an app with an extra stack of its own, such as one for an `ec2.Vpc.fromLookup`. The sandbox's `cdk watch` on such an app never redeployed and showed no error. A single-stack app deploys, watches and destroys the same stack as before.
 
-`npm run destroy` deletes every top-level stack of the app without asking, dependent stacks first; resources with a `RETAIN` removal policy are kept. If your app also defines a stack you deploy and delete on its own, move it to a separate CDK app before running `npm run destroy`. The deploy, and `npm run console`, now use the stack that has the `ApiUrl` output rather than the first stack in the outputs file, and warn if several stacks have one.
+`npm run destroy` deletes every top-level stack of the app without asking, dependent stacks first, and CDK prints each stack as it deletes it. If your app also defines a stack you deploy and delete on its own, move it to a separate CDK app before running `npm run destroy`. Resources with a `RETAIN` removal policy are kept, with their data: when a delete attempt fails, `npm run destroy` and `npm run sandbox:destroy` empty only the S3 buckets the stack's delete removes before they retry. A bucket whose `DeletionPolicy` in the deployed template is not `Delete` is no longer emptied (before, a retry emptied every bucket of the stack). Reading that template needs the `cloudformation:GetTemplate` permission; without it, no bucket of the stack is emptied and a warning says so. As with `npm run sandbox:destroy`, the retry finds the buckets of every stack in its own Region, with the profile and Region CDK uses, and when the Lambda@Edge stack fails to delete because CloudFront still replicates its function, `npm run destroy` says to run it again later instead of retrying.
+
+The deploy, and `npm run console`, now use the stack that has the `ApiUrl` output rather than the first stack in the outputs file, and warn if several stacks have one.

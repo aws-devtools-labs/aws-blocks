@@ -8,8 +8,15 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildCdkDeployArgs, selectAppStack } from './deploy-stream.js';
-import { buildSandboxDeployArgs, buildSandboxWatchArgs, sandboxWatchStacks, topLevelStackPaths } from './sandbox.js';
+import { buildCdkDeployArgs, readAppStackOutputs, selectAppStack } from './deploy-stream.js';
+import {
+  buildSandboxDeployArgs,
+  buildSandboxWatchArgs,
+  quoteCdkAppPath,
+  sandboxWatchStacks,
+  topLevelStackPaths,
+  watchArgsForAssembly,
+} from './sandbox.js';
 
 // Every CDK command the scripts run must select every top-level stack of the
 // app. With no selector, `cdk deploy` and `cdk destroy` refuse an app with more
@@ -109,6 +116,27 @@ describe('destroy selects every stack its deploy creates', { skip }, () => {
     assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
     assert.ok(argv.includes('--all'), `expected --all in: ${argv.join(' ')}`);
     assert.ok(argv.includes('--force'), `expected --force in: ${argv.join(' ')}`);
+    // The retry reads the stacks this attempt selected from the assembly it synthesized.
+    assert.strictEqual(argv[argv.indexOf('--output') + 1], '.blocks-sandbox/destroy.out', `expected --output in: ${argv.join(' ')}`);
+  });
+
+  it('production destroy clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
+    // CDK runs in projectRoot and writes the relative `--output` there; destroy() clears and reads that same directory.
+    const projectRoot = mkdtempSync(join(root, 'project-'));
+    const assemblyDir = join(projectRoot, '.blocks-sandbox', 'destroy.out');
+    mkdirSync(assemblyDir, { recursive: true });
+    writeFileSync(join(assemblyDir, 'stale.json'), '{}');
+    const call = `mod.destroy({ cdkAppPath: ${JSON.stringify(join(projectRoot, 'index.cdk.ts'))}, projectRoot: ${JSON.stringify(projectRoot)} })`;
+    const argv = recordDestroyArgv('./destroy.js', call);
+    assert.ok(argv.includes('.blocks-sandbox/destroy.out'), argv.join(' '));
+    const cdk = readFileSync(cdkLog, 'utf-8');
+    assert.match(cdk, new RegExp(`^cwd=${realpathSync(projectRoot)}$`, 'm'));
+    // The stale file was gone before CDK wrote there, and the successful destroy removed what CDK wrote.
+    assert.doesNotMatch(cdk, /stale-seen/);
+    assert.ok(!existsSync(assemblyDir), `expected ${assemblyDir} to be removed`);
+    assert.ok(!existsSync(join(root, '.blocks-sandbox', 'destroy.out')), 'CDK wrote outside projectRoot');
+    // Its own directory: a sandbox:destroy running at the same time keeps its assembly.
+    assert.ok(!argv.includes('.blocks-sandbox/sandbox-destroy.out'), argv.join(' '));
   });
 });
 
@@ -141,6 +169,22 @@ describe('deploy and watch select every stack', () => {
   it('the sandbox `cdk watch` passes no selector when no stack is named', () => {
     const args = buildSandboxWatchArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts', stacks: [] });
     assert.strictEqual(args[2], '--outputs-file', `expected no stack pattern: ${args.join(' ')}`);
+  });
+
+  it('the sandbox `cdk watch` quotes the backend path in --app, like the other sandbox commands', () => {
+    const args = buildSandboxWatchArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'my app/a.ts', stacks: [] });
+    assert.strictEqual(args[args.indexOf('--app') + 1], `npm exec tsx -- -C cdk ${quoteCdkAppPath('my app/a.ts')}`);
+  });
+});
+
+describe('quoteCdkAppPath', () => {
+  it('double-quotes on Windows, where cmd.exe keeps single quotes in the path', () => {
+    assert.strictEqual(quoteCdkAppPath('D:\\a\\my app\\index.cdk.ts', 'win32'), '"D:\\a\\my app\\index.cdk.ts"');
+  });
+
+  it('single-quotes on POSIX, escaping a single quote in the path', () => {
+    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
+    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
 });
 
@@ -182,6 +226,44 @@ function writeMultiStackAssembly(dir: string): void {
     JSON.stringify({ version: '22.0.0', artifacts: { 'Stage-Staged': stack('Stage/Staged', 'staged.template.json') } }),
   );
 }
+
+/** A synthesized cloud assembly with one top-level stack, below a construct. */
+function writeSingleStackAssembly(dir: string): void {
+  writeFileSync(join(dir, 'app.template.json'), JSON.stringify({ Resources: {} }));
+  writeFileSync(
+    join(dir, 'manifest.json'),
+    JSON.stringify({
+      version: '22.0.0',
+      artifacts: {
+        ApiDev: {
+          type: 'aws:cloudformation:stack',
+          environment: 'aws://000000000000/us-east-1',
+          displayName: 'Api (dev)',
+          properties: { templateFile: 'app.template.json' },
+        },
+      },
+    }),
+  );
+}
+
+describe('watchArgsForAssembly', () => {
+  it('names every top-level stack of a multi-stack assembly for `cdk watch`', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-watch-asm-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    writeMultiStackAssembly(dir);
+    const args = watchArgsForAssembly(dir, { outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts' });
+    assert.deepStrictEqual(args.slice(0, 5), ['cdk', 'watch', 'my-app', 'Parent/Nested', 'edge-lambda-stack-x']);
+    assert.strictEqual(args[5], '--outputs-file');
+  });
+
+  it('names no stack for a single-stack assembly', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-watch-asm-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    writeSingleStackAssembly(dir);
+    const args = watchArgsForAssembly(dir, { outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts' });
+    assert.strictEqual(args[2], '--outputs-file', `expected no stack pattern: ${args.join(' ')}`);
+  });
+});
 
 describe('topLevelStackPaths', () => {
   it('lists the top-level stacks by construct path, not stacks inside a Stage', (t) => {
@@ -274,6 +356,25 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     // The `*` wildcard would miss the stack below a construct.
     const star = cdk(['ls', '*']).out.split('\n').map((l) => l.trim()).filter(Boolean);
     assert.ok(!star.includes('Parent/Nested'), `expected '*' to miss Parent/Nested: ${star.join(', ')}`);
+  });
+});
+
+describe('readAppStackOutputs', () => {
+  it("reads the outputs file and picks the app's stack when another stack finished first", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-outputs-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const file = join(dir, 'outputs.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        'my-app-CfMonitoring-1': { MonitoringTopicArnUsEast1: 'arn:topic' },
+        'my-app': { ApiUrl: 'https://api.example/aws-blocks/api' },
+      }),
+    );
+    assert.deepStrictEqual(readAppStackOutputs(file), {
+      stackName: 'my-app',
+      outputs: { ApiUrl: 'https://api.example/aws-blocks/api' },
+    });
   });
 });
 

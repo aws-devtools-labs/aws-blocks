@@ -1,12 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
-import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import {
+  destroyRetryClients,
+  edgeStacksBlockedByReplicas,
+  emptySandboxBuckets,
+  listDestroyedStacks,
+  runDestroyWithRetries,
+} from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -14,31 +21,11 @@ export interface DestroyOptions {
 }
 
 /**
- * Resolve the production app's stack names via `cdk ls` (best-effort; [] on
- * error). Mirrors the sandbox resolver but without `sandboxMode` — it drives
- * the pre-retry bucket-emptying in {@link runDestroyWithRetries}, so a failure
- * here must WARN rather than stay silent: a silent [] skips bucket-emptying,
- * the exact no-op the retry exists to avoid.
+ * Where `destroy` has CDK write the assembly it synthesizes (`--output`),
+ * relative to the project root. The retry reads the stack list from it. Not
+ * the directory `sandbox:destroy` uses, so the two can run at the same time.
  */
-function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): string[] {
-  try {
-    const out = execFileSync(
-      'npx',
-      ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`],
-      // Capture stderr so a genuine synth/`cdk ls` failure is logged below
-      // rather than being indistinguishable from "app has zero stacks".
-      { cwd: options.projectRoot, env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    return out
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
-  } catch (e) {
-    const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
-    console.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
-    return [];
-  }
-}
+const DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/destroy.out';
 
 /**
  * Production teardown behind `npm run destroy`: `cdk destroy --all --force`,
@@ -46,7 +33,11 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
  * creates; not stacks inside a CDK `Stage`), dependent stacks first, without a
  * confirmation prompt. Resources
  * with a `RETAIN` removal policy are kept. Retries transient teardown failures
- * (see {@link runDestroyWithRetries}).
+ * (see {@link runDestroyWithRetries}); before a retry it empties only the S3
+ * buckets the delete removes, never one the stack keeps (see
+ * `listStackBucketNames` in ./sandbox.ts), reading the stacks, with their Regions, from
+ * the assembly the attempt synthesized, and stops early when the Lambda@Edge
+ * stack can't be deleted yet.
  */
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
@@ -64,6 +55,11 @@ export async function destroy(options: DestroyOptions) {
       NODE_OPTIONS: '--conditions=cdk',
       ...getCdkTelemetryEnv('production'),
     };
+    // The destroy synthesizes into this directory; the retry reads the stacks
+    // it selected from there. Cleared first so a failed synth can't leave an
+    // earlier run's stack list behind.
+    const assemblyDir = join(options.projectRoot, DESTROY_ASSEMBLY_DIR);
+    rmSync(assemblyDir, { recursive: true, force: true });
     const cdkArgs = [
       'cdk', 'destroy',
       // `--all`, like the deploy (see buildCdkDeployArgs): without it CDK
@@ -72,6 +68,7 @@ export async function destroy(options: DestroyOptions) {
       // stacks first; a stack deployed from this app by hand is included.
       '--all',
       '--force',
+      '--output', DESTROY_ASSEMBLY_DIR,
       '--context', `projectRoot=${options.projectRoot}`,
     ];
 
@@ -82,12 +79,16 @@ export async function destroy(options: DestroyOptions) {
     // The backoff also rides out a transient API Gateway control-plane throttle
     // (DeleteRestApi 429), which single-shot `cdk destroy` surfaced as a hard
     // teardown failure with no recovery.
+    const clients = await destroyRetryClients(options.projectRoot);
     await runDestroyWithRetries({
       runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
-      listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
-      emptyBuckets: emptySandboxBuckets,
+      listStacks: () => listDestroyedStacks(assemblyDir),
+      emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
+      edgeReplicaBlocked: (stacks, since) => edgeStacksBlockedByReplicas(stacks, since, clients.cfnFor),
+      rerunCommand: 'npm run destroy',
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       successLabel: 'Production stacks',
     });
+    rmSync(assemblyDir, { recursive: true, force: true });
   });
 }

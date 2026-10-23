@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
@@ -11,7 +11,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal, selectAppStack } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDeploySignal, readAppStackOutputs } from './deploy-stream.js';
 import { waitForLiveBuild, type InvalidationProbe, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 
@@ -211,7 +211,7 @@ export function makeInvalidationProbe(
  * pending migrations, generates the client, then runs `cdk deploy --all` (see
  * {@link buildCdkDeployArgs}), so every top-level stack of the app is deployed
  * (not stacks inside a CDK `Stage`), and writes `.blocks-sandbox/config.json`
- * from the outputs of the stack that carries `ApiUrl` (see {@link selectAppStack}).
+ * from the outputs of the stack that carries `ApiUrl` (see {@link readAppStackOutputs}).
  */
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
@@ -326,8 +326,7 @@ export async function deploy(options: DeployOptions) {
     
     registerFrameworkFromSink(frameworkSink);
 
-    const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = selectAppStack(outputs).outputs;
+    const stackOutputs = readAppStackOutputs(join(options.projectRoot, '.blocks-sandbox', 'outputs.json')).outputs;
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME

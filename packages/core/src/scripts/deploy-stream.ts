@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -413,6 +414,15 @@ export function selectAppStack(outputs: Record<string, Record<string, string>>):
   }
   const [stackName, stackOutputs] = withApiUrl[0] ?? entries[0] ?? [undefined, {}];
   return { stackName, outputs: stackOutputs ?? {} };
+}
+
+/**
+ * Read a `cdk deploy --outputs-file` JSON file and pick the app's stack from it
+ * (see {@link selectAppStack}). The deploys, the sandbox and `npm run console`
+ * all read the outputs file through this, so they agree on the stack.
+ */
+export function readAppStackOutputs(outputsFile: string): AppStackOutputs {
+  return selectAppStack(JSON.parse(readFileSync(outputsFile, 'utf-8')));
 }
 
 /** Unref'd sleep: a pending flush grace must never keep the process alive. */
