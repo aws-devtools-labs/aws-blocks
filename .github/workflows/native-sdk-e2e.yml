@@ -368,8 +368,8 @@ jobs:
     # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
     # on, so the GSIs are built with the table and the deploy takes about 3
     # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
-    # then drops to 30 (#986:
-    # https://github.com/aws-devtools-labs/aws-blocks/issues/986).
+    # then drops to 30 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -513,7 +513,8 @@ jobs:
     # Same deploy history as dart-e2e-sandbox; with the old ~27-min deploy+build
     # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
     # 45 stays until this job has 10 green runs with sandboxMode on, then drops
-    # to 35 (#986: https://github.com/aws-devtools-labs/aws-blocks/issues/986).
+    # to 35 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -614,8 +615,8 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
     # Per-leg: iOS deploy + simulator build exceeded a flat 30 min with the
-    # serial GSI deploy. Matches the Swift iOS sandbox job and the non-sandbox
-    # Kotlin job above.
+    # serial GSI deploy. For now the same 45 as the Swift sandbox job and the
+    # non-sandbox Kotlin job above; see each leg's note for when it drops.
     timeout-minutes: ${{ matrix.timeout }}
     environment: e2e
     strategy:
@@ -629,13 +630,14 @@ jobs:
             # The sandbox deploy took 19-25 min before sandboxMode (serial GSI
             # custom resources), so 30 min left no room for the build, tests and
             # destroy. 45 stays until this leg has 10 green runs with
-            # sandboxMode on, then drops to 30 (#986).
+            # sandboxMode on, then drops to 30 by the rule in #986.
             timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
-            # Drops to 30 after 10 green runs with sandboxMode on (#986).
+            # Drops to 30 after 10 green runs with sandboxMode on, by the rule
+            # in #986.
             timeout: 45
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}

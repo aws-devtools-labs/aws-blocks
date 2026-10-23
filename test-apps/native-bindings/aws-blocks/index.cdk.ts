@@ -27,12 +27,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // long-lived developer stack it also means a later index change drops and
 // recreates the table.
 //
-// The recreate restores the items but not the settings CloudFormation applied
-// when it created the table: TTL and the table tags are gone afterwards, while
-// CloudFormation still records them. So the native suites run against a
-// connections table with TTL off (`expiresAt` rows don't expire); no native
-// test checks expiry, and that is accepted for these tests. The fast path
-// re-applying them is tracked in
+// The recreate copies the items back (best effort: unprocessed batch writes are
+// not retried) but not the settings CloudFormation applied when it created the
+// table: TTL, the table tags and the encryption setting (the table falls back
+// to the AWS owned key) are gone afterwards, while CloudFormation still records
+// them. So the native suites run against a connections table with TTL off
+// (`expiresAt` rows don't expire); no native test checks expiry or encryption,
+// and that is accepted for these tests. The fast path re-applying them is
+// tracked in
 // https://github.com/aws-devtools-labs/aws-blocks/issues/985. The serial
 // production GSI path, which keeps the table, is covered by the comprehensive
 // app's production deploy. A direct
