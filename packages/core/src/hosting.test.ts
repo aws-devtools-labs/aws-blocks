@@ -13,7 +13,10 @@ import { App, Duration, Stack, Token } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
-import { BLOCKS_RPC_PREFIX } from './constants.js';
+import { BlocksPresets } from './cdk/blocks-defaults.js';
+import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, Hosting } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
@@ -622,6 +625,43 @@ describe('Hosting', () => {
         ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'],
         'API wildcard behavior should allow all HTTP methods',
       );
+    });
+
+    it('attaches the distribution security-headers policy to the API and auth behaviors', () => {
+      // The static root behavior carries a security-headers / CSP policy; the
+      // API, auth and raw-route proxy behaviors must carry the same one, so no
+      // behavior on the distribution serves responses without security headers.
+      createSpaBuildOutput(tmpDir);
+
+      // A raw route outside /aws-blocks/* gets its own behavior too; register
+      // one so this test guards the raw-route tagging path, not just the
+      // fixed /aws-blocks/* patterns.
+      registerRoute({ method: 'GET', path: '/health', handler: async () => {} });
+
+      const app = new App();
+      const stack = new Stack(app, 'ApiHeadersStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+      });
+
+      const template = Template.fromStack(stack);
+      const distributions = template.findResources('AWS::CloudFront::Distribution');
+      const distConfig = (distributions[Object.keys(distributions)[0]] as any).Properties.DistributionConfig;
+      const defaultPolicy = distConfig.DefaultCacheBehavior.ResponseHeadersPolicyId;
+      assert.ok(defaultPolicy, 'default behavior should have a ResponseHeadersPolicy');
+
+      const cacheBehaviors = distConfig.CacheBehaviors ?? [];
+      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`, '/health']) {
+        const behavior = cacheBehaviors.find((b: any) => b.PathPattern === pattern);
+        assert.ok(behavior, `expected a behavior for ${pattern}`);
+        assert.deepStrictEqual(
+          behavior.ResponseHeadersPolicyId,
+          defaultPolicy,
+          `${pattern} should reuse the distribution's security-headers policy`,
+        );
+      }
     });
 
     it(`does not create ${BLOCKS_RPC_PREFIX}/* behavior when api prop is omitted`, () => {
@@ -2201,6 +2241,124 @@ describe('Hosting', () => {
           DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$')]),
         }),
       );
+    });
+  });
+
+  describe('defaults.permissionsBoundary of the fronted backend', () => {
+    const BOUNDARY_ARN = 'arn:aws:iam::123456789012:policy/app-ceiling';
+
+    /**
+     * A branded backend root (stand-in for BlocksBackend) wired the way
+     * `setupBlocksInfra` wires one: role coverage on, then the boundary (if any).
+     */
+    const makeBackend = (stack: Stack, id: string, permissionsBoundary?: string): BlocksStackApi => {
+      const backend = new Construct(stack, id);
+      (backend as unknown as Record<symbol, unknown>)[Symbol.for('blocks:BackendRoot')] = true;
+      (backend as unknown as { apiUrl: string }).apiUrl = `https://${id}.execute-api.eu-west-1.amazonaws.com/prod/aws-blocks`;
+      (backend as unknown as { defaults: unknown }).defaults = { ...BlocksPresets.production, permissionsBoundary };
+      coverBlocksRoot(backend);
+      applyBlocksPermissionsBoundary(backend);
+      return backend as unknown as BlocksStackApi;
+    };
+
+    /** Off-region Hosting with one Lambda@Edge route, beside (not under) `backend`. Returns every stack in the app. */
+    const buildOffRegionEdgeHosting = (app: App, stack: Stack, backend: BlocksStackApi): Stack[] => {
+      createNextjsBuildOutput(tmpDir);
+      const edgeDir = path.join(tmpDir, '.hosting', 'compute', 'edge1');
+      fs.mkdirSync(edgeDir, { recursive: true });
+      fs.writeFileSync(path.join(edgeDir, 'index.mjs'), 'export const handler = async (e) => e.Records[0].cf.request;');
+      const base = createNextjsFixtureAdapter(tmpDir);
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: backend,
+        customAdapter: (dir: string) => {
+          const manifest = base(dir);
+          return {
+            ...manifest,
+            compute: {
+              ...manifest.compute,
+              edge1: { type: 'edge' as const, bundle: edgeDir, handler: 'index.handler', placement: 'global' as const },
+            },
+            routes: [{ pattern: '/edge/*', target: 'edge1' }, ...manifest.routes],
+          };
+        },
+      });
+      return app.node.children.filter((c): c is Stack => Stack.isStack(c));
+    };
+
+    const unboundedRoles = (stack: Stack) =>
+      Object.entries(Template.fromStack(stack).findResources('AWS::IAM::Role'))
+        .filter(([, r]) => r.Properties?.PermissionsBoundary !== BOUNDARY_ARN)
+        .map(([id]) => id);
+
+    it('caps SSR + Lambda@Edge roles, including the separate us-east-1 edge stack', () => {
+      const app = new App();
+      // Hosting sits beside (not under) the backend, as with an embedded BlocksBackend.
+      const stack = new Stack(app, 'EdgeBoundaryStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+      // Outside us-east-1, Hosting adds two separate stacks: the Lambda@Edge
+      // stack and the CloudFront monitoring stack (wired with cross-region refs).
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const edgeStack = stacks.find((c) => c.node.id.startsWith('edge-lambda-stack'));
+      const monitoringStack = stacks.find((c) => c.node.id.includes('CfMonitoring'));
+      assert.ok(edgeStack, 'cross-region Lambda@Edge should synthesize a separate edge stack');
+      assert.ok(monitoringStack, 'off-region hosting should synthesize the us-east-1 monitoring stack');
+      assert.ok(
+        Object.keys(Template.fromStack(edgeStack).findResources('AWS::IAM::Role')).length > 0,
+        'the edge stack should hold the Lambda@Edge role',
+      );
+      for (const s of stacks) {
+        assert.deepStrictEqual(unboundedRoles(s), [], `every role in ${s.node.id} carries the boundary`);
+      }
+      // The cross-region export writer is added during prepare, after aspects run.
+      assert.ok(
+        Object.keys(Template.fromStack(stack).findResources('AWS::IAM::Role')).some((id) =>
+          id.startsWith('CustomCrossRegionExportWriter'),
+        ),
+        'the cross-region export writer role is among the checked roles',
+      );
+    });
+
+    it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeVisitorStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      // A test-only consumer of the shared role visitor: stamp a tag on every Blocks role.
+      const visited = new Set<string>();
+      forEachBlocksRole(backend as unknown as Construct, (role) => {
+        visited.add(`${Stack.of(role).node.id}/${Stack.of(role).resolve(role.logicalId)}`);
+        role.addPropertyOverride('Tags', [{ Key: 'app', Value: 'app-a' }]);
+      });
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+
+      const inTemplates = new Set<string>();
+      const untagged: string[] = [];
+      for (const s of stacks) {
+        for (const [id, r] of Object.entries(Template.fromStack(s).findResources('AWS::IAM::Role'))) {
+          inTemplates.add(`${s.node.id}/${id}`);
+          if (JSON.stringify(r.Properties?.Tags) !== JSON.stringify([{ Key: 'app', Value: 'app-a' }])) {
+            untagged.push(`${s.node.id}/${id}`);
+          }
+        }
+      }
+      assert.deepStrictEqual(untagged, [], 'every role in every stack carries the visitor-applied tag');
+      assert.deepStrictEqual([...visited].sort(), [...inTemplates].sort(), 'the visitor saw exactly the synthesized roles');
+      assert.ok(
+        [...visited].some((r) => r.includes('CustomCrossRegionExportWriter')),
+        'the prepare-time cross-region provider role was visited',
+      );
+    });
+
+    it('leaves Hosting roles untouched when the backend sets no boundary', () => {
+      createNextjsBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'NoBoundaryHostingStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, customAdapter: createNextjsFixtureAdapter(tmpDir), api: MOCK_API });
+
+      const bounded = Object.values(Template.fromStack(stack).findResources('AWS::IAM::Role')).filter(
+        (r) => r.Properties?.PermissionsBoundary !== undefined,
+      );
+      assert.deepStrictEqual(bounded, []);
     });
   });
 });

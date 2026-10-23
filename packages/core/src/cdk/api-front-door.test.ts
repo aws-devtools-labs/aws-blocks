@@ -11,7 +11,7 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Distribution, type IOrigin } from 'aws-cdk-lib/aws-cloudfront';
+import { Distribution, type IOrigin, ResponseHeadersPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import {
 	API_BEHAVIOR_OPTIONS,
 	claimApiFrontDoor,
@@ -104,6 +104,26 @@ describe('scheduleApiFrontDoor', () => {
 		assert.strictEqual(config.Origins.length, 1, 'expected a single origin');
 		assert.strictEqual(config.Origins[0].DomainName, 'abc123.execute-api.us-east-1.amazonaws.com');
 		assert.strictEqual(config.Origins[0].OriginPath, '/prod', 'the gateway stage is the OriginPath');
+	});
+
+	test('cloudfront: attaches the managed SECURITY_HEADERS policy to the default behavior', () => {
+		// The API responses must carry security headers like the static site.
+		// Use the AWS-managed SECURITY_HEADERS policy, which consumes no account
+		// ResponseHeadersPolicy quota — so a cloudfront-tier app can't fail a
+		// deploy against the 20-per-account limit and no custom policy resource
+		// is synthesized.
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 0);
+
+		const config = soleDistributionConfig(stack);
+		assert.strictEqual(
+			config.DefaultCacheBehavior.ResponseHeadersPolicyId,
+			ResponseHeadersPolicy.SECURITY_HEADERS.responseHeadersPolicyId,
+			'the default behavior should reference the managed SECURITY_HEADERS policy',
+		);
 	});
 
 	test('cloudfront: records the CloudFront origin as resolvedApiFrontDoorUrl (feeds the ApiUrl output)', () => {

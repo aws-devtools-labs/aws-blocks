@@ -525,7 +525,10 @@ test('CDK: an unrecognized encryption value warns at synth', () => {
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		encryption: 'kms', // intentional typo — exercise the synth guard
 	});
-	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+	Annotations.fromStack(stack).hasWarning(
+		'*',
+		Match.stringLikeRegexp('Unrecognized encryption.*ack: @aws-blocks/bb-distributed-table:UnknownEncryption'),
+	);
 });
 
 test('CDK: an out-of-range retentionDays warns at synth', () => {
@@ -535,7 +538,10 @@ test('CDK: an out-of-range retentionDays warns at synth', () => {
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		pointInTimeRecovery: { retentionDays: 60 },
 	});
-	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+	Annotations.fromStack(stack).hasWarning(
+		'*',
+		Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-blocks/bb-distributed-table:InvalidPitrDays'),
+	);
 });
 
 test('CDK: durability options passed alongside fromExisting warn at synth', () => {

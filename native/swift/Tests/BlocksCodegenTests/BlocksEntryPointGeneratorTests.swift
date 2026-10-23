@@ -29,7 +29,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
 
     private func generate(_ json: String) throws -> GeneratedSources {
         let model = try CodegenModelBuilder().build(from: OpenRPCParser().parse(data: Data(json.utf8)))
-        return SwiftCodeGenerator().generate(from: model)
+        return try SwiftCodeGenerator().generate(from: model)
     }
 
     func testNamespaceClassTakesTheSharedClient() throws {
@@ -233,7 +233,19 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
                 .replacingOccurrences(of: #""(?:\\.|[^"\\])*""#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: #"BlocksRuntime\.\w+"#, with: "", options: .regularExpression)
             let declared = Set(matches(#"\b(?:class|struct|enum|actor|protocol|typealias) `?(\w+)"#, in: code))
-            named.formUnion(Set(matches(#"(?<![.\w])([A-Z]\w*)\b"#, in: code)).subtracting(declared))
+            // A declared native package's module and exported type names are the block author's
+            // to choose, so neither is reserved here: drop the import, the qualifier, and the
+            // member it qualifies. Everything the generator itself names is still checked.
+            let modules = Set(matches(#"import (\w+)"#, in: output.api)).subtracting(["Foundation", "BlocksRuntime"])
+            let scanned = modules.reduce(code) { text, module in
+                text.replacingOccurrences(of: "import \(module)", with: "")
+                    .replacingOccurrences(
+                        of: #"\b"# + NSRegularExpression.escapedPattern(for: module) + #"\.\w+"#,
+                        with: "",
+                        options: .regularExpression
+                    )
+            }
+            named.formUnion(Set(matches(#"(?<![.\w])([A-Z]\w*)\b"#, in: scanned)).subtracting(declared))
         }
         XCTAssertTrue(named.isSuperset(of: ["BlocksClient", "String", "Date", "JSONDecoder"]))
         XCTAssertEqual(named.subtracting(reservedNamespaceClassNames), [], "add these to reservedNamespaceClassNames")

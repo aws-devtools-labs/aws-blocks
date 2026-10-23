@@ -6,7 +6,7 @@ Playwright grades the result, and a judge agent scores against the rubric.
 
 ## Architecture
 
-Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxiliaries):
+Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxiliaries):
 
 0. **Init result** — write a baseline `result.json` before any AWS call, so
    even an OIDC failure still produces a cell row in the summary
@@ -15,16 +15,20 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
    port, so the agent's edit phase runs with nothing bound
 2. **Agent run** — Strands + Bedrock; the agent has the framework's vended
    `bash` + `fileEditor` tools, both routed through a `WORKSPACE`-rooted Sandbox
-   (`lib/run-shell.ts`). The workspace is already scaffolded; no dev server is
-   running (the agent must not rely on or start one).
+   (`lib/run-shell.ts`) whose shell runs as the unprivileged `benchagent` user
+   with a credential-free env (see *Security*). The workspace is already
+   scaffolded; no dev server is running (the agent must not rely on or start one).
 3. **Build and test** — `npm run build`, then launch the dev server fresh and
    discover the port it binds by anchoring on the framework's startup banner
    (`AWS Blocks local server running on http://localhost:<port>`) — no port
    guessing — exported as `APP_BASE_URL`; then run the task's Playwright spec
-   against it. Records build / dev-server / playwright / test signals
+   against it. Records build / dev-server / playwright / test signals. The script
+   is a trusted supervisor; every process that runs the agent's app or its
+   dependencies runs as `benchagent` (see *Security*)
 4. **Judge** — Strands + Bedrock; one vended `bash` tool rooted at a
    spec-blinded, disposable source-only COPY of the workspace
-   (`lib/run-shell.ts`); any writes it makes to the copy can't affect scoring.
+   (`lib/run-shell.ts`, same `benchagent` + credential-free shell as the builder);
+   any writes it makes to the copy can't affect scoring.
    Scores source only; objective signals are applied as caps afterward, not
    shown to it.
    - **4b. Analyze cell** (best-effort) — asks the judge model for a concise
@@ -32,13 +36,19 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
      plus a short list of potential issues, and writes both back into
      `result.json` as `analysis` + `analysis_issues[]` (`analyze-cell.mjs`); the
      summary job later rolls these up
+   - **4c. Stage artifacts** — reaps every `benchagent` process, then builds the
+     only copy that gets published: redacted `result.json`, trace, metrics,
+     command log and generated source in a runner-only dir
+     (`stage-artifacts.mjs`; see *Security*). Steps 5–6b and the S3 persist read
+     only that copy and run only if this step succeeded
 5. **Upload result** — JSON artifact + S3 archive (best-effort)
-6. **Upload source** — uploads the generated `bench-app` as
-   `bench-source-<task>-<template>` for post-run auditing, excluding deps/build
-   output and anything credential-shaped (`node_modules`, `.git`, `dist`,
-   `.env*`, `*.pem`, `.aws`)
-   - **6b. Upload trace** (best-effort) — the agent trace + run metrics written
-     by step 2; on a wall-clock timeout step 2 emits no trace, so nothing uploads
+6. **Upload source** — uploads the staged `bench-app` copy as
+   `bench-source-<task>-<template>` for post-run auditing (deps/build output,
+   VCS and anything credential-shaped — `node_modules`, `.git`, `dist`,
+   `.blocks-sandbox`, `.env*`, `*.pem`, `.aws` — are never staged)
+   - **6b. Upload trace** (best-effort) — the agent trace, run metrics and
+     command log written by step 2; on a wall-clock timeout step 2 emits no
+     trace, so nothing uploads
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge currently both run on
@@ -49,29 +59,146 @@ bias, give the builder and judge different ids — set `BENCH_MODEL` (builder) a
 
 ## Security
 
-The builder step (`2. Agent run`) executes an LLM-driven agent with vended
-`bash` + `fileEditor` tools **inside the job's shell environment**, which holds
-the live OIDC/AWS session minted by the `Configure AWS credentials` step. A
-prompt-injected or
-otherwise malicious task `PROMPT.md` could therefore, in principle, drive the
-agent to reach **any AWS API within the role's scope** — i.e. Bedrock
-(`InvokeModelWithResponseStream` on the bench model) and the registry bucket
-(`s3:PutObject` on `bench/*`) — not just the build it was asked to perform.
+The builder (`2. Agent run`) and the judge (`4. Judge`) run LLM-driven agents
+with a shell, and step 3 runs the code the builder wrote. A prompt-injected or
+otherwise malicious task `PROMPT.md` — or agent-written source the judge reads —
+could try to use or leak the job's credentials: the Bedrock-scoped AWS session,
+the `ACTIONS_ID_TOKEN_REQUEST_*` pair (which mints a fresh OIDC token and could
+assume the role *without* the session policy), and the runner's own tokens.
+The boundary, outermost first:
 
-This is bounded by **who can trigger the bench, not by sandboxing the agent**:
-the matrix runs only on the same repo. It runs automatically on every same-repo
-pull request (opened / synchronized / reopened) and on every push to `main`,
-plus manual `workflow_dispatch` — there is **no label gate**. The same-repo guard
-is enforced in
-[`pr-agent-bench.yml`](../../.github/workflows/pr-agent-bench.yml): fork PRs get
-no secrets or OIDC under `pull_request`, so an external contributor cannot reach
-the role at all (push-to-`main` is same-repo by definition). The task `PROMPT.md`
-files are themselves in-repo and member-reviewed.
+1. **Who can trigger.** The matrix runs only on the same repo: automatically on
+   every same-repo pull request (opened / synchronized / reopened) and every
+   push to `main`, plus manual `workflow_dispatch` — there is **no label gate**.
+   The same-repo guard is enforced in
+   [`pr-agent-bench.yml`](../../.github/workflows/pr-agent-bench.yml): fork PRs
+   get no secrets or OIDC under `pull_request`, so an external contributor
+   cannot reach the role (push-to-`main` is same-repo by definition). The task
+   `PROMPT.md` files are in-repo and member-reviewed.
+2. **Bedrock-only AWS session.** The bench job's `Configure AWS credentials`
+   step passes an inline session policy, so the session every step up to the
+   uploads runs with can only call `bedrock:InvokeModelWithResponseStream` and
+   `bedrock:Converse` on model-invocation ARNs (the effective permissions are the
+   intersection of the role and that policy). The S3 write is regained only by
+   re-assuming the role without the policy right before `Persist to S3`, after
+   every agent, analysis and upload step, and only if step 4c succeeded (so
+   after every agent process has been killed), never on a cancelled run. The
+   `summary` job holds the full role but runs no agent code.
 
-**Future hardening (not yet implemented):** scope the builder step to a
-dedicated, minimal **Bedrock-invoke-only** role (drop the `s3:PutObject` grant,
-which only the separate "Persist to S3" step needs) so a compromised agent has
-the smallest possible blast radius even within a trusted trigger.
+   The role is `blocks-github-bench` in E2E account 1
+   ([`test-infra/github-oidc-stack.ts`](../../test-infra/github-oidc-stack.ts)):
+   Bedrock model invocation plus `s3:GetObject`/`s3:PutObject` on `bench/*` in
+   the bench bucket, nothing else. Both jobs run in the `agent-bench` GitHub
+   environment, and the role trusts only that environment's OIDC `sub`, so a
+   token minted in a bench job can assume this role and no other (the E2E
+   role, `blocks-github-e2e`, trusts only the `e2e` environment). That trust
+   policy, not the role's permissions, is the outer bound on what the job's
+   OIDC token can reach.
+3. **A separate uid for all agent code, fail closed** (`steps/lib/isolation.mjs`).
+   The harness processes keep the job env: the builder/judge model calls run in
+   the harness (Strands `BedrockModel`) and the analysis calls run the `aws` CLI
+   from the harness. Everything the agent controls runs as `benchagent`, an
+   unprivileged user with no sudo rights, via `sudo -n runuser`: the builder and
+   judge shells (`lib/run-shell.ts`) and, in step 3, every process of the
+   agent's app — the `package.json` probes, `npm install` and its lifecycle
+   scripts, the build, the dev server and Playwright (it loads the app's
+   `node_modules`), all started through `lib/agent-exec.mjs`. A different uid
+   can't read the harness's `/proc/<pid>/environ` or signal it. Step 3's script
+   is the trusted supervisor: it opens the log redirects itself (runner-owned
+   files), reads agent-written files without following links, and alone writes
+   `GITHUB_OUTPUT`, from validated integers. Under CI (`CI` or
+   `GITHUB_ACTIONS` set) there is no same-uid fallback: if `benchagent`, the
+   workspace ACL or the checks below fail, the phase refuses to run and records
+   `isolation_failure`, which scores as `harness_error` (infra). A bare shell
+   exists only for local development, behind `BENCH_ALLOW_BARE_SHELL=1`, and is
+   refused under CI.
+4. **Runner temp locked and verified.** The runner's file-command files
+   (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, …, including the env file
+   `configure-aws-credentials` writes the AWS keys to) live in `RUNNER_TEMP`.
+   Before any agent code runs, each phase makes `RUNNER_TEMP` and the
+   file-command dirs `0700`, then checks **as `benchagent`** that it can't list or
+   read any of them, nor read any runner-uid `/proc/<pid>/environ`; a failure
+   is an `isolation_failure`. Writing those files would otherwise inject env or
+   `PATH` into later steps, including the one that re-assumes the full role.
+5. **Trusted executables locked and verified.** Later runner-uid steps — and
+   `sudo`, as root, through its `secure_path` — execute from the runner `PATH`,
+   `/usr/local/{s,}bin` and the other system dirs, the node install, the hosted
+   tool cache, global npm modules, the checkout (its `scripts/agent-bench` and
+   `node_modules`), the downloaded actions and the runner itself. The hosted image
+   ships some of these world-writable (e.g. `/usr/local/bin`,
+   `/opt/hostedtoolcache`), which would let the agent plant or replace a binary
+   that a later step runs with the credentials. Before any agent code runs, each
+   phase removes group/other write from every such path `benchagent` can write
+   (via `sudo`, under CI), then checks **as `benchagent`** that it can't write or
+   replace any of them, any entry in them, or any (non-sticky) ancestor; anything
+   left (e.g. a file it already owns) is an `isolation_failure`. The agent's own
+   dirs (the workspace, the Playwright browser cache, which no runner-uid process
+   executes from afterwards) are excluded. The harness's own tool calls (`sudo`,
+   `runuser`, `pkill`, …) use absolute system paths.
+6. **Reap.** Every `benchagent` process (setsid/nohup escapees included) is
+   killed and its crontab removed at the start and end of each agent phase, and
+   step 4c reaps and verifies none remain before anything is published or the
+   role is re-assumed.
+7. **Credential-free env.** Each agent process gets an explicit env from
+   `buildShellEnv` (`steps/lib/secrets.mjs`); per-command overrides pass the same
+   filter, so they can add app settings (`BLOCKS_URL`, `RUN_ID`, …) but never
+   reintroduce anything denied:
+   - **allowed:** `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`,
+     `HOSTNAME`, locale (`LANG`, `LANGUAGE`, `TZ`, `LC_*`), terminal (`TERM`,
+     `COLORTERM`, `FORCE_COLOR`, `NO_COLOR`), `XDG_*` dirs, CI markers (`CI`,
+     `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH`), node/TLS/proxy (`NODE_OPTIONS`,
+     `NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`/`DIR`, `HTTP(S)_PROXY`,
+     `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
+     `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
+     `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
+     system dirs and the harness's own node dir (both covered by the lockdown);
+     `NODE_OPTIONS` keeps only flags that load no code.
+   - **always stripped:** every other `AWS_*` (keys, session token, profile,
+     web-identity, container-credential and config-file vars), every `ACTIONS_*`,
+     `GITHUB_TOKEN`, `GH_TOKEN`, `NPM_TOKEN`, `NODE_AUTH_TOKEN`, any name
+     containing `TOKEN`, `SECRET`, `PASSW`, `KEY`, `CREDENTIAL` or `AUTH`, every
+     other `GITHUB_*` / `RUNNER_*` (file commands, `RUNNER_TEMP`), and startup
+     hooks (`BASH_ENV`, `ENV`, exported bash functions, `PROMPT_COMMAND`,
+     `LD_*`, npm's `node-options`/`script-shell`/config-file redirects).
+8. **Redaction, then a fail-closed published copy.** Writers redact before
+   writing: `commands.jsonl` (command, cwd, stdout, stderr — redacted before the
+   4000-char cut), `trace.json`, `metrics.json`, `result.json`, the summary
+   job's step summary, PR comment, S3 aggregate, Athena NDJSON and
+   `bench-analysis.json`, and every analysis prompt (trace values are redacted
+   before serialization). Step 4c then builds the only copy that is published,
+   in a runner-only dir: harness files must be regular files owned by the
+   runner, opened without following links; the source root and its ancestors
+   must contain no symlink; and symlinks, special files, binaries (NUL / invalid
+   UTF-8), files over 20 MiB, unreadable files and entries whose name carries a
+   credential or control character are dropped, never published. Harness JSON
+   (result, trace, metrics, command log) is redacted value by value and
+   key-aware: a string under a credential field name (`SecretAccessKey`,
+   `SessionToken`, `password`, `apiKey`, `authorization`, env-style `*_TOKEN`, …;
+   exact names, not substrings) is replaced whatever its format, and numeric
+   usage fields survive. Source files the agent wrote, JSON included, are
+   redacted by value only, so `package.json` scripts and lockfile package names
+   (`credential-provider-*`, `js-cookie`, …) stay byte-identical. The redactor
+   replaces the exact values of the credential vars in the harness env, AWS key
+   ids (`AKIA`/`ASIA`), STS session tokens, JWTs (e.g. OIDC tokens), GitHub
+   (`ghp_`/`ghs_`/…, `github_pat_`) and npm tokens, PEM private keys and — in
+   logs, not source — credential-named `NAME=value` pairs. If 4c fails, nothing
+   from that cell is uploaded or persisted (it is then missing from the summary
+   table); the scoring itself is unchanged.
+
+**Limits.** The boundary is a uid on a shared VM, not a container: `benchagent`
+can still read whatever is world-readable on the runner outside `RUNNER_TEMP`,
+and it shares the network (the bench assumes a GitHub-hosted runner; on an EC2
+self-hosted runner the instance metadata service would hand out the instance
+role to any process). Allowed values such as a proxy URL pass through to the
+agent and are not redaction sources. The agent's code produces the Playwright
+report the supervisor scores (validated as bounded integers), so score
+integrity rests on the same trust as before. Redaction is best-effort: it cannot
+catch a secret that was encoded, split or otherwise transformed, or a credential
+in an unknown format without a credential-like name next to it (in source files,
+only exact values and known token formats are caught); dropped binary
+and oversized files are simply missing from the source artifact. Job logs are
+not passed through this redactor (GitHub masks the secrets it knows about), and
+the agent never holds credentials to print.
 
 ## Tasks
 
@@ -302,9 +429,13 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/0-init-result.mjs` | Write a baseline `result.json` so failed cells still produce an artifact |
 | `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, seed the telemetry canary from `BLOCKS_TELEMETRY_CANARY_ID` (optional — skipped with a warning if unset), no dev server (the verifier owns that) |
 | `steps/2-agent-run.ts` | Builder agent (Strands + Bedrock); vended `bash` + `fileEditor` tools; capped at `MAX_TURNS` |
-| `steps/3-build-and-test.sh` | `npm run build` + Playwright spec; writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
+| `steps/3-build-and-test.sh` | Trusted supervisor: `npm run build` + Playwright spec, every app/dependency process run as `benchagent` via `lib/agent-exec.mjs`; validates and writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
 | `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed shared rubric (`COMMON_DIMENSIONS`) and applies hard caps |
-| `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
+| `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner that spawns every command as `benchagent` with the `buildShellEnv` env and writes the redacted `commands.jsonl`. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
+| `steps/lib/isolation.mjs` | **Single source of truth** for the agent-user boundary: the `runuser` spawn (refuses a same-uid fallback under CI), workspace ACL, trusted-executable lockdown + runner-temp lockdown (each verified as the agent user), the reap, and `enterAgentPhase` |
+| `steps/lib/agent-exec.mjs` | Step 3's bridge to that boundary: `preflight`, `run` (a command as `benchagent`), `reap`, and `read-file` (copy an agent-written file without following links) |
+| `steps/lib/secrets.mjs` | **Single source of truth** for credential hygiene: `buildShellEnv` (the env policy for agent processes), `redactSecrets` / `redactDeep` (key-aware) / `stringifyRedacted` / `createRedactor` (artifact, sink and prompt redaction). Pure apart from `redactSecrets` reading `process.env` |
+| `steps/stage-artifacts.mjs` | Step 4c: reap, then build the only published copy (redacted harness files + source, no links/binaries/oversized/unreadable files or credential-bearing names); fails closed |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`, plus the cost/score model — `PRICING`/`BUILDER_PRICING`, `cellCost`, `scorePerDollar` (+ the `SCORE_PER_DOLLAR` knob). Imported by finalize, summary, and overview |
 | `steps/lib/overview.mjs` | Pure helpers for the report table: `buildAggregate` (schema-2 aggregate — per-cell composite/tests/judge-dims/tokens/cost/score/stop_reason + mean), `diffAgainstBaseline`, the color engine (`DELTA_THRESHOLDS`, `deltaColor`), formatters, and `renderDetailed` (the single results table: current value + colored signed delta per cell). Imported by summary + analyze |
 | `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature: trace trimming, prompt builders, and `parseCellAnalysis` (splits the per-cell model output into an analysis string + a bounded potential-issues list). Imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
@@ -321,8 +452,9 @@ pessimistic baseline. Each successful step augments it. `finalize-result.mjs`
 runs with `if: always()` and stamps `status: scored` (all steps green),
 `status: error, failed_at: <step>` (a tracked step failed), or
 `failed_at: pre-oidc` (something before OIDC — e.g. `npm ci` — failed). The
-upload step also runs with `if: always()`, so the cell always shows up in the
-summary table — never silently missing.
+upload step runs whenever step 4c staged the cell (`if: always()` plus the
+staging gate), so the cell shows up in the summary table unless its files could
+not be safely staged.
 
 The report is written to the **GitHub Actions run summary**
 (`$GITHUB_STEP_SUMMARY`) and renders in the run UI — the Glossary, the headline,
@@ -349,3 +481,10 @@ TASK_PROMPT=tasks/auth-notes/PROMPT.md \
 OUTPUT=/tmp/builder-result.json \
   npx tsx scripts/agent-bench/steps/2-agent-run.ts
 ```
+
+The agent phases need the isolated user: create it as the workflow does
+(`sudo useradd -m benchagent`, passwordless `sudo runuser` for your user) or
+point `BENCH_AGENT_USER` at another unprivileged account. Without one, set
+`BENCH_ALLOW_BARE_SHELL=1` to run the agent's commands as your own user — local
+only: it is refused whenever `CI` or `GITHUB_ACTIONS` is set, and the agent can
+then read your environment.

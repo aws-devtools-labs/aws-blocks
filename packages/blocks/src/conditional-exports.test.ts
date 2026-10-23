@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import ts from 'typescript';
 
 /**
@@ -27,6 +28,13 @@ import ts from 'typescript';
  *
  * This checks exported names, method presence and the cdk guards, not signature
  * compatibility. CDK stubs intentionally have different signatures.
+ *
+ * Type-only exports are erased at runtime, so they are compared from the same
+ * `.d.ts` files, for every BB and the umbrella package.
+ *
+ * Every BB that exports error constants (used by frontends with `isBlocksError`)
+ * must have a "browser" entry that exports the same constants with the same
+ * values, and that entry must bundle for the browser with esbuild.
  *
  * BB packages are discovered automatically — any package under packages/ whose
  * exports["."] has an "aws-runtime" condition is treated as a Building Block.
@@ -109,6 +117,9 @@ test('discovery sanity check', () => {
 	for (const expected of ['@aws-blocks/bb-kv-store', '@aws-blocks/bb-distributed-table', '@aws-blocks/bb-data']) {
 		assert.ok(names.includes(expected), `Expected to discover ${expected}`);
 	}
+	// The browser checks below cover every bb-* package, so a floor keeps the set
+	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
+	assert.ok(buildingBlocks.length >= 21, `Expected ≥21 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // `cdk synth` loads the whole backend module under --conditions=cdk, so an export
@@ -119,6 +130,67 @@ for (const { name } of bbPackages) {
 			assertSuperset(name, condition);
 		});
 	}
+}
+
+// ── BB packages: browser (auto-discovered) ──────────────────────────────────
+// Frontend code imports a BB package directly only for its error constants, to
+// match errors with `isBlocksError(e, FileBucketErrors.FileNotFound)`. Only the
+// error name crosses the RPC wire, so the browser entry must export every
+// `*Errors` constant the default entry has, with the same values: a frontend
+// typechecks against the default entry's `.d.ts`, so a missing key is `undefined`
+// at runtime and the match silently fails. Re-export them from `errors.js` rather
+// than copying literals. The rest of a BB is server-side, so other exports are
+// not compared.
+//
+// A BB with error constants but no "browser" condition fails too: a frontend
+// import would resolve the server entry. Packages without an aws-runtime entry
+// (like bb-auth-basic) are included.
+
+/** Load `pkg` under `condition` and return its `*Errors` constants with their values. */
+const getErrorConstants = (pkg: string, condition?: string): Record<string, unknown> => {
+	const flags = condition ? [`--conditions=${condition}`] : [];
+	const script = `import(${JSON.stringify(pkg)}).then(m => console.log(JSON.stringify(Object.fromEntries(Object.entries(m).filter(([k]) => k.endsWith('Errors'))))))`;
+	const out = execFileSync(process.execPath, [...flags, '--input-type=module', '-e', script], {
+		encoding: 'utf-8',
+	});
+	return JSON.parse(out.trim());
+};
+
+for (const { name, exports: entry } of buildingBlocks) {
+	test(`${name}: browser entry exports the same error constants`, () => {
+		const expected = getErrorConstants(name);
+		if (!entry.browser) {
+			assert.deepStrictEqual(
+				Object.keys(expected),
+				[],
+				`${name} exports error constants but has no "browser" condition, so a frontend import ` +
+					'resolves the server entry. Add a browser entry that re-exports them from `errors.js`.',
+			);
+			return;
+		}
+		assert.deepStrictEqual(
+			getErrorConstants(name, 'browser'),
+			expected,
+			`${name} "browser" entry error constants differ from the default entry. ` +
+				'Re-export them from `errors.js` in the browser entry file instead of copying them.',
+		);
+	});
+
+	// Node resolves `node:*` built-ins and server packages under --conditions=browser,
+	// so loading the entry in Node (above) does not prove a bundler can build it.
+	test(`${name}: browser entry bundles for the browser`, { skip: !entry.browser }, async () => {
+		const result = await build({
+			stdin: { contents: `export * from ${JSON.stringify(name)};`, resolveDir: packagesDir },
+			bundle: true,
+			platform: 'browser',
+			conditions: ['browser'],
+			write: false,
+			metafile: true,
+			logLevel: 'silent',
+		});
+		const serverOnly = Object.keys(result.metafile.inputs).filter((input) => input.includes('node_modules/@aws-sdk/'));
+		assert.deepStrictEqual(serverOnly, [], `${name} "browser" entry bundles server-only modules`);
+	});
 }
 
 // ── BB packages: class methods (auto-discovered) ────────────────────────────
@@ -268,6 +340,12 @@ const SYNTH_SAFE_METHODS = new Set([
 	'AuthOIDC.prototype.signInRoutePath',
 	// Synth-time config: sets an environment variable on the Lambda function.
 	'LambdaCompute.prototype.setEnv',
+	// Synth-time config: adds an env var to the Fargate container definition.
+	'ContainerCompute.prototype.setEnv',
+	// Resolves the backing compute at synth (an AsyncJob/CronJob calls it in its
+	// CDK constructor to wire against the real backing) — the ComputeProvider
+	// contract, not a runtime-only method.
+	'Compute.prototype.resolve',
 	// Top-level logging also runs under `cdk synth`; it writes the same lines as at runtime.
 	'Logger.prototype.debug',
 	'Logger.prototype.info',
@@ -351,4 +429,31 @@ for (const entry of bbEntries) {
 				'implement it for real and add it to SYNTH_SAFE_METHODS.',
 		);
 	});
+}
+
+// ── Type exports (auto-discovered) ──────────────────────────────────────────
+// Type-only exports are erased at runtime, so the export checks above cannot see
+// them. A type the default entry exports but a server entry lacks breaks any
+// backend that imports it once it is type-checked under that condition.
+// Compares every declared name, types included.
+
+for (const { name, files } of [umbrellaEntry, ...bbEntries]) {
+	for (const condition of serverConditions) {
+		test(`${name}: ${condition} type exports match default`, { skip: !files[condition] }, () => {
+			assert.ok(files.default, `${name} has no "types" entry`);
+			const conditionFile = files[condition];
+			assert.ok(conditionFile, `${name} has no "${condition}" entry`);
+			const actual = new Set(declaredExports(conditionFile).map((s) => s.name));
+			const missing = declaredExports(files.default)
+				.map((s) => s.name)
+				.filter((n) => n !== 'default' && !actual.has(n));
+
+			assert.deepStrictEqual(
+				missing,
+				[],
+				`${name} "${condition}" entry is missing exports:\n  ${missing.join(', ')}\n\n` +
+					`Re-export them from the ${condition} entry file: \`export type\` for types, a plain \`export\` for values.`,
+			);
+		});
+	}
 }

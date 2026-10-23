@@ -21,6 +21,7 @@ import {
 } from './lib/analysis.mjs';
 import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
+import { redactDeep, redactSecrets, stringifyRedacted } from './lib/secrets.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 const BASELINE_PATH = process.env.BASELINE_PATH;
@@ -39,7 +40,7 @@ function main() {
 	const cells = [];
 	for (const d of dirs) {
 		try {
-			cells.push(JSON.parse(readFileSync(join(RESULTS_DIR, d, 'result.json'), 'utf-8')));
+			cells.push(redactDeep(JSON.parse(readFileSync(join(RESULTS_DIR, d, 'result.json'), 'utf-8'))));
 		} catch {
 			// unreadable cell — skip
 		}
@@ -212,7 +213,8 @@ function synthesize(aggregate, verdictCounts, rows) {
 }
 
 function emit(lines) {
-	const md = `${lines.join('\n')}\n`;
+	// Redacted: the step summary is public and quotes per-cell analyses + the model's roll-up.
+	const md = redactSecrets(`${lines.join('\n')}\n`);
 	if (process.env.GITHUB_STEP_SUMMARY) {
 		try {
 			appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
@@ -228,20 +230,17 @@ function emit(lines) {
 function writeAnalysis(extra) {
 	if (!ANALYSIS_PATH) return;
 	try {
+		// Redacted: uploaded publicly as bench-analysis, and it quotes per-cell evidence + model output.
 		writeFileSync(
 			ANALYSIS_PATH,
-			`${JSON.stringify(
-				{
-					schema: 3,
-					generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-					model: MODEL_ID,
-					low_threshold: LOW_THRESHOLD,
-					regression_delta: REGRESSION_DELTA,
-					...extra,
-				},
-				null,
-				2,
-			)}\n`,
+			`${stringifyRedacted({
+				schema: 3,
+				generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+				model: MODEL_ID,
+				low_threshold: LOW_THRESHOLD,
+				regression_delta: REGRESSION_DELTA,
+				...extra,
+			})}\n`,
 		);
 	} catch (err) {
 		process.stderr.write(`[analyze] failed to write analysis to ${ANALYSIS_PATH}: ${err?.message ?? err}\n`);

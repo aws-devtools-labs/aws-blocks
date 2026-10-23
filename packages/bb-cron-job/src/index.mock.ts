@@ -96,13 +96,30 @@ export class CronJob<T = void> extends Scope {
 		const now = new Date();
 		const sched = this._schedule as CronSchedule;
 		const next = nextCronTime(sched.fields, now, this._timezone);
+		if (next === null) {
+			// Nothing matches within the search window (e.g. a leap day years away):
+			// search again later instead of firing on a date the schedule doesn't match.
+			if (canNeverMatch(sched.fields)) {
+				console.warn(`[CronJob:${this.id}] schedule can never match a real date (e.g. day 30 of February), so it will never fire. In AWS this would fail, check the day and month fields.`);
+			} else {
+				console.log(`[CronJob:${this.id}] no fire time within a year, checking again later`);
+			}
+			this._timer = setTimeout(() => this._scheduleCronTick(), MAX_TIMEOUT_MS);
+			(this._timer as NodeJS.Timeout).unref();
+			return;
+		}
 		const delayMs = next.getTime() - now.getTime();
 		const tzLabel = this._timezone ?? 'UTC';
 		console.log(`[CronJob:${this.id}] next fire: ${next.toISOString()} ${tzLabel}`);
-		this._timer = setTimeout(() => {
-			this._fire();
-			this._scheduleCronTick();
-		}, Math.max(delayMs, 1000));
+		if (delayMs > MAX_TIMEOUT_MS) {
+			// setTimeout fires right away for delays above its maximum, so wait in steps.
+			this._timer = setTimeout(() => this._scheduleCronTick(), MAX_TIMEOUT_MS);
+		} else {
+			this._timer = setTimeout(() => {
+				this._fire();
+				this._scheduleCronTick();
+			}, Math.max(delayMs, 1000));
+		}
 		(this._timer as NodeJS.Timeout).unref();
 	}
 
@@ -124,7 +141,20 @@ export class CronJob<T = void> extends Scope {
 // Cron next-fire-time calculation
 // ---------------------------------------------------------------------------
 
-function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date {
+/** Largest delay `setTimeout` accepts; longer delays fire immediately. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Longest each month can be, with February at its leap-year length. */
+const MAX_DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** True when no listed day of month exists in any listed month, so the schedule can never fire. */
+function canNeverMatch(fields: CronFields): boolean {
+	if (fields.dayOfMonth.length === 0) return false;
+	return !fields.month.some(m => fields.dayOfMonth.some(d => d <= MAX_DAYS_IN_MONTH[m - 1]));
+}
+
+/** Returns the next matching minute within a year after `after`, or `null` if there is none. */
+function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date | null {
 	// Work in the target timezone by converting to local components
 	const candidate = new Date(after.getTime() + 60_000); // start 1 minute ahead
 	candidate.setSeconds(0, 0);
@@ -145,8 +175,7 @@ function nextCronTime(fields: CronFields, after: Date, timezone?: string): Date 
 		candidate.setTime(candidate.getTime() + 60_000);
 	}
 
-	// Fallback: 1 hour from now
-	return new Date(after.getTime() + 3_600_000);
+	return null;
 }
 
 function getComponents(date: Date, timezone?: string): { minute: number; hour: number; day: number; month: number; dow: number } {

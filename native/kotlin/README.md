@@ -74,20 +74,48 @@ On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBun
 ## Using the Generated Code
 
 ```kotlin
-import com.example.myapp.generated.Api
+import com.aws.blocks.kotlin.Blocks
+import com.example.myapp.generated.Api.ListTodos
+import com.example.myapp.generated.Api.UpdateTodo
 import com.example.myapp.generated.Todo
+import com.example.myapp.generated.api
+import com.example.myapp.generated.authApi
+import com.example.myapp.generated.invoke
 
-val api = Api()
+val blocks = Blocks()
 
-// Create a todo
-val todo: Todo = api.createTodo(title = "Buy groceries", priority = 1.0)
+suspend fun todos() {
+    // Create a todo
+    val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
 
-// List todos with optional sorting
-val todos: List<Todo> = api.listTodos(sortBy = ListTodos.SortBy.Priority)
+    // List todos with optional sorting
+    val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
 
-// Update a todo
-api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+    // Update a todo
+    blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+
+    // A second namespace in the same spec
+    val authState = blocks.authApi.getAuthState()
+}
 ```
+
+`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
+call site alone — the `invoke` import is what brings it into scope, and without it the compiler
+reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+
+Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
+realtime channels still open their own. `close()` shuts that engine down, after which calls through
+the instance report it rather than failing inside the HTTP client.
+
+The accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one spec is assumed per
+compilation scope. Two generated packages visible in the same file make `Blocks()` ambiguous, and
+an accessor imported from one while `Blocks()` comes from the other would send its calls to the
+wrong backend. A module that generates a client for its own use should set its own `packageName`
+and `visibility = GeneratedVisibility.Internal`, so that its accessors stay out of its consumers'
+scope and its generated types do not share fully qualified names with another module's — two
+modules both left on the default `packageName` ship the same ones.
+
+### Transferable Results
 
 When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
 
