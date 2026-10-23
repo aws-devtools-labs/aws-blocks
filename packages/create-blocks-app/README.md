@@ -120,6 +120,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
+A new Vite app scaffolded from a template gets these scripts, among others. Adding AWS Blocks to an existing project keeps your own `build` script.
+
 ```json
 {
   "scripts": {
@@ -129,7 +131,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
-    "build": "tsc && vite build"
+    "build": "tsc -p tsconfig.build.json && vite build"
   }
 }
 ```

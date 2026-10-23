@@ -213,6 +213,32 @@ describe('create-blocks-app template metadata', () => {
     }
     assert.deepStrictEqual(problems, []);
   });
+
+  it('every Vite template builds its app sources without type-checking the sample tests', () => {
+    // test/ exercises the sample API, so a build that type-checks it fails as
+    // soon as that API is replaced. `build` checks the app through
+    // tsconfig.build.json; `typecheck` (tsconfig.json) still covers test/.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const name of readdirSync(templatesDir)) {
+      const pkgPath = join(templatesDir, name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      if (typeof scripts.build !== 'string' || !scripts.build.includes('vite build')) continue;
+      if (!/\btsc\b[^&]*-p tsconfig\.build\.json/.test(scripts.build)) {
+        problems.push(`${name}: build does not run tsc -p tsconfig.build.json`);
+        continue;
+      }
+      const buildInclude: string[] = JSON.parse(readFileSync(join(templatesDir, name, 'tsconfig.build.json'), 'utf-8')).include;
+      const fullInclude: string[] = JSON.parse(readFileSync(join(templatesDir, name, 'tsconfig.json'), 'utf-8')).include;
+      for (const glob of ['src/**/*', 'aws-blocks/**/*']) {
+        if (!buildInclude.includes(glob)) problems.push(`${name}: tsconfig.build.json does not include ${glob}`);
+      }
+      if (buildInclude.some((glob) => glob.startsWith('test/'))) problems.push(`${name}: tsconfig.build.json includes test/`);
+      if (!fullInclude.includes('test/**/*')) problems.push(`${name}: tsconfig.json no longer includes test/**/*`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
 });
 
 describe('create-blocks-app auto-detection', () => {
