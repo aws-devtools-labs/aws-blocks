@@ -21,19 +21,21 @@ const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
 
 /**
  * Integration timeout for every API-Gateway→Lambda integration on the shared
- * REST API, in seconds. API Gateway's own ceiling for a REST integration is
- * **29 seconds**: a request still in flight at that point is cut off with a 504
- * no matter how long the Lambda is allowed to run. The shared handler's
- * function timeout is the async-work ceiling (up to 900s for SQS/AsyncJob
- * invocations), which is unreachable on the synchronous HTTP path — so a client
- * that waits out the full function timeout gets a 504, not a response. Pinning
- * the integration timeout makes that boundary explicit (and lets the 504 surface
- * at 29s instead of API Gateway's silent default), without touching the function
- * timeout the async path depends on.
+ * REST API, in seconds. This is API Gateway's **existing** default integration
+ * timeout for a REST integration (`LambdaIntegration` already defaults to
+ * `Duration.seconds(29)` when unset) — setting it explicitly changes no runtime
+ * behaviour; it documents the boundary in synthesized output so it is visible at
+ * review and in the template rather than implicit. A request still in flight at
+ * 29s is cut off with a 504 regardless of how long the Lambda may run: the
+ * shared handler's function timeout is the async-work ceiling (up to 900s for
+ * SQS/AsyncJob invocations) and is unreachable on the synchronous HTTP path.
+ * The explicit value is aligned with the handler's own 28s deadline guard
+ * (`APIGW_TIMEOUT_MS`), which emits a structured 504 just before this cut-off.
  *
- * This is the exact maximum `TimeoutInMillis` (29000 ms) API Gateway accepts for
- * a REST integration — it is the service ceiling, not a tunable, so do not raise
- * it (a larger value is rejected at synth/deploy).
+ * 29s is API Gateway's default integration timeout and the hard cap for
+ * edge-optimized APIs. Regional and private REST APIs can raise it via a service
+ * quota increase (CDK validates only the lower bound, ~50 ms, so a larger value
+ * synthesizes without error). Kept at 29s here to match the handler's 28s guard.
  */
 const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
 
