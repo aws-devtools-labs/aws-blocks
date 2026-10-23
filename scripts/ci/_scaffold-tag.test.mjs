@@ -64,7 +64,7 @@ describe('Windows E2E stacks are reclaimable by cleanup-stacks.yml', () => {
 		assert.ok(tagAt < WINDOWS_DRIVER.indexOf("['run', 'sandbox']"), 'tag must be added before the sandbox deploy');
 		assert.match(
 			WINDOWS_DRIVER.slice(tagAt),
-			/^addPurposeTag\([\s\S]*?,\s*WINDOWS_E2E_PURPOSE\s*\)/,
+			/^addPurposeTag\([^;]*?,\s*WINDOWS_E2E_PURPOSE\s*,?\s*\)\s*;/,
 			'driver must tag with the shared constant',
 		);
 	});
@@ -73,11 +73,12 @@ describe('Windows E2E stacks are reclaimable by cleanup-stacks.yml', () => {
 		assert.match(WINDOWS_DRIVER, /if \(teardownFailures\.length > 0\) \{\s*throw /);
 		const checkAt = WINDOWS_DRIVER.indexOf('if (teardownFailures.length > 0)');
 		// `cdk-blocks destroy` prompts for confirmation, so the driver passes --yes.
-		const lastTeardownAt = WINDOWS_DRIVER.lastIndexOf("teardown('npm', ['run', 'destroy', '--', '--yes']");
+		const destroyAt = WINDOWS_DRIVER.lastIndexOf("teardown('npm', ['run', 'destroy', '--', '--yes']");
+		const lastTeardownAt = Math.max(...[...WINDOWS_DRIVER.matchAll(/\bteardown\(/g)].map((m) => m.index));
 		assert.ok(
-			lastTeardownAt > 0,
+			destroyAt > 0,
 			"windows-template-e2e.mjs must tear down with teardown('npm', ['run', 'destroy', '--', '--yes'], ...)",
 		);
-		assert.ok(checkAt > lastTeardownAt, 'the teardown check must come after the last teardown');
+		assert.ok(checkAt > lastTeardownAt, 'the teardown check must come after every teardown');
 	});
 });
