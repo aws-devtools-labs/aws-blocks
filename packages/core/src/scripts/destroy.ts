@@ -71,7 +71,7 @@ export async function destroy(options: DestroyOptions) {
     // teardown failure with no recovery.
     await runDestroyWithRetries({
       runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
-      listStackNames: () => listProductionStackNames(options, cdkEnv),
+      listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
       emptyBuckets: emptySandboxBuckets,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       successLabel: 'Production stack',
