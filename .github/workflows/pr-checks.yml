@@ -484,7 +484,13 @@ jobs:
         run: npm run test:e2e:sandbox:vpc
 
   e2e-compute-smoke:
-    name: E2E Compute Smoke
+    # The compute suite: one app (test-apps/compute-smoke) with a scenario module
+    # per compute kind and workload — container AsyncJobs, an API namespace on
+    # its own serverless compute — deployed once per leg. The legs vary the API
+    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
+    # its compute type. The `apigateway` front door is covered without a VPC by
+    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
@@ -505,8 +511,16 @@ jobs:
     concurrency:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        # One leg while every leg provisions endpoints into the one compute test
+        # VPC: the concurrency group above would run a second leg after the first.
+        front-door: [cloudfront]
     env:
+      # The app adds the leg (`-cf` / `-gw`) to the stack name itself.
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
     steps:
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
@@ -549,61 +563,11 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
-  e2e-multi-compute:
-    # An API namespace on its own Compute, served through the managed CloudFront
-    # front door (apiFrontDoor: 'cloudfront'). The default `apigateway` tier is
-    # covered by E2E Sandbox/Production (comprehensive) and Hosting's
-    # distribution by E2E Hosting (spa); this is the one deploy for the third.
-    name: E2E Multi-Compute
-    permissions:
-      contents: read
-      id-token: write  # assumes the AWS role below
-    needs: [build-and-test-local, detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'multi-compute') && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: e2e
-    env:
-      BLOCKS_STACK_SUFFIX: mc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - name: Check the E2E trailer
-        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'multi-compute')
-        run: |
-          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
-          exit 1
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-
-      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
-      # traffic is consistent and identifiable (and can be excluded from product
-      # usage metrics).
-      - uses: ./.github/actions/seed-telemetry-id
-
-      - run: npm ci
-      - run: npm run build
-
-      - name: Configure AWS credentials
-        uses: ./.github/actions/e2e-aws-credentials
-        with:
-          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
-          index: ${{ needs.detect-changes.outputs.e2e-index }}
-
-      - name: E2E Multi-Compute
-        run: npm run test:e2e:sandbox:multi-compute
-
       # The test tears its stack down itself; this catches a cancelled or timed-out
       # run, which would otherwise leave the stack (and its distribution) behind.
       - name: Destroy stack (if left behind)
         if: always()
-        working-directory: test-apps/multi-compute
+        working-directory: test-apps/compute-smoke
         run: npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
 
   e2e-production:
@@ -900,7 +864,7 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-multi-compute, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -933,7 +897,6 @@ jobs:
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-compute-smoke.result }}" != "success" && "${{ needs.e2e-compute-smoke.result }}" != "skipped" ]] ||
-             [[ "${{ needs.e2e-multi-compute.result }}" != "success" && "${{ needs.e2e-multi-compute.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||

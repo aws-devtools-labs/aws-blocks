@@ -24,7 +24,7 @@ set -euo pipefail
 set -f
 
 base=$1
-all='templates templates-windows sandbox sandbox-vpc compute-smoke multi-compute production supabase hosting telemetry'
+all='templates templates-windows sandbox sandbox-vpc compute-smoke production supabase hosting telemetry'
 
 # Exit code 1 means a difference and >1 an error, so an error counts as a
 # change. No pipe into `grep -q`: under pipefail, its early exit makes a large

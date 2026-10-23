@@ -19,7 +19,6 @@ const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', 
 const ALL = [
 	'compute-smoke',
 	'hosting',
-	'multi-compute',
 	'production',
 	'sandbox',
 	'sandbox-vpc',

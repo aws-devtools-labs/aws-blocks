@@ -27,9 +27,22 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 const id = getSandboxId(projectRoot);
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
+// The suite's variant axis: CI runs one leg per front door, deploying this same
+// app with COMPUTE_API_FRONT_DOOR set (as E2E Hosting does with
+// HOSTING_COMPUTE_TYPE). Each test module declares the legs it applies to.
+const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
+const apiFrontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as (typeof FRONT_DOORS)[number];
+if (!FRONT_DOORS.includes(apiFrontDoor)) {
+  throw new Error(`COMPUTE_API_FRONT_DOOR must be one of ${FRONT_DOORS.join(', ')}; got '${apiFrontDoor}'.`);
+}
+
+// Each leg gets its own stack, so legs never collide (in CI or locally). Keep the
+// name short: resource names derive from it, and the FileBucket's must fit S3's
+// 63 characters with a CI suffix like `compute-1234-12`.
+const leg = { apigateway: 'gw', cloudfront: 'cf' }[apiFrontDoor];
 const stackName = sandboxMode
-  ? `bb-compute-smoke-${id}${suffix ? `-${suffix}` : ''}`
-  : `bb-compute-smoke-prod-${suffix || 'default'}-${id}`;
+  ? `bb-compute-smoke-${id}-${leg}${suffix ? `-${suffix}` : ''}`
+  : `bb-compute-smoke-prod-${leg}-${suffix || 'default'}-${id}`;
 
 const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 
@@ -45,6 +58,7 @@ const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  apiFrontDoor,
   defaults: {
     ...BlocksPresets.sandbox,
     vpc: {
@@ -68,4 +82,5 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'compute-smoke-e2e');
+cdk.Tags.of(blocksStack).add('blocks:api-front-door', apiFrontDoor);
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

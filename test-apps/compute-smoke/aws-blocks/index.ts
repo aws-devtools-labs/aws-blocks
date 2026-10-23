@@ -2,18 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Compute Smoke Test — container-backed compute in a VPC.
+ * Compute Test — every compute kind and workload behind one deployment.
  *
- * Exercises the multi-compute path end to end: a `Compute` block of
- * `type: 'container'` (AWS Fargate) backs an `AsyncJob`, and the container
- * reaches Blocks resources (KVStore + FileBucket) exactly as a Lambda handler
- * would. A second job proves the per-handler wall-clock limit is enforced by
- * hard-terminating the worker thread.
+ * Scenarios (one test module each under `test/`):
+ * - Container `AsyncJob`s: a `Compute` of `type: 'container'` (AWS Fargate) backs
+ *   an `AsyncJob`, and the container reaches Blocks resources (KVStore +
+ *   FileBucket) exactly as a Lambda handler would. A second job proves the
+ *   per-handler wall-clock limit is enforced by hard-terminating the worker
+ *   thread.
+ * - API namespace on its own compute: `reports` runs on a serverless `Compute`
+ *   (512 MB), so a call through the front door must be served by that function,
+ *   while `api` stays on the default compute.
+ *
+ * The front door is the suite's variant axis: CI deploys this same app once per
+ * `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
  *
  * This app runs against the persistent test VPC (injected via
  * `defaults.vpc.network`), so it adds zero new VPCs per run — the reason
  * container compute lives here rather than in the VPC-free `comprehensive`
- * suite (where forcing a VPC would double the per-run VPC count).
+ * suite (where forcing a VPC would double the per-run VPC count). With the VPC
+ * set, the Lambda computes run in it too.
  */
 
 import { ApiNamespace, Scope } from '@aws-blocks/core';
@@ -22,7 +30,8 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 
-const scope = new Scope('compute-smoke');
+// A short scope id: every resource name derives from it (see the stack name in index.cdk.ts).
+const scope = new Scope('compute');
 
 // Shared resources the container handlers write to — the "did the handler run"
 // signals the smoke test reads back.
@@ -93,9 +102,38 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   },
 });
 
-// ── API (operations the smoke test calls via RPC) ───────────────────────────
+// ── Serverless compute — an API namespace on its own function ─────────────
+
+/** Which function served the call — what the API-namespace scenario asserts on. */
+function whereAmI() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+  };
+}
+
+const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 512 });
+
+// Constructed as 'reportsApi' but exported as `reports`: the gateway routes the
+// export name, which is what the client calls.
+export const reports = new ApiNamespace(
+  scope,
+  'reportsApi',
+  () => ({
+    async whereAmI() {
+      return whereAmI();
+    },
+  }),
+  { compute: reportsCompute },
+);
+
+// ── API (operations the tests call via RPC) — on the default compute ───────
 
 export const api = new ApiNamespace(scope, 'api', (_context) => ({
+  async whereAmI() {
+    return whereAmI();
+  },
+
   async containerJobSubmit(key: string, value: string) {
     const { jobId } = await containerJob.submit({ key, value });
     return { jobId };
