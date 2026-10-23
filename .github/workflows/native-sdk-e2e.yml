@@ -366,8 +366,10 @@ jobs:
     # backfill); 30 min left too little headroom (the job tripped the wall and
     # Destroy could be skipped -> leaked stacks).
     # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
-    # on, so the GSIs are built with the table and the deploy should take a few
-    # minutes. 45 is kept until that has a run history.
+    # on, so the GSIs are built with the table and the deploy takes about 3
+    # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
+    # then drops to 30 (#986:
+    # https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -510,7 +512,8 @@ jobs:
     runs-on: macos-26
     # Same deploy history as dart-e2e-sandbox; with the old ~27-min deploy+build
     # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
-    # 45 is kept until the faster sandboxMode deploy has a run history.
+    # 45 stays until this job has 10 green runs with sandboxMode on, then drops
+    # to 35 (#986: https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -625,12 +628,14 @@ jobs:
             gradle-task: jvmTest
             # The sandbox deploy took 19-25 min before sandboxMode (serial GSI
             # custom resources), so 30 min left no room for the build, tests and
-            # destroy. 45 is kept until the faster deploy has a run history.
+            # destroy. 45 stays until this leg has 10 green runs with
+            # sandboxMode on, then drops to 30 (#986).
             timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
+            # Drops to 30 after 10 green runs with sandboxMode on (#986).
             timeout: 45
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}

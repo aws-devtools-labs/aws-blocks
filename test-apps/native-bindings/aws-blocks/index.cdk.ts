@@ -21,12 +21,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Default the `sandboxMode` context to on, so `npm run deploy` (both uses above)
 // builds DistributedTable GSIs the way `npm run sandbox` does. Here that is the
 // `todos` table and the Realtime connections table: the GSI custom resource
-// recreates each empty table with all its indexes at once (about a minute)
-// instead of adding them one at a time and waiting for each to backfill (about
-// 17 minutes for `todos`). This stack is disposable (see `defaults` below); on
-// the long-lived developer stack it also means a later index change drops and
-// recreates the table. The serial production GSI path is covered by the
-// comprehensive app's production deploy. A direct
+// recreates each table with all its indexes at once (about a minute) instead of
+// adding them one at a time and waiting for each to backfill (about 17 minutes
+// for `todos`). This stack is disposable (see `defaults` below); on the
+// long-lived developer stack it also means a later index change drops and
+// recreates the table.
+//
+// The recreate restores the items but not the settings CloudFormation applied
+// when it created the table: TTL and the table tags are gone afterwards, while
+// CloudFormation still records them. So the native suites run against a
+// connections table with TTL off (`expiresAt` rows don't expire); no native
+// test checks expiry, and that is accepted for these tests. The fast path
+// re-applying them is tracked in
+// https://github.com/aws-devtools-labs/aws-blocks/issues/985. The serial
+// production GSI path, which keeps the table, is covered by the comprehensive
+// app's production deploy. A direct
 // `cdk synth/deploy --context sandboxMode=false` still overrides the default.
 const app = new cdk.App({ context: { sandboxMode: 'true' } });
 
