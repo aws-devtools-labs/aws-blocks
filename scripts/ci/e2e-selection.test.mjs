@@ -93,11 +93,14 @@ function select(dir) {
 	return { status: r.status, stdout: r.stdout, summary, ...out };
 }
 
-/** Each top-level job of a workflow file's text, by id, from its `  id:` line to the next one. */
+/**
+ * Each top-level job of a workflow file's text, by id, from its `  id:` line
+ * (a trailing comment allowed) to the next one.
+ */
 function jobsOf(yml) {
 	return Object.fromEntries(
 		yml
-			.split(/^(?=  [a-z][\w-]*:$)/m)
+			.split(/^(?=  [A-Za-z_][\w-]*:[ \t]*(?:#.*)?$)/m)
 			.slice(1)
 			.map((block) => [block.slice(2, block.indexOf(':')), block]),
 	);
@@ -113,16 +116,19 @@ function testVpcDeployers(dir) {
 	const found = [];
 	for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
 		for (const [job, block] of Object.entries(jobsOf(readFileSync(join(dir, file), 'utf8')))) {
+			// Whole-line comments out, trailing ` # ...` comments off, and shell
+			// line continuations joined, so a deploy split over lines still counts.
 			const code = block
 				.split('\n')
 				.filter((line) => !line.trim().startsWith('#'))
-				.join('\n');
+				.map((line) => line.replace(/\s+#\s.*$/, ''))
+				.join('\n')
+				.replace(/\\\n\s*/g, ' ');
 			if (!/\bcdk deploy\b[^\n]*(?<![\w-])BlocksTestVpc(?![\w-])/.test(code)) continue;
-			const group =
-				/^ {4}concurrency:[ \t]*\n {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(code)?.[1] ??
-				/^ {4}concurrency:[ \t]*([^\s{].*?)[ \t]*$/m.exec(code)?.[1] ??
-				null;
-			found.push({ job: `${file} ${job}`, group: group?.replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') ?? null });
+			const concurrency = /^ {4}concurrency:[ \t]*(\S.*?)?[ \t]*$((?:\n {6}.*)*)/m.exec(code);
+			const raw = concurrency?.[1] ?? /^ {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(concurrency?.[2] ?? '')?.[1] ?? null;
+			const group = raw?.replace(/^(['"])(.*)\1$/, '$2').replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') ?? null;
+			found.push({ job: `${file} ${job}`, group });
 		}
 	}
 	return found;
@@ -415,6 +421,37 @@ describe('pr-checks.yml', () => {
 
 		writeFileSync(join(dir, 'c.yml'), `on: push\njobs:\n${job('ungrouped', '', 'BlocksTestVpc')}`);
 		assert.throws(() => assertOneTestVpcGroup(testVpcDeployers(dir)), /share one concurrency group/);
+
+		// A deploy split over lines, a commented job id and concurrency line, a
+		// quoted group and cancel-in-progress first are all read the same way.
+		writeFileSync(
+			join(dir, 'c.yml'),
+			[
+				'on: push',
+				'jobs:',
+				'  Split-Job: # the endpoints job',
+				'    runs-on: ubuntu-latest',
+				'    concurrency: # one per account',
+				'      cancel-in-progress: false',
+				"      group: 'blocks-test-vpc-endpoints-${{ needs.e2e-slot.outputs.e2e-index }}'",
+				'    steps:',
+				'      - run: |',
+				'          cd test-infra && npx cdk deploy \\',
+				'            BlocksTestVpc --require-approval never',
+				'',
+			].join('\n'),
+		);
+		assert.deepEqual(
+			testVpcDeployers(dir).find((d) => d.job === 'c.yml Split-Job'),
+			{ job: 'c.yml Split-Job', group: 'blocks-test-vpc-endpoints-${{ needs.*.outputs.e2e-index }}' },
+		);
+		assert.throws(() => assertOneTestVpcGroup(testVpcDeployers(dir)), /share one concurrency group/);
+
+		writeFileSync(
+			join(dir, 'c.yml'),
+			`on: push\njobs:\n${job('quoted', group('"blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}"'), 'BlocksTestVpc')}`,
+		);
+		assertOneTestVpcGroup(testVpcDeployers(dir));
 	});
 
 	for (const name of ALL) {
