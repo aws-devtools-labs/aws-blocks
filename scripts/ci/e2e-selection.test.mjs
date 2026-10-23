@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-selection.sh', import.meta.url));
 const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
@@ -27,6 +28,9 @@ const ALL = [
 	'templates',
 	'templates-windows',
 ];
+
+// The E2E jobs that are required checks.
+const REQUIRED = ['production', 'sandbox'];
 
 // Isolated from the user's git config (hooks, signing, default branch).
 const GIT_ENV = {
@@ -185,6 +189,7 @@ describe('e2e-selection.sh', () => {
 
 describe('pr-checks.yml', () => {
 	const yml = readFileSync(WORKFLOW, 'utf8');
+	const parsed = parse(yml).jobs;
 	// Each top-level job, from its `  id:` line to the next one.
 	const jobs = Object.fromEntries(
 		yml
@@ -204,8 +209,21 @@ describe('pr-checks.yml', () => {
 	for (const name of ALL) {
 		it(`starts e2e-${name} from the run output and fails it first when blocked`, () => {
 			const job = jobs[`e2e-${name}`];
-			assert.ok(job.includes(`if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), '${name}')`));
-			const steps = job.slice(job.indexOf('    steps:\n'));
+			const run = `contains(fromJSON(needs.detect-changes.outputs.e2e-run), '${name}')`;
+			// The required ones also start when Detect Changes didn't succeed, and
+			// check that first; required-checks.test.mjs covers their if: and guard.
+			if (REQUIRED.includes(name)) assert.ok(parsed[`e2e-${name}`].if?.includes(run));
+			else
+				assert.equal(
+					parsed[`e2e-${name}`].if,
+					`${run} && github.event.pull_request.head.repo.full_name == github.repository`,
+				);
+			const steps = job
+				.slice(job.indexOf('    steps:\n'))
+				.replace(
+					/^( {4}steps:\n)(?: {6}#.*\n)* {6}- name: Check that Detect Changes succeeded\n[\s\S]*?\n\n/,
+					'$1',
+				);
 			assert.match(
 				steps,
 				new RegExp(
