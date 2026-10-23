@@ -132,7 +132,6 @@ export const fromExisting: (config: ExternalDatabaseRef) => ExternalDatabaseRef;
 // @public
 export class PgClientEngine implements DatabaseEngine {
     constructor(config: PgClientEngineConfig);
-    // (undocumented)
     beginTransaction(): Promise<TransactionHandle>;
     // (undocumented)
     commitTransaction(handle: TransactionHandle): Promise<void>;
