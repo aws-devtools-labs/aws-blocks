@@ -1,14 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Synthesizes each test app an E2E job in pr-checks.yml deploys, with that job's
-// own BLOCKS_STACK_SUFFIX rendered for a 5-digit PR number, and checks every
-// name that can't be truncated still fits. The stack name prefixes each derived
+// Synthesizes the test app of each E2E job in pr-checks.yml that sets
+// BLOCKS_STACK_SUFFIX (JOBS; the rest are in SKIP with a reason), with that
+// job's own suffix rendered for a 5-digit PR number, and checks every name that
+// can't be truncated still fits. The stack name prefixes each derived
 // resource name and the suffix carries the PR number, so names grow as PR
 // numbers do: at PR 1000 the comprehensive app's production stack pushed its
 // `preset-balanced` agent's session bucket to 64 characters and synth failed.
 //
-// Needs the root build (`npm run build`). Run: node --test scripts/ci/stack-name-budget.test.mjs
+// Needs the root build (`npm run build`) and glibc >= 2.34 (dsql-lint runs at
+// synth; on older hosts use a node:22-bookworm container). Run: node --test scripts/ci/stack-name-budget.test.mjs
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,8 +28,9 @@ const PR = '99999';
 const ATTEMPT = '99';
 
 // Each job's app and deploy mode, and the sandbox id CI ends up with: the
-// comprehensive app's is `<user>-<6 random>` and the runner's user is `runner`;
-// the smoke apps use 8 characters of a UUID.
+// comprehensive app's is `<user>-<6 random>` and the runner's user is `runner`
+// (no E2E job sets a git user.name; its sandbox-mode bucket has 2 characters
+// to spare at PR 99999), the smoke apps use 8 characters of a UUID.
 const JOBS = [
 	{ job: 'e2e-sandbox', app: 'comprehensive', sandboxMode: true, sandboxId: 'runner-qb3cmv' },
 	{ job: 'e2e-production', app: 'comprehensive', sandboxMode: false, sandboxId: 'runner-qb3cmv' },
@@ -35,20 +38,33 @@ const JOBS = [
 	{ job: 'e2e-compute-smoke', app: 'compute-smoke', sandboxMode: true, sandboxId: 'abcdef12' },
 ];
 
+// Jobs that set BLOCKS_STACK_SUFFIX but deploy no name this test checks.
+const SKIP = {
+	'e2e-hosting': 'hosting apps create no S3, S3 Vectors or RDS name from the stack name',
+	'e2e-telemetry': 'the telemetry app creates no S3, S3 Vectors or RDS name from the stack name',
+};
+
 // Names AWS rejects past this length, which the blocks don't truncate.
 const LIMITS = {
 	'AWS::S3::Bucket': ['BucketName', 63],
+	'AWS::RDS::DBCluster': ['DatabaseName', 63],
 	'AWS::S3Vectors::VectorBucket': ['VectorBucketName', 63],
 	'AWS::S3Vectors::Index': ['IndexName', 63],
 };
 
+/** Each pr-checks.yml job's text, keyed by job id. */
+function jobBlocks() {
+	const blocks = readFileSync(WORKFLOW, 'utf8').split(/^ {2}(?=[a-z0-9-]+:\s*$)/m);
+	return new Map(blocks.map((b) => [b.slice(0, b.indexOf(':')), b]));
+}
+
 /** The job's BLOCKS_STACK_SUFFIX with the PR number and run attempt filled in. */
 function renderSuffix(job) {
-	const jobs = readFileSync(WORKFLOW, 'utf8').split(/^ {2}(?=[a-z0-9-]+:\s*$)/m);
-	const block = jobs.find((b) => b.startsWith(`${job}:`));
+	const block = jobBlocks().get(job);
 	assert.ok(block, `pr-checks.yml has no ${job} job`);
-	const template = block.match(/^\s+BLOCKS_STACK_SUFFIX:\s*(.+?)\s*$/m)?.[1];
-	assert.ok(template, `${job} sets no BLOCKS_STACK_SUFFIX`);
+	const values = [...block.matchAll(/^\s+BLOCKS_STACK_SUFFIX:\s*(.+?)\s*$/gm)].map((m) => m[1]);
+	assert.equal(values.length, 1, `${job} should set BLOCKS_STACK_SUFFIX exactly once`);
+	const template = values[0].replace(/\s+#.*$/, '').replace(/^(['"])(.*)\1$/, '$2');
 	const suffix = template
 		.replaceAll('${{ github.event.pull_request.number || github.run_id }}', PR)
 		.replaceAll('${{ github.run_attempt }}', ATTEMPT);
@@ -57,6 +73,14 @@ function renderSuffix(job) {
 }
 
 describe('E2E stack names leave room for every derived resource name', () => {
+	it('covers every job that sets BLOCKS_STACK_SUFFIX', () => {
+		const listed = new Set([...JOBS.map((j) => j.job), ...Object.keys(SKIP)]);
+		const unlisted = [...jobBlocks()]
+			.filter(([job, block]) => /^\s+BLOCKS_STACK_SUFFIX:/m.test(block) && !listed.has(job))
+			.map(([job]) => job);
+		assert.deepEqual(unlisted, [], 'add these jobs to JOBS (or to SKIP with a reason)');
+	});
+
 	for (const { job, app, sandboxMode, sandboxId } of JOBS) {
 		it(`${job} (${app}, ${sandboxMode ? 'sandbox' : 'production'} mode)`, () => {
 			const suffix = renderSuffix(job);
@@ -73,6 +97,7 @@ describe('E2E stack names leave room for every derived resource name', () => {
 				const res = spawnSync('npx', ['tsx', '-C', 'cdk', 'aws-blocks/index.cdk.ts'], {
 					cwd: join(ROOT, 'test-apps', app),
 					encoding: 'utf8',
+					timeout: 180_000,
 					env: {
 						...process.env,
 						BLOCKS_STACK_SUFFIX: suffix,
