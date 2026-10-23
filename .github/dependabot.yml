@@ -8,7 +8,8 @@
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
 # Dependabot opens:
-#   - Version-update PRs run weekly.
+#   - npm version-update PRs run weekly, Monday 06:00 Europe/Berlin, so they
+#     are waiting at the start of the working week.
 #   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
@@ -27,6 +28,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
     cooldown:
       default-days: 3
     open-pull-requests-limit: 10
