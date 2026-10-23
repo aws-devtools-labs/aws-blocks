@@ -11,3 +11,6 @@ the stacks to empty their buckets also failed with `spawnSync npm ENOENT`, becau
 path is now double-quoted on Windows (single-quoted elsewhere), and stack listing for `sandbox:destroy` and `destroy`
 uses the same cross-platform spawn as the rest of the CLI. `sandbox` deploy, synth, and watch now quote the path
 the same way, so they also work when the project path contains a space.
+
+On Windows, a backend path that contains a double quote (which no Windows file name can contain) is now refused with
+a clear error instead of being passed to `cmd.exe`.

@@ -18,8 +18,10 @@ export interface DestroyOptions {
  * the pre-retry bucket-emptying in {@link runDestroyWithRetries}, so a failure
  * here must WARN rather than stay silent: a silent [] skips bucket-emptying,
  * the exact no-op the retry exists to avoid.
+ *
+ * @internal Exported for tests.
  */
-function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): string[] {
+export function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): string[] {
   try {
     const out = runCapture(
       'npx',
