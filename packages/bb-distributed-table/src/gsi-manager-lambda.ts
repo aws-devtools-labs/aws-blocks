@@ -88,7 +88,11 @@ const UPDATE_CLEANUP = new Set(['UPDATE_COMPLETE_CLEANUP_IN_PROGRESS', 'UPDATE_R
  * keeps them too but throws, so the Delete is reported as failed instead of
  * silently leaving indexes the config no longer has.
  */
-async function deleteKeepsIndexes(stackId: string | undefined, tableName: string, indexNames: string[]): Promise<boolean> {
+async function deleteKeepsIndexes(
+	stackId: string | undefined,
+	tableName: string,
+	indexNames: string[],
+): Promise<boolean> {
 	if (!stackId) {
 		console.warn('Delete without a StackId; leaving the indexes in place');
 		return true;
@@ -106,7 +110,9 @@ async function deleteKeepsIndexes(stackId: string | undefined, tableName: string
 
 	let tableStays: boolean;
 	try {
-		const { TemplateBody } = await cloudformation.send(new GetTemplateCommand({ StackName: stackId, TemplateStage: 'Processed' }));
+		const { TemplateBody } = await cloudformation.send(
+			new GetTemplateCommand({ StackName: stackId, TemplateStage: 'Processed' }),
+		);
 		const resources: Record<string, { Type?: string; Properties?: { TableName?: unknown } }> =
 			JSON.parse(TemplateBody ?? '{}').Resources ?? {};
 		tableStays = Object.values(resources).some(
@@ -114,11 +120,17 @@ async function deleteKeepsIndexes(stackId: string | undefined, tableName: string
 		);
 	} catch (e) {
 		if (UPDATE_CLEANUP.has(status)) {
-			const indexes = indexNames.length > 0 ? ` (${indexNames.join(', ')})` : '';
+			// The failure reason travels in the custom resource response, capped at 4 KB.
+			const shown = indexNames.slice(0, 10).join(', ');
+			const more = indexNames.length > 10 ? ` and ${indexNames.length - 10} more` : '';
+			const indexes = indexNames.length > 0 ? ` (${shown}${more})` : '';
+			const rolledBack = 'The update was rolled back: an index it added may remain, and a later deploy reuses it.';
+			const removed = 'If the table is still in your app, delete the indexes it no longer configures with UpdateTable.';
+			const next = status === 'UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS' ? rolledBack : removed;
+			const cause = e instanceof Error ? e.message : String(e);
 			throw new Error(
 				`Could not read the stack template to tell whether table ${tableName} stays in the stack, so its ` +
-					`indexes${indexes} were left in place. If the table is still in your app, delete the indexes ` +
-					`it no longer configures with UpdateTable. Cause: ${e instanceof Error ? e.message : String(e)}`,
+					`indexes${indexes} were left in place. ${next} Cause: ${cause}`,
 			);
 		}
 		console.warn('Could not read the stack template; leaving the indexes in place:', e);
@@ -282,7 +294,8 @@ export async function handler(event: CfnEvent) {
 	// echo back the original ID — CloudFormation rejects changes to it.
 	const physicalId = event.PhysicalResourceId ?? TableName;
 
-	if (event.RequestType === 'Delete' && await deleteKeepsIndexes(event.StackId, TableName, Object.keys(Indexes ?? {}))) {
+	const indexNames = Object.keys(Indexes ?? {});
+	if (event.RequestType === 'Delete' && (await deleteKeepsIndexes(event.StackId, TableName, indexNames))) {
 		console.log('Leaving the indexes in place');
 		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE', [KEEP_INDEXES]: 'true' } };
 	}
