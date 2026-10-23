@@ -92,13 +92,18 @@ const MAX_FAILING_TESTS = 10;
  */
 const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-only'];
 
-/** `flags` without the test filters, and without the value of a `--test-name-pattern <value>` form. */
+/**
+ * `flags` without the test filters, and without the value of a
+ * `--test-name-pattern <value>` form. A flag is matched without the double
+ * quotes NODE_OPTIONS may wrap it in.
+ */
 function withoutTestFilters(flags: readonly string[]): string[] {
   const kept: string[] = [];
   for (let i = 0; i < flags.length; i++) {
-    const name = TEST_FILTER_FLAGS.find((f) => flags[i] === f || flags[i].startsWith(`${f}=`));
+    const flag = flags[i].replace(/"/g, '');
+    const name = TEST_FILTER_FLAGS.find((f) => flag === f || flag.startsWith(`${f}=`));
     if (!name) kept.push(flags[i]);
-    else if (flags[i] === name && name !== '--test-only') i++;
+    else if (flag === name && name !== '--test-only') i++;
   }
   return kept;
 }
@@ -118,17 +123,16 @@ function childExecArgv(): string[] {
  * child inherits): a second `--test-reporter` makes node:test exit on startup.
  */
 function reporterArgs(): string[] {
-  const flags = [...process.execArgv, ...(process.env.NODE_OPTIONS ?? '').split(/\s+/)];
-  return flags.some((flag) => flag.startsWith('--test-reporter')) ? [] : ['--test-reporter=spec'];
+  const flags = [...process.execArgv, ...nodeOptionsTokens(process.env.NODE_OPTIONS ?? '')];
+  return flags.some((flag) => flag.replace(/"/g, '').startsWith('--test-reporter')) ? [] : ['--test-reporter=spec'];
 }
 
 /**
- * NODE_OPTIONS split the way node splits it: on whitespace outside double
- * quotes. Each token keeps its quotes, so joining them back gives node the
- * same flags.
+ * NODE_OPTIONS split the way node splits it: on spaces outside double quotes.
+ * Each token keeps its quotes, so joining them back gives node the same flags.
  */
 function nodeOptionsTokens(options: string): string[] {
-  return options.match(/(?:[^\s"]+|"(?:\\.|[^"\\])*")+/g) ?? [];
+  return options.match(/(?:[^ "]+|"(?:\\.|[^"\\])*")+/g) ?? [];
 }
 
 /**
