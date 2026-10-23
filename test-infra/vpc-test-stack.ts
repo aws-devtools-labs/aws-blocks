@@ -85,11 +85,23 @@ export interface TestVpcStacks {
 }
 
 /**
+ * Props of the stacks every Compute Smoke run deploys at once, each from its
+ * own checkout, with no lock. The CDK CLI turns version reporting on, which
+ * puts the aws-cdk-lib version into each template (AWS::CDK::Metadata), so a
+ * branch on another version would update the shared stacks and a concurrent
+ * run would fail with "is in UPDATE_IN_PROGRESS state". Without it the
+ * templates change only when this file does, or when an aws-cdk-lib upgrade
+ * changes what these constructs synthesize.
+ */
+const SHARED_STACK_PROPS = { analyticsReporting: false } as const;
+
+/**
  * Define one bare persistent test VPC in its own stack.
  *
  * @param stackId CloudFormation stack id (also its name)
  * @param purpose value for the `blocks:purpose` tag
  * @param consumer human description of which smoke suite consumes this VPC
+ * @param extraProps more stack props (SHARED_STACK_PROPS for a shared stack)
  */
 function createTestVpcStack(
   app: cdk.App,
@@ -97,10 +109,12 @@ function createTestVpcStack(
   stackId: string,
   purpose: string,
   consumer: string,
+  extraProps: Partial<cdk.StackProps> = {},
 ): { stack: cdk.Stack; vpc: ec2.Vpc } {
   const stack = new cdk.Stack(app, stackId, {
     description: `Persistent test VPC for AWS Blocks ${consumer}. Do NOT delete between test runs.`,
     env,
+    ...extraProps,
   });
 
   // ── VPC ─────────────────────────────────────────────────────────────────
@@ -167,6 +181,7 @@ function createComputeVpcEndpointsStack(app: cdk.App, env: cdk.Environment, vpc:
     description:
       'Permanent VPC endpoints in BlocksComputeTestVpc for AWS Blocks Compute smoke tests. Do NOT delete between test runs.',
     env,
+    ...SHARED_STACK_PROPS,
   });
 
   for (const name of COMPUTE_TEST_VPC_ENDPOINTS.gateway) {
@@ -209,6 +224,7 @@ export function buildTestVpcStacks(app: cdk.App, env: cdk.Environment = {}): Tes
     COMPUTE_TEST_VPC_STACK,
     'persistent-compute-test-vpc',
     'Compute smoke tests',
+    SHARED_STACK_PROPS,
   );
   const computeTestVpcEndpoints = createComputeVpcEndpointsStack(app, env, computeTestVpc.vpc);
 

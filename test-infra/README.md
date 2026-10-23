@@ -64,7 +64,10 @@ from its own checkout. A PR that changes them therefore changes them for every
 run in its E2E account while it is open, and runs from other branches put them
 back. Keep such changes additive (add an endpoint first; remove an old one only
 after every open PR has the addition), and expect "stack is in
-UPDATE_IN_PROGRESS" failures if two such runs overlap. A PR that changes only
+UPDATE_IN_PROGRESS" failures if two such runs overlap. Both stacks leave
+CDK's version metadata out of their templates, so a branch on another
+aws-cdk-lib version deploys the same templates (a no-op) unless that version
+changes what the VPC or endpoint constructs synthesize. A PR that changes only
 `test-infra/` selects no PR Checks E2E job, so put an `E2E: compute-smoke`
 trailer on its head commit to deploy the change once, in its own account, before
 it merges; after the merge, runs from main deploy it to all three accounts. The same export lock
@@ -86,9 +89,18 @@ Delete the stack and its `-vpc-ref` sibling in that account.
 
 ### Rolling back
 
-Revert the change on main, then per account delete `BlocksComputeTestVpcEndpoints`
-and deploy `BlocksComputeTestVpc` from main (which drops the exports). Do this
-while no Compute Smoke run is in flight in that account.
+Merge the revert on main, then right away delete `BlocksComputeTestVpcEndpoints`
+in all three E2E accounts. Not the other way round: until the revert is on
+main, the next run's "Ensure persistent compute test VPC" recreates the stack.
+Between the two steps every main-based Compute Smoke run fails at that Ensure
+step with "Cannot delete export BlocksComputeTestVpc:... as it is in use by
+BlocksComputeTestVpcEndpoints" (CloudFormation rolls back, nothing leaks). To
+avoid that red window, disable the Compute Smoke job in the same revert and
+enable it again once the stack is gone everywhere. The next main-based run's
+Ensure step then drops the exports (or deploy `BlocksComputeTestVpc` from main
+by hand). Branches that contain the change still deploy their app without
+endpoints; once the stack is gone their private-DNS checks fail until they are
+rebased onto main.
 
 ## Usage
 
@@ -151,7 +163,7 @@ compute-smoke adds no endpoints unless `COMPUTE_SMOKE_PROVISION_ENDPOINTS=true`
 | Public / private-with-egress / isolated subnets | each VPC stack | Cover every placement the app may select | none |
 | `VpcId` CfnOutput | each VPC stack | Consumed by the app stack via `VPC_TEST_VPC_ID` | none |
 | S3 + DynamoDB gateway endpoints | `BlocksComputeTestVpcEndpoints` | Routes on all six route tables | none |
-| SQS + CloudWatch Logs interface endpoints, one security group | `BlocksComputeTestVpcEndpoints` | One ENI per private subnet each, private DNS on | ~$29/mo |
+| SQS + CloudWatch Logs interface endpoints, one security group | `BlocksComputeTestVpcEndpoints` | One ENI per private subnet each, private DNS on | ~$29/mo per account (~$88/mo for the 3 E2E accounts) + $0.01/GB |
 
 > **VPC quota note:** the two VPC stacks use 2 of the region's VPCs (quota 20
 > in the E2E accounts). Account for that before adding more persistent VPCs.

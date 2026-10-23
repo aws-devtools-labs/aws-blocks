@@ -106,4 +106,21 @@ describe('persistent test VPCs', () => {
       Tags: Match.arrayWith([{ Key: 'blocks:do-not-delete', Value: 'true' }]),
     });
   });
+
+  // Compute Smoke runs deploy the compute stacks at the same time, each from its
+  // own checkout. The CLI turns version reporting on, which puts the
+  // aws-cdk-lib version into the template, so a branch with another version
+  // would update the shared stacks and race the other runs' deploys.
+  test('the compute stacks do not depend on the aws-cdk-lib version', () => {
+    const app = new cdk.App({ context: { 'aws:cdk:version-reporting': true } });
+    const stacks = buildTestVpcStacks(app, { account: '111111111111', region: 'us-east-1' });
+    const assembly = app.synth();
+    const metadata = (stack: cdk.Stack) =>
+      Object.values(assembly.getStackByName(stack.stackName).template.Resources as Record<string, { Type: string }>)
+        .filter((r) => r.Type === 'AWS::CDK::Metadata').length;
+    assert.equal(metadata(stacks.computeTestVpc), 0);
+    assert.equal(metadata(stacks.computeTestVpcEndpoints), 0);
+    // BlocksTestVpc is left as it is: one VPC Smoke run per account deploys it.
+    assert.equal(metadata(stacks.testVpc), 1);
+  });
 });

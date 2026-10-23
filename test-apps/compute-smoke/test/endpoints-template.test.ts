@@ -206,3 +206,43 @@ describe('compute-smoke VPC endpoints (template)', () => {
     });
   });
 });
+
+// This test checks the shape; E2E Compute Endpoints is the only real deploy of
+// the endpoints the framework creates. It must run on the PRs that change the
+// code deciding them: the core VPC wiring, and each Building Block this app
+// imports (a BB declares the endpoints it needs in its index.cdk.ts).
+describe('E2E Compute Endpoints workflow', () => {
+  const repo = join(appDir, '..', '..');
+  const yml = readFileSync(join(repo, '.github/workflows/e2e-compute-endpoints.yml'), 'utf8');
+  const block = yml.match(/\n {2}pull_request:\n(?: {4}.*\n)*? {4}paths:\n((?: {6}(?:- |# ).*\n)+)/)?.[1] ?? '';
+  // Listed paths only: not a commented-out entry, not a `!` exclusion.
+  const paths = [...block.matchAll(/^ {6}- '([^'!][^']*)'\s*$/gm)].map((m) => m[1]);
+
+  test('runs on changes to the core VPC wiring', () => {
+    assert.ok(paths.includes('packages/core/src/cdk/**'), `paths: ${paths.join(', ')}`);
+  });
+
+  test("runs on changes to the CDK entry of each Building Block the app imports", () => {
+    const src = readFileSync(join(appDir, 'aws-blocks/index.ts'), 'utf8');
+    const bbs = [...src.matchAll(/from '@aws-blocks\/(bb-[\w-]+)'/g)].map((m) => m[1]);
+    assert.ok(bbs.length > 0);
+    // Building Blocks the app takes from the umbrella package, and where they live.
+    const UMBRELLA: Record<string, string[]> = {
+      Compute: ['bb-compute', 'bb-lambda-compute', 'bb-container-compute'],
+    };
+    const umbrella = src.match(/import \{([^}]+)\} from '@aws-blocks\/blocks'/)?.[1].split(',').map((s) => s.trim()) ?? [];
+    for (const name of umbrella) {
+      assert.ok(name in UMBRELLA, `index.ts imports ${name} from @aws-blocks/blocks; add it to UMBRELLA`);
+      bbs.push(...UMBRELLA[name]);
+    }
+    if (umbrella.length > 0) {
+      assert.ok(paths.includes('packages/blocks/src/index.cdk.ts'), 'e2e-compute-endpoints.yml does not run on packages/blocks');
+    }
+    for (const bb of bbs) {
+      assert.ok(
+        paths.includes(`packages/${bb}/src/**`) || paths.includes(`packages/${bb}/src/index.cdk.ts`),
+        `e2e-compute-endpoints.yml does not run on changes to ${bb}`,
+      );
+    }
+  });
+});

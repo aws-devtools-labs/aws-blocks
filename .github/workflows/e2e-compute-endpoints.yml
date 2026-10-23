@@ -23,11 +23,16 @@ on:
   pull_request:
     branches: ['*']
     paths:
-      - 'packages/core/src/cdk/vpc*.ts'
+      # The core VPC wiring, and every Building Block compute-smoke uses (each
+      # declares the endpoints it needs in its CDK entry).
+      - 'packages/core/src/cdk/**'
       - 'packages/bb-async-job/src/**'
       - 'packages/bb-compute/src/**'
       - 'packages/bb-container-compute/src/**'
       - 'packages/bb-lambda-compute/src/**'
+      - 'packages/blocks/src/index.cdk.ts'
+      - 'packages/bb-kv-store/src/index.cdk.ts'
+      - 'packages/bb-file-bucket/src/index.cdk.ts'
       - 'test-apps/compute-smoke/**'
       - 'test-infra/vpc-test-*.ts'
       - 'test-infra/cdk.json'
