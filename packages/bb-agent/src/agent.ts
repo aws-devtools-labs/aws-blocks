@@ -282,6 +282,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * entrypoint (agentcore-entry.ts) calls it as a background async task on AWS, and locally
 	 * {@link dispatchTurn} calls it in-process. Errors are caught and published as an `error`
 	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
+	 * The one exception is a turn whose channel can't be scoped to its user (stream()/resume()
+	 * reject that before dispatching): it is logged and persisted, but no chunk is published,
+	 * since the bare caller-chosen channelId may be another user's channel.
 	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
@@ -759,6 +762,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// Before anything is persisted or dispatched: a non-owner must not be able to
 		// approve (or `trust`) someone else's pending tool call.
 		await this.assertOwnsConversation(conversationId, userId);
+		// Also before anything is persisted: fail here, not in the background turn, if the
+		// channel can't be scoped (see chunksChannel).
+		this.chunksChannel(channelId, userId);
 		// Persist each decision to conversation history
 		if (conversationId && this.messages) {
 			for (const r of responses) {
@@ -772,8 +778,6 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
 		const context = this.resolveContext(options?.context);
-		// Fail here, not in the background turn, if the channel can't be scoped (see chunksChannel).
-		this.chunksChannel(channelId, userId);
 		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
 	}
 
@@ -783,13 +787,19 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * may pick any channelId, so an unscoped channel would let a non-owner who knows a
 	 * conversation id publish onto, or subscribe to, the owner's live channel.
 	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
-	 * can never prefix-match another's (it throws on a userId with a lone surrogate, which
-	 * stream()/resume() surface before dispatching). inferenceOnly agents have no owner to
-	 * scope by and keep the bare channelId.
+	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
+	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
+	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId.
 	 */
 	private chunksChannel(channelId: string, userId: string): string {
 		if (!this.conversations) return channelId;
-		return `u/${encodeURIComponent(userId)}/${channelId}`;
+		let user: string;
+		try {
+			user = encodeURIComponent(userId);
+		} catch {
+			throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+		}
+		return `u/${user}/${channelId}`;
 	}
 
 	/**
