@@ -12,6 +12,7 @@ the server, and a **Client Component** that calls the API from the browser.
 npm run dev          # Start the Next.js dev server (mocks, no AWS needed)
 npm run test:e2e     # Run the e2e test against the dev server
 npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
@@ -46,6 +47,7 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run build` | `next build` (standalone output) |
 | `npm run start` | Serve the production build locally |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
 | `npm run destroy` | Tear down the production stack |
