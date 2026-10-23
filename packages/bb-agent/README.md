@@ -74,7 +74,7 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 - `getConversation(id, userId)` and `getPendingInterrupts(conversationId, userId)` return `[]` for a conversation the user doesn't own.
 - `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
 - `getChannel(channelId, userId)` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
-- `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` when the `userId` argument is missing (except `getChannel()` on an `inferenceOnly` agent), so a call written for an older signature fails loudly.
+- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` when the `userId` argument is missing, so a call written for an older signature fails loudly.
 - A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
@@ -411,7 +411,7 @@ try {
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
 | `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
-| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without the caller's `userId`. |
+| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without the caller's `userId` (with persistence enabled). |
 
 ### Streaming Mode
 

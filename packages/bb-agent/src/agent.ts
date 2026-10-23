@@ -287,8 +287,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
 	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
-		const channel = this.chunksChannel(payload.channelId, payload.userId);
+		let channel: string | undefined;
 		try {
+			channel = this.chunksChannel(payload.channelId, payload.userId);
 			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
@@ -305,7 +306,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				this.log.error('Failed to persist error to history', { error: persistErr });
 			}
 			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
-			await this.rt.publish('chunks', channel, { type: 'error', error: errorMessage });
+			// Without a scoped channel there is no channel of the caller's to report on: never fall back to
+			// the bare, caller-chosen channelId (it may be another user's scoped channel). The publish itself
+			// can fail (e.g. a channel path over Realtime's size limit); the turn runs fire-and-forget, so
+			// log it rather than let it become an unhandled rejection.
+			if (channel === undefined) return;
+			try {
+				await this.rt.publish('chunks', channel, { type: 'error', error: errorMessage });
+			} catch (publishErr) {
+				this.log.error('Failed to publish error chunk', { error: publishErr instanceof Error ? publishErr.message : String(publishErr) });
+			}
 		}
 	}
 
@@ -684,12 +694,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const userId = options?.userId ?? 'anonymous';
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
-		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
 		const rtChannel = this.chunksChannel(channelId, userId);
+		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
+		const channel = this.rt.getChannel('chunks', rtChannel);
+		// Most callers never await `channel`; don't let a rejection go unhandled.
+		channel.catch(() => {});
 		return {
 			channelId,
 			/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
-			channel: this.rt.getChannel('chunks', rtChannel),
+			channel,
 			/** Wait for the complete response (server-side). Resolves on done, rejects on error. */
 			complete: () => new Promise<AgentStreamChunk>((resolve, reject) => {
 				const unsub = this.rt.subscribe('chunks', rtChannel, (data) => {
@@ -759,6 +772,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
 		const context = this.resolveContext(options?.context);
+		// Fail here, not in the background turn, if the channel can't be scoped (see chunksChannel).
+		this.chunksChannel(channelId, userId);
 		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
 	}
 
@@ -768,8 +783,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * may pick any channelId, so an unscoped channel would let a non-owner who knows a
 	 * conversation id publish onto, or subscribe to, the owner's live channel.
 	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
-	 * can never prefix-match another's. inferenceOnly agents have no owner to scope by
-	 * and keep the bare channelId.
+	 * can never prefix-match another's (it throws on a userId with a lone surrogate, which
+	 * stream()/resume() surface before dispatching). inferenceOnly agents have no owner to
+	 * scope by and keep the bare channelId.
 	 */
 	private chunksChannel(channelId: string, userId: string): string {
 		if (!this.conversations) return channelId;
@@ -855,6 +871,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *
 	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
 	 * non-owner can't read another user's pending tool calls (or their interrupt IDs).
+	 * Throws InvalidUsage when `userId` is missing (with persistence enabled).
 	 *
 	 * TODO: optimize — query in reverse with limit instead of loading all messages.
 	 */

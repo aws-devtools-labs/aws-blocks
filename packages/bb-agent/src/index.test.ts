@@ -520,6 +520,28 @@ describe('conversation ownership on write paths', () => {
 		assert.ok(received.some((c: any) => c.type === 'done'), 'the owner still receives their own chunks');
 	});
 
+	// The turn runs fire-and-forget, so a failure while reporting its own error must not become an
+	// unhandled rejection; and a channel that can't be scoped must not fall back to the bare,
+	// caller-chosen channelId, which may be another user's scoped channel.
+	test('invokeTurn() never rejects and never reports on an unscoped channel', async () => {
+		const { agent } = approvalAgent('test-own-invoke-fail');
+		const ownerConv = await agent.createConversationId(ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, ownerId);
+		const received: unknown[] = [];
+		const sub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
+		const loneSurrogate = String.fromCharCode(0xd800);
+		// A channelId that is the owner's scoped key, from a userId that can't be scoped.
+		await agent.invokeTurn({ message: 'hi', channelId: `u/${ownerId}/${ownerConv}`, userId: loneSurrogate });
+		// A channel path over Realtime's size limit: every publish, including the error chunk, fails.
+		await agent.invokeTurn({ message: 'hi', channelId: 'x'.repeat(1100), userId: attackerId });
+		sub.unsubscribe();
+		assert.deepStrictEqual(received, []);
+		await assert.rejects(
+			() => agent.stream('hi', { channelId: `u/${ownerId}/${ownerConv}`, userId: loneSurrogate }),
+			(err: unknown) => err instanceof URIError,
+		);
+	});
+
 	test('getChannel() without a userId throws InvalidUsage when persistence is enabled', async () => {
 		const { agent } = approvalAgent('test-own-channel-nouser');
 		await assert.rejects(
@@ -2760,7 +2782,7 @@ describe('OllamaModels presets', () => {
 
 import { Agent as DeployedAgent } from './index.aws.js';
 import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
-import { toTurnPayload } from './agentcore-entry.js';
+import { handleInvocation } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -4083,8 +4105,16 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.strictEqual(sent[1].runtimeSessionId, ownerConv, 'a conversation keeps routing to its own session');
 	});
 
-	test('the AgentCore entry does not turn the session id into a conversationId', () => {
-		assert.strictEqual(toTurnPayload({ prompt: 'hi', channelId: 'chan-1', userId: 'u-1' }).conversationId, undefined);
-		assert.strictEqual(toTurnPayload({ prompt: '', channelId: 'chan-1', conversationId: 'conv-1', userId: 'u-1' }).conversationId, 'conv-1');
+	test('the AgentCore entry does not turn the session id into a conversationId', async () => {
+		const turns: Array<{ conversationId?: string }> = [];
+		const agent = { invokeTurn: async (payload: { conversationId?: string }) => { turns.push(payload); } };
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		const ownerConv = crypto.randomUUID();
+		// The session id a conversation-less turn would have used before the fix: the caller's channelId.
+		const ack = handleInvocation(agent, tasks, { prompt: 'hi', channelId: ownerConv, userId: 'attacker-2' }, { sessionId: ownerConv });
+		handleInvocation(agent, tasks, { prompt: '', channelId: 'chan-1', conversationId: 'conv-1', userId: 'owner-1' }, { sessionId: 'conv-1' });
+		assert.deepStrictEqual(ack, { channelId: ownerConv, status: 'accepted' });
+		assert.strictEqual(turns[0].conversationId, undefined);
+		assert.strictEqual(turns[1].conversationId, 'conv-1');
 	});
 });
