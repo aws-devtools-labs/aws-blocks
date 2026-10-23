@@ -615,8 +615,8 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
     # Per-leg: iOS deploy + simulator build exceeded a flat 30 min with the
-    # serial GSI deploy. For now the same 45 as the Swift sandbox job and the
-    # non-sandbox Kotlin job above; see each leg's note for when it drops.
+    # serial GSI deploy. For now the same 45 as the Swift sandbox job; see each
+    # leg's note for when it drops.
     timeout-minutes: ${{ matrix.timeout }}
     environment: e2e
     strategy:
