@@ -135,6 +135,11 @@ internal class PersistentCookiesStorage(
         }
     }
 
+    /**
+     * Deliberately empty. One jar is shared by every client in the process, and Ktor's
+     * `HttpCookies` closes its storage when its client closes, so releasing anything here would
+     * take the jar away from the clients still using it.
+     */
     override fun close() {}
 
     /**

@@ -3,9 +3,12 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import type { SpawnSyncOptions } from 'node:child_process';
+import semver from 'semver';
 import { spawn } from './spawn.js';
 import {
   hasExistingMiddlewareManifest,
+  installLinuxSharpForImageOptimizer,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
   patchImageOptimizerForNext16,
@@ -2276,5 +2279,67 @@ void describe('nextjsAdapter — Lambda Web Functions target (compute.type: web-
       `export default { default: { override: { wrapper: 'node', converter: 'node', generateDockerfile: true } } };\n`,
     );
     assert.doesNotThrow(() => withComputeTarget('web-function', () => nextjsAdapter({ projectDir: tmpDir })));
+  });
+});
+
+void describe('installLinuxSharpForImageOptimizer — sharp floor (GHSA-wq5f-xc86-pv6w)', () => {
+  // Every sharp below 0.35.5 bundles a librsvg with a use-after-free that can
+  // lead to RCE on glibc Linux — the image-optimization Lambda's runtime.
+  let openNextDir: string;
+  let imgDir: string;
+  let installs: { args: readonly string[]; pkgJson: string }[];
+
+  // Lay down what a real install leaves behind: sharp's package.json plus the
+  // `@img/sharp-linux-<arch>` prebuilt (package.json + native .node).
+  const seedSharp = (version: string, arch: 'x64' | 'arm64'): void => {
+    const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
+    fs.mkdirSync(sharpDir, { recursive: true });
+    fs.writeFileSync(path.join(sharpDir, 'package.json'), JSON.stringify({ name: 'sharp', version }));
+    const binDir = path.join(imgDir, 'node_modules', '@img', `sharp-linux-${arch}`);
+    fs.mkdirSync(path.join(binDir, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'package.json'), JSON.stringify({ name: `@img/sharp-linux-${arch}`, version }));
+    fs.writeFileSync(path.join(binDir, 'lib', `sharp-linux-${arch}.node`), '');
+  };
+
+  beforeEach(() => {
+    openNextDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-sharp-'));
+    imgDir = path.join(openNextDir, 'image-optimization-function');
+    fs.mkdirSync(imgDir, { recursive: true });
+    installs = [];
+    // Record each `npm install` (and the package.json it would resolve) instead
+    // of hitting the registry.
+    mock.method(spawn, 'sync', (_bin: string, args: readonly string[], options: SpawnSyncOptions) => {
+      installs.push({ args, pkgJson: fs.readFileSync(path.join(String(options.cwd), 'package.json'), 'utf-8') });
+    });
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+    fs.rmSync(openNextDir, { recursive: true, force: true });
+  });
+
+  it('installs a sharp range that excludes every vulnerable version', () => {
+    installLinuxSharpForImageOptimizer(openNextDir);
+    assert.strictEqual(installs.length, 1);
+    const range = (JSON.parse(installs[0].pkgJson) as { dependencies: { sharp: string } }).dependencies.sharp;
+    assert.ok(semver.subset(range, '>=0.35.5'), `sharp range ${range} admits versions below 0.35.5`);
+  });
+
+  it('reinstalls when the bundle already holds a vulnerable linux-x64 sharp', () => {
+    seedSharp('0.34.5', 'x64');
+    installLinuxSharpForImageOptimizer(openNextDir);
+    assert.strictEqual(installs.length, 1, 'a bundled sharp 0.34.5 must not satisfy the idempotency check');
+  });
+
+  it('reinstalls when the bundled sharp is linux-arm64 only (the image Lambda is x86_64)', () => {
+    seedSharp('0.35.5', 'arm64');
+    installLinuxSharpForImageOptimizer(openNextDir);
+    assert.strictEqual(installs.length, 1, 'an arm64-only sharp cannot load on the x86_64 image Lambda');
+  });
+
+  it('skips the install when a patched linux-x64 sharp is already bundled', () => {
+    seedSharp('0.35.5', 'x64');
+    installLinuxSharpForImageOptimizer(openNextDir);
+    assert.strictEqual(installs.length, 0);
   });
 });

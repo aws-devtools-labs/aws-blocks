@@ -9,6 +9,9 @@
  *
  * Then add the `RoleArn` output to the `AWS_ROLE_ARNS` secret of the `e2e`
  * environment (and the Dependabot secret of the same name). See README.md.
+ *
+ * For E2E account 1 only, also set E2E_AGENT_BENCH=1 to add the agent bench
+ * role and bucket.
  */
 
 import * as cdk from 'aws-cdk-lib';
@@ -30,5 +33,6 @@ const app = new cdk.App();
 buildGithubE2eOidcStack(app, {
   account: expectedAccount,
   oidcProviderArn: process.env.GITHUB_OIDC_PROVIDER_ARN || undefined,
+  agentBench: process.env.E2E_AGENT_BENCH === '1',
 });
 app.synth();

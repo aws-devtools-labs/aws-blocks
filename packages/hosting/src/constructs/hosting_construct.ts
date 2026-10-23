@@ -420,6 +420,15 @@ export class HostingConstruct extends Construct {
   readonly distribution: Distribution;
   readonly distributionUrl: string;
   /**
+   * The security-headers / CSP policy applied to this distribution's static,
+   * SSR and image behaviors. Exposed so `core.Hosting` can attach the same
+   * policy to the API/auth proxy behaviors it adds when it fronts the backend,
+   * keeping every behavior on the distribution covered by one policy.
+   */
+  get securityHeadersPolicy(): IResponseHeadersPolicy {
+    return this.cdn.securityHeadersPolicy;
+  }
+  /**
    * Physical id of the `/*` CloudFront invalidation issued on a compute deploy
    * (a CDK token), or `undefined` for a pure-static deploy. Surfaced so the L3
    * owner can output it for a post-deploy `GetInvalidation` liveness poll.
