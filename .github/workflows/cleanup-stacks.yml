@@ -583,7 +583,7 @@ jobs:
           # stack is known to own anything, so nothing may be deleted this run.
           # That is a warning with the CLI's reason, so a persistent denial shows.
           LIST_ERR=$(mktemp)
-          if ! LIVE_STACKS=$(aws cloudformation list-stacks \
+          if ! LIVE_STACKS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks \
             --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
             --query "StackSummaries[].StackName" --output text 2>"$LIST_ERR" | tr '\t' '\n' | sort -u); then
             aws_annotate warning "$LIST_ERR" "list-stacks failed, so the ownership set is incomplete and no REST API is deleted this run"
@@ -808,7 +808,7 @@ jobs:
           fi
           OWNED_ROLES=""
           for R in $REGIONS; do
-            if ! LIVE_STACKS=$(aws cloudformation list-stacks --region "$R" \
+            if ! LIVE_STACKS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks --region "$R" \
               --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS DELETE_FAILED UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE CREATE_FAILED ROLLBACK_FAILED UPDATE_ROLLBACK_FAILED \
               --query "StackSummaries[].StackId" --output text 2>"$LIST_ERR"); then
               aws_annotate warning "$LIST_ERR" "list-stacks failed in $R, so the ownership set is incomplete this run"
@@ -858,7 +858,10 @@ jobs:
           # The listing is kept so the summary can count roles without a second scan.
           CUTOFF_ISO=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%S)
           ROLES_LISTED=1
-          if ! ROLES_JSON=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws iam list-roles --output json 2>"$LIST_ERR"); then
+          # Output that isn't a role listing counts as a failed listing, so the
+          # count below can't abort the step before its summary.
+          if ! ROLES_JSON=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws iam list-roles --output json 2>"$LIST_ERR") ||
+            ! jq -e '.Roles | type == "array"' >/dev/null 2>&1 <<<"$ROLES_JSON"; then
             aws_annotate error "$LIST_ERR" "iam list-roles failed, so no CloudWatch role is swept and the role count is unknown"
             LIST_FAILED=1
             ROLES_LISTED=0
