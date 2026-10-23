@@ -57,6 +57,7 @@ import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { routeSpecificity } from '../plan/route-table.js';
+import { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
 import { albDoor } from './alb_door.js';
 import { AlbConstruct } from './alb_construct.js';
@@ -2501,6 +2502,11 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+
+    // An in-place build behind a door without CloudFront drops the AWS CLI
+    // layers no upload handler uses (see `aws_cli_layers.ts`). The CloudFront
+    // door ignores `inPlaceBuild`, and every other build keeps its layers.
+    if (props.inPlaceBuild && !cdn) removeUnusedAwsCliLayers(this);
   }
 
   /**

@@ -30,6 +30,7 @@ import {
   type HostingFrontDoor,
   pickKnownSettingKeys,
   resolveFrontDoorFeatures,
+  removeUnusedAwsCliLayers,
   type StackedDoorFeatures,
   type HostingWafConfig,
   type SkewProtectionConfig,
@@ -1379,6 +1380,11 @@ export class Hosting extends Construct {
 
       // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
+
+      // `buildId: 'fixed'` (an in-place build): drop the AWS CLI layers no
+      // upload handler uses, the runtime config upload's included. Every other
+      // build keeps them.
+      if (fixedBuildId) removeUnusedAwsCliLayers(this);
 
       if (stackedEdge) {
         stackedInvalidationId = this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);

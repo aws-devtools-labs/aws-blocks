@@ -334,6 +334,81 @@ describe('Hosting with HostingPresets.preview', () => {
   });
 });
 
+/** The template's AWS CLI layers, split by whether a Lambda function references them. */
+function awsCliLayers(t: Template): { used: string[]; unused: string[] } {
+  const referenced = new Set<string>();
+  for (const fn of Object.values(t.findResources('AWS::Lambda::Function'))) {
+    for (const layer of (fn.Properties?.Layers ?? []) as unknown[]) {
+      if (layer && typeof layer === 'object' && 'Ref' in layer) referenced.add(String(layer.Ref));
+    }
+  }
+  const layers = Object.keys(t.findResources('AWS::Lambda::LayerVersion')).filter((id) => id.includes('AwsCliLayer'));
+  return { used: layers.filter((id) => referenced.has(id)), unused: layers.filter((id) => !referenced.has(id)) };
+}
+
+/** Every bucket-upload custom resource's handler function carries a layer. */
+function everyUploadHandlerHasALayer(t: Template): boolean {
+  const fns = t.findResources('AWS::Lambda::Function');
+  return Object.values(t.findResources('Custom::CDKBucketDeployment')).every((cr) => {
+    const target = JSON.stringify(cr.Properties?.ServiceToken);
+    const handlerId = Object.keys(fns).find((id) => target.includes(`"${id}"`));
+    return Boolean(handlerId && (fns[handlerId].Properties?.Layers ?? []).length > 0);
+  });
+}
+
+describe('AWS CLI layers: only an in-place (preview) build drops the unused ones', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-layers-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearRouteRegistry();
+  });
+
+  it('the default (CloudFront) build keeps every layer, including the unused ones', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersDefault');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+    const t = Template.fromStack(stack);
+    const { used, unused } = awsCliLayers(t);
+    // One layer per upload: the shared handler uses one, the others stay in the template.
+    assert.ok(unused.length > 0, `expected the default build to keep its unused layers (used: ${used.join(', ')})`);
+    assert.strictEqual(used.length + unused.length, Object.keys(t.findResources('Custom::CDKBucketDeployment')).length);
+  });
+
+  it('HostingPresets.production keeps every layer too', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersProduction');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.production, root: tmpDir, api: MOCK_API });
+    assert.ok(awsCliLayers(Template.fromStack(stack)).unused.length > 0);
+  });
+
+  it("buildId: 'fixed' behind the ALB (no preset) also drops them", () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersFixedAlb');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
+    const t = Template.fromStack(stack);
+    assert.deepStrictEqual(awsCliLayers(t).unused, []);
+    assert.ok(everyUploadHandlerHasALayer(t));
+  });
+
+  it('HostingPresets.preview keeps only the layers a handler uses, and every upload still has one', () => {
+    createSpaBuildOutput(tmpDir);
+    const stack = newStack('LayersPreview');
+    new Hosting(stack, 'Hosting', { ...HostingPresets.preview, root: tmpDir, api: MOCK_API });
+    const t = Template.fromStack(stack);
+    const { used, unused } = awsCliLayers(t);
+    assert.deepStrictEqual(unused, []);
+    assert.ok(used.length > 0);
+    assert.ok(everyUploadHandlerHasALayer(t), 'every upload handler keeps its layer');
+    // The runtime config upload is still in the template.
+    assert.ok(Object.keys(t.findResources('Custom::CDKBucketDeployment')).some((id) => id.startsWith('HostingBlocksConfigDeployment')));
+  });
+});
+
 describe('the trim settings on their own', () => {
   let tmpDir: string;
 
