@@ -33,6 +33,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'node:path';
 
 /** Suites run-background-suite.ts can run; each maps to one `*Tests` registrar there. */
@@ -75,17 +76,38 @@ export interface BackgroundSuites<Name extends string = BackgroundSuiteName> {
 export interface BackgroundSuitesOptions {
   /** Script each child runs with the suite name as its argument. Defaults to run-background-suite.ts. */
   readonly entry?: string;
+  /** Where the children's prefixed output lines go. Defaults to this process's stdout and stderr. */
+  readonly output?: { stdout: (line: string) => void; stderr: (line: string) => void };
 }
 
 /** How many of a child's failing test names a failed suite's error repeats. */
 const MAX_FAILING_TESTS = 10;
 
 /**
- * This process's flags minus the inspector ones: three children would fight
- * over the debug port (and with --inspect-brk wait for a debugger forever).
+ * node:test flags that pick which tests run. A child inheriting the parent's
+ * filter would run none of its own tests and pass; its `Background suite - *`
+ * test stands for the whole suite, so the child always runs all of it.
+ */
+const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-skip-pattern', '--test-only'];
+
+/** `flags` without the test filters, and without the value of a `--test-name-pattern <value>` form. */
+function withoutTestFilters(flags: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    const name = TEST_FILTER_FLAGS.find((f) => flags[i] === f || flags[i].startsWith(`${f}=`));
+    if (!name) kept.push(flags[i]);
+    else if (flags[i] === name && name !== '--test-only') i++;
+  }
+  return kept;
+}
+
+/**
+ * This process's flags minus the test filters and the inspector ones: three
+ * children would fight over the debug port (and with --inspect-brk wait for a
+ * debugger forever).
  */
 function childExecArgv(): string[] {
-  return process.execArgv.filter((flag) => !flag.startsWith('--inspect'));
+  return withoutTestFilters(process.execArgv).filter((flag) => !flag.startsWith('--inspect'));
 }
 
 /**
@@ -99,26 +121,41 @@ function reporterArgs(): string[] {
 }
 
 /**
- * This process's environment minus NODE_TEST_CONTEXT. node --test sets it in
+ * This process's environment minus NODE_TEST_CONTEXT (node --test sets it in
  * each test file's process; a child inheriting it would report to that runner
- * in its internal protocol instead of printing results to its own stdout.
+ * in its internal protocol instead of printing results to its own stdout) and
+ * minus any test filter in NODE_OPTIONS.
  */
 function childEnv(): NodeJS.ProcessEnv {
   const { NODE_TEST_CONTEXT: _runnerContext, ...env } = process.env;
+  if (env.NODE_OPTIONS) env.NODE_OPTIONS = withoutTestFilters(env.NODE_OPTIONS.split(/\s+/).filter(Boolean)).join(' ');
   return env;
 }
 
-export function backgroundSuites<Name extends string = BackgroundSuiteName>(
+/**
+ * Children still running, across every backgroundSuites() call. A child
+ * outliving this process (a crash, the open-handle backstop in e2e.test.ts)
+ * would keep calling a server or stack that is going away.
+ */
+const live = new Set<ChildProcess>();
+process.once('exit', () => {
+  for (const child of live) child.kill('SIGKILL');
+});
+
+/** The suites run-background-suite.ts knows, with their children's output on this process's own streams. */
+export function backgroundSuites(names: readonly BackgroundSuiteName[]): BackgroundSuites;
+/** Any suite names, run by another entry script (tests of this runner). */
+export function backgroundSuites<Name extends string>(
   names: readonly Name[],
-  { entry = defaultEntry }: BackgroundSuitesOptions = {},
+  options: BackgroundSuitesOptions & { readonly entry: string },
+): BackgroundSuites<Name>;
+export function backgroundSuites<Name extends string>(
+  names: readonly Name[],
+  { entry = defaultEntry, output }: BackgroundSuitesOptions = {},
 ): BackgroundSuites<Name> {
   const results = new Map<Name, Promise<void>>();
-  const live = new Set<ChildProcess>();
-  // A child outliving this process (a crash, the open-handle backstop in
-  // e2e.test.ts) would keep calling a server or stack that is going away.
-  process.once('exit', () => {
-    for (const child of live) child.kill('SIGKILL');
-  });
+  const writeOut = output?.stdout ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const writeErr = output?.stderr ?? ((line: string) => process.stderr.write(`${line}\n`));
 
   const run = (name: Name): Promise<void> =>
     new Promise<void>((resolve, reject) => {
@@ -138,14 +175,14 @@ export function backgroundSuites<Name extends string = BackgroundSuiteName>(
       const failingTests: string[] = [];
       let inFailingBlock = false;
       createInterface({ input: child.stdout }).on('line', (line) => {
-        process.stdout.write(`${prefix}${line}\n`);
-        const trimmed = line.trim();
+        writeOut(`${prefix}${line}`);
+        const trimmed = stripVTControlCharacters(line).trim();
         if (trimmed.endsWith('failing tests:')) inFailingBlock = true;
         else if (inFailingBlock && trimmed.startsWith('\u2716') && failingTests.length < MAX_FAILING_TESTS) {
           failingTests.push(trimmed);
         }
       });
-      createInterface({ input: child.stderr }).on('line', (line) => process.stderr.write(`${prefix}${line}\n`));
+      createInterface({ input: child.stderr }).on('line', (line) => writeErr(`${prefix}${line}`));
 
       const timer = globalThis.setTimeout(() => {
         child.kill('SIGKILL');

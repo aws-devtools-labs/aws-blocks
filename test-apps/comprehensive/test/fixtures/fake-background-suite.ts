@@ -26,6 +26,7 @@ if (mode === 'fail') {
 if (mode === 'slow') {
   test('fake background test finishes late', async () => {
     await setTimeout(1000);
-    writeFileSync(process.env.FAKE_SUITE_MARKER ?? '', 'done');
+    const marker = process.env.FAKE_SUITE_MARKER;
+    if (marker) writeFileSync(marker, 'done');
   });
 }
