@@ -121,6 +121,22 @@ describe('marker insertion', () => {
 		assert.match(b, /bb-a/);
 		assert.match(b, /bb-b/);
 	});
+	test('trims trailing whitespace before inserting markers and entries', () => {
+		const out = insertBetweenMarkers('x  \n\n\t\n', "export { A } from '@x/bb-a';");
+		assert.strictEqual(
+			out,
+			"x\n\n// <!-- BEGIN:generated-block-exports -->\nexport { A } from '@x/bb-a';\n// <!-- END:generated-block-exports -->\n",
+		);
+	});
+	test('stays linear on long whitespace runs', () => {
+		// The previous `/\s*$/` took seconds on these inputs (quadratic backtracking).
+		const begin = '// <!-- BEGIN:generated-block-exports -->';
+		const end = '// <!-- END:generated-block-exports -->';
+		const t = performance.now();
+		insertBetweenMarkers(`${' '.repeat(50_000)}x`, "export { A } from '@x/bb-a';");
+		insertBetweenMarkers(`${begin}\n${' '.repeat(50_000)}y\n${end}\n`, "export { A } from '@x/bb-a';");
+		assert.ok(performance.now() - t < 200);
+	});
 });
 
 describe('arg parsing', () => {
