@@ -27,9 +27,22 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 const id = getSandboxId(projectRoot);
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
+// `bb-test-` is one of the prefixes cleanup-stacks.yml sweeps (and the cleanup
+// role may delete), so a stack whose teardown fails is still reclaimed. Keep
+// the rest short: the FileBucket is named `<stackName>-compute-smoke-artifacts`
+// and S3 bucket names are capped at 63 characters.
 const stackName = sandboxMode
-  ? `bb-compute-smoke-${id}${suffix ? `-${suffix}` : ''}`
-  : `bb-compute-smoke-prod-${suffix || 'default'}-${id}`;
+  ? `bb-test-cs-${id}${suffix ? `-${suffix}` : ''}`
+  : `bb-test-cs-prod-${suffix || 'default'}-${id}`;
+
+// The FileBucket's id: Scope 'compute-smoke' + FileBucket 'artifacts' in index.ts.
+const MAX_STACK_NAME_LENGTH = 63 - '-compute-smoke-artifacts'.length;
+if (stackName.length > MAX_STACK_NAME_LENGTH) {
+  throw new Error(
+    `Stack name ${stackName} is ${stackName.length} characters; the artifacts bucket name needs it to be at most ` +
+    `${MAX_STACK_NAME_LENGTH}. Shorten BLOCKS_STACK_SUFFIX.`,
+  );
+}
 
 const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 
@@ -67,5 +80,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   },
 });
 
-cdk.Tags.of(blocksStack).add('blocks:purpose', 'compute-smoke-e2e');
+// Tag the whole app, so the vpc-ref stack carries the purpose tag too:
+// cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
+cdk.Tags.of(app).add('blocks:purpose', 'compute-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
