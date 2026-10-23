@@ -10,6 +10,8 @@ import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
   buildSandboxCdkEnv,
   buildSandboxDeployArgs,
+  buildSandboxDestroyArgs,
+  buildSandboxLsArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
   quoteCdkAppPath,
@@ -225,4 +227,40 @@ describe('quoteCdkAppPath', () => {
   it('escapes a single quote inside a POSIX path', () => {
     assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
+
+  it('refuses a double quote on Windows, where it would end the cmd.exe quoting early', () => {
+    assert.throws(() => quoteCdkAppPath('D:\\a\\x" & echo hi & "\\index.cdk.ts', 'win32'), /contains a double quote/);
+  });
 });
+
+// destroy and `cdk ls` were the two `--app` strings behind the Windows
+// `sandbox:destroy` failure: single quotes, which cmd.exe keeps as part of the
+// path. Each is asserted with a literal for both shells, so a revert to
+// `'${backendPath}'` (or to an unescaped POSIX quote) fails here.
+for (const [name, build, verb] of [
+  ['buildSandboxDestroyArgs', buildSandboxDestroyArgs, 'destroy'],
+  ['buildSandboxLsArgs', buildSandboxLsArgs, 'ls'],
+] as const) {
+  describe(name, () => {
+    it(`runs \`cdk ${verb}\` in sandbox mode`, () => {
+      const args = build('/tmp/app/index.cdk.ts', 'linux');
+      assert.deepStrictEqual(args.slice(0, 4), ['exec', 'cdk', '--', verb]);
+      assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
+      if (verb === 'destroy') assert.ok(args.includes('--force'), `expected --force in: ${args.join(' ')}`);
+    });
+
+    it('double-quotes the --app path on Windows', () => {
+      assert.strictEqual(
+        valueAfter(build('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'), '--app'),
+        'npm exec tsx -- -C cdk "D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
+      );
+    });
+
+    it('single-quotes and escapes the --app path on POSIX', () => {
+      assert.strictEqual(
+        valueAfter(build("/tmp/bob's app/index.cdk.ts", 'linux'), '--app'),
+        "npm exec tsx -- -C cdk '/tmp/bob'\\''s app/index.cdk.ts'",
+      );
+    });
+  });
+}
