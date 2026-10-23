@@ -303,7 +303,7 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     if (asm) rmSync(asm, { recursive: true, force: true });
   });
 
-  function cdk(args: string[]): { out: string; status: number | null } {
+  function cdk(args: string[]): { out: string; stdout: string; status: number | null } {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: asm,
@@ -324,7 +324,7 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
       encoding: 'utf-8',
       timeout: 120_000,
     });
-    return { out: `${r.stdout ?? ''}${r.stderr ?? ''}`, status: r.status };
+    return { out: `${r.stdout ?? ''}${r.stderr ?? ''}`, stdout: r.stdout ?? '', status: r.status };
   }
 
   it('the production deploy argv: refused without --all, selected with it', { skip: skipCli }, () => {
@@ -351,10 +351,11 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     // `cdk ls` matches stack patterns the same way `cdk watch` does.
     const listed = cdk(['ls', ...names]);
     assert.strictEqual(listed.status, 0, listed.out);
-    const ids = listed.out.split('\n').map((l) => l.trim()).filter(Boolean);
+    // Stack names only: `cdk ls` prints them on stdout, and CLI warnings on stderr.
+    const ids = listed.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
     assert.deepStrictEqual(ids.sort(), ['Parent/Nested', 'edge-lambda-stack-x', 'my-app'].sort());
     // The `*` wildcard would miss the stack below a construct.
-    const star = cdk(['ls', '*']).out.split('\n').map((l) => l.trim()).filter(Boolean);
+    const star = cdk(['ls', '*']).stdout.split('\n').map((l) => l.trim()).filter(Boolean);
     assert.ok(!star.includes('Parent/Nested'), `expected '*' to miss Parent/Nested: ${star.join(', ')}`);
   });
 });
