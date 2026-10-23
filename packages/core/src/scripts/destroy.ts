@@ -1,11 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
-import { runSync } from './run-command.js';
+import { runCapture, runSync } from './run-command.js';
 import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
@@ -22,12 +21,12 @@ export interface DestroyOptions {
  */
 function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): string[] {
   try {
-    const out = execFileSync(
+    const out = runCapture(
       'npx',
       ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`],
-      // Capture stderr so a genuine synth/`cdk ls` failure is logged below
-      // rather than being indistinguishable from "app has zero stacks".
-      { cwd: options.projectRoot, env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+      // runCapture captures stderr so a genuine synth/`cdk ls` failure is logged
+      // below rather than being indistinguishable from "app has zero stacks".
+      { cwd: options.projectRoot, env: cdkEnv },
     );
     return out
       .split('\n')

@@ -12,6 +12,7 @@ import {
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
+  quoteCdkAppPath,
   sandboxFailureRecoveryHint,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
@@ -66,7 +67,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
     assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), 'npm exec tsx -- -C cdk aws-blocks/index.ts');
+    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
   });
 
   it('interpolates the provided outDir and projectRoot', () => {
@@ -115,6 +116,7 @@ describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => 
     assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
     assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
     assert.ok(synth.includes('sandboxMode=true'));
+    assert.strictEqual(valueAfter(synth, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.cdk.ts')}`);
     const deploy = buildSandboxDeployArgs({
       outDir: '.blocks-sandbox',
       projectRoot: '/app',
@@ -205,5 +207,22 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
+  });
+});
+
+describe('quoteCdkAppPath', () => {
+  it('double-quotes on Windows, where cmd.exe keeps single quotes as part of the path', () => {
+    assert.strictEqual(
+      quoteCdkAppPath('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'),
+      '"D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
+    );
+  });
+
+  it('single-quotes on POSIX so a path with a space stays one argument', () => {
+    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
+  });
+
+  it('escapes a single quote inside a POSIX path', () => {
+    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
 });
