@@ -130,6 +130,36 @@ final class BlocksClientTests: XCTestCase {
             XCTFail("Expected error")
         } catch let error as RPCError {
             XCTAssertEqual(error.message, "Error occured with code: -32600 message: Invalid request")
+            XCTAssertEqual(error.code, -32_600)
+            XCTAssertNil(error.name)
+        } catch {
+            XCTFail("Expected RPCError, got \(error)")
+        }
+    }
+
+    func testExecuteExposesServerErrorNameAndCode() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        MockURLProtocol.handler = { _ in
+            let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let data = Data("""
+            {"jsonrpc":"2.0","error":{"code":401,"message":"Not signed in","data":{"name":"NotAuthenticatedException"}},"id":1}
+            """.utf8)
+            return (response, data)
+        }
+
+        let client = BlocksClient(url: "http://localhost:3001/api", session: session)
+        let request = BlocksRequest(method: "api.whoAmI", params: [], id: 1)
+
+        do {
+            _ = try await client.execute(request)
+            XCTFail("Expected error")
+        } catch let error as RPCError {
+            XCTAssertEqual(error.name, "NotAuthenticatedException")
+            XCTAssertEqual(error.code, 401)
+            XCTAssertEqual(error.message, "Error occured with code: 401 message: Not signed in")
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }

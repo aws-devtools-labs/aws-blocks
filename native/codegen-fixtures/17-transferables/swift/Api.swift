@@ -18,7 +18,7 @@ public final nonisolated class Api: Sendable {
         let request = BlocksRequest(method: "api.getChannel", params: [], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for api.getChannel") }
-        return try JSONDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)
+        return try self.client.makeDecoder().decode(RealtimeChannel<GetChannel.ResultMessage>.self, from: result)
     }
 
     /// Calls `api.getFile`.
@@ -48,6 +48,11 @@ public final nonisolated class Api: Sendable {
         public struct ResultMessage: Codable {
             public let message: String
             public let timestamp: Double
+
+            public init(message: String, timestamp: Double) {
+                self.message = message
+                self.timestamp = timestamp
+            }
         }
     }
 }

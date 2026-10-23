@@ -96,6 +96,11 @@ public final nonisolated class Api: Sendable {
         public struct ResultMessage: Codable {
             public let humidity: Double
             public let temperature: Double
+
+            public init(humidity: Double, temperature: Double) {
+                self.humidity = humidity
+                self.temperature = temperature
+            }
         }
     }
 }
