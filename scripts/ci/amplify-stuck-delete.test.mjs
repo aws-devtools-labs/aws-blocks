@@ -15,7 +15,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +28,9 @@ const STEP = 'Find and delete stale Amplify sandbox stacks';
 // A stub `aws` that serves canned output from its fixture dir and logs every
 // call. Files are keyed by the --stack-name value with every character outside
 // [A-Za-z0-9-] replaced by `_` (see key() below).
-//   list-stacks                    -> stacks.txt; with a length() query, 0
+//   list-stacks                    -> stacks.txt; with a length() query, 0;
+//                                     for DELETE_COMPLETE, deleted.json (exit
+//                                     254 if list-deleted-fails exists)
 //   describe-stacks, Tags query    -> info-<key>.txt (the step's tag/status/date)
 //   describe-stacks, Parameters    -> params-<key>.json, else exit 254
 //   describe-stacks, other query   -> status-<key>.txt, else exit 254
@@ -49,6 +51,11 @@ k=$(printf '%s' "$stack" | tr -c 'A-Za-z0-9-' '_')
 q=$(arg --query "$@")
 case "$1 $2" in
 'cloudformation list-stacks')
+	case " $* " in *' DELETE_COMPLETE '*)
+		if [ -f "$d/list-deleted-fails" ]; then echo "An error occurred (Throttling) for stack $(cat "$d/list-deleted-fails")" >&2; exit 254; fi
+		cat "$d/deleted.json" 2>/dev/null || echo '{"StackSummaries":[]}'
+		exit 0 ;;
+	esac
 	case "$q" in length*) echo 0 ;; *) cat "$d/stacks.txt" 2>/dev/null ;; esac ;;
 'cloudformation describe-stacks')
 	case "$q" in
@@ -202,6 +209,7 @@ function run(dir, args, env = {}, cwd = ROOT_DIR) {
 		summary: read('summary.md'),
 		report: read('report.md'),
 		deletes: read('deletes.txt').split('\n').filter(Boolean),
+		calls: read('calls.txt'),
 	};
 }
 
@@ -229,9 +237,9 @@ function stepScript() {
  */
 function runStep(files, { status = 'DELETE_FAILED', created = '2026-10-19T14:48:22.894Z', cwd } = {}) {
 	const dir = fixture({
-		...files,
 		'stacks.txt': `${ROOT}\n`,
 		[`info-${key(ROOT)}.txt`]: `sandbox\t${status}\t${created}\n`,
+		...files,
 	});
 	const file = join(dir, 'step.sh');
 	writeFileSync(file, stepScript());
@@ -553,6 +561,95 @@ describe('amplify-stuck-delete.sh', () => {
 	});
 });
 
+// The model stack after the retain, as list-stacks reports it once deleted:
+// CloudFormation keeps a deleted stack's record, resources and template for
+// 90 days. It lived from the failed deploy to the retain, over 6 h later.
+const deletedTodo = (over = {}) => ({
+	StackId: TODO,
+	StackName: TODO_NAME,
+	ParentId: DATA,
+	StackStatus: 'DELETE_COMPLETE',
+	CreationTime: '2026-10-19T14:50:01.123000+00:00',
+	DeletionTime: '2026-10-21T08:12:40.456000+00:00',
+	...over,
+});
+const deleted = (...items) => JSON.stringify({ StackSummaries: items });
+/** Fixture files for a later run: the retain went through and the model stack is gone. */
+const afterRetain = (over = {}) =>
+	sandbox({
+		'deleted.json': deleted(deletedTodo()),
+		[`status-${key(TODO)}.txt`]: 'DELETE_COMPLETE\n',
+		[`resources-${key(TODO)}.json`]: resources(
+			resource('TodoTable', TABLE, 'DELETE_SKIPPED', TABLE_ID),
+			resource('TodoIAMRole', 'AWS::IAM::Role', 'DELETE_COMPLETE', 'role'),
+		),
+		...over,
+	});
+const runLeftovers = (dir) => run(dir, [SCRIPT, '--leftovers']);
+
+describe('amplify-stuck-delete.sh --leftovers', () => {
+	it('reports a table retained on an earlier run, by its real name, and deletes nothing', () => {
+		const r = runLeftovers(fixture(afterRetain()));
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.deepEqual(r.deletes, []);
+		assert.match(
+			r.stdout,
+			new RegExp(`^::warning::${TODO_NAME} retained TodoTable when it was deleted on 2026-10-21; DynamoDB table ${REAL_TABLE} may still exist`, 'm'),
+		);
+		assert.match(
+			r.report,
+			new RegExp(`^- leftover: TodoTable \\(${TABLE}\\) of ${TODO_NAME}, deleted 2026-10-21; delete DynamoDB table ${REAL_TABLE} by hand if it still exists$`, 'm'),
+		);
+		assert.doesNotMatch(r.stdout + r.stderr + r.report, NO_ACCOUNT);
+	});
+
+	it('does not read the resources of a nested stack that lived under 5 hours (an ordinary teardown)', () => {
+		const r = runLeftovers(
+			fixture(afterRetain({ 'deleted.json': deleted(deletedTodo({ DeletionTime: '2026-10-19T19:40:00.000000+00:00' })) })),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.equal(r.report, '');
+		assert.doesNotMatch(r.calls, /list-stack-resources/);
+	});
+
+	it('ignores a deleted root stack, and stacks of other apps', () => {
+		const r = runLeftovers(
+			fixture(
+				afterRetain({
+					'deleted.json': deleted(deletedTodo({ ParentId: undefined }), deletedTodo({ StackName: 'amplify-myapp-x-sandbox-1-y' })),
+				}),
+			),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.equal(r.report, '');
+		assert.doesNotMatch(r.calls, /list-stack-resources/);
+	});
+
+	it('reports nothing for a table resource the delete removed', () => {
+		const r = runLeftovers(
+			fixture(afterRetain({ [`resources-${key(TODO)}.json`]: resources(resource('TodoTable', TABLE, 'DELETE_COMPLETE', TABLE_ID)) })),
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.equal(r.report, '');
+		assert.doesNotMatch(r.stdout, /::warning::/);
+	});
+
+	it('warns, without the account id, when the deleted stacks cannot be listed', () => {
+		const r = runLeftovers(fixture(afterRetain({ 'list-deleted-fails': TODO })));
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.stdout, /::warning::could not list deleted stacks/);
+		assert.doesNotMatch(r.stdout + r.stderr, NO_ACCOUNT);
+	});
+
+	it('still names the table, unresolved, when its deleted template cannot be read', () => {
+		const files = afterRetain();
+		delete files[`template-${key(TODO)}.json`];
+		const r = runLeftovers(fixture(files));
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.report, /^- leftover: TodoTable .*delete DynamoDB table \(name unresolved, see the stack template\) by hand/m);
+	});
+});
+
 describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU date' }, () => {
 	it('unblocks the stuck sandbox: nested retain, root deferred, real table in the summary', () => {
 		const r = runStep(sandbox());
@@ -585,7 +682,8 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 	it('warns and retries plainly when the script fails', () => {
 		const cwd = mkdtempSync(join(tmpdir(), 'amplify-stuck-delete-cwd-'));
 		dirs.push(cwd);
-		mkdirSync(join(cwd, 'scripts', 'ci'), { recursive: true });
+		// Every script the step runs from scripts/ci, with this one failing.
+		cpSync(join(ROOT_DIR, 'scripts', 'ci'), join(cwd, 'scripts', 'ci'), { recursive: true });
 		writeFileSync(join(cwd, 'scripts', 'ci', 'amplify-stuck-delete.sh'), 'exit 1\n');
 		const r = runStep(sandbox(), { cwd });
 		assert.equal(r.status, 0, r.stdout);
@@ -595,15 +693,46 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 	});
 
 	it('only retries plainly while a DELETE_FAILED sandbox is younger than 6 hours', () => {
-		const created = new Date(Date.now() - 3600_000).toISOString();
+		const created = new Date(Date.now() - 5 * 3600_000).toISOString();
 		const r = runStep(sandbox(), { created });
 		assert.equal(r.status, 0, r.stdout);
 		assert.deepEqual(r.deletes, [`cloudformation delete-stack --stack-name ${ROOT}`]);
+	});
+
+	it('only retries plainly a sandbox with no creation time, even after an old stuck one', () => {
+		const ROOT2 = 'amplify-amplifygen2-amp716639251-sandbox-0000000000';
+		const r = runStep({
+			...sandbox(),
+			'stacks.txt': `${ROOT}\n${ROOT2}\n`,
+			[`info-${key(ROOT2)}.txt`]: 'sandbox\tDELETE_FAILED\tNone\n',
+		});
+		assert.equal(r.status, 0, r.stdout);
+		assert.deepEqual(r.deletes, [RETAIN_TODO, `cloudformation delete-stack --stack-name ${ROOT2}`]);
+		assert.doesNotMatch(r.calls, new RegExp(`list-stack-resources --stack-name ${ROOT2} --output json`));
+	});
+
+	it('reports a table retained on an earlier run in the summary, on every later run', () => {
+		// The root is gone too: only the deleted model stack's record is left.
+		const r = runStep(afterRetain(), { created: 'None' });
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.stdout, new RegExp(`^::warning::${TODO_NAME} retained TodoTable when it was deleted`, 'm'));
+		assert.match(r.summary, new RegExp(`^- leftover: TodoTable .* delete DynamoDB table ${REAL_TABLE} by hand`, 'm'));
+		assert.doesNotMatch(r.summary, NO_ACCOUNT);
 	});
 
 	it('only retries plainly a ROLLBACK_FAILED sandbox (the retain needs DELETE_FAILED)', () => {
 		const r = runStep(sandbox(), { status: 'ROLLBACK_FAILED' });
 		assert.equal(r.status, 0, r.stdout);
 		assert.deepEqual(r.deletes, [`cloudformation delete-stack --stack-name ${ROOT}`]);
+	});
+});
+
+describe('cleanup-stacks.yml checkout', () => {
+	// Every leg runs scripts from scripts/ci, so the comment names them.
+	it('names the scripts it checks out for', () => {
+		const lines = readFileSync(WORKFLOW, 'utf8').split('\n');
+		const at = lines.findIndex((l, i) => i > lines.indexOf('  cleanup:') && l.trim().startsWith('- uses: actions/checkout@'));
+		const comment = lines.slice(at - 3, at).join('\n');
+		assert.match(comment, /amplify-stuck-delete\.sh/);
 	});
 });

@@ -61,7 +61,9 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
-      # Every leg: the REST API sweep runs scripts/ci/rest-api-quota.sh.
+      # The steps below source scripts/ci/aws-error.sh, the REST API sweep runs
+      # scripts/ci/rest-api-quota.sh and the Amplify sweep runs
+      # scripts/ci/amplify-stuck-delete.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
@@ -515,8 +517,9 @@ jobs:
             # model stack retaining only that table resource, and the root is
             # deleted on the next run. The real table survives the retain and no
             # sweep deletes tables, so it is named in a warning and the step summary
-            # for deletion by hand. The script runs from the job's checkout, which
-            # includes scripts/ci on every leg.
+            # for deletion by hand, on this run and every later one (--leftovers
+            # below). The script runs from the job's checkout, which includes
+            # scripts/ci on every leg.
             echo "🧹 Emptying nested buckets for $STACK"
             _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
@@ -544,6 +547,11 @@ jobs:
             fi
           done
 
+          # Tables retained on earlier runs, reported again on every run until
+          # CloudFormation drops the deleted stack's record (90 days).
+          AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh --leftovers ||
+            echo "::warning::amplify-stuck-delete.sh --leftovers failed; tables retained on earlier runs are not reported this run"
+
           # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
           # DELETE_FAILED (commonly the managed DynamoDB table) surfaced as a warning
           # so the backlog can't grow silently and exhaust the AppSync API quota.
@@ -559,11 +567,12 @@ jobs:
           echo "- Root delete deferred (nested stack delete started): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Nested retain script failed: $SCRIPT_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
-          # What amplify-stuck-delete.sh retained (with the DynamoDB table to
-          # delete by hand) and the failed resources it left in place.
+          # What amplify-stuck-delete.sh retained, this run or earlier (with the
+          # DynamoDB table to delete by hand), and the failed resources it left
+          # in place.
           if [ -s "$RETAINED_FILE" ]; then
             echo "" | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "Retained, left-in-place and bucket-blocked resources of stuck sandboxes:" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Retained, leftover, left-in-place and bucket-blocked resources of stuck sandboxes:" | tee -a "$GITHUB_STEP_SUMMARY"
             tee -a "$GITHUB_STEP_SUMMARY" < "$RETAINED_FILE"
           fi
           rm -f "$RETAINED_FILE"
