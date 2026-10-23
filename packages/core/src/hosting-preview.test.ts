@@ -327,6 +327,7 @@ describe('the trim settings on their own', () => {
     ['imageOptimization: false behind the ALB', { imageOptimization: false, frontDoor: { kind: 'alb' } }, /imageOptimization: false.*kind: 'alb'/],
     ["edgeRoutes: 'regional' behind CloudFront", { edgeRoutes: 'regional' }, /edgeRoutes: 'regional'/],
     ["buildId: 'fixed' behind CloudFront", { buildId: 'fixed' }, /buildId: 'fixed'.*edge cache/],
+    ["buildId: 'fixed' behind frontDoor: null (the default door)", { buildId: 'fixed', frontDoor: null as never }, /buildId: 'fixed'.*'cloudfront' \(the default\)/],
     ["buildId: 'fixed' behind the stacked door", { buildId: 'fixed', frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } }, /buildId: 'fixed'/],
     ['the preview preset with a CloudFront door override', { ...HostingPresets.preview, frontDoor: 'cloudfront' }, /UnsupportedHostingSettingError|not available/],
   ];
