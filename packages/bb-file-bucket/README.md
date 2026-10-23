@@ -287,5 +287,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
 
+When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
+
 
 
