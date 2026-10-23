@@ -38,8 +38,12 @@ describe('runTeardown', () => {
 
 	it('never throws, so the next teardown still runs', () => {
 		const failures = [];
-		assert.doesNotThrow(() => runTeardown(process.execPath, ['-e', 'process.exit(2)'], {}, ROOT, failures));
-		assert.equal(failures.length, 1);
+		assert.doesNotThrow(() => {
+			runTeardown(process.execPath, ['-e', 'process.exit(2)'], {}, ROOT, failures);
+			runTeardown(process.execPath, ['-e', 'process.exit(3)'], {}, ROOT, failures);
+		});
+		assert.equal(failures.length, 2);
+		assert.match(failures[1], /exited with 3/);
 	});
 
 	// POSIX only: spawnSync reports a signal kill as status null + signal.
