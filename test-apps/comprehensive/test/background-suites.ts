@@ -139,11 +139,15 @@ function nodeOptionsTokens(options: string): string[] {
  * This process's environment minus NODE_TEST_CONTEXT (node --test sets it in
  * each test file's process; a child inheriting it would report to that runner
  * in its internal protocol instead of printing results to its own stdout) and
- * minus any test filter in NODE_OPTIONS.
+ * minus any test filter or inspector flag in NODE_OPTIONS (see childExecArgv).
  */
 function childEnv(): NodeJS.ProcessEnv {
   const { NODE_TEST_CONTEXT: _runnerContext, ...env } = process.env;
-  if (env.NODE_OPTIONS) env.NODE_OPTIONS = withoutTestFilters(nodeOptionsTokens(env.NODE_OPTIONS)).join(' ');
+  if (env.NODE_OPTIONS) {
+    env.NODE_OPTIONS = withoutTestFilters(nodeOptionsTokens(env.NODE_OPTIONS))
+      .filter((flag) => !flag.replace(/"/g, '').startsWith('--inspect'))
+      .join(' ');
+  }
   return env;
 }
 
