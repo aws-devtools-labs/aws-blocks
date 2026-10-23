@@ -121,13 +121,41 @@ export function tlsConnectionMessage(
   };
 }
 
+/** A SQLSTATE (`57P01`) or a Node errno name (`ECONNRESET`); anything else is not logged. */
+const LOGGABLE_ERROR_CODE = /^(?:[0-9A-Z]{5}|E[A-Z0-9_]{2,30})$/;
+
+/**
+ * Build the warning logged when a pooled connection's socket errors. The text
+ * is fixed: the error's message is never included, because it can carry
+ * server-supplied text (a FATAL message may hold a credential or a newline).
+ * The error's `code` is included only when it has the shape of a SQLSTATE or a
+ * Node errno name. The error object itself is never logged (pg attaches the
+ * client, with its connection parameters, to it).
+ */
+function connectionErrorMessage(err: Error, during: 'idle' | 'transaction'): string {
+  const code = 'code' in err && typeof err.code === 'string' && LOGGABLE_ERROR_CODE.test(err.code) ? ` (${err.code})` : '';
+  return during === 'idle'
+    ? `[PgClientEngine] An idle database connection was closed unexpectedly${code}. ` +
+        'The pool discarded it and opens a replacement when one is needed.'
+    : `[PgClientEngine] A database connection was closed unexpectedly during a transaction${code}. ` +
+        'The transaction fails and the connection is discarded.';
+}
+
 /**
  * DatabaseEngine implementation using the `pg` library.
  * Connects to any PostgreSQL-compatible database (Supabase, Neon, DSQL, etc.)
  * via a connection pool.
+ *
+ * An idle pooled connection that the server or network drops (a pooler's idle
+ * timeout, a reset, a Lambda freeze/thaw) is discarded and logged as a warning;
+ * it never crashes the process, and the pool opens a replacement connection
+ * when one is needed. A connection dropped during a transaction fails that
+ * transaction and is likewise logged and discarded, never crashing the process.
  */
 export class PgClientEngine implements DatabaseEngine {
   private pool: pg.Pool;
+  /** The `'error'` listener attached to each checked-out transaction client (see beginTransaction). */
+  private readonly txErrorListeners = new WeakMap<pg.PoolClient, (err: Error) => void>();
 
   constructor(config: PgClientEngineConfig) {
     assertPostgresUrl(config.connectionString);
@@ -166,6 +194,16 @@ export class PgClientEngine implements DatabaseEngine {
       const { level, message } = tlsConnectionMessage(baseSsl, config.connectionString);
       console[level](message);
     });
+
+    // pg-pool discards an idle client whose socket errors and re-emits the error
+    // on the pool. An EventEmitter 'error' with no listener throws, which would
+    // crash the process even though the pool is healthy and reconnects on the
+    // next checkout. Log a fixed warning and continue. Neither the error object
+    // (it carries the client and its connection parameters) nor its message
+    // (it can carry server-supplied text) is logged; see connectionErrorMessage.
+    this.pool.on('error', (err: Error) => {
+      console.warn(connectionErrorMessage(err, 'idle'));
+    });
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
@@ -186,12 +224,35 @@ export class PgClientEngine implements DatabaseEngine {
     }
   }
 
+  /**
+   * Check out a pooled client and run `BEGIN` on it. If `BEGIN` fails, the
+   * client is released with the error (so pg closes the possibly broken
+   * connection instead of reusing it) before the translated error is thrown;
+   * a failed begin never holds a pool slot.
+   *
+   * While checked out, the client carries an `'error'` listener that logs a
+   * warning, so a connection dropped mid-transaction fails the transaction's
+   * queries instead of crashing the process. The listener is removed when the
+   * client is released (commit, rollback, or a failed `BEGIN`).
+   */
   async beginTransaction(): Promise<TransactionHandle> {
+    let client: pg.PoolClient | undefined;
     try {
-      const client = await this.pool.connect();
+      client = await this.pool.connect();
+      // pg-pool removes its own idle 'error' listener while a client is checked
+      // out, and pg's Client emits 'error' when its socket ends unexpectedly
+      // (even with a query in flight). Without a listener of our own, that
+      // emit throws and terminates the process. `pool.query()` needs no such
+      // listener: pg-pool attaches one for the duration of each query.
+      const listener = (err: Error) => {
+        console.warn(connectionErrorMessage(err, 'transaction'));
+      };
+      client.on('error', listener);
+      this.txErrorListeners.set(client, listener);
       await client.query('BEGIN');
       return client;
     } catch (e) {
+      if (client) this.releaseTxClient(client, e instanceof Error ? e : true);
       translatePgError(e, 'PgClientEngine');
     }
   }
@@ -201,7 +262,7 @@ export class PgClientEngine implements DatabaseEngine {
     try {
       await client.query('COMMIT');
     } finally {
-      client.release();
+      this.releaseTxClient(client);
     }
   }
 
@@ -210,8 +271,22 @@ export class PgClientEngine implements DatabaseEngine {
     try {
       await client.query('ROLLBACK');
     } finally {
-      client.release();
+      this.releaseTxClient(client);
     }
+  }
+
+  /**
+   * Detach the transaction's `'error'` listener (once) and return the client to
+   * the pool, so a pooled idle client never carries a stale listener. Passing
+   * an error makes pg discard the connection instead of reusing it.
+   */
+  private releaseTxClient(client: pg.PoolClient, err?: Error | boolean): void {
+    const listener = this.txErrorListeners.get(client);
+    if (listener) {
+      this.txErrorListeners.delete(client);
+      client.removeListener('error', listener);
+    }
+    client.release(err);
   }
 
   async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
