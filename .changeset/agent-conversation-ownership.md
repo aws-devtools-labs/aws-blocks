@@ -3,7 +3,7 @@
 "@aws-blocks/blocks": minor
 ---
 
-fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()`, `getPendingInterrupts()`, and `getChannel()`
+fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller
 
 `stream()` and `resume()` accepted any `conversationId` alongside a `userId` and never checked that the conversation belonged to that user. A caller who knew another user's conversation ID could add turns to it, or approve (and `trust`) that user's pending tool call, which then ran with the agent's IAM role. The same ID also let a caller read the conversation's history, and listen to or push chunks onto its live Realtime channel (the default `channelId` is the conversation ID).
 

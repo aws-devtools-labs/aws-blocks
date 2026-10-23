@@ -538,8 +538,20 @@ describe('conversation ownership on write paths', () => {
 		assert.deepStrictEqual(received, []);
 		await assert.rejects(
 			() => agent.stream('hi', { channelId: `u/${ownerId}/${ownerConv}`, userId: loneSurrogate }),
-			(err: unknown) => err instanceof URIError,
+			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
+	});
+
+	test('resume() rejects an unscopable userId before persisting any approval', async () => {
+		const { agent } = approvalAgent('test-own-resume-unscopable');
+		const loneSurrogate = String.fromCharCode(0xd800);
+		const convId = await agent.createConversationId(loneSurrogate);
+		await assert.rejects(
+			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: loneSurrogate }),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		const history = await agent.getConversation(convId, loneSurrogate);
+		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
 	});
 
 	test('getChannel() without a userId throws InvalidUsage when persistence is enabled', async () => {

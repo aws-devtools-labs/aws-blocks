@@ -33,7 +33,8 @@ function toRuntimeSessionId(base: string): string {
  */
 function runtimeSessionIdFor(payload: { conversationId?: string; channelId: string; userId: string }): string {
 	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
-	return createHash('sha256').update(`turn:${encodeURIComponent(payload.userId)}/${payload.channelId}`).digest('hex');
+	// JSON keeps the (userId, channelId) pair unambiguous and, unlike encodeURIComponent, never throws.
+	return createHash('sha256').update(`turn:${JSON.stringify([payload.userId, payload.channelId])}`).digest('hex');
 }
 
 /**
