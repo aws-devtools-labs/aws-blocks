@@ -163,6 +163,12 @@ function main(): void {
     console.log("\n=== Build scaffolded app ===");
     run("npm", ["run", "build"], { cwd: appDir, env });
 
+    // ── Typecheck ───────────────────────────────────────────
+    // `build` type-checks only the app's own sources; `typecheck` also covers
+    // the template's tests, so a stale sample test is caught here.
+    console.log("\n=== Typecheck scaffolded app ===");
+    run("npm", ["run", "typecheck"], { cwd: appDir, env });
+
     // ── Local e2e (mocks) ───────────────────────────────────
     console.log("\n=== Run local e2e (mocks, no AWS account) ===");
     run("npm", ["run", "test:e2e"], { cwd: appDir, env });
