@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { resolveExtensions } from './pglite-extensions.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -140,11 +141,37 @@ export class PGliteEngine implements DatabaseEngine {
    * @param createClient - factory for the underlying PGlite instance; defaults
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
+   *
+   * To load Postgres extensions (PostGIS, pgvector) use the async
+   * {@link PGliteEngine.create} factory instead — extension packages are
+   * resolved by dynamic import, which the synchronous constructor cannot do.
    */
   constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
     this.dataDir = dataDir;
     this.createClient = createClient;
     this.db = this.createDb();
+  }
+
+  /**
+   * Construct a PGliteEngine with Postgres extensions loaded (PostGIS, pgvector).
+   *
+   * Extensions are resolved by dynamic `import()` of their optional peer packages
+   * (see {@link resolveExtensions}), so this is async where the constructor is
+   * sync. The resolved `{ namespace: extension }` object is captured in the
+   * `createClient` closure, so it is reapplied on every PGlite instance the
+   * init-trap retry path recreates — the extensions survive a WASM-trap retry.
+   *
+   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir)`.
+   *
+   * @param dataDir - directory PGlite persists to (nested paths are created).
+   * @param extensions - extension names from `DatabaseOptions.extensions`.
+   */
+  static async create(dataDir: string = '.bb-data', extensions?: readonly string[]): Promise<PGliteEngine> {
+    const resolved = await resolveExtensions(extensions);
+    if (Object.keys(resolved).length === 0) {
+      return new PGliteEngine(dataDir);
+    }
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: resolved }));
   }
 
   /**
