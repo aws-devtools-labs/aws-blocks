@@ -22,6 +22,7 @@ export type {
 	KeyCondition,
 	QueryOptions,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 } from './types.js';
@@ -33,6 +34,7 @@ import type {
 	ExternalKmsKeyRef,
 	SortKeyCondition,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 	TableKey,
@@ -149,7 +151,8 @@ export class DistributedTable<
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
 
-	async get(key: TableKey<T, K>): Promise<T | null> {
+	// The in-memory store is always strongly consistent, so `options.consistentRead` needs no handling.
+	async get(key: TableKey<T, K>, _options?: GetOptions): Promise<T | null> {
 		return this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null);
 	}
 

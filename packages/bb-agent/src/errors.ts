@@ -12,7 +12,7 @@ import { blocksError as coreBlocksError, brandBlocksError } from '@aws-blocks/co
  * import { AgentErrors } from '@aws-blocks/bb-agent';
  *
  * try {
- *   await agent.getConversation(id);
+ *   await agent.getConversation(id, userId);
  * } catch (e) {
  *   if (isBlocksError(e, AgentErrors.PersistenceRequired)) {
  *     // agent is in inferenceOnly mode

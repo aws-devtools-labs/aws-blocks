@@ -2011,7 +2011,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentGetChannel(channelId: string) {
-    return { channel: await agent.getChannel(channelId) };
+    const user = await auth.getCurrentUser(context);
+    return { channel: await agent.getChannel(channelId, user?.userId ?? 'anonymous') };
   },
 
   async agentGetRawDescriptor(channelId: string) {
@@ -2019,9 +2020,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // removed so client middleware does NOT hydrate it into a channel client. useChat's
     // `refresh` callback needs the raw token fields to re-mint fresh credentials before a
     // reconnect. Mirrors realtimeGetRawDescriptor, but sourced from the agent's chunks
-    // channel (agent.getChannel === realtime.getChannel('chunks', channelId)) so the
+    // channel (agent.getChannel(channelId, userId), scoped to the session user) so the
     // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
-    const ch = await agent.getChannel(channelId);
+    const user = await auth.getCurrentUser(context);
+    const ch = await agent.getChannel(channelId, user?.userId ?? 'anonymous');
     const raw = ch.toJSON() as Record<string, unknown>;
     const { __blocks, ...rest } = raw;
     // Preserve the descriptor's real channel key (the full `{fullId}/chunks/{channelId}`
@@ -2044,7 +2046,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentGetConversation(conversationId: string) {
-    return { messages: await agent.getConversation(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { messages: await agent.getConversation(conversationId, user?.userId ?? 'anonymous') };
   },
 
   async agentDeleteConversation(conversationId: string) {
@@ -2059,7 +2062,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
-    return { messages: await inferenceAgent.getConversation(conversationId) };
+    return { messages: await inferenceAgent.getConversation(conversationId, 'n/a') };
   },
 
   async agentInferenceOnlyDeleteConversation(conversationId: string) {
@@ -2078,7 +2081,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversationId };
   },
   async cannedGetChannel(channelId: string) {
-    return { channel: await cannedAgent.getChannel(channelId) };
+    return { channel: await cannedAgent.getChannel(channelId, 'test-user') };
   },
   async cannedResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean }>, conversationId?: string) {
     await cannedAgent.resume(channelId, responses, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
@@ -2088,13 +2091,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { interrupts: await cannedAgent.getPendingInterrupts(conversationId, 'test-user') };
   },
   async cannedGetConversation(conversationId: string) {
-    return { messages: await cannedAgent.getConversation(conversationId) };
+    return { messages: await cannedAgent.getConversation(conversationId, 'test-user') };
   },
 
   async fallbackStream(message: string) {
     const channelId = crypto.randomUUID();
     const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
-    return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+    return { channelId, channel: await fallbackAgent.getChannel(channelId, 'test-user') };
   },
 
   async agentPresetStream(presetName: string, message: string) {
