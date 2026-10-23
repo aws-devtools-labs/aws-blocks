@@ -84,11 +84,13 @@ export interface BackgroundSuitesOptions {
 const MAX_FAILING_TESTS = 10;
 
 /**
- * node:test flags that pick which tests run. A child inheriting the parent's
- * filter would run none of its own tests and pass; its `Background suite - *`
- * test stands for the whole suite, so the child always runs all of it.
+ * node:test flags that pick the only tests to run. A child inheriting the
+ * parent's filter would run none of its own tests and pass; its
+ * `Background suite - *` test stands for the whole suite, so the child runs
+ * all of it. (--test-skip-pattern is passed on: it only skips the matching
+ * tests, which is what whoever set it wants in the children too.)
  */
-const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-skip-pattern', '--test-only'];
+const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-only'];
 
 /** `flags` without the test filters, and without the value of a `--test-name-pattern <value>` form. */
 function withoutTestFilters(flags: readonly string[]): string[] {
@@ -121,6 +123,15 @@ function reporterArgs(): string[] {
 }
 
 /**
+ * NODE_OPTIONS split the way node splits it: on whitespace outside double
+ * quotes. Each token keeps its quotes, so joining them back gives node the
+ * same flags.
+ */
+function nodeOptionsTokens(options: string): string[] {
+  return options.match(/(?:[^\s"]+|"(?:\\.|[^"\\])*")+/g) ?? [];
+}
+
+/**
  * This process's environment minus NODE_TEST_CONTEXT (node --test sets it in
  * each test file's process; a child inheriting it would report to that runner
  * in its internal protocol instead of printing results to its own stdout) and
@@ -128,7 +139,7 @@ function reporterArgs(): string[] {
  */
 function childEnv(): NodeJS.ProcessEnv {
   const { NODE_TEST_CONTEXT: _runnerContext, ...env } = process.env;
-  if (env.NODE_OPTIONS) env.NODE_OPTIONS = withoutTestFilters(env.NODE_OPTIONS.split(/\s+/).filter(Boolean)).join(' ');
+  if (env.NODE_OPTIONS) env.NODE_OPTIONS = withoutTestFilters(nodeOptionsTokens(env.NODE_OPTIONS)).join(' ');
   return env;
 }
 
