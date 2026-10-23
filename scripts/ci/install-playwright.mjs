@@ -27,6 +27,7 @@
 //   --deadline-minutes  budget for all attempts (default 23)
 
 import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -57,6 +58,8 @@ const APT_PROCESSES = ['apt-get', 'dpkg'];
  * that root sudo) still holds the stdio open.
  *
  * @param onSpawn called with the child, so a signal handler can reach it
+ * @param stdout where the child's stdout is copied (anything with `write`; default this process's)
+ * @param stderr where the child's stderr is copied (default this process's)
  * @returns `{ code, signal, killed }` where `killed` is `'silence'` or
  *   `'deadline'` when this function stopped it, else null. Never rejects; a
  *   spawn error is reported as `code: null`.
@@ -72,6 +75,8 @@ export function runWatched(
 		env = process.env,
 		log = console.log,
 		onSpawn = () => {},
+		stdout = process.stdout,
+		stderr = process.stderr,
 	} = {},
 ) {
 	return new Promise((resolve) => {
@@ -116,8 +121,8 @@ export function runWatched(
 			openStreams--;
 			if (openStreams === 0 && exit) settle();
 		};
-		child.stdout.on('data', onData(process.stdout));
-		child.stderr.on('data', onData(process.stderr));
+		child.stdout.on('data', onData(stdout));
+		child.stderr.on('data', onData(stderr));
 		child.stdout.on('close', onClose);
 		child.stderr.on('close', onClose);
 		child.on('error', (e) => {
@@ -175,11 +180,37 @@ export async function cleanupApt({ run = spawnSync, wait = sleep, platform = pro
 }
 
 /**
+ * Record one attempt's outcome where later runs can be counted: a fixed
+ * `install-playwright: attempt=<i>/<n> result=<result>` line in the log, and
+ * the same line in the step summary when GITHUB_STEP_SUMMARY is set. A
+ * recovered stall leaves the step green, so this is what keeps the stall rate
+ * measurable. `result` is `ok`, `silence`, `deadline` or `exit-<code or signal>`.
+ * Never throws.
+ */
+export function recordAttempt(i, attempts, result, { log = console.log, summaryFile = process.env.GITHUB_STEP_SUMMARY } = {}) {
+	const line = `install-playwright: attempt=${i}/${attempts} result=${result}`;
+	log(line);
+	if (!summaryFile) return;
+	try {
+		appendFileSync(summaryFile, `${line}\n`);
+	} catch {
+		/* the summary is best-effort */
+	}
+}
+
+/** The `result` recordAttempt reports for a runWatched result. */
+function attemptResult(r) {
+	if (r.killed) return r.killed;
+	return r.code === 0 ? 'ok' : `exit-${r.code ?? r.signal}`;
+}
+
+/**
  * Run `attempt()` up to `attempts` times or until `deadlineAt`, calling
  * `cleanup()` after every failed attempt (the last one too, so nothing it
  * left behind holds the apt locks for the rest of the job).
  *
  * @param attempt `(i) => Promise<runWatched result>`
+ * @param record `(i, attempts, result)`, called after every attempt; the script passes {@link recordAttempt}
  * @returns true once an attempt exits 0; false when they all failed or time ran out
  */
 export async function withRetry(
@@ -191,10 +222,12 @@ export async function withRetry(
 		cleanup = cleanupApt,
 		log = console.log,
 		now = Date.now,
+		record = () => {},
 	} = {},
 ) {
 	for (let i = 1; i <= attempts; i++) {
 		const r = await attempt(i);
+		record(i, attempts, attemptResult(r));
 		if (r.code === 0 && !r.killed) return true;
 		const why = r.killed === 'silence' ? 'stalled' : r.killed === 'deadline' ? 'ran out of time' : `exited with ${r.code ?? r.signal}`;
 		await cleanup();
@@ -248,7 +281,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 			console.log(`\n$ npx ${args.join(' ')}  (attempt ${i}/${ATTEMPTS})`);
 			return runWatched('npx', args, { deadlineAt, onSpawn: (c) => (current = c) });
 		},
-		{ deadlineAt },
+		{ deadlineAt, record: recordAttempt },
 	);
 	process.exit(ok ? 0 : 1);
 }

@@ -67,7 +67,11 @@ jobs:
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Must cover the sum of all step budgets (agent 35 + build/test 12 + judge 20 + ~13 uncapped).
+    # Not the sum of the step caps: the capped steps add up to 125 min (Playwright install 25,
+    # agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3), plus the uncapped
+    # ones. A cell that runs long in an early step can hit this job timeout in a later step
+    # (the judge, the analysis or an upload) before that step's own cap fires. The caps bound
+    # each step on its own; only this line bounds the cell.
     timeout-minutes: 85
     permissions:
       id-token: write
