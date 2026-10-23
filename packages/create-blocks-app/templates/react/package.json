@@ -21,7 +21,7 @@
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
     "prebuild": "blocks-generate-client",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit -p tsconfig.build.json && vite build",
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "secret": "tsx aws-blocks/scripts/secret.ts",
