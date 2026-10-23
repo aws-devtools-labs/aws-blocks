@@ -30,7 +30,8 @@ const DENIED =
 // A stub `aws` that serves canned output from its fixture dir and logs every call.
 //   logs describe-log-groups --log-group-name-prefix P -> lines of log-groups.tsv starting with P
 //                                                          (every line when no-filter is present)
-//   lambda list-functions                               -> functions.txt
+//   lambda list-functions                               -> functions.txt (after sleeping
+//                                                          list-delay's seconds, if present)
 //   rds describe-db-clusters                            -> clusters.txt
 //   <service>.err present                               -> its text on stderr, exit 254
 //   logs delete-log-group --log-group-name N            -> appends N to deleted.txt, or fails
@@ -46,7 +47,9 @@ case "$1 $2" in
 	p=$(arg --log-group-name-prefix "$@")
 	[ -f "$d/no-filter" ] && p=''
 	while IFS= read -r line || [ -n "$line" ]; do case "$line" in "$p"*) printf '%s\\n' "$line" ;; esac; done < "$d/log-groups.tsv" ;;
-'lambda list-functions') cat "$d/functions.txt" 2>/dev/null || true ;;
+'lambda list-functions')
+	[ -f "$d/list-delay" ] && sleep "$(cat "$d/list-delay")"
+	cat "$d/functions.txt" 2>/dev/null || true ;;
 'rds describe-db-clusters') cat "$d/clusters.txt" 2>/dev/null || true ;;
 'logs delete-log-group')
 	n=$(arg --log-group-name "$@")
@@ -259,6 +262,17 @@ describe('log-group sweep step', () => {
 		assert.equal(r.status, 0, r.stderr);
 		assert.deepEqual(r.deleted, []);
 		assert.match(r.summary, /Deferred to next run \(time budget\): 2/);
+	});
+
+	it('starts the time budget after the listings, so a slow listing still leaves time to delete', () => {
+		const dir = fixture({ 'log-groups.tsv': group('/aws/lambda/bb-test-a-Fn-1', 30), 'list-delay': '2' });
+		const r = run(dir, { LOG_GROUP_SWEEP_BUDGET_SECONDS: '1' });
+		assert.equal(r.status, 0, r.stderr);
+		assert.deepEqual(r.deleted, ['/aws/lambda/bb-test-a-Fn-1']);
+	});
+
+	it('defaults to a 5-minute budget', () => {
+		assert.match(step().script, /\$\{LOG_GROUP_SWEEP_BUDGET_SECONDS:-300\}/);
 	});
 });
 
