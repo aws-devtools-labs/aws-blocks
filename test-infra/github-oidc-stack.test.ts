@@ -124,3 +124,18 @@ describe('BlocksGithubE2eOidc', () => {
     assert.equal(benchRole.Properties.AssumeRolePolicyDocument.Statement[0].Principal.Federated, arn);
   });
 });
+
+describe('blocks-github-e2e cleanup grants', () => {
+  // The leftover-table report only needs to know whether a table still exists.
+  test('reads Amplify sandbox tables with DescribeTable only', () => {
+    const { template } = synth();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement,
+    );
+    const dynamodb = statements.filter((s) => [s.Action].flat().some((a: string) => a.startsWith('dynamodb:')));
+    assert.equal(dynamodb.length, 1);
+    assert.equal(dynamodb[0].Sid, 'CleanupLeftoverAmplifyTables');
+    assert.equal(dynamodb[0].Action, 'dynamodb:DescribeTable');
+    assert.equal(dynamodb[0].Resource, `arn:aws:dynamodb:${E2E_REGION}:${ACCOUNT}:table/*-NONE`);
+  });
+});

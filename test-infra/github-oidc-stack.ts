@@ -234,6 +234,17 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
       resources: E2E_PREFIXES.map((p) => `arn:aws:iam::${account}:role/${p}*`),
     }),
   );
+  // The Amplify sweep reports a DynamoDB table that a stuck sandbox's delete
+  // had to retain (scripts/ci/amplify-stuck-delete.sh --leftovers) until the
+  // table is gone. Describe only: no sweep deletes tables. Amplify sandbox
+  // tables are named <Model>-<apiId>-NONE.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLeftoverAmplifyTables',
+      actions: ['dynamodb:DescribeTable'],
+      resources: [`arn:aws:dynamodb:${region}:${account}:table/*-NONE`],
+    }),
+  );
   role.addToPolicy(
     new iam.PolicyStatement({
       sid: 'CleanupResponseHeadersPolicies',
