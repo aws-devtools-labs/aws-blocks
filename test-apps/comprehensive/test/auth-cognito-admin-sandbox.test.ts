@@ -229,7 +229,8 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 				const near = `${base} a\\\\b "c" \\"d\\"`;
 				assert.deepStrictEqual(await api.authCAdminScan({ attribute: 'name', match: 'equals', value: near }), []);
 			} finally {
-				await api.authCAdminDeleteUser(u);
+				// Don't let a cleanup failure hide the assertion that failed.
+				await api.authCAdminDeleteUser(u).catch((e: unknown) => console.warn(`cleanup of ${u} failed:`, e));
 			}
 		});
 	});
