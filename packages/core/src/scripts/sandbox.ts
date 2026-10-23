@@ -187,13 +187,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   process.env.BLOCKS_STAGE = 'sandbox';
 
-  // Fail fast if AWS credentials are missing/expired, before spending ~10s in
-  // synth only to hit an opaque CDK credential error. Unlike deploy(), startSandbox
-  // isn't wrapped in trackCommand, so emit the FAIL event manually (mirroring the
-  // CDK-deploy failure path below) before rethrowing — otherwise a no-creds abort
-  // sends no telemetry.
+  // Fail fast if AWS credentials are missing/expired, or the account and Region were
+  // never CDK-bootstrapped, before spending ~10s in synth only to hit an opaque CDK
+  // error. Unlike deploy(), startSandbox isn't wrapped in trackCommand, so emit the
+  // FAIL event manually (mirroring the CDK-deploy failure path below) before
+  // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
