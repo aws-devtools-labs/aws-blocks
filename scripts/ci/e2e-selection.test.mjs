@@ -9,14 +9,15 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
 const SCRIPT = fileURLToPath(new URL('./e2e-selection.sh', import.meta.url));
-const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
+const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
+const WORKFLOW = join(WORKFLOWS, 'pr-checks.yml');
 const ALL = [
 	'compute-smoke',
 	'hosting',
@@ -91,7 +92,57 @@ function select(dir) {
 				return [line.slice(0, i), JSON.parse(line.slice(i + 1))];
 			}),
 	);
-	return { status: r.status, stdout: r.stdout, ...out };
+	const summaryFile = join(dir, '.summary');
+	const summary = existsSync(summaryFile) ? readFileSync(summaryFile, 'utf8') : '';
+	return { status: r.status, stdout: r.stdout, summary, ...out };
+}
+
+/** Each top-level job of a workflow file's text, by id, from its `  id:` line to the next one. */
+function jobsOf(yml) {
+	return Object.fromEntries(
+		yml
+			.split(/^(?=  [a-z][\w-]*:$)/m)
+			.slice(1)
+			.map((block) => [block.slice(2, block.indexOf(':')), block]),
+	);
+}
+
+/**
+ * Every job in the workflow files under `dir` that runs `cdk deploy` on the
+ * BlocksTestVpc stack, with its job-level concurrency group. A group's
+ * `needs.<job>.outputs.` is written `needs.*.outputs.`, so two jobs that read
+ * the same slot output from different jobs compare equal.
+ */
+function testVpcDeployers(dir) {
+	const found = [];
+	for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort()) {
+		for (const [job, block] of Object.entries(jobsOf(readFileSync(join(dir, file), 'utf8')))) {
+			const code = block
+				.split('\n')
+				.filter((line) => !line.trim().startsWith('#'))
+				.join('\n');
+			if (!/\bcdk deploy\b[^\n]*(?<![\w-])BlocksTestVpc(?![\w-])/.test(code)) continue;
+			const group =
+				/^ {4}concurrency:[ \t]*\n {6}group:[ \t]*(\S.*?)[ \t]*$/m.exec(code)?.[1] ??
+				/^ {4}concurrency:[ \t]*([^\s{].*?)[ \t]*$/m.exec(code)?.[1] ??
+				null;
+			found.push({ job: `${file} ${job}`, group: group?.replace(/needs\.[\w-]+\.outputs\./g, 'needs.*.outputs.') ?? null });
+		}
+	}
+	return found;
+}
+
+/** Fails unless every BlocksTestVpc deployer has a concurrency group, and they all share one. */
+function assertOneTestVpcGroup(deployers) {
+	const message =
+		'Every job that deploys BlocksTestVpc must share one concurrency group: AWS allows one private-DNS ' +
+		'interface endpoint per service per VPC, so two of them at once fail a deploy. Deployers: ' +
+		JSON.stringify(deployers);
+	assert.ok(
+		deployers.every((d) => d.group),
+		message,
+	);
+	assert.equal(new Set(deployers.map((d) => d.group)).size, 1, message);
 }
 
 const SOURCE = ['packages/core/src/a.ts'];
@@ -214,6 +265,19 @@ describe('e2e-selection.sh', () => {
 			assert.deepEqual([r.e2e, r.blocked, r.run], [[], [], []]);
 		});
 
+		it('says nothing when sandbox-vpc would not have run anyway', () => {
+			const r = select(repo(CI_ONLY, 'ci', VPC_OFF));
+			assert.deepEqual([r.e2e, r.blocked, r.run], [[], [], []]);
+			assert.doesNotMatch(r.stdout, /E2E VPC Smoke is left out/);
+			assert.doesNotMatch(r.summary, /E2E VPC Smoke is left out/);
+		});
+
+		it('flags the skip as a warning annotation and in the step summary', () => {
+			const r = select(repo(SOURCE, 'src', VPC_OFF));
+			assert.match(r.stdout, /^::warning::E2E VPC Smoke is left out: .*issues\/987/m);
+			assert.match(r.summary, /^E2E VPC Smoke is left out: .*issues\/987/m);
+		});
+
 		it('still blocks the other jobs a subset leaves out', () => {
 			const r = select(repo(SOURCE, 'src\n\nE2E: sandbox\n', VPC_OFF));
 			assert.deepEqual(r.e2e, ['sandbox']);
@@ -276,13 +340,7 @@ describe('e2e-selection.sh', () => {
 describe('pr-checks.yml', () => {
 	const yml = readFileSync(WORKFLOW, 'utf8');
 	const parsed = parse(yml).jobs;
-	// Each top-level job, from its `  id:` line to the next one.
-	const jobs = Object.fromEntries(
-		yml
-			.split(/^(?=  [a-z][\w-]*:$)/m)
-			.slice(1)
-			.map((block) => [block.slice(2, block.indexOf(':')), block]),
-	);
+	const jobs = jobsOf(yml);
 
 	it('has one E2E job per name the script knows', () => {
 		const e2eJobs = Object.keys(jobs)
@@ -294,9 +352,10 @@ describe('pr-checks.yml', () => {
 
 	// While test-apps/vpc-smoke's tests are off, e2e-selection.sh skips E2E VPC
 	// Smoke by reading the npm script the job runs, so the job must run its
-	// tests through that script and nothing else. Once they are on, this no
-	// longer applies.
-	it('runs the VPC smoke tests only through npm run test:e2e:sandbox:vpc while they are off', (t) => {
+	// tests through that script and nothing else. Once they are on, the job
+	// deploys endpoints into BlocksTestVpc again, so it must then share one
+	// concurrency group with every other job that deploys that VPC.
+	it('runs the VPC smoke tests only through npm run test:e2e:sandbox:vpc while they are off, and in the shared VPC group once on', () => {
 		// Ask the script, with this repo's package.json files.
 		const real = {};
 		for (const file of ['package.json', 'test-apps/vpc-smoke/package.json']) {
@@ -304,7 +363,7 @@ describe('pr-checks.yml', () => {
 			if (existsSync(path)) real[file] = readFileSync(path, 'utf8');
 		}
 		if (select(repo(SOURCE, 'src', real)).e2e.includes('sandbox-vpc')) {
-			t.skip('the VPC smoke tests are on');
+			assertOneTestVpcGroup(testVpcDeployers(WORKFLOWS));
 			return;
 		}
 		const job = jobs['e2e-sandbox-vpc'];
@@ -319,6 +378,48 @@ describe('pr-checks.yml', () => {
 			['        run: npm run test:e2e:sandbox:vpc'],
 			message,
 		);
+	});
+
+	it('finds the jobs that deploy BlocksTestVpc, with their concurrency groups', () => {
+		const deployers = testVpcDeployers(WORKFLOWS);
+		assert.ok(
+			deployers.some(
+				(d) =>
+					d.job === 'pr-checks.yml e2e-sandbox-vpc' && d.group === 'blocks-test-vpc-${{ needs.*.outputs.e2e-index }}',
+			),
+			JSON.stringify(deployers),
+		);
+	});
+
+	it('flags BlocksTestVpc deployers that use different or no concurrency groups', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'e2e-vpc-groups-'));
+		const job = (id, concurrency, deploy) =>
+			`  ${id}:\n    runs-on: ubuntu-latest\n${concurrency}    steps:\n      - run: cd test-infra && npx cdk deploy ${deploy} --require-approval never\n`;
+		const group = (g) => `    concurrency:\n      group: ${g}\n      cancel-in-progress: false\n`;
+		writeFileSync(
+			join(dir, 'a.yml'),
+			`on: push\njobs:\n${job('smoke', group('blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}'), 'BlocksTestVpc')}` +
+				job('other-vpc', group('unrelated'), 'BlocksComputeTestVpc BlocksTestVpcEndpoints'),
+		);
+		writeFileSync(
+			join(dir, 'b.yml'),
+			`on: push\njobs:\n${job('same-slot', group('blocks-test-vpc-${{ needs.e2e-slot.outputs.e2e-index }}'), 'BlocksTestVpc')}`,
+		);
+		const same = testVpcDeployers(dir);
+		assert.deepEqual(
+			same.map((d) => d.job),
+			['a.yml smoke', 'b.yml same-slot'],
+		);
+		assertOneTestVpcGroup(same);
+
+		writeFileSync(
+			join(dir, 'c.yml'),
+			`on: push\njobs:\n${job('endpoints', group('blocks-test-vpc-endpoints-${{ needs.e2e-slot.outputs.e2e-index }}'), 'BlocksTestVpc')}`,
+		);
+		assert.throws(() => assertOneTestVpcGroup(testVpcDeployers(dir)), /share one concurrency group/);
+
+		writeFileSync(join(dir, 'c.yml'), `on: push\njobs:\n${job('ungrouped', '', 'BlocksTestVpc')}`);
+		assert.throws(() => assertOneTestVpcGroup(testVpcDeployers(dir)), /share one concurrency group/);
 	});
 
 	for (const name of ALL) {
