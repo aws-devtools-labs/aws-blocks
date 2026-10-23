@@ -315,13 +315,13 @@ for (const [status, hint] of [
 	});
 }
 
-test('GSI manager: the failure message lists at most 10 indexes', async () => {
+test('GSI manager: the failure message lists at most 5 indexes', async () => {
 	templateHasTable = accessDenied('cloudformation:GetTemplate');
 	const many = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`idx${i}`, { partitionKey: `a${i}` }]));
 	const event = deleteEvent();
 	await assert.rejects(
 		() => handler({ ...event, ResourceProperties: { ...event.ResourceProperties, Indexes: many } }),
-		/\(idx0, idx1, idx2, idx3, idx4, idx5, idx6, idx7, idx8, idx9 and 2 more\)/,
+		/\(idx0, idx1, idx2, idx3, idx4 and 7 more\)/,
 	);
 });
 
