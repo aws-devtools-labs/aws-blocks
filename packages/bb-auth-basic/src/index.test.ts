@@ -334,6 +334,7 @@ describe('AuthBasic session revocation on sign-out', () => {
 function codesStore(auth: AuthBasic): {
 	get: (k: string) => Promise<string | null>;
 	put: (k: string, v: string, o?: { ttlSeconds?: number }) => Promise<void>;
+	delete: (k: string, o?: { ifValueEquals?: string }) => Promise<void>;
 } {
 	return (auth as unknown as { codes: ReturnType<typeof codesStore> }).codes;
 }
@@ -551,14 +552,18 @@ describe('AuthBasic verification-code attempt limiting', () => {
 			);
 		}
 
-		// The code row is gone — the counter was bound to the code's lifecycle.
-		assert.strictEqual(await codesStore(auth).get('reset:alice'), null, 'the code was invalidated on exhaustion');
+		// The row remains at the spent cap (it self-reaps at the code TTL rather
+		// than being deleted per guess — deleting per guess would open a
+		// delete-then-stale-resurrect race under concurrency).
+		const spent = await codesStore(auth).get('reset:alice');
+		assert.ok(spent, 'the code row persists at the spent cap');
+		assert.strictEqual(JSON.parse(spent!).attempts, 5, 'attempts is pinned at the cap');
 
-		// Even the CORRECT code is now rejected: the code no longer exists.
+		// Even the CORRECT code is now rejected: the cap is spent.
 		await assert.rejects(
 			auth.confirmResetPassword('alice', realCode, 'newpassword123'),
 			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
-			'the correct code is rejected after the code was invalidated',
+			'the correct code is rejected after the cap is exhausted',
 		);
 	});
 
@@ -611,7 +616,82 @@ describe('AuthBasic verification-code attempt limiting', () => {
 				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
 			);
 		}
-		assert.strictEqual(await codesStore(auth).get('signup:dave'), null, 'the signup code was invalidated too');
+		const spent = await codesStore(auth).get('signup:dave');
+		assert.ok(spent, 'the signup code row persists at the spent cap');
+		assert.strictEqual(JSON.parse(spent!).attempts, 5, 'signup attempts pinned at the cap');
+	});
+
+	test('concurrent wrong guesses cannot bypass the cap (worst-case interleaving)', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('erin', 'password123');
+		await auth.confirmSignUp('erin', lastCode());
+		await auth.resetPassword('erin');
+		const realCode = lastCode();
+
+		// Spend 4 of the 5 attempts sequentially, leaving exactly one in the budget.
+		for (let i = 0; i < 4; i++) {
+			await assert.rejects(auth.confirmResetPassword('erin', '000000', 'newpassword123'));
+		}
+
+		// Install a read barrier on the codes store: every `get` in the burst
+		// below blocks until ALL of them have read, so each request sees the SAME
+		// row (attempts: 4) before any CAS write lands — the exact interleaving a
+		// plain Promise.all would NOT force (submitted ≠ consumed budget). A
+		// non-atomic read-modify-write would let the whole burst past; the CAS
+		// reserve means only ONE request wins the single remaining attempt.
+		const store = codesStore(auth);
+		const originalGet = store.get.bind(store);
+		const BURST = 20; // 19 wrong + the correct code, all submitted together
+		let arrived = 0;
+		let release!: () => void;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		store.get = async (k: string) => {
+			const v = await originalGet(k);
+			if (k === 'reset:erin') {
+				arrived += 1;
+				if (arrived >= BURST) release();
+				await gate; // hold until the whole burst has read
+			}
+			return v;
+		};
+
+		// 19 wrong guesses + the correct code, submitted concurrently. With only
+		// one attempt left, at most one guess may be evaluated; the rest lose the
+		// CAS and are rejected without being evaluated.
+		const guesses = [...Array(BURST - 1)].map(() =>
+			auth.confirmResetPassword('erin', '000000', 'hijackedpw123').then(
+				() => 'ok',
+				() => 'rejected',
+			),
+		);
+		guesses.push(
+			auth.confirmResetPassword('erin', realCode, 'hijackedpw123').then(
+				() => 'ok',
+				() => 'rejected',
+			),
+		);
+		const results = await Promise.all(guesses);
+		store.get = originalGet; // restore
+
+		// The password must NOT have been reset by the burst: the cap held.
+		const succeeded = results.filter((r) => r === 'ok').length;
+		assert.strictEqual(succeeded, 0, 'no guess in the over-budget burst succeeded');
+
+		// Sign-in with the attacker password must fail; the original still works.
+		await assert.rejects(
+			auth.signIn('erin', 'hijackedpw123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+			'the attacker password was never set',
+		);
+		const user = await auth.signIn('erin', 'password123', ctx());
+		assert.strictEqual(user.username, 'erin', 'the original password still authenticates');
+
+		// The row ends pinned at the cap, not resurrected or over-counted.
+		const after = await codesStore(auth).get('reset:erin');
+		assert.ok(after, 'the row persists');
+		assert.strictEqual(JSON.parse(after!).attempts, 5, 'attempts ends exactly at the cap');
 	});
 });
 

@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError, isBlocksError } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 import { buildCookieSecurityAttrs, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
@@ -310,33 +310,69 @@ export class AuthBasic extends Scope implements BlocksAuth {
 			expires: number;
 			attempts?: number;
 		};
-		if (Date.now() > expires) {
-			await this.codes.delete(key);
+		if (Date.now() > expires || attempts >= MAX_CODE_ATTEMPTS) {
+			// Expired, or the cap is already spent. Delete only if the row is still
+			// exactly what we read, so a concurrent fresh issuance isn't clobbered.
+			await this.deleteCodeIfUnchanged(key, raw);
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
+
+		// RESERVE the attempt before evaluating the guess, with a compare-and-swap
+		// on the exact row we read (`ifValueEquals: raw`). This is what makes the
+		// cap hold under concurrency: in a parallel burst every request reads the
+		// same row, but only ONE CAS write per `attempts` value can win — the losers
+		// get ConditionalCheckFailed and are rejected WITHOUT their guess being
+		// evaluated, so they consume no budget and leak nothing. A plain
+		// read-modify-write would instead let the whole burst read `attempts` and
+		// each write back the same `attempts + 1`, advancing the counter once per
+		// burst rather than once per guess (slack scaling with attacker
+		// parallelism). The same CAS runs across Lambda instances on one DynamoDB
+		// row. `ifValueEquals` compares the serialized value, so the guard MUST be
+		// the original `raw` string, never a re-stringified object (key order).
+		const reserved = JSON.stringify({ hmac, expires, attempts: attempts + 1 });
+		try {
+			await this.codes.put(key, reserved, {
+				ifValueEquals: raw,
+				expiresAt: Math.floor(expires / 1000),
+			});
+		} catch (e) {
+			// Lost the race (another guess advanced or consumed the row first): the
+			// guess was never evaluated, so reject it exactly like a wrong code.
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) {
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			throw e;
+		}
+
 		const secret = await this.getSecret();
 		const expected = crypto.createHmac('sha256', secret).update(`${purpose}:${username}:${code}`).digest('hex');
 		if (!constantTimeEquals(hmac, expected)) {
-			// Wrong guess: burn one attempt. On the Nth failure, invalidate the code
-			// entirely (delete the row) so a 6-digit OTP can't be brute-forced within
-			// its validity window — the attempt cap, not the code entropy, is the
-			// bound. Otherwise persist the incremented count for the next request.
-			// The counter is a best-effort read-modify-write (KVStore has no atomic
-			// increment): concurrent wrong guesses for the same code can interleave
-			// and lose an increment, so an attacker may get somewhat more than
-			// MAX_CODE_ATTEMPTS tries. The code TTL still bounds the window, so this
-			// is a bounded weakening, not a hard cap — see DESIGN.md D-AB-4.
-			const nextAttempts = attempts + 1;
-			if (nextAttempts >= MAX_CODE_ATTEMPTS) {
-				await this.codes.delete(key);
-			} else {
-				await this.codes.put(key, JSON.stringify({ hmac, expires, attempts: nextAttempts }), {
-					expiresAt: Math.floor(expires / 1000),
-				});
-			}
+			// Wrong guess, attempt already reserved above. The row stays at the
+			// incremented count until the cap is reached, at which point the next
+			// attempt is rejected by the `attempts >= MAX_CODE_ATTEMPTS` guard and
+			// the row is cleaned up — no delete-then-resurrect race (a late stale
+			// write cannot re-create a deleted row, because the row is not deleted
+			// on each wrong guess; it self-reaps at the code TTL).
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		await this.codes.delete(key);
+		// Correct code: consume it. Conditional on the reserved value so a
+		// concurrent fresh issuance (a different row) is never deleted.
+		await this.deleteCodeIfUnchanged(key, reserved);
+	}
+
+	/**
+	 * Delete a code row only if it still holds exactly `expected` (the serialized
+	 * value previously read/written). A concurrent writer that replaced the row
+	 * (e.g. a fresh `resetPassword` issuance) leaves a ConditionalCheckFailed,
+	 * which is swallowed: the row we meant to remove is already gone.
+	 */
+	private async deleteCodeIfUnchanged(key: string, expected: string): Promise<void> {
+		try {
+			await this.codes.delete(key, { ifValueEquals: expected });
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return;
+			throw e;
+		}
 	}
 
 	// ── Validation ───────────────────────────────────────────────────────
