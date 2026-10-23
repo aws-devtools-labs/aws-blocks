@@ -192,7 +192,12 @@ class DartCodeGenerator {
       final constraints = _getConstraints(f.type);
       if (constraints == null) continue;
       final ident = _escapeIdentifier(f.name);
-      final stmts = _buildValidations(ident, constraints, !f.isRequired);
+      final stmts = _buildValidations(
+        f.name,
+        ident,
+        constraints,
+        !f.isRequired,
+      );
       validations.addAll(stmts);
     }
     final hasValidations = validations.isNotEmpty;
@@ -237,14 +242,16 @@ class DartCodeGenerator {
       '  factory ${record.name}.fromJson(Map<String, dynamic> json) {',
     );
     if (hasAdditional) {
-      final knownKeys = record.fields.map((f) => "'${f.name}'").join(', ');
+      final knownKeys = record.fields
+          .map((f) => _dartStringLiteral(f.name))
+          .join(', ');
       buf.writeln('    const knownKeys = {$knownKeys};');
     }
     buf.writeln('    return ${record.name}(');
     for (final f in record.fields) {
       final ident = _escapeIdentifier(f.name);
       buf.writeln(
-        "      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},",
+        "      $ident: ${_fromJsonExpr("json[${_dartStringLiteral(f.name)}]", f.type, allTypes, !f.isRequired)},",
       );
     }
     if (hasAdditional) {
@@ -269,9 +276,11 @@ class DartCodeGenerator {
       final ident = _escapeIdentifier(f.name);
       final expr = _toJsonExpr(ident, f.type, allTypes, !f.isRequired);
       if (f.isRequired) {
-        buf.writeln("      '${f.name}': $expr,");
+        buf.writeln('      ${_dartStringLiteral(f.name)}: $expr,');
       } else {
-        buf.writeln("      if ($ident != null) '${f.name}': $expr,");
+        buf.writeln(
+          '      if ($ident != null) ${_dartStringLiteral(f.name)}: $expr,',
+        );
       }
     }
     if (hasAdditional) {
@@ -304,12 +313,16 @@ class DartCodeGenerator {
     if (needsMap) {
       buf.writeln('  static const _jsonMap = <String, ${enumType.name}>{');
       for (var i = 0; i < enumType.values.length; i++) {
-        buf.writeln("    '${enumType.values[i]}': ${sanitized[i]},");
+        buf.writeln(
+          '    ${_dartStringLiteral(enumType.values[i])}: ${sanitized[i]},',
+        );
       }
       buf.writeln('  };');
       buf.writeln('  static const _toJsonMap = <${enumType.name}, String>{');
       for (var i = 0; i < enumType.values.length; i++) {
-        buf.writeln("    ${sanitized[i]}: '${enumType.values[i]}',");
+        buf.writeln(
+          '    ${sanitized[i]}: ${_dartStringLiteral(enumType.values[i])},',
+        );
       }
       buf.writeln('  };');
       buf.writeln('  String toJson() => _toJsonMap[this]!;');
@@ -363,7 +376,9 @@ class DartCodeGenerator {
       // Boolean discriminant: switch on the real bool; case labels and the
       // serialized value are unquoted true/false literals. true/false are
       // exhaustive for a bool, so no (unreachable) default clause is emitted.
-      buf.writeln("    switch (json['${sealed.discriminant}'] as bool) {");
+      buf.writeln(
+        '    switch (json[${_dartStringLiteral(sealed.discriminant)}] as bool) {',
+      );
       for (final v in sealed.variants) {
         buf.writeln(
           "      case ${v.discriminantValue}: return ${v.className}.fromJson(json);",
@@ -371,14 +386,21 @@ class DartCodeGenerator {
       }
       buf.writeln('    }');
     } else {
-      buf.writeln("    switch (json['${sealed.discriminant}'] as String) {");
+      buf.writeln(
+        '    switch (json[${_dartStringLiteral(sealed.discriminant)}] as String) {',
+      );
       for (final v in sealed.variants) {
         buf.writeln(
-          "      case '${v.discriminantValue}': return ${v.className}.fromJson(json);",
+          '      case ${_dartStringLiteral(v.discriminantValue)}: return ${v.className}.fromJson(json);',
         );
       }
+      // The discriminant appears twice: as message text inside the outer
+      // literal (escaped body, quotes stripped) and as a map key inside the
+      // live `${...}` interpolation (full escaped literal).
+      final discLiteral = _dartStringLiteral(sealed.discriminant);
+      final discText = discLiteral.substring(1, discLiteral.length - 1);
       buf.writeln(
-        "      default: throw ArgumentError('Unknown ${sealed.discriminant}: \${json['${sealed.discriminant}']}');",
+        "      default: throw ArgumentError('Unknown $discText: \${json[$discLiteral]}');",
       );
       buf.writeln('    }');
     }
@@ -431,7 +453,7 @@ class DartCodeGenerator {
       for (final f in v.fields) {
         final ident = _escapeIdentifier(f.name);
         buf.writeln(
-          "      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},",
+          "      $ident: ${_fromJsonExpr("json[${_dartStringLiteral(f.name)}]", f.type, allTypes, !f.isRequired)},",
         );
       }
       if (v.embeddedUnion != null) {
@@ -448,19 +470,23 @@ class DartCodeGenerator {
       buf.writeln('  Map<String, dynamic> toJson() {');
       buf.writeln('    return {');
       if (sealed.discriminantIsBoolean) {
-        buf.writeln("      '${sealed.discriminant}': ${v.discriminantValue},");
+        buf.writeln(
+          '      ${_dartStringLiteral(sealed.discriminant)}: ${v.discriminantValue},',
+        );
       } else {
         buf.writeln(
-          "      '${sealed.discriminant}': '${v.discriminantValue}',",
+          '      ${_dartStringLiteral(sealed.discriminant)}: ${_dartStringLiteral(v.discriminantValue)},',
         );
       }
       for (final f in v.fields) {
         final ident = _escapeIdentifier(f.name);
         final expr = _toJsonExpr(ident, f.type, allTypes, !f.isRequired);
         if (f.isRequired) {
-          buf.writeln("      '${f.name}': $expr,");
+          buf.writeln('      ${_dartStringLiteral(f.name)}: $expr,');
         } else {
-          buf.writeln("      if ($ident != null) '${f.name}': $expr,");
+          buf.writeln(
+            '      if ($ident != null) ${_dartStringLiteral(f.name)}: $expr,',
+          );
         }
       }
       if (v.embeddedUnion != null) {
@@ -559,14 +585,16 @@ class DartCodeGenerator {
           final ident = _escapeIdentifier(p.name);
           final valExpr = _paramToJsonExpr(ident, p.type, allTypes);
           if (p.isRequired) {
-            buf.writeln("      '${p.name}': $valExpr,");
+            buf.writeln('      ${_dartStringLiteral(p.name)}: $valExpr,');
           } else {
             if (_needsTransform(p.type, allTypes)) {
               buf.writeln(
-                "      if ($ident != null) '${p.name}': $ident.toJson(),",
+                '      if ($ident != null) ${_dartStringLiteral(p.name)}: $ident.toJson(),',
               );
             } else {
-              buf.writeln("      if ($ident != null) '${p.name}': $ident,");
+              buf.writeln(
+                '      if ($ident != null) ${_dartStringLiteral(p.name)}: $ident,',
+              );
             }
           }
         }
@@ -576,10 +604,12 @@ class DartCodeGenerator {
       final paramsArg = op.params.isNotEmpty ? 'params' : '<String, dynamic>{}';
 
       if (isVoid) {
-        buf.writeln("    await _client.call('${op.fullName}', $paramsArg);");
+        buf.writeln(
+          '    await _client.call(${_dartStringLiteral(op.fullName)}, $paramsArg);',
+        );
       } else {
         buf.writeln(
-          "    final result = await _client.call('${op.fullName}', $paramsArg);",
+          '    final result = await _client.call(${_dartStringLiteral(op.fullName)}, $paramsArg);',
         );
         final deserExpr = switch ((unboundResult, boundResult)) {
           (final TransferableType unbound, _) =>
@@ -607,7 +637,9 @@ class DartCodeGenerator {
     buf.writeln('class Servers {');
     for (final server in servers) {
       final fieldName = _escapeIdentifier(server.name);
-      buf.writeln("  static const String $fieldName = '${server.url}';");
+      buf.writeln(
+        '  static const String $fieldName = ${_dartStringLiteral(server.url)};',
+      );
     }
     buf.writeln('}');
     return buf.toString();
@@ -660,7 +692,14 @@ class DartCodeGenerator {
     };
   }
 
-  List<String> _buildValidations(String ident, Constraints c, bool optional) {
+  /// [name] is the raw schema field name, used only in the error message
+  /// text; [ident] is the generated Dart identifier used in the conditions.
+  List<String> _buildValidations(
+    String name,
+    String ident,
+    Constraints c,
+    bool optional,
+  ) {
     final stmts = <String>[];
     if (c.format != null) {
       switch (c.format) {
@@ -669,14 +708,14 @@ class DartCodeGenerator {
               ? "$ident == null || (Uri.tryParse($ident)?.hasScheme ?? false)"
               : "(Uri.tryParse($ident)?.hasScheme ?? false)";
           stmts.add(
-            "if (!($cond)) throw ArgumentError('$ident must be a valid URI');",
+            "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be a valid URI')});",
           );
         case 'email':
           final cond = optional
               ? "$ident == null || $ident.contains('@')"
               : "$ident.contains('@')";
           stmts.add(
-            "if (!($cond)) throw ArgumentError('$ident must be a valid email');",
+            "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be a valid email')});",
           );
       }
     }
@@ -685,7 +724,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident.length >= ${c.minLength}'
           : '$ident.length >= ${c.minLength}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be at least ${c.minLength} characters');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be at least ${c.minLength} characters')});",
       );
     }
     if (c.maxLength != null) {
@@ -693,7 +732,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident.length <= ${c.maxLength}'
           : '$ident.length <= ${c.maxLength}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be at most ${c.maxLength} characters');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be at most ${c.maxLength} characters')});",
       );
     }
     if (c.pattern != null) {
@@ -702,7 +741,7 @@ class DartCodeGenerator {
           ? '$ident == null || RegExp($literal).hasMatch($ident)'
           : 'RegExp($literal).hasMatch($ident)';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must match pattern');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must match pattern')});",
       );
     }
     if (c.minimum != null) {
@@ -710,7 +749,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident >= ${c.minimum}'
           : '$ident >= ${c.minimum}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be >= ${c.minimum}');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be >= ${c.minimum}')});",
       );
     }
     if (c.maximum != null) {
@@ -718,7 +757,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident <= ${c.maximum}'
           : '$ident <= ${c.maximum}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be <= ${c.maximum}');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be <= ${c.maximum}')});",
       );
     }
     if (c.exclusiveMinimum != null) {
@@ -726,7 +765,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident > ${c.exclusiveMinimum}'
           : '$ident > ${c.exclusiveMinimum}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be > ${c.exclusiveMinimum}');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be > ${c.exclusiveMinimum}')});",
       );
     }
     if (c.exclusiveMaximum != null) {
@@ -734,7 +773,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident < ${c.exclusiveMaximum}'
           : '$ident < ${c.exclusiveMaximum}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be < ${c.exclusiveMaximum}');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be < ${c.exclusiveMaximum}')});",
       );
     }
     if (c.multipleOf != null) {
@@ -742,7 +781,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident % ${c.multipleOf} == 0'
           : '$ident % ${c.multipleOf} == 0';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must be a multiple of ${c.multipleOf}');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must be a multiple of ${c.multipleOf}')});",
       );
     }
     if (c.minItems != null) {
@@ -750,7 +789,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident.length >= ${c.minItems}'
           : '$ident.length >= ${c.minItems}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must have at least ${c.minItems} items');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must have at least ${c.minItems} items')});",
       );
     }
     if (c.maxItems != null) {
@@ -758,7 +797,7 @@ class DartCodeGenerator {
           ? '$ident == null || $ident.length <= ${c.maxItems}'
           : '$ident.length <= ${c.maxItems}';
       stmts.add(
-        "if (!($cond)) throw ArgumentError('$ident must have at most ${c.maxItems} items');",
+        "if (!($cond)) throw ArgumentError(${_dartStringLiteral('$name must have at most ${c.maxItems} items')});",
       );
     }
     return stmts;
@@ -1445,7 +1484,11 @@ class DartCodeGenerator {
           return '$f: \$$f';
         })
         .join(', ');
-    buf.writeln("  String toString() => '$className($props)';");
+    // The class name can carry schema text (e.g. a `$` from a method name or
+    // discriminator tag); emit it as escaped literal text, quotes stripped.
+    final classLiteral = _dartStringLiteral(className);
+    final classLabel = classLiteral.substring(1, classLiteral.length - 1);
+    buf.writeln("  String toString() => '$classLabel($props)';");
   }
 
   static const _dartKeywords = {

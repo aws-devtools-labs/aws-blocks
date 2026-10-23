@@ -56,7 +56,7 @@ await api.setValue('greeting', 'hello');
 const value = await api.getValue('greeting'); // typed: string | null
 ```
 
-That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC over a single endpoint) is handled for you and is intentionally invisible.
+That's the whole model: **define blocks → export an API → import it on the frontend.** The transport (JSON-RPC under `/aws-blocks/api`) is handled for you and is intentionally invisible.
 
 ## Adding auth and data
 
@@ -196,6 +196,8 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 
 > **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws login` (AWS CLI 2.32.0 or later), `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). If the credentials are missing or expired, both commands stop before synthesizing and print the sign-in or refresh command for the profile they use. Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
 
+Before they deploy, `npm run sandbox` and `npm run deploy` print the deployment target: the credentials that CDK deploys with (an AWS profile, environment access keys, or container or web identity credentials) and the configured Region. As in CDK, environment access keys are used before `AWS_PROFILE` unless `cdk.json` sets a profile. With valid credentials they also show the account name and the AWS account plan (Free or Paid) when those credentials allow `account:GetAccountInformation` and `freetier:GetAccountPlanState`. Otherwise they show "not available" and continue; these reads never stop a deploy. When you sign in with the AWS-managed role of the new AWS sign-up experience (a role at the path `/managed/` that `account-access.amazonaws.com` can assume, checked with `iam:GetRole`), the output also links to `https://settings.aws.com/billing` for spend limits. In AWS Settings, verify that the project you intend to manage matches the CLI deployment target before viewing or changing its spend limit. If you sign in with `aws login`, set the profile Region to your project's Region before you sign in (`aws configure set region <region> --profile <name>`), and run `aws login` again if you change it later. `npm run sandbox:destroy` and `npm run destroy` print only the deployment target.
+
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
 
 Importing `@aws-blocks/blocks` through its default (Node) entry declares the default compute (`LambdaCompute`) so the CLI reports it in telemetry. It is folded in only when telemetry reads the registry, after the blocks the app constructed, and an app-constructed `LambdaCompute` takes precedence. The `cdk` and `browser` entries do not declare it.
@@ -235,7 +237,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
 - **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
-- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC to a single `POST /aws-blocks/api`; use the typed import instead.
+- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/aws-blocks/api`; use the typed import instead.
 
 ## Security Considerations
 
@@ -251,6 +253,25 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 
+### IAM hardening
+
+Every Blocks compute runs as one shared IAM (Identity and Access Management) execution role, and every Building Block grants its permissions onto it. Set `defaults.permissionsBoundary` to attach a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html), a ceiling on effective permissions, to every IAM role AWS Blocks creates. Pass the policy's name, its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. It's unset in both presets, and unset leaves templates unchanged.
+
+```typescript
+// aws-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' },
+});
+```
+
+- **Report.** Every synth, with or without a boundary, writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth.
+- **Scope.** On a `BlocksStack` the boundary covers every role in the stack; on an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK (Cloud Development Kit) singleton roles its blocks add.
+- **CDK context.** If CDK's `@aws-cdk/core:permissionsBoundary` context is also set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns.
+
+Details, including sharing one AWS account across many apps, are in the bundled `@aws-blocks/core` README (`docs/core/README.md`), sections "IAM: permissions boundary and the composed-policy report" and "Running many apps in one AWS account (a shared platform)".
+
 ## VPC Support
 
 AWS Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources. You can let Blocks manage endpoint provisioning and security groups automatically, or bring a fully-configured VPC and handle networking yourself.
@@ -262,4 +283,4 @@ See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guida
 - **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
-- **Wire protocol & debugging:** the client is JSON-RPC 2.0 over a single endpoint — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+- **Wire protocol & debugging:** the client is JSON-RPC 2.0 under `/aws-blocks/api` — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

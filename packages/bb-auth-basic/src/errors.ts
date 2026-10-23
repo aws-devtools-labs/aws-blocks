@@ -26,4 +26,5 @@ export const AuthBasicErrors = {
 	SessionRevoked: 'SessionRevokedException',
 	SignOutIncomplete: 'SignOutIncompleteException',
 	InvalidPassword: 'InvalidPasswordException',
+	AccountLocked: 'AccountLockedException',
 } as const;

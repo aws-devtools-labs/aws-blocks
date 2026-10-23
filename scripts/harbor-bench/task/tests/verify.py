@@ -10,6 +10,7 @@ import urllib.request
 
 sys.path.insert(0, '/opt/bench')
 from provenance import stored_in_blocks, verify
+from snapshot import capture  # /tests, next to this script
 
 OUT = Path('/logs/verifier')
 OUT.mkdir(parents=True, exist_ok=True)
@@ -19,7 +20,6 @@ ENV = {
     'NPM_CONFIG_USERCONFIG': '/etc/bench-npmrc', 'NPM_CONFIG_GLOBALCONFIG': '/etc/bench-npm-globalrc',
     'NPM_CONFIG_CACHE': '/home/node/.npm', 'AWS_EC2_METADATA_DISABLED': 'true',
     'BLOCKS_DISABLE_TELEMETRY': '1', 'CI': '1', 'BENCH_PHASE': str(PHASE),
-    'PLAYWRIGHT_BROWSERS_PATH': '/opt/playwright',
 }
 server = None
 server_log = None
@@ -67,6 +67,15 @@ result = {'phase': PHASE, 'status': 'failed', 'checks': {}}
 stage = 'package_provenance'
 try:
     stop()
+    # Replay input: the app exactly as the agent left it (servers killed) and the records earlier
+    # phases seeded, before this verifier builds, starts or mutates anything. Written first so it
+    # exists whether the checks pass, fail or time out; never a check itself.
+    try:
+        capture(Path('/app/todo-app'), Path('/var/lib/harbor-verifier/state.json'), OUT / 'snapshot.tar.gz')
+        result['snapshot'] = True
+    except Exception as error:
+        result['snapshot'] = False
+        print(f'snapshot failure: {type(error).__name__}', file=sys.stderr)
     provenance = verify()
     (OUT / 'provenance.json').write_text(json.dumps(provenance, indent=2))
     result['checks']['package_provenance'] = True

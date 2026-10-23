@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { AwsCredentialIdentity } from '@smithy/types';
 
 /** Options for the deployment target lookup. For internal use only. */
 export interface DeploymentTargetOptions {
@@ -48,6 +49,19 @@ export function sharedConfigFiles(env: NodeJS.ProcessEnv = process.env): { confi
 }
 
 /**
+ * Access keys from the environment, read as CDK reads them: each `AWS_` name, then
+ * the `AMAZON_` name that CDK keeps for backward compatibility. SDK clients read
+ * only the `AWS_` names. `undefined` unless both a key and a secret are set.
+ */
+export function environmentAccessKeys(env: NodeJS.ProcessEnv = process.env): AwsCredentialIdentity | undefined {
+	const accessKeyId = env.AWS_ACCESS_KEY_ID || env.AMAZON_ACCESS_KEY_ID;
+	const secretAccessKey = env.AWS_SECRET_ACCESS_KEY || env.AMAZON_SECRET_ACCESS_KEY;
+	if (!accessKeyId || !secretAccessKey) return undefined;
+	const sessionToken = env.AWS_SESSION_TOKEN ?? env.AMAZON_SESSION_TOKEN;
+	return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };
+}
+
+/**
  * Find the Region and the profile that CDK uses for a deployment.
  *
  * The lookup order is:
@@ -79,7 +93,7 @@ export async function resolveDeploymentTarget({
 	const envProfile = env.AWS_PROFILE || env.AWS_DEFAULT_PROFILE;
 	// CDK and the AWS CLI read AWS_DEFAULT_PROFILE, but SDK v3 clients do not, so pass it
 	// explicitly. CDK uses access keys from the environment before an environment profile.
-	const hasEnvKeys = Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY);
+	const hasEnvKeys = environmentAccessKeys(env) !== undefined;
 	const passDefaultProfile = !env.AWS_PROFILE && !hasEnvKeys && Boolean(env.AWS_DEFAULT_PROFILE);
 	const profile = settingsProfile ?? (passDefaultProfile ? env.AWS_DEFAULT_PROFILE : undefined);
 	const cdkRegion = typeof settings.region === 'string' && settings.region ? settings.region : null;

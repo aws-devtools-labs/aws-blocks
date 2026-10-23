@@ -225,7 +225,7 @@ const SIGN_IN_OPTIONS_URL = 'https://docs.aws.amazon.com/cli/latest/userguide/cl
 const SHELL_SAFE_PROFILE = /^\w[\w.@+-]*$/;
 
 /** A profile name for prose; quoted, with control characters escaped, when it has unusual characters. */
-function profileName(profile: string): string {
+export function profileName(profile: string): string {
 	return SHELL_SAFE_PROFILE.test(profile) ? profile : JSON.stringify(profile);
 }
 
@@ -234,7 +234,7 @@ function profileName(profile: string): string {
  * (`$(…)`, backticks, spaces, quotes) prints as a `<profile>` placeholder, so a
  * copied command never runs anything else. The message names the profile elsewhere.
  */
-function profileArg(profile: string): string {
+export function profileArg(profile: string): string {
 	return SHELL_SAFE_PROFILE.test(profile) ? profile : '<profile>';
 }
 
