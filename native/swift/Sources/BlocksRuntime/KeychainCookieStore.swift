@@ -6,12 +6,14 @@
 //
 
 import Foundation
+import os
 import Security
+
+private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "KeychainCookieStore")
 
 /// Persists cookies in the iOS/macOS Keychain so auth sessions survive app restarts.
 ///
 /// Each cookie is stored as a separate Keychain item keyed by `host|cookieName`.
-
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.
@@ -69,17 +71,34 @@ final class KeychainCookieStore {
         query[kSecUseDataProtectionKeychain as String] = true
         #endif
 
-        let attrs: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-        ]
+        let attrs = Self.writeAttributes(data: data)
 
+        // The update carries the accessibility class too, so an item stored by an earlier version
+        // under a different class is moved to the current one in place, without losing its value.
         let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
-        if status == errSecItemNotFound {
-            var addQuery = query
-            addQuery.merge(attrs) { _, new in new }
-            SecItemAdd(addQuery as CFDictionary, nil)
+        if status == errSecSuccess { return }
+        guard status == errSecItemNotFound else {
+            logger.error("Updating cookie '\(name, privacy: .public)' in the keychain failed: OSStatus \(status)")
+            return
         }
+
+        var addQuery = query
+        addQuery.merge(attrs) { _, new in new }
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            logger.error("Adding cookie '\(name, privacy: .public)' to the keychain failed: OSStatus \(addStatus)")
+        }
+    }
+
+    /// Attributes written on every add and update of a cookie item.
+    ///
+    /// Items are readable only while the device is unlocked and are bound to this device, so they
+    /// are not restored onto another device.
+    static func writeAttributes(data: Data) -> [String: Any] {
+        [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
     }
 
     /// Removes a cookie by name.
