@@ -518,6 +518,25 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
       });
 
+      // On AWS a turn without a conversationId used to take its channelId as its AgentCore
+      // session and conversation, i.e. it ran inside user A's session. Locally it never did.
+      test("user B's turn without a conversation doesn't land in user A's conversation", { timeout: 90_000 }, async () => {
+        const api = getApi();
+        await signInAs(api, userA);
+        const historyBefore = (await waitForMessages(api, convA, 2)).length;
+        await signInAs(api, userB);
+        const { channel } = await api.agentGetChannel(convA);
+        const chunksB: AgentStreamChunk[] = [];
+        const subB = channel.subscribe((chunk) => { chunksB.push(chunk); });
+        await establishedOrTimeout(subB);
+        await api.agentStream('Say hello', undefined, convA);
+        await doneCount(chunksB, 1);
+        subB.unsubscribe();
+        await signInAs(api, userA);
+        await new Promise(r => setTimeout(r, 3_000));
+        assert.strictEqual((await api.agentGetConversation(convA)).messages.length, historyBefore, "user A's history must not change");
+      });
+
       test("user B can't listen to user A's turn", { timeout: 90_000 }, async () => {
         const api = getApi();
         await signInAs(api, userB);

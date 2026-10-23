@@ -46,7 +46,7 @@ const agent = new Agent(scope, id, config)
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
 | `getPendingInterrupts(conversationId, userId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
-| `getChannel(channelId, userId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `userId` is optional (unused) for `inferenceOnly` agents. |
+| `getChannel(channelId, userId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns (not used by `inferenceOnly` agents, whose channels are not user-scoped). |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -75,6 +75,9 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 - `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
 - `getChannel(channelId, userId)` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
 - `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` when the `userId` argument is missing (except `getChannel()` on an `inferenceOnly` agent), so a call written for an older signature fails loudly.
+- A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
+
+**`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
 
 These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. `listConversations(userId)` returns only the conversations a user owns:
 
@@ -407,6 +410,8 @@ try {
 | `AgentErrors.StreamFailed` | Agent encountered an error during execution. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
+| `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
+| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without the caller's `userId`. |
 
 ### Streaming Mode
 
@@ -1080,7 +1085,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     return { interrupts: await agent.getPendingInterrupts(conversationId, user.userId) };
   },
-  async resume(channelId: string, responses: InterruptResponse[], conversationId: string) {
+  async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
     const user = await auth.requireAuth(context);
     await agent.resume(channelId, responses, { conversationId, userId: user.userId });
   },
@@ -1101,6 +1106,8 @@ const chat = useChat({
     sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
     createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
+    resume: (chId, responses, convId) => api.resume(chId, responses, convId),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id),
   },
   // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
   // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
@@ -1111,6 +1118,7 @@ const chat = useChat({
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
+  onInterrupt: (interrupts) => showApprovalUI(interrupts),
 });
 
 // Send a message — useChat handles subscribe-before-send automatically

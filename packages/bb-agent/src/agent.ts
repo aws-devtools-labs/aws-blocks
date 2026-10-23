@@ -671,6 +671,11 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * when the AgentCore Runtime can't be invoked (unresolved runtime ARN, or an `InvokeAgentRuntime`
 	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
 	 * `stream()` so a dispatch failure isn't lost.
+	 *
+	 * @throws ConversationNotFound when `options.conversationId` was not created by
+	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
+	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
+	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
@@ -713,6 +718,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Like `stream()`, errors surface on two paths: loop failures arrive as an `error` chunk on the
 	 * channel once the turn is dispatched, while a failure to *dispatch* (e.g. on AWS when the AgentCore
 	 * Runtime can't be invoked) rejects this `resume()` call itself. Always `await` it.
+	 *
+	 * @throws ConversationNotFound when `options.conversationId` does not belong to `options.userId`,
+	 *   before any approval is persisted or the turn is dispatched. Not checked for `inferenceOnly` agents.
+	 * @throws InterruptRequired when `responses` is empty or `options.conversationId` is missing.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
@@ -833,12 +842,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Owner-scoped when persistence is enabled: pass the same `userId` you pass to
 	 * stream()/resume(), taken from the authenticated session. The channel only
 	 * carries that user's turns, so a caller who knows another user's conversation
-	 * id can't listen to it. Throws InvalidUsage without a `userId` unless the agent
-	 * is `inferenceOnly`, where `userId` is not used.
+	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
+	 * agent has no owner to scope by, so its channels are not user-scoped and the
+	 * `userId` is not used.
 	 */
-	async getChannel(channelId: string, userId?: string) {
+	async getChannel(channelId: string, userId: string) {
 		if (this.conversations) this.requireUserId(userId, 'getChannel', 'getChannel(channelId, userId)');
-		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId ?? 'anonymous'));
+		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
 	}
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
