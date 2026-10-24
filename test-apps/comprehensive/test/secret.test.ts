@@ -49,6 +49,15 @@ export function secretTests(getApi: () => typeof apiType) {
       assert.strictEqual(value, 'sk-test-second');
     });
 
+    test('Secret - validated strings preserve their literal contents', async () => {
+      const api = getApi();
+      for (const expected of ['hello', '123', 'null', '"quoted"']) {
+        await api.secretPutValidatedString(expected);
+        const { value } = await api.secretGetValidatedString();
+        assert.strictEqual(value, expected);
+      }
+    });
+
     test('Secret - typed JSON secret put then get returns the typed object', async () => {
       const api = getApi();
       await api.secretPutDbCredentials({ host: 'db.internal', port: 5432 });
