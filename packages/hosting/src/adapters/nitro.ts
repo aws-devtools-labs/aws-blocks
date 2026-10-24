@@ -39,6 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
+import { buildProfile } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
@@ -58,6 +59,9 @@ export type NitroAdapterOptions = {
    * When the run targets Lambda Web Functions (`compute.type:
    * 'web-function'`, see `withComputeTarget`) the default is
    * `'node-server'` instead — Web Functions run the HTTP server directly.
+   * Behind an API Gateway HTTP API (`serverInvoke: 'http-api'`, see
+   * `withBuildProfile`) it is `'node-server'` too: the Lambda Web Adapter
+   * server runs buffered, whatever `awsLambda.streaming` says.
    */
   preset?: string;
   /**
@@ -254,9 +258,14 @@ type NitroRouteRule = {
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   const { projectDir, skipBuild, preset, buildCommand } = options;
-  // Web Functions run a plain Node.js HTTP server → `node-server`; Lambda
-  // compute (API Gateway) → `aws-lambda`.
-  const effectivePreset = preset ?? (targetCompute() === 'web-function' ? 'node-server' : 'aws-lambda');
+  // Web Functions run a plain Node.js HTTP server → `node-server`. An API
+  // Gateway HTTP API invokes the server buffered, which a streaming
+  // `aws-lambda` handler (`awsLambda.streaming: true`) can't answer → a
+  // `node-server` Lambda Web Adapter server, built buffered by the L3. Lambda
+  // compute behind the REST API → `aws-lambda`.
+  const effectivePreset =
+    preset ??
+    (targetCompute() === 'web-function' || buildProfile().serverInvoke === 'http-api' ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');
@@ -379,11 +388,18 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // If the user has @nuxt/image installed, build a standalone IPX
   // Lambda bundle so sharp doesn't bloat the SSR Lambda. The bundle
   // is referenced via `manifest.imageOptimization` later on.
-  const imageOptBundle = buildImageOptBundleIfNeeded(projectDir);
+  // `skipImageOptimization`: no image function is deployed, so don't bundle one.
+  const skipImageOptimization = buildProfile().skipImageOptimization === true;
+  const imageOptBundle = skipImageOptimization ? undefined : buildImageOptBundleIfNeeded(projectDir);
+  // Without an image function the app still requests its IPX endpoint: keep
+  // the endpoint's route (targeting `image-optimization`), so the door can
+  // answer it with the source image.
+  const imageEndpointWithoutFunction = skipImageOptimization && projectUsesNuxtImage(projectDir);
   // @nuxt/image's `runtimeConfig.ipx.baseURL` lets users serve IPX
   // from a path other than the default `/_ipx`. We need the same
-  // value so the CloudFront cache behavior + Lambda strip match.
-  const ipxBaseURL = imageOptBundle ? findIpxBaseURL(projectDir) : undefined;
+  // value so the CloudFront cache behavior + Lambda strip match (and,
+  // without an image function, so the door's fallback matches it).
+  const ipxBaseURL = imageOptBundle || imageEndpointWithoutFunction ? findIpxBaseURL(projectDir) : undefined;
   // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda.
   const imageDomains = imageOptBundle ? findNuxtImageDomains(projectDir) : [];
 
@@ -441,6 +457,7 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     routeRules: mergedRouteRules,
     awsLambdaStreaming,
     imageOptBundle,
+    imageEndpointWithoutFunction,
     ipxBaseURL,
     imageDomains,
     basePath,
@@ -1235,6 +1252,12 @@ const buildManifest = (input: {
   awsLambdaStreaming: boolean;
   imageOptBundle?: string;
   /**
+   * The app uses `@nuxt/image` but no image function is built
+   * (`skipImageOptimization`): the IPX route is still emitted, targeting
+   * `image-optimization`, so the door can answer the endpoint.
+   */
+  imageEndpointWithoutFunction?: boolean;
+  /**
    * Path the IPX Lambda is mounted at. Defaults to `/_ipx` when
    * `imageOptBundle` is set; user override comes from
    * `runtimeConfig.ipx.baseURL` in nuxt.config.
@@ -1252,6 +1275,7 @@ const buildManifest = (input: {
     routeRules,
     awsLambdaStreaming,
     imageOptBundle,
+    imageEndpointWithoutFunction,
     ipxBaseURL,
     imageDomains,
     basePath,
@@ -1279,7 +1303,7 @@ const buildManifest = (input: {
     routes: buildRoutes(
       publicDir,
       routeRules,
-      !!imageOptBundle,
+      !!imageOptBundle || imageEndpointWithoutFunction === true,
       effectiveIpxBaseURL,
     ),
   };
@@ -1380,6 +1404,19 @@ const usesIsrFeatures = (
 };
 
 /**
+ * Lambda Web Adapter start script for the `node-server` preset on Lambda:
+ * execs node on Nitro's `index.mjs` (preferring the managed runtime's binary).
+ */
+const NODE_SERVER_RUN_SH_FILENAME = 'run.sh';
+const NODE_SERVER_RUN_SH_SOURCE = `#!/bin/sh
+cd "$(dirname "$0")"
+if [ -x /var/lang/bin/node ]; then
+  exec /var/lang/bin/node index.mjs
+fi
+exec node index.mjs
+`;
+
+/**
  * Map a Nitro preset (+ relevant config flags) to the right
  * ComputeResource shape.
  */
@@ -1390,10 +1427,22 @@ const presetToCompute = (
 ): ComputeResource => {
   // Plain Node HTTP server presets — front via the Lambda Web Adapter.
   if (preset === 'node-server' || preset === 'node') {
+    // On Lambda, the adapter's `/opt/bootstrap` execs the entrypoint as a
+    // child process; Nitro's `index.mjs` has no shebang, so it would be run as
+    // a shell script (exit 127). Start it through a `run.sh` that execs node,
+    // as the Astro and SvelteKit adapters do. Web Functions start `index.mjs`
+    // themselves.
+    const lambda = targetCompute() !== 'web-function';
+    if (lambda) {
+      fs.writeFileSync(path.join(serverDir, NODE_SERVER_RUN_SH_FILENAME), NODE_SERVER_RUN_SH_SOURCE, {
+        encoding: 'utf-8',
+        mode: 0o755,
+      });
+    }
     return {
       type: 'http-server',
       bundle: serverDir,
-      entrypoint: 'index.mjs',
+      entrypoint: lambda ? NODE_SERVER_RUN_SH_FILENAME : 'index.mjs',
       port: 3000,
       placement: 'regional',
       runtime: FRAMEWORK_COMPUTE_RUNTIME,

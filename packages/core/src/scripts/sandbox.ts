@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -42,6 +42,51 @@ export interface SandboxOptions {
   deployOnly?: boolean;
   /** Custom dev server command. Defaults to 'npx vite'. For Next.js use 'npx next dev'. */
   devCommand?: string;
+  /**
+   * Deploy a preview sandbox: a sandbox that includes hosting in preview
+   * shape (`npm run sandbox:preview`). Synth and deploy get
+   * `--context previewMode=true` (see {@link PREVIEW_MODE_CONTEXT}) next to
+   * `sandboxMode=true`; the app reads it to add `Hosting` with
+   * `HostingPresets.preview`. A plain sandbox stays backend-only.
+   *
+   * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
+   * applied straight to the Lambda functions in seconds, falling back to a
+   * CloudFormation deploy (direct, no change set) for anything that can't be
+   * hotswapped. Hotswap
+   * leaves the stack drifted from its template, which is acceptable for a
+   * throwaway preview only, so every other sandbox keeps the CloudFormation
+   * deploy.
+   */
+  preview?: boolean;
+}
+
+/**
+ * The CDK context key a preview sandbox sets (`--context previewMode=true`),
+ * next to `sandboxMode=true`. The app reads it to add `Hosting` in preview
+ * shape to the sandbox, which otherwise deploys the backend only:
+ *
+ * ```ts
+ * const previewMode = app.node.tryGetContext('previewMode') === 'true';
+ * if (!sandboxMode || previewMode) {
+ *   new Hosting(stack, 'Hosting', { ...(previewMode ? HostingPresets.preview : HostingPresets.production), root, api });
+ * }
+ * ```
+ */
+export const PREVIEW_MODE_CONTEXT = "previewMode";
+
+/**
+ * The site URL from a stack's outputs: the `Hosting` construct's `HostingUrl`
+ * output, whose key CDK prefixes with the construct path and suffixes with a
+ * hash (e.g. `HostingHostingUrl4F2C…`).
+ *
+ * @param stackOutputs one stack's outputs from `outputs.json`.
+ * @returns the URL with a scheme, or `undefined` when the stack has no hosting.
+ */
+export function findHostingUrl(stackOutputs: Record<string, string>): string | undefined {
+  const key = Object.keys(stackOutputs).find((k) => /HostingUrl/.test(k));
+  const url = key ? stackOutputs[key] : undefined;
+  if (!url) return undefined;
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
 }
 
 export interface SandboxDeployArgsOptions {
@@ -64,6 +109,18 @@ export interface SandboxDeployArgsOptions {
    * the framework build runs only once.
    */
   assemblyDir?: string;
+  /**
+   * Add `--hotswap-fallback` (next to `--method direct`, which its fallback
+   * CloudFormation deploy uses). `startSandbox` sets it only for a preview
+   * re-deploy (see {@link SandboxOptions.preview}).
+   */
+  hotswap?: boolean;
+  /**
+   * Synthesize and deploy a preview sandbox: adds `--context previewMode=true`
+   * (see {@link PREVIEW_MODE_CONTEXT}). `startSandbox` sets it from
+   * {@link SandboxOptions.preview}.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -71,13 +128,14 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
     "--app", `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
@@ -95,6 +153,23 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
     ...getCdkTelemetryEnv('sandbox'),
     ...getFrameworkSinkEnv(frameworkSink),
   };
+}
+
+/**
+ * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
+ * It synthesizes with the same context as the deploy, so a preview sandbox
+ * keeps `previewMode=true` and a file change re-deploys the same shape (the
+ * app adds `Hosting` only when it sees the signal).
+ */
+export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
+  return [
+    "cdk", "watch",
+    "--outputs-file", `${outDir}/outputs.json`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
 }
 
 /**
@@ -127,6 +202,16 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
  *   `express: false` drops it (still `--method direct`, with rollback) for a
  *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
  *   Web Function endpoint (`compute.type: 'web-function'`).
+ * - `--hotswap-fallback` (`hotswap`, a preview re-deploy only): next to
+ *   `--method direct`, apply a code-only change straight to the Lambda
+ *   functions and S3 assets, falling back to a CloudFormation deploy (still
+ *   direct and in Express Mode) for a change that can't be hotswapped. The
+ *   CDK CLI deploys the fallback with the `--method` given; without one, the
+ *   fallback creates and executes a change set, which adds its own wait
+ *   (about 13 s on a preview stack). A true hotswap
+ *   needs a deterministic template: a tag or name whose value changes per
+ *   synth (a date, a git SHA, a per-deploy build id) forces the fallback
+ *   every time. Preview mode pins its build id for this reason.
  */
 export function buildSandboxDeployArgs({
   outDir,
@@ -134,16 +219,20 @@ export function buildSandboxDeployArgs({
   backendPath,
   express = true,
   assemblyDir,
+  hotswap = false,
+  preview = false,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
+    ...(hotswap ? ["--hotswap-fallback"] : []),
     "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
     "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
@@ -177,7 +266,7 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
+  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand, preview = false } = options;
   const sandboxStartTime = Date.now();
 
   // Load .env.local so CDK can read secret ARNs and other config.
@@ -227,11 +316,21 @@ export async function startSandbox(options: SandboxOptions) {
   // Framework resolves in the cdk synth child; it writes the value here so the
   // parent can attach it to the sandbox telemetry event.
   const frameworkSink = createFrameworkSink();
+
+  // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
+  // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
+  // destroyed since, `--hotswap-fallback` falls back to a full deploy.
+  const hotswap = preview && existsSync(join(process.cwd(), outDir, "outputs.json"));
+
   console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+  console.log(
+    hotswap
+      ? "   (preview re-deploy: hotswapping code changes; other changes fall back to a full deploy)"
+      : "   (This may take a few minutes on first deploy)",
+  );
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
-  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
   try {
@@ -256,7 +355,7 @@ export async function startSandbox(options: SandboxOptions) {
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir, hotswap }),
       { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
@@ -284,6 +383,8 @@ export async function startSandbox(options: SandboxOptions) {
 
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);
+  const hostingUrl = findHostingUrl(stackOutputs);
+  if (hostingUrl) console.log(`🌐 ${preview ? 'Preview' : 'Hosting'} URL: ${hostingUrl}`);
 
   buildAndSendEvent({
     command: 'sandbox',
@@ -326,13 +427,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch",
-    `--outputs-file`, `${outDir}/outputs.json`,
-    `--context`, `projectRoot=${process.cwd()}`,
-    `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
-  ], {
+  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs(argOptions), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a

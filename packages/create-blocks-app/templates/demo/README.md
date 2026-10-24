@@ -55,6 +55,7 @@ The API mixes **public** methods (no auth) and **protected** methods (gated by
 | `npm run test:e2e` | Test the API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
 | `npm run destroy` | Tear down the production stack |

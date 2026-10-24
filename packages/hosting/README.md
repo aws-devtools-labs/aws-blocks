@@ -646,6 +646,23 @@ its chunks gets a 404 (the website's error document) and needs a reload. The pag
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
 
+**The server behind the HTTP API.** An HTTP API Lambda integration sends the
+payload format 2.0 event and can't stream, so the server is built for it: the
+Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
+`aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
+pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
+Adapter server, run buffered) unless the app sets a preset. A route served by
+a compute other than the server (for example a Next.js `runtime: 'edge'` route
+built as a regional function) gets its own route to that function.
+
+**No image function.** With `skipImageOptimization` (set by core `Hosting` in
+preview mode) no image function is built, and the HTTP API routes the framework
+image endpoints (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to
+the asset proxy, which serves the source image unoptimized. A remote source is
+redirected (302) to itself only when its host is in the manifest's image
+allowlist (`imageOptimization.domains`, `remotePatterns` hostnames); anything
+else is a 404. The proxy never fetches a remote URL.
+
 ### The stacked door
 
 `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` puts a CloudFront edge
