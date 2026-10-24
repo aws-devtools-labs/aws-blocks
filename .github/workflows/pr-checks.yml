@@ -484,7 +484,13 @@ jobs:
         run: npm run test:e2e:sandbox:vpc
 
   e2e-compute-smoke:
-    name: E2E Compute Smoke
+    # The compute suite: one app (test-apps/compute-smoke) with a scenario module
+    # per compute kind and workload — container AsyncJobs, an API namespace on
+    # its own serverless compute — deployed once per leg. The legs vary the API
+    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
+    # its compute type. The `apigateway` front door is covered without a VPC by
+    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
@@ -505,8 +511,19 @@ jobs:
     concurrency:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      # Every leg provisions the same endpoints into the one compute test VPC, so
+      # legs run one after another. The concurrency group is not a queue: it holds
+      # one running and one pending job, and a newer pending job (another PR on
+      # this account) cancels the pending one.
+      max-parallel: 1
+      matrix:
+        front-door: [cloudfront]
     env:
+      # The app adds the leg (`-cf` / `-gw`) to the stack name itself.
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
     steps:
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
@@ -542,12 +559,26 @@ jobs:
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
+        id: vpc-id
         run: |
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
 
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
+
+      # The test tears its stack down itself and fails the run if it can't. This
+      # retries after a failed, cancelled or timed-out run, which would otherwise
+      # leave the stack (its distribution and its endpoints in the shared VPC)
+      # behind. Nothing is deployed before the VPC ID is exported.
+      - name: Destroy stack (if left behind)
+        if: (failure() || cancelled()) && steps.vpc-id.outcome == 'success'
+        working-directory: test-apps/compute-smoke
+        run: |
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || {
+            echo "::error::Could not destroy the compute suite's stack; the scheduled stack cleanup will retry."
+            exit 1
+          }
 
   e2e-production:
     permissions:

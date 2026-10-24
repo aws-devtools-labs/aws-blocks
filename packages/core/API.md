@@ -35,6 +35,15 @@ export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = (con
 export const ApiNamespace: ApiNamespaceConstructor;
 
 // @public
+export interface ApiNamespaceOptions {
+    compute?: {
+        resolve(): {
+            readonly type: 'serverless';
+        };
+    };
+}
+
+// @public
 export const BLOCKS_AUTH_PREFIX = "/aws-blocks/auth";
 
 // @public

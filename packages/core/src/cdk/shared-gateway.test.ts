@@ -14,7 +14,7 @@
 import assert from 'node:assert';
 import { before, describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
@@ -375,7 +375,7 @@ describe('resolveNamespaceRoutes', () => {
 	});
 
 	test("uses the namespace's own compute resolver, not its scope's compute", () => {
-		// Stands in for the future per-namespace compute option: the namespace
+		// What the `compute` option does, without a real Compute block: the namespace
 		// resolves to a different compute than its scope does, and routing follows
 		// the namespace.
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesOwnResolver');
@@ -394,6 +394,23 @@ describe('resolveNamespaceRoutes', () => {
 			getComputes(stack),
 		);
 		assert.strictEqual(routes.size, 0);
+		// Inherited from its scope (the cached sub-module case): skipped silently.
+		assert.strictEqual(Annotations.fromStack(otherStack).findWarning('*', Match.anyValue()).length, 0);
+	});
+
+	test("warns when a namespace's explicit compute is another backend's, and skips it", () => {
+		const { stack, defaultCompute } = computes('RoutesForeignExplicit');
+		const otherStack = new cdk.Stack(new cdk.App(), 'RoutesForeignExplicitOther');
+		const foreignCompute = new StubCompute(otherStack, 'ForeignCompute', makeFn(otherStack, 'ForeignFn'));
+		const reports = new ApiNamespace(stack as never, 'reports', () => ({ async ping() {} }), {
+			compute: { resolve: () => foreignCompute as ComputeBase & { readonly type: 'serverless' } },
+		});
+		const routes = resolveNamespaceRoutes({ reports }, defaultCompute, getComputes(stack));
+		assert.strictEqual(routes.size, 0);
+		Annotations.fromStack(otherStack).hasWarning(
+			'/RoutesForeignExplicitOther/ForeignCompute',
+			Match.stringLikeRegexp("API namespace export 'reports' was given compute 'RoutesForeignExplicitOther/ForeignCompute', which belongs to another backend"),
+		);
 	});
 
 	test('resolves the compute when called, not when the namespace was constructed', () => {
