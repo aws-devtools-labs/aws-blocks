@@ -334,8 +334,10 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   if (!skipBuild) {
     // Nitro's aws-lambda preset reads event.rawPath / requestContext.http
     // (HTTP API v2 / Function URL shape). The L3 fronts SSR with REST API
-    // (payload v1: event.path / requestContext.httpMethod). Without the
-    // patch every URL renders as `/`. See patchNitroHandlerForApiGateway.
+    // (payload v1: event.path / requestContext.httpMethod), and the ALB door
+    // invokes it as a Lambda target (method at the top level:
+    // event.httpMethod). Without the patch every URL renders as `/` and every
+    // ALB request is a GET. See patchNitroHandlerForApiGateway.
     if (effectivePreset === 'aws-lambda') {
       // Flag an unverified nitropack BEFORE patching so a signature drift
       // (or a v3 build that legitimately needs no patch) is contextualized.
@@ -741,14 +743,14 @@ export const extractJsonObjectAfter = (
   if (open === -1) return undefined;
   let depth = 0;
   let inString = false;
-  let escape = false;
+  let escaped = false;
   for (let i = open; i < source.length; i++) {
     const ch = source[i];
     if (inString) {
-      if (escape) {
-        escape = false;
+      if (escaped) {
+        escaped = false;
       } else if (ch === '\\') {
-        escape = true;
+        escaped = true;
       } else if (ch === '"') {
         inString = false;
       }
@@ -1336,8 +1338,16 @@ const buildManifest = (input: {
       // Forward the user-configured base URL into the Lambda so its
       // prefix-stripping regex matches whatever path CloudFront
       // routes here. Default `/_ipx` works without an explicit env.
-      ...(effectiveIpxBaseURL !== '/_ipx'
-        ? { environment: { IPX_BASE_URL: effectiveIpxBaseURL } }
+      // The app's base path too: behind the ALB and API Gateway doors the
+      // image Lambda receives `/<basePath>/_ipx/...` (the CloudFront router
+      // strips it first), so it strips an optional base path before IPX's.
+      ...(effectiveIpxBaseURL !== '/_ipx' || basePath
+        ? {
+            environment: {
+              ...(effectiveIpxBaseURL !== '/_ipx' ? { IPX_BASE_URL: effectiveIpxBaseURL } : {}),
+              ...(basePath ? { IPX_APP_BASE_URL: basePath } : {}),
+            },
+          }
         : {}),
     };
   }
@@ -1678,6 +1688,7 @@ const buildHeaders = (
  * (payload v1) fields when the v2 fields are undefined:
  *   - withQuery(event.rawPath, …) → event.rawPath || event.path
  *   - event.requestContext?.http?.method → || event.requestContext?.httpMethod
+ *     || event.httpMethod (the last for an ALB Lambda-target event)
  *
  * The handler can land in different chunks depending on Nitro's chunking
  * (typically `chunks/nitro/nitro.mjs` on POSIX, `chunks/_/nitro.mjs` or
@@ -1698,13 +1709,17 @@ export const patchNitroHandlerForApiGateway = (serverDir: string): void => {
 
   const rawPathRe = /withQuery\(\s*event\.rawPath\s*,\s*query\s*\)/g;
   const rawPathReplacement = 'withQuery(event.rawPath || event.path, query)';
+  // The method falls through payload 2.0 (`requestContext.http.method`), the
+  // REST API (payload 1.0, `requestContext.httpMethod`) and an ALB Lambda
+  // target (`event.httpMethod` at the top level — the ALB event has neither
+  // `requestContext` field, so without it every ALB request would be a GET).
   // Negative lookahead so we don't re-wrap a method ref that already has the
   // `|| event.requestContext?.httpMethod` fallthrough — keeps the patch
   // idempotent across repeat invocations.
   const methodRe =
     /event\.requestContext\?\.http\?\.method(?!\s*\|\|\s*event\.requestContext\?\.httpMethod)/g;
   const methodReplacement =
-    '(event.requestContext?.http?.method || event.requestContext?.httpMethod)';
+    '(event.requestContext?.http?.method || event.requestContext?.httpMethod || event.httpMethod)';
   // Nitro's aws-lambda preset decodes the API Gateway base64 wrapper and
   // immediately re-encodes the bytes as a UTF-8 string before handing them
   // to h3, mangling any non-text payload (file uploads, binary blobs). A

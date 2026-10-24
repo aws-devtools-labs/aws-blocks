@@ -4,7 +4,7 @@
 // Notes Manager — SPA e2e test backend
 // AuthBasic + notes CRUD + public stats
 
-import { ApiNamespace, Scope, KVStore, AuthBasic } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, AuthBasic, RawRoute } from '@aws-blocks/blocks';
 
 const scope = new Scope('hosting-spa-test');
 
@@ -151,3 +151,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 
 export const authApi = auth.createApi();
+
+// A raw route outside /aws-blocks/*: every front door must route it to the
+// backend same-origin. It echoes the decoded query, so the e2e can check that
+// an encoded value survives the door unchanged.
+new RawRoute(scope, 'echoQuery', {
+  method: 'GET',
+  path: '/hooks/echo',
+  handler: async (ctx) => {
+    ctx.response.headers.set('Content-Type', 'application/json');
+    ctx.response.send({ q: ctx.request.url.searchParams.get('q'), path: ctx.request.url.pathname });
+  },
+});
+

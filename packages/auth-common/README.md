@@ -11,7 +11,7 @@ Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField` |
 | `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `StatusMessage`, `onAuthChange`, `broadcastAuthChange`, `submitAuthAction`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
-| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest` |
+| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
 
 ## Session-cookie security policy (`/cookies`)
 
@@ -25,6 +25,8 @@ All AWS Blocks auth BBs route their session-cookie `SameSite` / `Secure` / `Part
 | `true` | `true` | `SameSite=None; Secure` |
 
 `buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLoopbackRequest(ctx)` detects loopback origins (`localhost`, `127.0.0.1`, `[::1]`) for per-request `isLocalhost` decisions.
+
+The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate): it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. Today `bb-auth-basic` passes it; the other auth BBs keep `Secure`, so behind a plain-HTTP door their sessions don't persist.
 
 
 ## Server-Side Interface (`BlocksAuth`)
