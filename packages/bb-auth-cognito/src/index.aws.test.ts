@@ -3,7 +3,13 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { extractUserAttributes, memoizePerContext, toCognitoApiError, AuthCognitoErrors } from './index.aws.js';
+import {
+	extractUserAttributes,
+	memoizePerContext,
+	toCognitoApiError,
+	toCognitoFilter,
+	AuthCognitoErrors,
+} from './index.aws.js';
 import { ApiError } from '@aws-blocks/core';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
@@ -229,5 +235,20 @@ describe('toCognitoApiError (wire-safe SDK error translation)', () => {
 			assert.ok(!Object.keys(err).includes(key), `raw SDK field '${key}' was copied onto the ApiError`);
 		}
 		assert.ok(!JSON.stringify(err).includes('req-123456789012'));
+	});
+});
+
+describe('toCognitoFilter', () => {
+	test('maps startsWith to ^= and equals to =', () => {
+		assert.strictEqual(toCognitoFilter(undefined), undefined);
+		assert.strictEqual(toCognitoFilter({ attribute: 'email', match: 'startsWith', value: 'al' }), 'email ^= "al"');
+		assert.strictEqual(toCognitoFilter({ attribute: 'username', match: 'equals', value: 'alice' }), 'username = "alice"');
+	});
+
+	test('escapes backslashes and quotes so the value cannot close the quoted string', () => {
+		const filter = (value: string) => toCognitoFilter({ attribute: 'name', match: 'equals', value });
+		assert.strictEqual(filter('a"b'), String.raw`name = "a\"b"`);
+		assert.strictEqual(filter('a\\'), String.raw`name = "a\\"`);
+		assert.strictEqual(filter(String.raw`\"`), String.raw`name = "\\\""`);
 	});
 });

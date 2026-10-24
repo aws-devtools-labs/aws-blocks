@@ -7,7 +7,8 @@
  *
  * Runs only when BLOCKS_TEST_ENV=sandbox|production (the unified e2e harness
  * deploys + tears down the stack). Verifies the admin IAM grant is wired and
- * the surface behaves end-to-end against real Cognito.
+ * the surface behaves end-to-end against real Cognito. The scan filter-escaping
+ * suite at the end also runs locally, against the mock.
  */
 
 import { describe, test } from 'node:test';
@@ -204,6 +205,79 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 
 			await api.authCAdminDeleteUser(a);
 			await api.authCAdminDeleteUser(b);
+		});
+	});
+
+	// `admin.scan` escapes `\` and `"` in the filter value before sending it as a
+	// ListUsers Filter. Only Cognito decides how the escaped string is read (the
+	// mock compares the raw value), so on a sandbox this checks the escaping
+	// against the real service; locally it pins the mock to the same results.
+	// Each special character gets its own user so a failure shows which one the
+	// service reads differently.
+	describe('AuthCognito admin.scan filter values with backslashes and quotes', () => {
+		test('equals and startsWith match values holding \\, " and \\" literally', async () => {
+			const api = getApi();
+			const base = `scanesc-${uniqueUser()}`;
+			const names = {
+				plain: `${base} plain`,
+				quote: `${base} q"x`,
+				backslash: `${base} b\\x`,
+				mixed: `${base} a\\b "c" \\"d\\"`,
+			};
+			const users: Record<string, string> = {};
+			for (const [key, name] of Object.entries(names)) {
+				users[key] = uniqueUser();
+				await api.authCAdminCreateUserWithName(users[key], PW, name);
+			}
+			try {
+				// ListUsers can trail AdminCreateUser; wait until a plain prefix sees all four.
+				let all: string[] = [];
+				for (let i = 0; i < 10 && all.length < 4; i++) {
+					if (i > 0) await new Promise((r) => setTimeout(r, 1000));
+					all = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: base });
+				}
+				// Record a rejected filter as its error name, so one run shows every case.
+				const scan = (filter: Parameters<typeof api.authCAdminScan>[0]) =>
+					api.authCAdminScan(filter).catch((e: unknown) => [`error: ${e instanceof Error ? e.name : String(e)}`]);
+				const results: Record<string, string[]> = { all: [...all].sort() };
+				for (const [key, name] of Object.entries(names)) {
+					results[`${key} equals`] = await scan({ attribute: 'name', match: 'equals', value: name });
+				}
+				// Prefixes that end in a backslash: unescaped, it would escape the closing quote.
+				results['backslash startsWith'] = await scan({
+					attribute: 'name',
+					match: 'startsWith',
+					value: `${base} b\\`,
+				});
+				results['mixed startsWith'] = await scan({
+					attribute: 'name',
+					match: 'startsWith',
+					value: `${base} a\\b "c" \\`,
+				});
+				// Two backslashes where the user has one must not match: each backslash is
+				// escaped on its own, so the service never reads the pair back as one.
+				results['doubled backslash equals'] = await scan({
+					attribute: 'name',
+					match: 'equals',
+					value: `${base} b\\\\x`,
+				});
+				console.log(`scan escaping results: ${JSON.stringify(results)}`);
+				assert.deepStrictEqual(results, {
+					all: Object.values(users).sort(),
+					'plain equals': [users.plain],
+					'quote equals': [users.quote],
+					'backslash equals': [users.backslash],
+					'mixed equals': [users.mixed],
+					'backslash startsWith': [users.backslash],
+					'mixed startsWith': [users.mixed],
+					'doubled backslash equals': [],
+				});
+			} finally {
+				// Don't let a cleanup failure hide the assertion that failed.
+				for (const u of Object.values(users)) {
+					await api.authCAdminDeleteUser(u).catch((e: unknown) => console.warn(`cleanup of ${u} failed:`, e));
+				}
+			}
 		});
 	});
 }
