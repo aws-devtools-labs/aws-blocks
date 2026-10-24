@@ -2,7 +2,6 @@
 "@aws-blocks/create-blocks-app": patch
 ---
 
-docs: correct the docs folder paths in the generated `AGENTS.md`
+docs: point the generated `AGENTS.md` at a docs index instead of a guessed folder
 
-Building Block docs live in folders named after their package (for example `bb-kv-store/README.md`), and `ApiNamespace`,
-`ApiError` and the typed client are documented in `core/README.md`. The generated `AGENTS.md` now names these paths.
+The docs bullet now gives one command that lists the docs folders and prints the block catalog from the docs `README.md`, so agents read folder names (for example `bb-distributed-table`) instead of guessing them from a `<block>/README.md` placeholder. It also names `core/README.md` for `ApiNamespace`, `ApiError` and the typed client, and says to import them from `@aws-blocks/blocks`.
