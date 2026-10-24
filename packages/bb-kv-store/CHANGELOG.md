@@ -1,5 +1,49 @@
 # @aws-blocks/bb-kv-store
 
+## 0.3.2
+
+### Patch Changes
+
+- 943d405: fix: export a type missing from the `cdk` entry point
+
+  A type exported by the default entry point of `@aws-blocks/bb-kv-store` was missing from its `cdk` entry, so
+  backend code importing it failed to type-check under that condition — for example,
+  `import type { ScanOptions } from '@aws-blocks/bb-kv-store'`.
+
+  The `cdk` entry now exports `ScanOptions`.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 0d4ede3: refactor(core, bb-kv-store, bb-distributed-table): share one DynamoDB PITR + encryption resolver
+
+  No synth output change: the same CloudFormation template and the same synth warnings are produced.
+
+  The point-in-time-recovery and encryption resolution — the `retentionDays` 1–35 validation, the `aws-managed`/`customer-managed`/`fromKmsKey` encryption selection, and the auto-created-CMK removal-policy alignment — was duplicated almost line-for-line between the two Blocks-provisioned DynamoDB tables (`bb-kv-store`, `bb-distributed-table`). Both blocks now resolve that behaviour through one shared internal helper in `@aws-blocks/core`. Durability (`removalPolicy`/`deletionProtection`) stays in each block, since the two surface it through different options.
+
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- Updated dependencies [1076ccc]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [72e3259]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/bb-logger@0.2.3
+
 ## 0.3.1
 
 ### Patch Changes
@@ -7,14 +51,15 @@
 - 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
 - 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
 - 32a4b73: Report `AuthOIDC` as the parent block of its session store, and assert the rendered chain on the wire.
-  
+
   `AuthOIDC` built its session store with the scope it was given rather than itself, so the store's requests reported only `bb/KVStore` and no owning block. It cannot pass `this`: the store becomes the engine's session store, and the engine is an argument to `super()`. It now passes a parent carrying the block's own name, version and fully-qualified ID, built by the new `buildingBlockParent` helper, and the store's own ID is shortened to `sessions` so the session table name is unchanged.
-  
+
   `core` adds two exports: `computeScopeFullId`, the rule `Scope.fullId` already applies, and `buildingBlockParent`, which wraps it for a block that must construct a child before `super()` has run. Both replace a copy of that rule inside `bb-auth-oidc`. The Cognito env var prefix moves into the package's shared `utils.ts` alongside the cookie-secret name, so the CDK writer and the runtime reader derive both names from one function.
-  
+
   Two names change, in local and other non-Lambda `aws-runtime` runs only, where `BLOCKS_STACK_NAME` is unset and the app's root is a `Scope`. In that case the old helper walked one scope too far and produced a leading-dash ID, so the cookie-secret and Cognito env var names it looked up were not the ones the CDK side wrote, and session cookies were named `oidc_-my-app-auth`. Both now resolve. A deployed Lambda always has `BLOCKS_STACK_NAME` set and is unaffected. Under the default condition, which is what a scaffolded app's dev server resolves, the cookie prefix also changes to `oidc_my-app-auth`, from `oidc_my-app_auth` under a plain root and `oidc__my-app_auth` under a `Scope` root, because the dev entry now names cookies with the same expression as the AWS runtime instead of its own. Existing sessions in those two setups are signed out once.
-  
+
   Nothing covered the chain inside the rendered header, so a change that stopped it reaching the wire would still have passed. `bb-kv-store`'s request-capture helper now takes a parent scope, and `bb-auth-oidc` gains a suite that runs under `--conditions=aws-runtime`, where the session store is the real AWS client, and asserts the captured `user-agent` header carries both blocks root-to-leaf. The CDK suite pins the literal env var names the synth side writes, which nothing checked before, and `core` gains tests for the new helper covering attribution, the official-name gate, and the derived ID.
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [e682ba7]
 - Updated dependencies [e7e96e6]
@@ -50,21 +95,21 @@
 ### Minor Changes
 
 - 20be3f0: fix(bb-kv-store): wire point-in-time recovery from the stack preset and add customer-managed encryption
-  
+
   `KVStore` now honors `defaults.pointInTimeRecovery` (PITR on under `production`, off under `sandbox`) and accepts per-block `pointInTimeRecovery` and `encryption` options — mirroring `DistributedTable`. `encryption: 'customer-managed'` provisions a dedicated CMK, and `KVStore.fromKmsKey(arn)` reuses an existing key across stores. Previously `KVStore` ignored the preset, so production-preset consumers believed PITR was enabled when it was not.
-  
+
   The default encryption now emits the AWS-managed `aws/dynamodb` KMS key (`SSESpecification: { SSEEnabled: true }`), where before no `SSESpecification` was emitted at all (the AWS-owned key). On an already-deployed table this is an in-place SSE change applied on upgrade, and the `aws/dynamodb` key bills per-request KMS charges that the AWS-owned key does not.
-  
+
   **Behavior change on next production deploy of an existing app:** an existing `production`-preset `KVStore` table gains Point-in-Time Recovery in place on the next deploy (an in-place update, no table replacement); continuous backups are billed per GB-month of table size. Separately, passing `removalPolicy`, `deletionProtection`, or `ttl` alongside `fromExisting()` now warns at synth (previously only `pointInTimeRecovery` and `encryption` did), so a pipeline running `cdk synth --strict` will fail until those options are removed from the wrapped-table call.
 
 ### Patch Changes
 
 - 5454763: fix(bb-kv-store): align `delete()` conditional detection with the mock and `put()`
-  
+
   The AWS `delete()` path detected the value-equality condition with
   `'ifValueEquals' in conditions` (key presence), while the mock and AWS `put()`
   use `!== undefined`. Two consequences, both mock↔AWS parity breaks:
-  
+
   - `delete(key, { ifValueEquals: undefined })` was a silent no-op on the mock but,
     on AWS, emitted `#value = :expected` with `:expected = JSON.stringify(undefined)`
     (`undefined`) — a DynamoDB DocumentClient marshalling error instead of an
@@ -73,14 +118,15 @@
     `ifValueEquals` were set, silently dropping the value check — so on AWS the
     item was deleted regardless of its value, while the mock (correctly) required
     both.
-  
+
   `delete()` conditions are now composed conjunctively (`attribute_exists(#pk) AND
-  #value = :expected`) with `!== undefined` detection, matching the mock branch-for-
+#value = :expected`) with `!== undefined` detection, matching the mock branch-for-
   branch. Added `parity.test.ts` cases asserting the `DeleteCommand` shape for each
   combination (value-only, exists-only, both, none, explicit `undefined` no-op, and
   `null` as a real condition).
+
 - 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-  
+
   Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
   request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
   dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
@@ -89,31 +135,33 @@
   so native attribution rides the SDK user-agent chain AWS service telemetry already
   counts. The Kotlin runtime already sends the header, so Kotlin
   callers are attributed as soon as this ships; Swift and Dart follow.
+
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - Updated dependencies [5501cb6]
 - Updated dependencies [b58f248]
 - Updated dependencies [39628cb]
@@ -133,21 +181,22 @@
 ### Minor Changes
 
 - 81609a8: `KVStore.put`: allow `ifNotExists` and `ifValueEquals` to compose.
-  
+
   Previously the two conditional-write options were mutually exclusive — the AWS runtime silently ignored `ifValueEquals` when `ifNotExists` was also set, and the mock rejected the write outright, so passing both was unusable (and the two layers diverged). They now compose with **OR**: the write succeeds when the key is absent **or** its current value matches, and fails only when the key exists **and** the value differs. This is the optimistic "create it, or update it only if unchanged" pattern (`attribute_not_exists(pk) OR value = :expected`). Each option used alone is unchanged.
+
 - 21443ba: fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
-  
+
   Optimistic-concurrency / conditional-write conflicts now surface to clients as
   JSON-RPC error **code 409 (Conflict)** instead of a generic **500**. Previously
   these conflicts were thrown as plain named `Error`s (or re-thrown raw driver
   errors), and the JSON-RPC serializer maps any non-`ApiError` to 500 — so a
   routine, expected conflict was indistinguishable from an internal server error.
-  
+
   Each affected conflict is now an `ApiError` with `status: 409`, so on the client
   `error.status === 409`. The structured `error.name` is preserved end-to-end, so
   `isBlocksError(e, ...)` keeps matching by name on both server and client, and the
   existing typed error constants are unchanged:
-  
+
   - `@aws-blocks/bb-kv-store` — a failed `ifNotExists` / `ifExists` /
     `ifValueEquals` write or delete (`KVStoreErrors.ConditionalCheckFailed`). The
     AWS runtime now also normalizes DynamoDB's raw `ConditionalCheckFailedException`
@@ -161,19 +210,19 @@
   - `@aws-blocks/bb-data` — a serializable-isolation conflict, SQLSTATE `40001`
     (`DatabaseErrors.SerializationFailure`), across the PGlite, pg-client, and
     Data API engines.
-  
+
   The `retriable` flag is scoped to genuine optimistic-lock conflicts: it is
   `true` for value/field-equals conflicts (`ifValueEquals` / `ifFieldEquals`) and
   the 40001 serialization failures, and omitted/`false` for existence/uniqueness
   assertions (`ifNotExists`, `ifExists`), where a blind identical retry would fail
   identically. Status (409) and `error.name` are unchanged in every case.
-  
+
   This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior: callers that
   branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
   code) will now see `409`. Code that matches conflicts by name via
   `isBlocksError` — the documented pattern — is unaffected.
-  
+
   `@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
   change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
   (no behavior or API change).
@@ -181,17 +230,18 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -200,19 +250,20 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
 - Updated dependencies [9aa0814]
@@ -252,17 +303,18 @@
 ### Patch Changes
 
 - 309a236: refactor(bb): attach IAM grants to the shared execution role
-  
+
   Data and auth blocks now grant permissions to the shared Blocks execution role
   (`this.executionRole`) instead of the handler function directly. Grants land on
   the same role the handler assumes, so the effective runtime permissions are
   identical — this decouples IAM wiring from the concrete Lambda function ahead of
   the multi-compute model.
-  
+
   For `bb-distributed-data`, the DSQL endpoint and region now flow through the
   config registry (loaded into `process.env` at cold start, like every other
   block) rather than being set as direct handler environment variables, and the
   migration Lambda maps the shared execution role's ARN.
+
 - Updated dependencies [5798492]
 - Updated dependencies [f00adb0]
 - Updated dependencies [f00adb0]
@@ -279,14 +331,15 @@
 ### Patch Changes
 
 - 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
-  
+
   `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
-  
+
   Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
-  
+
   The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
-  
+
   **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+
 - Updated dependencies [7b4c62d]
 - Updated dependencies [5262062]
 - Updated dependencies [3614a09]

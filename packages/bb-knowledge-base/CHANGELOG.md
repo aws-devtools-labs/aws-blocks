@@ -1,5 +1,45 @@
 # @aws-blocks/bb-knowledge-base
 
+## 0.2.7
+
+### Patch Changes
+
+- d1d129f: feat(bb-agent): mark tool output as untrusted, attach a Bedrock guardrail, and stop silently ignoring `guardrails`
+
+  Tools that return content you don't control (knowledge-base chunks, fetched web pages, user uploads) put that text in the model's context next to real instructions, where it can try to steer the agent into misusing its other tools (indirect prompt injection). Three opt-in controls:
+
+  - **`untrustedOutput: true` on a tool.** The tool's result is wrapped in an `<untrusted-data>` block whose delimiter carries a random per-session id, and the agent's system prompt tells the model that content inside it is data, never instructions. Content can't close the block early: any occurrence of the session id inside it is neutralized. Tools without the flag are unchanged.
+  - **`guardrail: { identifier, version, trace? }` on a Bedrock `ModelConfig`.** Attaches an existing Amazon Bedrock guardrail to every model call. The deployed agent is granted `bedrock:ApplyGuardrail` on that guardrail only (an id is expanded to the stack's guardrail ARN; an ARN is used as-is). Setting it on a non-Bedrock provider throws `InvalidModelConfig` instead of being ignored.
+  - **`ModelConfig.guardrails` is deprecated.** No provider ever applied it, so it gave no protection. It still type-checks, and the agent now logs a warning when it is set.
+
+  The Agent and KnowledgeBase READMEs now document the trust boundary: mark retrieval tools `untrustedOutput`, put `needsApproval` on side-effecting tools, and set knowledge-base filters from the authenticated caller rather than from request or tool input, since a filter is a query scope, not an access control.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- Updated dependencies [1076ccc]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [72e3259]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/bb-logger@0.2.3
+
 ## 0.2.6
 
 ### Patch Changes
@@ -42,7 +82,7 @@
 ### Patch Changes
 
 - 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-  
+
   Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
   request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
   dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
@@ -51,31 +91,33 @@
   so native attribution rides the SDK user-agent chain AWS service telemetry already
   counts. The Kotlin runtime already sends the header, so Kotlin
   callers are attributed as soon as this ships; Swift and Dart follow.
+
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - Updated dependencies [5501cb6]
 - Updated dependencies [b58f248]
 - Updated dependencies [39628cb]
@@ -95,17 +137,18 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -114,19 +157,20 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
 - Updated dependencies [9aa0814]
@@ -149,10 +193,11 @@
 ### Patch Changes
 
 - 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
-  
+
   Test-only change: both packages' CDK tests were updated to call
   `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
   signature. No runtime or public API change.
+
 - Updated dependencies [df667c5]
 - Updated dependencies [df667c5]
 - Updated dependencies [64ddd74]
@@ -171,22 +216,24 @@
 ### Patch Changes
 
 - 309a236: refactor(bb): attach IAM grants to the shared execution role
-  
+
   Data and auth blocks now grant permissions to the shared Blocks execution role
   (`this.executionRole`) instead of the handler function directly. Grants land on
   the same role the handler assumes, so the effective runtime permissions are
   identical — this decouples IAM wiring from the concrete Lambda function ahead of
   the multi-compute model.
-  
+
   For `bb-distributed-data`, the DSQL endpoint and region now flow through the
   config registry (loaded into `process.env` at cold start, like every other
   block) rather than being set as direct handler environment variables, and the
   migration Lambda maps the shared execution role's ARN.
+
 - de4f209: `KnowledgeBase.retrieve`: validate `maxResults` consistently across the mock and AWS runtimes.
-  
+
   `maxResults` was normalized with `Math.min(Math.max(v ?? 10, 1), 100)`, which silently passed fractional and non-finite values (`1.5`, `NaN`, `Infinity`) straight through — the mock and the AWS `RetrieveCommand` then diverged, and Bedrock rejects a non-integer `numberOfResults`. A new shared `normalizeMaxResults` helper (used by both runtimes) keeps the documented clamp for finite integers and now rejects fractional/non-finite values up front with `KnowledgeBaseErrors.ValidationError`, before any search or Bedrock request.
-  
+
   Fixes #430.
+
 - Updated dependencies [5798492]
 - Updated dependencies [f00adb0]
 - Updated dependencies [f00adb0]
@@ -203,16 +250,17 @@
 ### Patch Changes
 
 - 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
-  
+
   `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
-  
+
   Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
-  
+
   The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
-  
+
   **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+
 - edbf1aa: fix(bb-knowledge-base): disable `installLatestAwsSdk` on the ingestion custom resource
-  
+
   The `StartIngestion` `AwsCustomResource` left `installLatestAwsSdk` at its default
   (`true`), so the provider Lambda ran an `npm install` of the AWS SDK on every
   invocation before it could call the API. That costs roughly 15-30s of extra cold
@@ -220,26 +268,27 @@
   reduction is only realized once every `AwsCustomResource` in the stack opts out —
   the provider is a stack-level singleton and its `memorySize` is resolved once at
   synth. The per-resource cold-start saving applies regardless.
-  
+
   Nothing needed it. The resource calls `BedrockAgent.startIngestionJob`, a stable
   API already bundled in the Lambda runtime's AWS SDK v3, so the bundled client is
   sufficient and the install is pure overhead. Setting `installLatestAwsSdk: false`
   also silences CDK's `installLatestAwsSdkNotSpecified` synth-time warning for this
   construct.
-  
+
   The tradeoff being accepted: the provider now uses whichever SDK v3 the Lambda
   runtime bundles at deploy time rather than installing the newest one. That is safe
   here because `startIngestionJob` is a foundational Bedrock Agent operation present
   since the client's initial release, not a recent addition.
-  
+
   Internal construct wiring only — no public API change. The synthesized
   `Custom::AWS` resource now renders `InstallLatestAwsSdk: false`.
-  
+
   Upgrade note: because `InstallLatestAwsSdk` renders as a property on the
   `Custom::AWS` resource while the `physicalResourceId` stays stable, the first
-  deploy after upgrading is a CloudFormation *Update* and fires `onUpdate` — so one
+  deploy after upgrading is a CloudFormation _Update_ and fires `onUpdate` — so one
   `startIngestionJob` kicks off. This is harmless (ingestion is idempotent and
   fire-and-forget), but expect to see an ingestion start right after upgrading.
+
 - Updated dependencies [7b4c62d]
 - Updated dependencies [5262062]
 - Updated dependencies [3614a09]
