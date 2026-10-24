@@ -97,6 +97,18 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       }
     });
 
+    for (const batch of [false, true]) {
+      test(`AsyncJob - ${batch ? 'batch' : 'single'} submit isolates the queued payload`, async () => {
+        const api = getApi();
+        const key = `snapshot-${batch}-${Date.now().toString(36)}`;
+        await api.asyncJobSubmitThenMutate(key, 'saved-at-submit', batch);
+
+        const result = await pollForResult(() => api.asyncJobGetResult(key));
+        assert.ok(result, 'handler should have written result');
+        assert.strictEqual(result.value, 'saved-at-submit');
+      });
+    }
+
     test('AsyncJob - submit throws PayloadTooLarge', async () => {
       const api = getApi();
       await assert.rejects(
