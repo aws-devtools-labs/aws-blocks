@@ -13,7 +13,9 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Keycha
 
 /// Persists cookies in the iOS/macOS Keychain so auth sessions survive app restarts.
 ///
-/// Each cookie is stored as a separate Keychain item keyed by `host|cookieName`.
+/// Each cookie is stored as a separate Keychain item keyed by `host|path|cookieName`, holding a
+/// JSON-encoded `StoredCookie` with the cookie's attributes. Items written by earlier versions,
+/// keyed by `host|cookieName` and holding the bare value, are still read (see `StoredCookie.decode`).
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.
@@ -21,7 +23,10 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Keycha
 /// Items are readable only while the device is unlocked, so the store also keeps the jar in
 /// memory: while the Keychain cannot be read, requests are served from that copy, and a change
 /// the Keychain does not accept is kept and written again on the next call.
-final class KeychainCookieStore {
+///
+/// Every access to the in-memory state goes through `lock`, which is what makes sharing one
+/// store across concurrent requests safe (hence `@unchecked Sendable`).
+final class KeychainCookieStore: CookieItemStore, @unchecked Sendable {
     private let keychain: CookieKeychain
     private let lock = NSLock()
 
