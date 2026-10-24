@@ -5,7 +5,7 @@
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — start here), then `<block>/README.md`, plus `<block>/API.md` and `<block>/DESIGN.md` where present.
+- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
 
