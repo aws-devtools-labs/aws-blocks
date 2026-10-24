@@ -182,6 +182,19 @@ DynamoDB only allows one GSI change per `UpdateTable` call, and each change can 
   2. If the table is idle and matches the desired state, returns `IsComplete: true`.
   3. If the table is idle but doesn't match, initiates the next GSI change and returns `IsComplete: false`.
 
+**Delete:** CloudFormation sends the same Delete request whether `indexes` was removed from the config or the table itself is leaving the stack, and the custom resource (which depends on the table) is deleted while the table still exists in both cases. A `retained`/`locked` table that leaves the stack is orphaned with its data and must keep its indexes (rebuilding a GSI on a large table takes hours); a table that stays must lose the indexes no longer configured. On Delete, `onEvent` therefore reads its own stack with `cloudformation:DescribeStacks` and, during an update's cleanup phase, `cloudformation:GetTemplate` (the current template: the new one after an update, the restored one after a rollback):
+
+| Stack status at Delete | Cause | Table in current template? | Indexes |
+|---|---|---|---|
+| `DELETE_IN_PROGRESS` | stack delete (also a retried delete, or a nested stack removed by its parent) | (not read) | kept |
+| `ROLLBACK_IN_PROGRESS` | the stack's first create failed | (not read) | kept |
+| `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS` | `indexes` removed from the config | yes | dropped one at a time |
+| `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS` | the DistributedTable removed from the app | no | kept |
+| `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS` | a failed update had added `indexes` | yes | dropped one at a time |
+| `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS` | a failed update had added the whole table | no | kept |
+
+A `disposable` table that leaves the stack is deleted right after, so keeping its indexes also spares the stack delete the wait for each drop. If a lookup fails (after the SDK's retries), the indexes are kept: the worst case is an unwanted index left in place, visible and removable, rather than a rebuild on a retained table. A `DescribeStacks` failure (status unknown) keeps them and succeeds. A `GetTemplate` failure in one of the two cleanup statuses keeps them and fails the Delete with a message naming the table and its indexes: a failed delete in the cleanup phase is reported as a `DELETE_FAILED` event and does not roll the update back, so the leftover is visible instead of silent. A stack delete never reaches `GetTemplate`, so the failure cannot block one. `onEvent` passes the "keep" verdict to `isCompleteHandler` through its result (the Provider framework merges it into every isComplete call), so only the `onEvent` role holds the permissions. A Delete whose table no longer exists (`ResourceNotFoundException`) succeeds instead of failing the stack operation; Create and Update still fail on a missing table. A stack created before this behaviour shipped gets it once the upgraded GSI manager code is deployed.
+
 **Ordering:** Creations are performed before deletions when possible. This ensures new access patterns are available before old ones are removed. The one exception is schema-mismatched GSIs — if a desired GSI has the same name as an existing GSI but different key schema, the old one must be deleted first because DynamoDB doesn't support in-place GSI modification.
 
 **IAM policies are split by environment:**
@@ -194,6 +207,7 @@ DynamoDB only allows one GSI change per `UpdateTable` call, and each change can 
 | `dynamodb:CreateTable` | ❌ | ✅ |
 | `dynamodb:Scan` | ❌ | ✅ |
 | `dynamodb:BatchWriteItem` | ❌ | ✅ |
+| `cloudformation:DescribeStacks`, `cloudformation:GetTemplate` (own stack only, `onEvent` role only) | ✅ | ✅ |
 
 Production deployments can only add/remove GSIs via `UpdateTable`. The GSI manager lambda cannot drop or recreate the table, scan its data, or batch-write items. This prevents accidental data loss from a misconfigured custom resource.
 
