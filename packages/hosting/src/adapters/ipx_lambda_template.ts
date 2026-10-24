@@ -31,6 +31,7 @@
  *   https://github.com/unjs/ipx/issues/261.
  */
 import { looksLikeSvg } from './ipx_allowlist.js';
+import { SHARP_VERSION_RANGE } from './shared/sharp.js';
 
 export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer, ipxHttpStorage } from 'ipx';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -471,8 +472,12 @@ export const IPX_LAMBDA_PACKAGE_JSON = JSON.stringify(
       // mapping (the handler returns it). Re-run the executable handler tests in
       // nitro_internal.test.ts when bumping this.
       ipx: '3.1.1',
-      sharp: '^0.34.0',
+      sharp: SHARP_VERSION_RANGE,
     },
+    // ipx@3.1.1 declares `sharp: ^0.34.3`, which excludes the patched range, so
+    // npm would nest a vulnerable sharp under ipx/node_modules and ipx would
+    // load it (GHSA-wq5f-xc86-pv6w). Force ipx onto the root sharp above.
+    overrides: { sharp: '$sharp' },
     // @aws-sdk/client-s3 is provided by the Lambda Node 20 runtime;
     // we don't bundle it (saves ~16 MB unzipped, keeps the bundle
     // under Lambda's 50 MB limit).

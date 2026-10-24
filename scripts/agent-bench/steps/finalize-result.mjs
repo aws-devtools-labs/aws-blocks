@@ -6,6 +6,7 @@
 // can re-derive the exact same numbers from one source of truth.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { classifyCell, composite, isScoredCell, testRate, testStats, verdictOf } from './lib/scoring.mjs';
+import { stringifyRedacted } from './lib/secrets.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
 
@@ -139,7 +140,9 @@ r.verdict = verdictOf(r);
 // excluded from the headline mean — isScoredCell reads the klass stamped above.
 r.composite = isScoredCell(r) ? composite(tr, j) : null;
 
-writeFileSync(RESULT_PATH, JSON.stringify(r, null, 2));
+// Redacted: result.json is uploaded publicly and by now carries every agent-influenced field (the
+// builder envelope, the judge output, step 3's dev-server log tail).
+writeFileSync(RESULT_PATH, stringifyRedacted(r));
 process.stderr.write(
 	`[finalize-result] status=${status}${failedAt ? ` failed_at=${failedAt}` : ''} klass=${klass}${reason ? ` reason=${reason}` : ''} verdict=${r.verdict} composite=${r.composite}\n`,
 );

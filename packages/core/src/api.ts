@@ -60,40 +60,29 @@ export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 import type { ScopeParent } from './common/index.js';
 
 /**
- * Structural view of a scope that resolves a compute carrying a recordable
- * namespace list. Only the CDK `Scope` satisfies this at runtime (via its
- * `compute` getter); in the mock/runtime bundles the property is absent.
+ * Symbol under which an `ApiNamespace` exposes a resolver for the compute that
+ * hosts it: a function returning that compute, or `undefined` outside CDK synth
+ * (the mock/runtime `Scope` has no `compute`).
+ *
+ * The shared API gateway routes each exported namespace to its compute. It calls
+ * the resolver at synth, after the backend module has been imported — not at
+ * construction — so routing reflects compute assignments made in any order. The
+ * precedence lives here, with the options that define it, so the gateway never
+ * needs to know where a namespace's compute comes from: today that is the
+ * scope's compute (`scope.compute` — the nearest compute assigned up the scope
+ * chain, else the default); a per-namespace compute option, once it exists,
+ * takes precedence over it. Routes key on the **export** name (what the client
+ * sends and dispatch resolves), not the constructor's `name`.
+ *
+ * A symbol key, like {@link API_NAMESPACE_MARKER}, so `Object.entries`,
+ * `JSON.stringify` and the client/spec generators never see it.
+ *
+ * @internal
  */
-type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
+export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
 
-/**
- * Record this namespace on its resolved compute so request routing can later
- * map a namespace to the compute that hosts it.
- *
- * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
- * namespace's compute (the stack default today), and we append the name to its
- * `namespaces` list. In the mock/runtime bundles — or a scopeless test — the
- * property is absent, so `scope.compute` is `undefined` and this is a silent
- * no-op. The public `ApiNamespace` signature is unchanged; this is a purely
- * internal side effect.
- *
- * No `try/catch`: `BlocksBackend.create()` initializes the default compute
- * before it imports the backend module that constructs any `ApiNamespace`, so
- * the `compute` getter always resolves at this call site. If it ever threw
- * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
- * before `create()` resolved), which should surface rather than be swallowed.
- */
-function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
-  // An API created without a Scope stays unrecorded and routes to the
-  // default compute.
-  if (!scope || typeof scope !== 'object') return;
-  const compute = (scope as ComputeResolvingScope).compute;
-  // Guard against duplicates so `namespaces` stays a set of names: a namespace
-  // could otherwise be recorded twice (e.g. a re-imported module during synth).
-  if (compute && Array.isArray(compute.namespaces) && !compute.namespaces.includes(name)) {
-    compute.namespaces.push(name);
-  }
-}
+/** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
+type ComputeResolvingScope = { compute?: unknown };
 
 /**
  * Define a type-safe API namespace that works seamlessly between frontend and backend.
@@ -193,9 +182,13 @@ export interface ApiNamespaceConstructor {
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
   constructor(scope: ScopeParent, name: string, handler: any) {
     handler[API_NAMESPACE_MARKER] = name;
-    // Record the namespace → compute association for per-compute routing.
-    // No-op outside CDK synth. Signature and returned handler are unchanged.
-    recordNamespaceOnCompute(scope, name);
+    // How synth-time routing finds this namespace's compute (see
+    // API_NAMESPACE_COMPUTE): resolved when called, never here. A scopeless
+    // namespace resolves to undefined and routes to the default compute.
+    // Signature and returned handler are unchanged.
+    handler[API_NAMESPACE_COMPUTE] = () =>
+      scope && typeof scope === 'object' ? (scope as ComputeResolvingScope).compute : undefined;
+    // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }
 } as any;

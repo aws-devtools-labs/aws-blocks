@@ -4,26 +4,36 @@
 # starts `npm run dev`, discovers the port from the framework banner, and points Playwright at it.
 # Writes build/dev-server/playwright/test signals to $GITHUB_OUTPUT (the judge folds them into EVIDENCE).
 # Required env: WORKSPACE (bench-app path), TASK_DIR (task dir with PROMPT.md + test.spec.ts).
+#
+# TRUST SPLIT: this script is the trusted supervisor (runner uid, job credentials in its env). Every
+# process that runs the agent's app or its dependencies — the package.json probes, npm install and its
+# lifecycle scripts, the build, the dev server, Playwright (it loads the app's node_modules) — runs via
+# lib/agent-exec.mjs as the isolated agent user with the scrubbed env: no credentials, no GITHUB_*
+# file-command paths, no RUNNER_TEMP. The supervisor opens their log redirects (runner-owned files),
+# reads agent-written files only without following links, and alone writes GITHUB_OUTPUT, from
+# validated values. Under CI it refuses to run agent code without that boundary.
 set -euo pipefail
 
 : "${WORKSPACE:?WORKSPACE must be set}"
 : "${TASK_DIR:?TASK_DIR must be set}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set (run inside GitHub Actions)}"
 
+AGENT_EXEC=(node "$(cd "$(dirname "$0")" && pwd)/lib/agent-exec.mjs")
+# Run a shell command as the agent user in the workspace: agent_run [K=V …] -- '<command>'.
+agent_run() { "${AGENT_EXEC[@]}" run "$WORKSPACE" "$@"; }
+
 # Pin to the lockfile-resolved version so the browser/runner stay reproducible.
 PW_VERSION="1.60.0"
 
-# Per-run, per-cell scratch prefix so a re-run on a reused runner can't collide on fixed /tmp paths.
-# PW_RESULTS_JSON is exported so the generated playwright.config.ts heredoc can read the report path.
-CELL_TMP="/tmp/bench-${TASK:-default}-$$"
-mkdir -p "$CELL_TMP"
-export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
+# Per-cell scratch dir for the supervisor's captures (runner-owned, 0700: the agent user can't reach
+# or pre-create anything in it).
+CELL_TMP="$(mktemp -d "/tmp/bench-${TASK:-default}-XXXXXX")"
 
 # Test-only mock switch, inherited by both the dev server and Playwright. Tasks
 # whose grader needs a server-side test backdoor gate that surface on BLOCKS_MOCK
 # and return null otherwise, so it is inert in a real deployment. Example:
 # cognito-profile's api.getLastCode exposes the most-recently delivered OTP
-# (the grader has no mailbox) only when this is set.
+# (the grader has no mailbox) only when this is set. (BLOCKS_* passes the agent env policy.)
 export BLOCKS_MOCK=true
 
 # Pessimistic defaults up front, updated on success, so a failure still yields well-formed EVIDENCE.
@@ -45,21 +55,43 @@ cd "$WORKSPACE" || {
   exit 0
 }
 
+# Fail closed on any boundary failure: stamp `isolation_failure` (scoring → harness_error, infra) and
+# stop, so agent code never runs (or keeps running) outside the agent-user boundary.
+isolation_failed() {
+  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" REASON="step 3: $1" node -e '
+    const fs = require("fs");
+    const p = process.env.RESULT_PATH;
+    let r = {};
+    try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
+    r.isolation_failure = process.env.REASON;
+    fs.writeFileSync(p, JSON.stringify(r, null, 2));
+  ' || true
+  echo "::error::$1; refusing to run the agent's app"
+  exit 1
+}
+agent_reap() { "${AGENT_EXEC[@]}" reap || isolation_failed "agent-user processes survived the reap"; }
+
+# Enter the agent-user boundary: reap anything left from step 2, (re)grant the workspace ACL, lock the
+# runner temp dirs and verify the agent user can't reach them or this job's /proc environ.
+"${AGENT_EXEC[@]}" preflight "$WORKSPACE" || isolation_failed "agent-user isolation preflight failed"
+# Whatever exit path: no agent-user process (dev server included) outlives this step.
+trap '"${AGENT_EXEC[@]}" reap >/dev/null 2>&1 || true' EXIT
+
 # Build detection (scoring correctness): some templates ship no `build` script, so a bare
 # `npm run build` exits non-zero — recording that as a failure would wrongly cap the judge. So:
 #   - package.json missing/malformed → build_status=failed (a broken workspace IS a failure).
 #   - no `build` script   → build_status=na, build_succeeded=true (N/A, step 4 applies no cap).
 #   - `build` ok / failed → build_status=ok / failed (a real failure keeps the cap).
 # The require() probe throws on a missing/malformed file (distinct from "no build script"); the
-# second node -e exits 0 iff scripts.build is non-empty. Guarded `if`s stay safe under `set -e`.
-if ! node -e 'require("./package.json")' 2>/dev/null; then
+# second probe exits 0 iff scripts.build is non-empty. Guarded `if`s stay safe under `set -e`.
+if ! agent_run -- 'node -e "require(\"./package.json\")"' 2>/dev/null; then
   echo "::warning::package.json missing or malformed — treating as build failure"
   {
     echo "build_status=failed"
     echo "build_succeeded=false"
   } >> "$GITHUB_OUTPUT"
-elif node -e 'process.exit(require("./package.json").scripts?.build ? 0 : 1)'; then
-  if npm run build > "${CELL_TMP}/build.log" 2>&1; then
+elif agent_run -- 'node -e "process.exit(require(\"./package.json\").scripts?.build ? 0 : 1)"'; then
+  if agent_run -- 'npm run build' > "${CELL_TMP}/build.log" 2>&1; then
     {
       echo "build_status=ok"
       echo "build_succeeded=true"
@@ -80,10 +112,56 @@ else
   } >> "$GITHUB_OUTPUT"
 fi
 
+# Nothing the build started may survive into the supervisor's own writes below.
+agent_reap
+
+# Stage the graded spec + Playwright config NOW, while no agent-user process is alive, so nothing can
+# swap a path under these runner writes. Both live in bench-tests/ (excluded from the judge's copy):
+# fresh dir, and noclobber (O_EXCL) creates so a planted symlink fails the write instead of being
+# followed. The JSON report goes to bench-tests/ too (Playwright runs as the agent user); the
+# supervisor reads it back without following links.
+sudo -n rm -rf bench-tests 2>/dev/null || rm -rf bench-tests
+mkdir bench-tests
+PW_RESULTS_JSON="${WORKSPACE}/bench-tests/pw-results.json"
+(
+  set -C
+  cat "$TASK_DIR/test.spec.ts" > bench-tests/task.spec.ts
+  cat > bench-tests/playwright.config.ts <<'EOF'
+import { defineConfig } from '@playwright/test';
+
+// Serial, single-worker: cells share one dev server whose backing store persists for the run,
+// so parallel tests would race on shared state. retries: 0 for an honest pass/fail signal.
+export default defineConfig({
+  testDir: '.',
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
+  timeout: 60_000,
+  globalTimeout: 600_000,
+  expect: { timeout: 15_000 },
+  use: {
+    // The discovered dev-server URL (exported as APP_BASE_URL); specs also use their own
+    // absolute goto() via BLOCKS_URL, but baseURL is set for any relative navigation.
+    baseURL: process.env.APP_BASE_URL,
+    actionTimeout: 30_000,
+    navigationTimeout: 45_000,
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+    trace: 'retain-on-failure',
+    launchOptions: {
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    },
+  },
+  // Report path injected via PW_RESULTS_JSON (inside bench-tests/, next to this config).
+  reporter: [['json', { outputFile: process.env.PW_RESULTS_JSON || 'pw-results.json' }]],
+});
+EOF
+)
+
 # ── Dev server: launch fresh + discover its port two independent ways ────────
-# The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
-# that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
-# agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
+# The verifier OWNS the server. Any dev server step 2 left was reaped with the agent user's processes
+# (preflight), so only its stale pidfile remains: the framework singleton guard would REFUSE our
+# `npm run dev` on it, so drop it, then free the front-door ports (3000/3001 only, never :3100).
 # Discovery uses TWO independent paths over a 90-iteration window (either confirms), sharing ONE
 # readiness bar — the app root `/` answers non-5xx (`< 500`). They differ only in how the port is found:
 # Path A parses it from the framework banner `AWS Blocks local server running on http://localhost:<port>`;
@@ -92,63 +170,21 @@ fi
 # config.json is a discovery signal only (it answers before the proxied app on :3100 is up), so Path B
 # still confirms readiness with the same root `/` probe. If neither confirms, APP_BASE_URL stays empty
 # and we proceed (the cell fails honestly rather than hanging). See the inline block at the launch site.
-
-# Reap any dev server the agent left running. The framework records each in
-# .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
-# that respawns `pid` on change. A plain `fuser -k` only kills the child, the supervisor respawns it,
-# and the stale pidfile makes the framework singleton guard REFUSE our own `npm run dev`. So kill the
-# supervisor tree first (ppid before pid; TERM then KILL) and delete the pidfile before freeing ports.
-# Only node/tsx/npm procs are signalled (pid-reuse guard); sudo covers the cross-uid isolated case.
-reap_stale_dev_servers() {
-  local sandbox="${WORKSPACE}/.blocks-sandbox"
-  [ -d "$sandbox" ] || return 0
-  local pf ids ppid pid sig target
-  for pf in "$sandbox"/dev-server.*.pid; do
-    [ -f "$pf" ] || continue
-    ids="$(node -e 'try{const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(`${Number.isInteger(r.ppid)?r.ppid:""} ${Number.isInteger(r.pid)?r.pid:""}`)}catch{}' "$pf" 2>/dev/null || true)"
-    read -r ppid pid <<< "$ids" || true
-    for sig in TERM KILL; do
-      for target in "$ppid" "$pid"; do
-        [ -n "${target:-}" ] || continue
-        # pid-reuse guard: only signal a live node/tsx/npm process (/proc/<pid>/comm).
-        # This is a comm-CLASS heuristic (matches any node/tsx/npm), not process IDENTITY — a
-        # recycled pid now running an UNRELATED node/tsx/npm would still match. Acceptable here:
-        # the window is tiny and the sole workload on this ephemeral runner is our own dev server.
-        case "$(cat "/proc/${target}/comm" 2>/dev/null || true)" in
-          node|tsx|npm*) sudo -n kill "-${sig}" "$target" 2>/dev/null || kill "-${sig}" "$target" 2>/dev/null || true ;;
-        esac
-      done
-      [ "$sig" = TERM ] && sleep 1
-    done
-    # Drop the stale pidfile so the framework singleton guard won't refuse our start.
-    sudo -n rm -f "$pf" 2>/dev/null || rm -f "$pf" 2>/dev/null || true
-  done
-}
-reap_stale_dev_servers
+agent_run -- 'rm -f .blocks-sandbox/dev-server.*.pid' || true
 
 # The front-door ports the dev server may bind (3000/3001 only, never :3100). Single source of truth:
-# the reap/free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
+# the free-port loop below AND the readiness probe further down both read $DEV_PORTS, so changing
 # the canonical set updates both.
 DEV_PORTS="3000 3001"
 
 for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
-  # Probe via sudo too: an isolated squatter is benchagent-owned and invisible to an unprivileged fuser.
+  # Probe via sudo too: a squatter owned by another uid is invisible to an unprivileged fuser.
   { sudo -n fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1 || fuser $(printf '%s/tcp ' $DEV_PORTS) >/dev/null 2>&1; } || break
   # Still held — re-issue the privileged kill before waiting.
   for p in $DEV_PORTS; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
   sleep 1
 done
-
-# Reap the dev server on EXIT (it stays alive through the Playwright run; no later step needs it).
-# Trapped before launch so an interrupt is still reaped; guarded to no-op before the server started.
-cleanup_dev_server() {
-  [ -f "${CELL_TMP}/dev.pid" ] || return 0
-  local dev_pid
-  dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
-  if [ -n "${dev_pid:-}" ]; then kill "$dev_pid" 2>/dev/null || true; fi
-}
-trap cleanup_dev_server EXIT
 
 # Dev-server stability: readiness is detected two INDEPENDENT ways, so a slow or
 # mismatched startup banner no longer false-negatives `dev_server_started` (which hard-caps
@@ -161,7 +197,9 @@ trap cleanup_dev_server EXIT
 # signal, not a readiness one: it answers 200 before spawnFrontend() brings up the proxied app on :3100
 # (dev-server.ts:1024-1034), so both paths still confirm on the root `/` probe before accepting a port.
 # No NODE_OPTIONS heap cap: an OOM fix needs a repro (none yet), and guessing one could mask it.
-nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
+# The server runs as the agent user; its log is a supervisor-opened (runner-owned) file. The EXIT trap
+# reaps it.
+nohup "${AGENT_EXEC[@]}" run "$WORKSPACE" -- 'npm run dev' > "${CELL_TMP}/dev.log" 2>&1 &
 echo "$!" > "${CELL_TMP}/dev.pid"
 
 APP_BASE_URL=""
@@ -240,7 +278,6 @@ else
     fs.writeFileSync(p, JSON.stringify(r, null, 2));
   ' || echo "::warning::failed to record dev_log_tail on result.json"
 fi
-export APP_BASE_URL
 
 # Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
 # dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
@@ -255,19 +292,18 @@ export APP_BASE_URL
 # Clear any stale /tmp evidence copies from a PRIOR cell BEFORE the Playwright guard below, so this
 # always runs even when a Playwright-install/chromium early-exit fires inside the guard (those `exit 0`
 # paths would otherwise skip the clear and leave the previous cell's pw-results.json/dev.log/build.log
-# for analyze-cell to misread as this cell's). The fresh `cp` staging stays after the guard (it needs
+# for analyze-cell to misread as this cell's). The fresh copies stay after the guard (they need
 # the evidence to exist first); on an early-exit there is nothing to stage, and a cleared /tmp is the
 # honest state — analyze-cell degrades to null on a missing file.
-# /tmp is sticky (+t): a stale copy may be benchagent-owned (the agent's isolated phase wrote it), so a
-# plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the step. Mirror the
-# reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is the fallback,
-# and the trailing `|| true` guarantees this cleanup never aborts the step.
+# /tmp is sticky (+t): a stale copy may be owned by the agent user, so a plain `rm` as the runner uid
+# hits EPERM and — under `set -e` — would abort the step: `sudo -n rm` clears it, unprivileged `rm`
+# is the fallback, and the trailing `|| true` guarantees this cleanup never aborts the step.
 sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
 
 if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
-if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
+if ! agent_run -- "npm install --no-save --silent @playwright/test@${PW_VERSION}"; then
   echo "::warning::playwright install failed; functional tests will not run"
   exit 0
 fi
@@ -275,75 +311,52 @@ fi
 # Playwright chromium" workflow step, same job-level PLAYWRIGHT_BROWSERS_PATH), making this a
 # cache-hit no-op. Kept (guarded) as a fallback so step 3 still works standalone; `playwright
 # install` is idempotent, so it self-heals a rare miss.
-if ! npx playwright install chromium > "${CELL_TMP}/pw-install.log" 2>&1; then
+if ! agent_run -- 'npx playwright install chromium' > "${CELL_TMP}/pw-install.log" 2>&1; then
   echo "::warning::playwright chromium download failed; functional tests will not run"
   exit 0
 fi
 echo "playwright_installed=true" >> "$GITHUB_OUTPUT"
 
-rm -rf bench-tests && mkdir -p bench-tests
-cp "$TASK_DIR/test.spec.ts" bench-tests/task.spec.ts
-cat > playwright.config.ts <<'EOF'
-import { defineConfig } from '@playwright/test';
-
-// Serial, single-worker: cells share one dev server whose backing store persists for the run,
-// so parallel tests would race on shared state. retries: 0 for an honest pass/fail signal.
-export default defineConfig({
-  testDir: './bench-tests',
-  fullyParallel: false,
-  workers: 1,
-  retries: 0,
-  timeout: 60_000,
-  globalTimeout: 600_000,
-  expect: { timeout: 15_000 },
-  use: {
-    // The discovered dev-server URL (exported as APP_BASE_URL); specs also use their own
-    // absolute goto() via BLOCKS_URL, but baseURL is set for any relative navigation.
-    baseURL: process.env.APP_BASE_URL,
-    actionTimeout: 30_000,
-    navigationTimeout: 45_000,
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
-    trace: 'retain-on-failure',
-    launchOptions: {
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    },
-  },
-  // Report path injected via PW_RESULTS_JSON; literal fallback keeps a local run working.
-  reporter: [['json', { outputFile: process.env.PW_RESULTS_JSON || '/tmp/pw-results.json' }]],
-});
-EOF
-
 # Specs read BLOCKS_URL for their absolute goto(); point it (and APP_BASE_URL) at the discovered port.
 # RUN_ID is a run-stable seed the specs fold into deterministic-but-unique test data; it carries TASK
-# so cells sharing a run id still seed distinct data. Exported once so it's stable across navigation.
-export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${TASK:-x}-$(date +%s)"
-BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee "${CELL_TMP}/pw.log" || true
+# so cells sharing a run id still seed distinct data. Passed explicitly: the agent env policy drops
+# GITHUB_* and anything not allowlisted.
+RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${TASK:-x}-$(date +%s)"
+agent_run "RUN_ID=${RUN_ID}" "BLOCKS_URL=${APP_BASE_URL}" "APP_BASE_URL=${APP_BASE_URL}" "PW_RESULTS_JSON=${PW_RESULTS_JSON}" \
+  -- 'npx playwright test --config bench-tests/playwright.config.ts' 2>&1 | tee "${CELL_TMP}/pw.log" || true
 
-if [ -f "$PW_RESULTS_JSON" ]; then
-  PW_RESULTS_JSON="$PW_RESULTS_JSON" node -e '
+# Stop every agent-user process (the dev server included) before reading what they wrote.
+agent_reap
+# Agent-written report → runner-owned copy, never following a planted link.
+if "${AGENT_EXEC[@]}" read-file "$PW_RESULTS_JSON" "${CELL_TMP}/pw-results.json" 2>/dev/null; then
+  PW_RESULTS_JSON="${CELL_TMP}/pw-results.json" node -e '
     const fs = require("fs");
     const stats = JSON.parse(fs.readFileSync(process.env.PW_RESULTS_JSON, "utf-8")).stats ?? {};
-    // Assert the field exists before the ?? fallback — a missing "expected" is an unexpected
-    // reporter shape, not zero passes. Fail loudly so the pessimistic defaults are retained.
-    if (stats.expected === undefined) {
-      console.error("stats.expected missing — unexpected Playwright reporter shape");
+    // The report was produced by agent-user code (Playwright runs the app node_modules), so
+    // only bounded non-negative integers are written to GITHUB_OUTPUT. A missing "expected" is an
+    // unexpected reporter shape, not zero passes: fail so the pessimistic defaults are retained.
+    const n = (v, dflt) => (v === undefined ? dflt : Number.isInteger(v) && v >= 0 && v < 1e6 ? v : NaN);
+    const expected = n(stats.expected, undefined);
+    const flaky = n(stats.flaky, 0);
+    const unexpected = n(stats.unexpected, 0);
+    const skipped = n(stats.skipped, 0);
+    if (expected === undefined || [expected, flaky, unexpected, skipped].some(Number.isNaN)) {
+      console.error("unexpected Playwright reporter shape");
       process.exit(1);
     }
-    const passed = stats.expected + (stats.flaky ?? 0);
-    const failed = stats.unexpected ?? 0;
+    const passed = expected + flaky;
     // NB: tests_total INCLUDES skipped (display); the scoring test_rate denominator EXCLUDES skipped.
-    const total = passed + failed + (stats.skipped ?? 0);
-    console.log("tests_passed="+passed);
-    console.log("tests_failed="+failed);
-    console.log("tests_total="+total);
+    process.stdout.write(`tests_passed=${passed}\ntests_failed=${unexpected}\ntests_total=${passed + unexpected + skipped}\n`);
   ' >> "$GITHUB_OUTPUT" || echo "::warning::pw-results.json parse failed or unexpected shape; defaults retained"
 else
-  echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
+  echo "::warning::Playwright produced no readable report (probably never ran); defaults retained"
 fi
 else
   echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
 fi
+
+# The dev server must be gone before the scan below and before the evidence leaves this step.
+agent_reap
 
 # Causal data-layer scan — runs AFTER Playwright so dev.log is complete through the end of the tests.
 # When a mock Database's eager migration run dies on a PGlite WASM init trap, bb-data KEEPS THE DEV
@@ -382,13 +395,12 @@ if [ -f "${CELL_TMP}/dev.log" ] && grep -qF "$DATA_LAYER_SENTINEL" "${CELL_TMP}/
   ' || echo "::warning::failed to evaluate data_layer_unavailable on result.json"
 fi
 
-# Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
-# keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
-# trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
-# the green-regardless exit (analyze-cell degrades to null when a file is absent). Stale copies from a
-# PRIOR cell were already cleared before the Playwright guard above, so these cp's only ever add THIS
-# cell's evidence.
-cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
+# Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step (CELL_TMP is
+# per-run scratch) — mirror how the trace/metrics already land at /tmp. All three are runner-owned
+# captures. Best-effort: a missing source or copy failure must never break the green-regardless exit
+# (analyze-cell degrades to null when a file is absent). Stale copies from a PRIOR cell were already
+# cleared before the Playwright guard above, so these cp's only ever add THIS cell's evidence.
+cp "${CELL_TMP}/pw-results.json" /tmp/pw-results.json 2>/dev/null || true
 cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
 cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
 

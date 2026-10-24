@@ -11,7 +11,8 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
+import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -43,6 +44,16 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+/**
+ * How the sandbox spawns the local dev server. It runs under `shell: true`, so
+ * the whole command goes to the shell as one string with no separate args:
+ * Node 24 emits DEP0190 whenever a non-empty args array is combined with
+ * `shell: true`, because the args are only concatenated, never escaped.
+ */
+export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
+  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+}
+
 export interface SandboxDeployArgsOptions {
   /** Directory CDK writes stack outputs to (relative to the project root). */
   outDir: string;
@@ -50,6 +61,50 @@ export interface SandboxDeployArgsOptions {
   projectRoot: string;
   /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
   backendPath: string;
+  /**
+   * Use CloudFormation Express Mode (`--express`). Default `true`. Turned off
+   * when the deployed sandbox contains a resource Express Mode can't update —
+   * see {@link findExpressUnsafeStacks}.
+   */
+  express?: boolean;
+  /**
+   * Deploy an already-synthesized cloud assembly (`--app <dir>`) instead of
+   * synthesizing from `backendPath` again. The sandbox synthesizes once into
+   * `<outDir>/cdk.out` to inspect the templates, then deploys that output, so
+   * the framework build runs only once.
+   */
+  assemblyDir?: string;
+}
+
+/**
+ * Build the `npm exec cdk -- synth …` argv the sandbox runs first: synthesize
+ * once into `<outDir>/cdk.out`, inspect the templates (see
+ * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
+ */
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "exec", "cdk", "--", "synth",
+    "--quiet",
+    "--output", `${outDir}/cdk.out`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
+}
+
+/**
+ * cdk child env for the sandbox synth + deploy. Includes the telemetry framework
+ * sink so the synth child reports its framework before this parent emits SUCCESS.
+ * The watch spawn omits it: watch sends no event, and the sink is already consumed
+ * and deleted by then, so wiring this same path in would silently write nowhere.
+ */
+export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    NODE_OPTIONS: "--conditions=cdk",
+    ...getCdkTelemetryEnv('sandbox'),
+    ...getFrameworkSinkEnv(frameworkSink),
+  };
 }
 
 /**
@@ -79,18 +134,27 @@ export interface SandboxDeployArgsOptions {
  *   change set and full stabilization with rollback, which are exactly the
  *   safety signals a production deploy should keep. Requires an aws-cdk CLI
  *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
+ *   `express: false` drops it (still `--method direct`, with rollback) for a
+ *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
+ *   Web Function endpoint (`compute.type: 'web-function'`).
  */
-export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxDeployArgs({
+  outDir,
+  projectRoot,
+  backendPath,
+  express = true,
+  assemblyDir,
+}: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
     "--method", "direct",
-    "--express",
+    ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
   ];
 }
 
@@ -133,13 +197,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   process.env.BLOCKS_STAGE = 'sandbox';
 
-  // Fail fast if AWS credentials are missing/expired, before spending ~10s in
-  // synth only to hit an opaque CDK credential error. Unlike deploy(), startSandbox
-  // isn't wrapped in trackCommand, so emit the FAIL event manually (mirroring the
-  // CDK-deploy failure path below) before rethrowing — otherwise a no-creds abort
-  // sends no telemetry.
+  // Fail fast if AWS credentials are missing/expired, or the account and Region were
+  // never CDK-bootstrapped, before spending ~10s in synth only to hit an opaque CDK
+  // error. Unlike deploy(), startSandbox isn't wrapped in trackCommand, so emit the
+  // FAIL event manually (mirroring the CDK-deploy failure path below) before
+  // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -170,21 +234,43 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
+  // Framework resolves in the cdk synth child; it writes the value here so the
+  // parent can attach it to the sandbox telemetry event.
+  const frameworkSink = createFrameworkSink();
   console.log("🚀 Deploying to AWS...");
   console.log("   (This may take a few minutes on first deploy)");
 
+  const cdkEnv = buildSandboxCdkEnv(frameworkSink);
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const assemblyDir = `${outDir}/cdk.out`;
+
   try {
+    // Synthesize once, so the deploy decision is based on what is about to be
+    // deployed (not on local state that may be missing — a fresh clone, a
+    // cleaned .blocks-sandbox, another machine). The deploy below reuses this
+    // assembly, so the framework build still runs only once.
+    runSync("npm", buildSandboxSynthArgs(argOptions), { stdio: "inherit", env: cdkEnv });
+
+    // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
+    // creating them is fine. Fall back to a full deploy when a stack about to be
+    // deployed has one and already exists — or can't be inspected (fail closed).
+    const expressUnsafe = await findExpressUnsafeStacks(stacksWithExpressUnsafeResources(assemblyDir));
+    if (expressUnsafe.length > 0) {
+      console.log(
+        `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} has a Lambda Web Function endpoint, ` +
+          "which Express Mode can't update. Deploying with full stabilization + rollback instead.",
+      );
+    }
+
     runSync(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
-      {
-        stdio: "inherit",
-        env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
-      },
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
+      { stdio: "inherit", env: cdkEnv },
     );
   } catch (error) {
+    registerFrameworkFromSink(frameworkSink);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -195,6 +281,8 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(sandboxFailureRecoveryHint());
     throw error;
   }
+
+  registerFrameworkFromSink(frameworkSink);
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
   const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
@@ -275,10 +363,9 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(`[CDK Watch] ${data.toString().trim()}`);
   });
 
-  const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
-  const [cmd, ...args] = devServerCmd.split(' ');
-  
-  const devServer = spawnCommand(cmd, args, {
+  const devServerSpawn = buildDevServerSpawn(devCommand);
+
+  const devServer = spawnCommand(devServerSpawn.command, devServerSpawn.args, {
     stdio: "inherit",
     shell: true,
     // Own process group on POSIX so cleanup can signal the whole dev-server
@@ -365,6 +452,88 @@ export async function listStackBucketNames(cfn: CloudFormationClient, stackName:
 	return buckets;
 }
 
+/**
+ * Resource types CloudFormation Express Mode can't UPDATE. Re-pointing a
+ * Lambda Web Function endpoint's `RevisionWeights` at a new revision fails
+ * there with "RevisionWeights: expected minimum item count: 1, found: 0" (a
+ * plain update with rollback succeeds), and Express Mode's disabled rollback
+ * then leaves the stack stuck in UPDATE_FAILED. Creates are unaffected.
+ */
+export const EXPRESS_UNSAFE_RESOURCE_TYPES: ReadonlySet<string> = new Set(['AWS::Lambda::WebFunctionEndpoint']);
+
+/** A stack in a synthesized cloud assembly. `region` is unset for environment-agnostic stacks. */
+export interface AssemblyStack {
+	stackName: string;
+	region?: string;
+}
+
+/**
+ * The stacks in the synthesized assembly at `assemblyDir` whose template
+ * contains a resource in {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Reads
+ * `manifest.json` + each stack's template; [] if the assembly can't be read.
+ */
+export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyStack[] {
+	type Artifact = {
+		type?: string;
+		environment?: string;
+		displayName?: string;
+		properties?: { templateFile?: string; stackName?: string };
+	};
+	let artifacts: Record<string, Artifact>;
+	try {
+		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, Artifact> })
+			.artifacts ?? {};
+	} catch {
+		return [];
+	}
+	const stacks: AssemblyStack[] = [];
+	for (const [id, artifact] of Object.entries(artifacts)) {
+		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
+		let template: { Resources?: Record<string, { Type?: string }> };
+		try {
+			template = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8'));
+		} catch {
+			continue;
+		}
+		const hasUnsafe = Object.values(template.Resources ?? {}).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type ?? ''));
+		if (!hasUnsafe) continue;
+		const region = artifact.environment?.split('/')[3];
+		stacks.push({
+			stackName: artifact.properties.stackName ?? id,
+			region: region && region !== 'unknown-region' ? region : undefined,
+		});
+	}
+	return stacks;
+}
+
+/**
+ * The stacks (of `stacks`, each containing a resource Express Mode can't
+ * update) that already exist — so this deploy would UPDATE them. Fails closed:
+ * any error other than "stack does not exist" (credentials, throttling, access)
+ * counts as existing, so a deploy never risks Express Mode's unrecoverable
+ * UPDATE_FAILED state on a guess.
+ */
+export async function findExpressUnsafeStacks(
+	stacks: AssemblyStack[],
+	cfnFor?: (region: string | undefined) => CloudFormationClient,
+): Promise<string[]> {
+	if (stacks.length === 0) return [];
+	const { CloudFormationClient: Client, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+	const clientFor = cfnFor ?? ((region: string | undefined) => new Client(region ? { region } : {}));
+	const unsafe: string[] = [];
+	for (const { stackName, region } of stacks) {
+		try {
+			const res = await clientFor(region).send(new DescribeStacksCommand({ StackName: stackName }));
+			const status = res.Stacks?.[0]?.StackStatus;
+			if (status && status !== 'DELETE_COMPLETE') unsafe.push(stackName);
+		} catch (e) {
+			const message = (e as Error).message ?? '';
+			if (!/does not exist/i.test(message)) unsafe.push(stackName);
+		}
+	}
+	return unsafe;
+}
+
 /** Empty a versioned bucket: delete every object version + delete marker in
  * pages of 1000 (the DeleteObjects limit). Stops if a page reports per-key
  * errors (object-lock / retention) so it can't loop forever. */
@@ -398,9 +567,10 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
  * a partial/aborted deploy), so the versioned bucket blocks the delete and the
  * stack (and its IAM roles) leak. Emptying out-of-band before the retry lets
  * the delete complete. Best-effort: any per-stack/per-bucket error is logged
- * and skipped so teardown still proceeds.
+ * and skipped so teardown still proceeds. Exported so the production destroy
+ * path ({@link ./destroy.ts}) reuses the same bucket-emptying step.
  */
-async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
+export async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 	try {
 		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
 		const { S3Client } = await import('@aws-sdk/client-s3');
@@ -466,10 +636,12 @@ export interface DestroyRetryDeps {
 	listStackNames: () => string[];
 	/** Empty the given stacks' versioned S3 buckets. */
 	emptyBuckets: (stackNames: string[]) => Promise<void>;
-	/** Sleep (VPC-ENI detach window). */
+	/** Backoff between retries (VPC-ENI detach, bucket-block clearing, DeleteRestApi 429 throttle). */
 	sleep: (ms: number) => Promise<void>;
 	/** Backoff between retries. Default: 1min, then 2min. */
 	retryDelays?: number[];
+	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
+	successLabel?: string;
 }
 
 /**
@@ -479,15 +651,19 @@ export interface DestroyRetryDeps {
  * failed, so the bucket blocks the delete and the stack (+ its IAM roles) leaks;
  * we empty them out-of-band — and (2) VPC ENIs that take 60-120s to detach (the
  * backoff). Stack names are resolved once and reused (topology is stable across
- * attempts). Factored out with injectable deps so this behavior is unit-testable.
+ * attempts). Deterministic auth/account failures never reach here: both callers
+ * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
+ * retries a transient teardown blocker. Factored out with injectable deps so
+ * this behavior is unit-testable.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
+	const label = deps.successLabel ?? 'Sandbox';
 	let stackNames: string[] | undefined;
 	for (let attempt = 0; ; attempt++) {
 		try {
 			deps.runDestroy();
-			console.log(attempt === 0 ? '\n✅ Sandbox destroyed!' : '\n✅ Sandbox destroyed on retry!');
+			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
 			if (attempt < retryDelays.length) {
@@ -510,6 +686,12 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
     console.log("🗑️  Destroying sandbox...");
+
+    // Fail fast on a missing/expired credential BEFORE the retry loop: a
+    // credential error is deterministic and retrying only burns the backoff.
+    // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
+    // teardown blockers, not auth.
+    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd(), accountDetails: false });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {

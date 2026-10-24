@@ -4,6 +4,7 @@
 import { Annotations } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
+import { getBlocksRoot } from './root-registry.js';
 import { getVpcRequirements as getRegisteredVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, SubnetRole, SubnetScope, VpcContext, VpcRequirements } from './vpc-types.js';
 
@@ -57,6 +58,21 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 	return undefined;
 }
 
+/**
+ * Whether VPC context has already been initialized anywhere at or above `scope`.
+ *
+ * A container compute must place its Fargate tasks in the shared VPC *during the
+ * backend import* — well before `create()`'s `finalizeVpc` step runs — so it
+ * initializes the VPC itself on first need (`getOrCreateVpc` + `initializeVpc`).
+ * This guard lets both that early path and the later finalize path check "already
+ * done?" so the security group and context are created exactly once, whichever
+ * runs first. Thin wrapper over {@link getVpcContext} for intent at call sites.
+ * @internal
+ */
+export function isVpcInitialized(scope: Construct): boolean {
+	return getVpcContext(scope) !== undefined;
+}
+
 const LAZY_VPC_KEY = Symbol.for('BLOCKS_LAZY_VPC');
 
 /**
@@ -89,10 +105,19 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
  * @internal
  */
 export function getOrCreateVpc(scope: Construct): ec2.IVpc {
-	const holder = scope as any;
-	const existing = holder[LAZY_VPC_KEY] as ec2.IVpc | undefined;
+	// Key and construct on the owning backend ROOT (BlocksStack/BlocksBackend), not
+	// the passed scope, so every caller shares one VPC and its logical id is stable
+	// regardless of which block triggers creation or in what order. The finalize
+	// path and a container compute (constructed mid-import) both resolve to the same
+	// root holder, so there is exactly one `BlocksVpc` per backend — never one per
+	// container (which would multiply NAT gateways and hit the default-VPC quota) and
+	// never dependent on declaration order. getBlocksRoot collapses to the stack for
+	// the common single-BlocksStack app, so this matches main's behavior there.
+	const root = getBlocksRoot(scope);
+	const holder = root as unknown as Record<symbol, ec2.IVpc | undefined>;
+	const existing = holder[LAZY_VPC_KEY];
 	if (existing) return existing;
-	const vpc = new ec2.Vpc(scope, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
+	const vpc = new ec2.Vpc(root, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
 	holder[LAZY_VPC_KEY] = vpc;
 	return vpc;
 }
@@ -103,9 +128,19 @@ export function getOrCreateVpc(scope: Construct): ec2.IVpc {
  * that is used for Lambda placement configuration.
  *
  * Called during setupBlocksInfra when `vpc` prop is present.
+ *
+ * @param source - Where the VPC came from: `'provided'` (customer passed
+ *   `defaults.vpc`) or `'derived'` (Blocks created it because a block required
+ *   one). Stamped on the context so a stateful block can refuse to auto-join a
+ *   derived VPC — see {@link VpcContext.source}. Defaults to `'provided'`, since
+ *   the backend's own call sites only run on the customer-provided path.
  * @internal
  */
-export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcContext {
+export function initializeVpc(
+	scope: Construct,
+	options: BlocksVpcOptions,
+	source: 'provided' | 'derived' = 'provided',
+): VpcContext {
 	const { network: vpc, subnets } = options;
 
 	// Default Lambda placement to private-with-egress. Guard the default: if the
@@ -134,6 +169,7 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
 		vpc,
 		computeSecurityGroup,
 		computeSubnets: resolvedSubnets,
+		source,
 		selectSubnets(scope: SubnetScope, role: SubnetRole, opts?: { fallback?: SubnetRole }): ec2.SubnetSelection {
 			if (vpcHasRole(vpc, role)) {
 				return { subnetType: subnetTypeForRole(role) };
@@ -252,7 +288,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	const ctx = getVpcContext(scope);
 	const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
 		vpc,
-		description: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only',
+		description: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only',
 		allowAllOutbound: true,
 	});
 	if (ctx) {

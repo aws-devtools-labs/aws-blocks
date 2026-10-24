@@ -19,6 +19,8 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { targetCompute } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
   FRAMEWORK_COMPUTE_RUNTIME,
   FRAMEWORK_EDGE_COMPUTE_RUNTIME,
@@ -164,7 +166,9 @@ export const nextjsAdapter = (
 
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
-    patchStreamingWrapperForApiGateway(openNextDir);
+    // Web Functions use OpenNext's `node` wrapper (a plain HTTP server, no
+    // API Gateway framing), so there is nothing to patch.
+    if (targetCompute() !== 'web-function') patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
     // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
@@ -1019,6 +1023,12 @@ const escapeRegex = (s: string): string =>
  * separate edge function — OpenNext refuses to build a project that
  * declares `runtime = 'edge'` without an explicit split function.
  *
+ * When the run targets Lambda Web Functions (`compute.type:
+ * 'web-function'`) the server is a plain Node.js HTTP server instead, so the
+ * required overrides are `wrapper: 'node'`, `converter: 'node'` and
+ * `generateDockerfile: true` (the container origin the adapter maps to
+ * http-server compute).
+ *
  * Why textual scan: the file is TypeScript that may be transpiled at
  * build time; importing it here would require running the TS compiler
  * before OpenNext even starts. We strip comments + look for either a
@@ -1047,19 +1057,32 @@ const validateUserOpenNextConfig = (
   }
   const source = stripCommentsForScan(raw);
   const missing: string[] = [];
-  if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
-    missing.push("converter: 'aws-apigw-v1'");
-  }
-  // Accept either the patched community wrapper (`aws-lambda-streaming`) or
-  // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
-  // the upstream PR). Both produce a handler compatible with the REST API
-  // STREAM integration; rejecting the native one would force users onto the
-  // wrapper we monkeypatch even after upstream ships the proper fix.
-  const hasStreamingWrapper =
-    findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
-    findOverride(source, 'wrapper', 'aws-apigw-streaming');
-  if (!hasStreamingWrapper) {
-    missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+  if (targetCompute() === 'web-function') {
+    // Lambda Web Functions run the server as a plain Node.js HTTP server:
+    // OpenNext's `node` wrapper + converter, emitted as a container (`ecs`)
+    // origin so the adapter maps it to http-server compute.
+    for (const [key, value] of [
+      ['wrapper', 'node'],
+      ['converter', 'node'],
+    ] as const) {
+      if (!findOverride(source, key, value)) missing.push(`${key}: '${value}'`);
+    }
+    if (!/\bgenerateDockerfile\s*:\s*true\b/.test(source)) missing.push('generateDockerfile: true');
+  } else {
+    if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
+      missing.push("converter: 'aws-apigw-v1'");
+    }
+    // Accept either the patched community wrapper (`aws-lambda-streaming`) or
+    // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
+    // the upstream PR). Both produce a handler compatible with the REST API
+    // STREAM integration; rejecting the native one would force users onto the
+    // wrapper we monkeypatch even after upstream ships the proper fix.
+    const hasStreamingWrapper =
+      findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
+      findOverride(source, 'wrapper', 'aws-apigw-streaming');
+    if (!hasStreamingWrapper) {
+      missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+    }
   }
   // Edge functions must be split out per OpenNext's build-time
   // requirement. Detect by checking for any `runtime: 'edge'` token in
@@ -1104,13 +1127,23 @@ const installGeneratedOpenNextConfig = (
   // semantically-equivalent fix would be externalizing `@aws-sdk/*`
   // (Lambda runtime ships AWS SDK v3), but OpenNext does not yet expose
   // an `external` knob in its public config.
+  // Lambda Web Functions (compute.type: 'web-function') run the server as a
+  // plain Node.js HTTP server: OpenNext's `node` wrapper/converter, emitted as
+  // a container (`ecs`) origin so it maps to http-server compute. (The
+  // Dockerfile OpenNext writes alongside is unused.)
+  const defaultOverride =
+    targetCompute() === 'web-function'
+      ? `converter: 'node',
+      wrapper: 'node',
+      generateDockerfile: true,`
+      : `converter: 'aws-apigw-v1',
+      wrapper: 'aws-lambda-streaming',`;
   const configBody = `// AUTO-GENERATED by @aws-blocks/hosting — do not edit.
 const config = {
   default: {
     minify: true,
     override: {
-      converter: 'aws-apigw-v1',
-      wrapper: 'aws-lambda-streaming',
+      ${defaultOverride}
     },
   },${edgeBlock}
 };
@@ -1631,7 +1664,10 @@ export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
  * Best-effort + idempotent: skips when the image fn dir is absent (image
  * optimization disabled) or a linux sharp is already present; warns (not fatal)
  * if the install fails, since the crash-level bug is already fixed and the app
- * still serves originals.
+ * still serves originals. "Already present" means a linux-x64 sharp within
+ * {@link SHARP_VERSION_RANGE}: a bundled sharp below that floor is vulnerable
+ * (GHSA-wq5f-xc86-pv6w) and an arm64-only one can't load, so both are
+ * reinstalled.
  * @internal
  */
 export const installLinuxSharpForImageOptimizer = (
@@ -1640,16 +1676,8 @@ export const installLinuxSharpForImageOptimizer = (
   const imgDir = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(imgDir)) return; // image optimization disabled
 
-  // Already has a linux sharp binary? (idempotent — avoid reinstalling.)
-  const linuxSharp = fg.sync(
-    'node_modules/@img/sharp-linux*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  const linuxSharpLegacy = fg.sync(
-    'node_modules/sharp/**/linux-x64*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  if (linuxSharp.length > 0 || linuxSharpLegacy.length > 0) return;
+  // Already has a patched linux-x64 sharp? (idempotent — avoid reinstalling.)
+  if (hasPatchedLinuxSharp(imgDir, 'x64')) return;
 
   // Pin a MODERN sharp (>=0.33). The `--os/--cpu/--libc` cross-install flags
   // (which fetch the `@img/sharp-linux-x64` prebuilt) only exist on sharp
@@ -1657,8 +1685,8 @@ export const installLinuxSharpForImageOptimizer = (
   // sits in `node_modules/sharp/build/Release/*.node` and is NOT replaced by
   // those flags (0.32 used `prebuild-install`/SHARP_* env, not npm os/cpu) —
   // so reinstalling `^0.32` would leave the darwin binary in place and the
-  // optimizer would keep serving unoptimized originals. Force 0.34.x.
-  const SHARP_RANGE = '^0.34.0';
+  // optimizer would keep serving unoptimized originals. Force the shared
+  // patched range (see SHARP_VERSION_RANGE for the security floor).
   const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
   // Remove the wrong-platform / old bundled sharp so the reinstall is clean and
   // the fresh linux binary is unambiguously what loads at runtime.
@@ -1669,7 +1697,7 @@ export const installLinuxSharpForImageOptimizer = (
       /* best-effort — npm install below still overwrites */
     }
   }
-  const sharpVersion = SHARP_RANGE;
+  const sharpVersion = SHARP_VERSION_RANGE;
 
   // Minimal package.json so `npm install` only pulls sharp (+ its platform
   // optionalDependencies), not the whole app tree.
@@ -1824,6 +1852,33 @@ const runNextBuild = (projectDir: string): void => {
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   const args = ['@opennextjs/aws', 'build'];
   if (configPath) args.push('--config-path', configPath);
+
+  // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
+  // the Next.js team's 2-year support window: `checkNextVersionSupport` prints
+  // `Next.js version X is not supported by the Next.js team` and calls
+  // `process.exit(1)` unless `--dangerously-use-unsupported-next-version` is
+  // set. That window is a wall-clock deadline, so a deploy that worked
+  // yesterday starts hard-failing the day the major expires — with no change
+  // on the user's side. We'd rather let the deploy proceed (the app still runs
+  // fine; the policy is about upstream security patches) than break it on a
+  // date.
+  //
+  // We pass the flag UNCONDITIONALLY rather than mirror OpenNext's release-date
+  // table and decide ourselves (which we'd have to keep in sync). It is inert
+  // on a supported version — OpenNext only reads the flag inside its
+  // `if (!isSupported)` branch, so a supported build ignores it entirely — and
+  // on an unsupported version it downgrades OpenNext's `exit(1)` to a
+  // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
+  // own `isNextVersionSupported` stays the single source of truth for the
+  // supported/unsupported decision, and its warning is the one the user sees.
+  //
+  // The explicit `'true'` value is REQUIRED, not cosmetic: OpenNext's CLI
+  // `parseArgs` only records a `--flag` when a following non-`-` token exists
+  // (otherwise it stores `undefined`), and `build()` then applies the override
+  // only when the value `!== undefined`. A bare trailing `--flag` would parse
+  // as `undefined` and the override would silently NOT apply, so the value
+  // token is what makes it take effect.
+  args.push('--dangerously-use-unsupported-next-version', 'true');
 
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,
@@ -2093,10 +2148,14 @@ const mapOriginToCompute = (
   }
 
   if (origin.type === 'ecs' || origin.type === 'docker') {
+    // OpenNext's container origin (`node` wrapper) starts its HTTP server from
+    // `index.mjs`; a custom entrypoint wins when declared.
+    const openNextServerEntry = fs.existsSync(path.join(effectiveBundle, 'index.mjs')) ? 'index.mjs' : undefined;
     return {
       type: 'http-server',
       bundle: effectiveBundle,
       entrypoint: origin.entrypoint ?? 'server.js',
+      serverEntry: origin.entrypoint ?? openNextServerEntry,
       port: origin.port ?? 3000,
       placement: 'regional',
       streaming: origin.streaming ?? false,

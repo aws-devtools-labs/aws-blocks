@@ -21,7 +21,29 @@ export interface FileBucketOptions {
 	 * runtime behavior. See {@link GetOptionsFor} et al.
 	 */
 	versioned?: boolean;
-	/** CORS rules for browser-based access. */
+	/**
+	 * CORS rules for browser-based access.
+	 *
+	 * Default: none — browsers block every cross-origin `fetch()` to the
+	 * deployed bucket. Required whenever browser code fetches a presigned URL directly
+	 * (`download()` / `upload()` on a file handle, or `fetch()` on a
+	 * `getUrl()` / `putUrl()` URL) against a deployed stack. Not inherited from
+	 * the stack's `defaults.allowedOrigins` or the Hosting domain. The local dev
+	 * server accepts any origin, so a missing rule only fails after deploy.
+	 * Ignored when `bucket` wraps an existing bucket — configure CORS on that
+	 * bucket itself.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'uploads', {
+	 *   corsRules: [{
+	 *     allowedOrigins: ['http://localhost:3000', 'https://app.example.com'],
+	 *     allowedMethods: ['GET', 'PUT'],
+	 *     allowedHeaders: ['Content-Type'],
+	 *   }],
+	 * });
+	 * ```
+	 */
 	corsRules?: CorsRule[];
 	/** Lifecycle rules for automatic object expiration or transitions. */
 	lifecycleRules?: LifecycleRule[];

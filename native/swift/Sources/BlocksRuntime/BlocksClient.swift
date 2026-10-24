@@ -15,43 +15,59 @@ private let logger = Logger(subsystem: "com.aws.blocks.swift", category: "Blocks
 /// Returns raw JSON `Data` from `execute()` — the generated code handles
 /// deserialization and transferable hydration.
 ///
-/// Usage (from generated code):
+/// Generated APIs run on the one the generated `Blocks` owns:
 /// ```swift
-/// let client = BlocksClient(url: "http://localhost:3001/api")
-/// let request = BlocksRequest(method: "api.createTodo", params: [title, priority], id: BlocksRequest.nextId())
-/// let result = try await client.execute(request)
-/// return Cursor.fromJson(result)
+/// let blocks = Blocks()
+/// let todos = try await blocks.api.listTodos(sortBy: nil)
 /// ```
-public final class BlocksClient {
+public final class BlocksClient: Sendable {
 
     /// Base host for localhost rewriting in transferable descriptors (e.g., WebSocket URLs).
-    /// Set to your Mac's LAN IP for physical device testing.
+    /// Only needed for a dev server started with `BLOCKS_DEV_HOST`: set it to the host the app reaches that server at.
     /// Default: "localhost" (no rewriting — works in Simulator).
-    public static var baseHost: String = "localhost"
+    public static var baseHost: String {
+        get { baseHostLock.withLock { $0 } }
+        set { baseHostLock.withLock { $0 = newValue } }
+    }
+
+    // Not a stored static var: Swift 6 app code cannot reference one.
+    private static let baseHostLock = OSAllocatedUnfairLock(initialState: "localhost")
 
     /// Base URL the client was constructed with — exposed for transferable
     /// hydration (e.g. `OIDCClient.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
     public var baseUrl: String { url }
 
     /// Token store used to hydrate `OIDCClient` transferables returned by this client.
-    /// Defaults to in-memory storage; pass a Keychain-backed implementation for
-    /// session persistence across app restarts.
+    /// Defaults to in-memory storage; pass a Keychain-backed implementation, e.g.
+    /// `Blocks(tokenStore: store)`, for session persistence across app restarts.
     public let tokenStore: TokenStore
 
     private let url: String
-    let session: URLSession
+    /// The only path to the session; read by tests.
+    let gate: SessionGate
+    /// The one move of tokens saved under the old unscoped keys, shared by every OIDCClient on this client.
+    private let legacyTokenAdoption = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     /// Stored cookies persisted in the Keychain so auth sessions survive app restarts.
     /// Shared across all BlocksClient instances.
     private static let cookieStore = KeychainCookieStore()
 
-    public init(
+    /// Applies cookie attributes over `cookieStore`.
+    private static let cookieJar = CookieJar(items: cookieStore)
+
+    /// A `session` you pass stays yours; without one the client creates a session and invalidates it on close or release.
+    public convenience init(
         url: String,
         session: URLSession? = nil,
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
+        self.init(url: url, session: session ?? BlocksClient.makeSession(), ownsSession: session == nil, tokenStore: tokenStore)
+    }
+
+    /// Tests pass `ownsSession: true` to observe an owned session being invalidated.
+    init(url: String, session: URLSession, ownsSession: Bool, tokenStore: TokenStore) {
         self.url = url
-        self.session = session ?? BlocksClient.makeSession()
+        self.gate = SessionGate(session: session, ownsSession: ownsSession)
         self.tokenStore = tokenStore
     }
 
@@ -61,6 +77,22 @@ public final class BlocksClient {
         tokenStore: TokenStore = InMemoryTokenStore()
     ) {
         self.init(url: server.url, session: session, tokenStore: tokenStore)
+    }
+
+    /// Later requests throw `ClientClosedError`; in-flight ones finish, then the session this client created is invalidated.
+    public func close() {
+        gate.close()
+    }
+
+    /// Runs only the first caller's `move`; every later caller waits for that run instead.
+    func adoptLegacyTokensOnce(_ move: @escaping @Sendable () async -> Void) async {
+        let adoption = legacyTokenAdoption.withLock { state in
+            if let existing = state { return existing }
+            let started = Task { await move() }
+            state = started
+            return started
+        }
+        await adoption.value
     }
 
     /// Clears all stored cookies (e.g. on sign-out).
@@ -84,9 +116,16 @@ public final class BlocksClient {
     /// Executes a JSON-RPC request and returns the raw JSON `Data` of the `result` field.
     /// The generated code is responsible for decoding this into typed models.
     ///
+    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+    /// `reports.build`), so a namespace that runs on its own compute is served by it.
+    ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        guard let requestURL = URL(string: url) else {
+        // Validate the base first: appending the namespace can turn an invalid base (e.g. "")
+        // into a relative URL that only fails later, as a transport error.
+        guard URL(string: url) != nil,
+              let requestURL = URL(string: BlocksClient.rpcURL(base: url, method: request.method))
+        else {
             throw RPCError(message: "Invalid URL: \(url)")
         }
 
@@ -95,15 +134,8 @@ public final class BlocksClient {
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // Attach stored cookies (filtered by host)
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(host)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { (String($0.key.dropFirst(hostPrefix.count)), $0.value) }
-
-        if !cookies.isEmpty {
-            let cookieHeader = cookies.map { "\($0.0)=\($0.1)" }.joined(separator: "; ")
+        // Attach stored cookies (filtered by host, path, `Secure` and expiry)
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
@@ -112,11 +144,11 @@ public final class BlocksClient {
 
         logger.debug("→ \(request.method) id=\(request.id)")
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Process Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
         }
 
         // Parse response to check for errors (minimal parsing)
@@ -160,9 +192,24 @@ public final class BlocksClient {
         }
     }
 
-    private var host: String {
-        URL(string: url)?.host ?? "unknown"
+    /// The URL a call to `method` is POSTed to: `{base}/{namespace}`, where the namespace is the
+    /// part of `method` before the first `.` — the path the TypeScript client uses, so the backend's
+    /// gateway can route each namespace to the compute that hosts it. The body still carries the
+    /// full `namespace.method`, which is what the server dispatches on. A `method` without a
+    /// namespace goes to `base` unchanged.
+    static func rpcURL(base: String, method: String) -> String {
+        guard let dot = method.firstIndex(of: "."), dot != method.startIndex else { return base }
+        let namespace = String(method[..<dot])
+        let segment = namespace.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? namespace
+        var trimmed = Substring(base)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return "\(trimmed)/\(segment)"
     }
+
+    /// Characters allowed in a single path segment: a path's characters, without its `/` separator.
+    private static let pathSegmentAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
 
     /// Base URL for raw routes — strips the RPC path suffix but keeps the stage prefix.
     /// Base URL for raw routes. Raw routes share the same origin and stage
@@ -198,21 +245,15 @@ public final class BlocksClient {
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         // Attach stored cookies
-        let reqHost = requestURL.host ?? ""
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(reqHost)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { "\(String($0.key.dropFirst(hostPrefix.count)))=\($0.value)" }
-        if !cookies.isEmpty {
-            urlRequest.setValue(cookies.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
+            urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await gate.send(urlRequest)
 
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -223,29 +264,16 @@ public final class BlocksClient {
 
     // MARK: - Cookie Handling
 
-    private func processCookies(from response: HTTPURLResponse) {
+    private func processCookies(from response: HTTPURLResponse, requestURL: URL) {
         for (key, value) in response.allHeaderFields {
             guard "\(key)".caseInsensitiveCompare("Set-Cookie") == .orderedSame else { continue }
 
             let rawCookies = splitSetCookieHeader("\(value)")
 
+            // After a followed redirect, `response.url` is the URL the cookies came from.
+            let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
-                let segments = rawCookie.split(separator: ";", maxSplits: 1)
-                guard let nameValuePart = segments.first else { continue }
-                guard let eqIdx = nameValuePart.firstIndex(of: "=") else { continue }
-
-                let name = String(nameValuePart[nameValuePart.startIndex ..< eqIdx])
-                    .trimmingCharacters(in: .whitespaces)
-                let cookieValue = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
-                    .trimmingCharacters(in: .whitespaces)
-
-                let cookieKey = "\(host)|\(name)"
-                let attrs = segments.count > 1 ? String(segments[1]).lowercased() : ""
-                if cookieValue.isEmpty || attrs.contains("max-age=0") {
-                    BlocksClient.cookieStore.remove(name: cookieKey)
-                } else {
-                    BlocksClient.cookieStore.set(name: cookieKey, value: cookieValue)
-                }
+                BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
             }
         }
     }
@@ -288,6 +316,13 @@ public struct RPCError: BlocksError {
         self.message = message
         self.underlyingError = underlyingError
     }
+}
+
+/// Thrown by a request made after `BlocksClient.close()` or the generated `Blocks.close()`.
+public struct ClientClosedError: BlocksError {
+    public let message = "This BlocksClient is closed; create a new Blocks to make requests."
+
+    public init() {}
 }
 
 /// Error thrown by raw route (non-RPC) requests.

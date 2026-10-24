@@ -180,7 +180,7 @@ When a bare direct result's `x-blocks-transferable` tag has no known runtime bin
 
 The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
 
-A nullable *bound* transferable result does hydrate to its optional concrete type.
+A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding is direct-only in iteration 1: a nullable, nested, or list-wrapped result keeps the pre-fallback type, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
 
 ---
 
@@ -281,6 +281,44 @@ Two pieces native SDK authors need that the spec deliberately does not carry:
 1. **Wire-level protocol details** for non-RPC transports — WebSocket subprotocol names, message frames, auth flow for Realtime. These live in per-BB protocol docs (`packages/bb-realtime/PROTOCOL.md` and similar). Embedding them in the spec as static JSON would be docs-with-extra-steps: same content, harder to read, no machine consumer to justify the format.
 
 2. **Per-environment endpoint URLs.** The `servers` array is populated from the local sandbox config when available, but it's a single snapshot — not a multi-environment registry. Production, staging, and local URLs are managed by the platform SDK's runtime config, not baked into the spec.
+
+---
+
+## Spec trust model
+
+The native generators (Dart, Swift, Kotlin) treat `blocks.spec.json` as the source of truth and copy schema-controlled strings from it into generated source: field and parameter names used as JSON keys, descriptions (where a generator emits them), patterns, enum values, discriminator properties and tags, RPC method names, server URLs, and defaults. Each generator routes every such value through its own string-literal escaper, so any character in a spec value produces well-formed generated code that carries the value verbatim at runtime and does not change the structure of the generated program. Identifier generation (turning names into Dart/Swift/Kotlin identifiers) is a separate concern and is not covered here.
+
+### Where the spec comes from today
+
+```mermaid
+flowchart LR
+  DB[(Postgres<br/>information_schema)] -. "npx bb-data pull" .-> TS
+  App[Hand-written<br/>ApiNamespace code] --> TS[aws-blocks/*.ts]
+  TS -- "npx blocks-generate-spec" --> Spec[aws-blocks/blocks.spec.json<br/>local, gitignored]
+  Sandbox[.blocks-sandbox/config.json] -- servers URL --> Spec
+  Spec -- local file read --> Dart[blocks_codegen]
+  Spec -- local file read --> Swift[BlocksCodegen plugins]
+  Spec -- local file read --> Kotlin[Gradle codegen task]
+```
+
+- **Generated locally.** `generate-spec-cli.ts` (`blocks-generate-spec`, the `spec` script in scaffolded apps) imports the backend entry and writes `aws-blocks/blocks.spec.json`. It is run explicitly, not as part of `npm run dev` or deploy.
+- **Gitignored in apps.** Every `create-blocks-app` template, and the entries `create-blocks-app` adds when initializing an existing directory, ignore `aws-blocks/blocks.spec.json`. (This repo commits a few specs as Swift test fixtures under `native/swift/Tests/`.)
+- **Not served by the deployed API.** No runtime or CDK code reads or bundles the spec, and the JSON-RPC handler has no discovery method that returns it.
+- **Read from a local path, no network fetch.** Dart reads `*.spec.json` build assets (`builder.dart`) or `--spec <path>` (CLI); the Swift plugins pass the target's `blocks.spec.json` file to the generator, which reads it with `FileManager`; the Kotlin task reads `awsBlocks.apiSpec` (default `rootProject/blocks.spec.json`) with `readText()`.
+
+### `db pull`: spec values from database schema
+
+`npx bb-data pull` (`packages/bb-data/src/db-pull/`) connects to a Postgres database, reads the `public` schema from `information_schema` and `pg_catalog`, and writes TypeScript into `aws-blocks/`:
+
+- `database.types.ts` — one interface per table; column names become property keys.
+- `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
+- `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
+
+When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator.
+
+### Sharing a spec
+
+If a spec is shared for third-party code generation, the same escaping applies to any spec the native generators accept. Consumers should still review and version generated client code as they would any other generated artifact.
 
 ---
 
