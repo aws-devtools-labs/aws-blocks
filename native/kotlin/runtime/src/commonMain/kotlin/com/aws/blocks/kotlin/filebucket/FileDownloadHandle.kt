@@ -12,8 +12,11 @@ import io.ktor.utils.io.readAvailable
 import kotlinx.io.Buffer
 import kotlinx.io.RawSink
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 class FileDownloadHandle(
     val url: String,
@@ -26,6 +29,15 @@ class FileDownloadHandle(
             val url = obj["url"]!!.jsonPrimitive.content
             return FileDownloadHandle(url)
         }
+    }
+
+    /**
+     * This handle's descriptor, as the server's `toJSON()` sends it and [fromJson] reads it:
+     * `{ "__blocks": "file-bucket/download", "url" }`. A generated client sends a handle parameter this way.
+     */
+    fun toJson(): JsonObject = buildJsonObject {
+        put("__blocks", "file-bucket/download")
+        put("url", url)
     }
 
     suspend fun download(): ByteArray = try {
