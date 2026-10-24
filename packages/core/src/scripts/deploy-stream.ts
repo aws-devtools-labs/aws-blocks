@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -356,11 +357,21 @@ export interface CdkDeployArgsOptions {
  *   redrawing progress bar. The bar needs a TTY, which a piped/backgrounded
  *   deploy does not have, and a half-rendered bar is not a usable progress
  *   signal in a log file.
+ *
+ * `--all` deploys every top-level stack of the app (not stacks inside a CDK
+ * `Stage`), the same selection as the sandbox deploy (`buildSandboxDeployArgs`)
+ * and as `npm run destroy`. Without
+ * it, CDK refuses an app with more than one stack ("specify which stacks to
+ * use"), such as one with `Hosting` and a Lambda@Edge function (an edge-runtime
+ * route or Next.js middleware) outside us-east-1, which adds an
+ * `edge-lambda-stack-*` stack, or one with an extra stack of its own. A
+ * single-stack app deploys the same stack as before.
  */
 export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOptions): string[] {
   return [
     'cdk',
     'deploy',
+    '--all',
     '--require-approval',
     'never',
     '--ci',
@@ -371,6 +382,47 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
     '--context',
     `projectRoot=${projectRoot}`,
   ];
+}
+
+/** The app's stack in a `cdk deploy --outputs-file` JSON object; see {@link selectAppStack}. */
+export interface AppStackOutputs {
+  /** Name of the selected stack; `undefined` when the outputs file has no stack. */
+  stackName?: string;
+  /** The selected stack's outputs (`{}` when there is none). */
+  outputs: Record<string, string>;
+}
+
+/**
+ * Pick the app's stack from a `cdk deploy --outputs-file` JSON object
+ * (`{ [stackName]: { [outputKey]: value } }`).
+ *
+ * The deploys select every top-level stack (`--all`), and CDK writes one entry
+ * per deployed stack that has outputs, in completion order, so the app's stack
+ * is not always the first entry (Hosting's us-east-1 monitoring stack, for
+ * one, has outputs of its own). Picks the first stack that carries the
+ * `ApiUrl` output, else the first stack. Warns when several stacks carry
+ * `ApiUrl`, since only one of them is the app's API.
+ */
+export function selectAppStack(outputs: Record<string, Record<string, string>>): AppStackOutputs {
+  const entries = Object.entries(outputs);
+  const withApiUrl = entries.filter(([, stack]) => typeof stack?.ApiUrl === 'string');
+  if (withApiUrl.length > 1) {
+    console.warn(
+      `⚠️  Several stacks have an ApiUrl output (${withApiUrl.map(([name]) => name).join(', ')}); ` +
+        `using ${withApiUrl[0][0]}. Rename the ApiUrl output of the stacks that are not the app's API.`,
+    );
+  }
+  const [stackName, stackOutputs] = withApiUrl[0] ?? entries[0] ?? [undefined, {}];
+  return { stackName, outputs: stackOutputs ?? {} };
+}
+
+/**
+ * Read a `cdk deploy --outputs-file` JSON file and pick the app's stack from it
+ * (see {@link selectAppStack}). The deploys, the sandbox and `npm run console`
+ * all read the outputs file through this, so they agree on the stack.
+ */
+export function readAppStackOutputs(outputsFile: string): AppStackOutputs {
+  return selectAppStack(JSON.parse(readFileSync(outputsFile, 'utf-8')));
 }
 
 /** Unref'd sleep: a pending flush grace must never keep the process alive. */

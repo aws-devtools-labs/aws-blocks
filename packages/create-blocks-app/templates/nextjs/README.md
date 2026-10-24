@@ -50,7 +50,7 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
-| `npm run destroy` | Tear down the production stack |
+| `npm run destroy` | Tear down the production stacks (every top-level stack in the app) |
 
 The home-page and Blocks config checks do not depend on the sample page title or API methods.
 A separate `greet` test validates the sample API in a freshly scaffolded app.

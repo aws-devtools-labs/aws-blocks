@@ -604,7 +604,10 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
   /**
    * argv for one probe deploy. The flag under test *replaces* the `--ci` that
    * {@link buildCdkDeployArgs} already adds instead of being appended after it,
-   * so a probe never argues with itself over two conflicting CI flags.
+   * so a probe never argues with itself over two conflicting CI flags. No
+   * stack name is appended: the deploy argv selects with `--all` (which
+   * selects the assembly's only stack), and CDK rejects a stack name given
+   * together with `--all`.
    */
   function probeArgv(assembly: string, ciFlag: '--ci' | '--no-ci'): string[] {
     const deployArgs = buildCdkDeployArgs({
@@ -613,7 +616,7 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
     })
       .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
       .filter((arg) => arg !== '--ci');
-    return [...deployArgs, ciFlag, 'ProbeStack', '--app', assembly];
+    return [...deployArgs, ciFlag, '--app', assembly];
   }
 
   function probeDeploy(assembly: string, ciFlag: '--ci' | '--no-ci'): ProbeRun {
