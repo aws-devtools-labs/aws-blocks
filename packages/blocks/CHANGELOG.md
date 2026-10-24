@@ -1,13 +1,451 @@
 # @aws-blocks/blocks
 
+## 0.9.0
+
+### Minor Changes
+
+- 1076ccc: fix(core): warn at synth when a durable stack disables API Gateway access logging
+
+  A synth-time warning now fires on every durable (non-`DESTROY` removal policy)
+  stack that has API Gateway access logging disabled — this includes the default
+  `BlocksPresets.production` posture, where `accessLogging` is off by default. The
+  warning id is `blocks:apigateway:access-logging-disabled`.
+
+  Because it is a warning, ordinary `cdk synth`/`deploy` still succeed, but
+  `cdk synth`/`deploy --strict` treat warnings as errors and fail until you either
+  opt in or acknowledge it.
+
+  Opt in by setting `accessLogging: true` in the backend's `defaults` (this also
+  turns on S3 server access logging for any FileBucket, each getting its own log
+  bucket). To keep it off deliberately, acknowledge the warning on the stack or
+  backend returned by `create()`, after it resolves:
+
+  ```ts
+  const backend = await BlocksBackend.create(stack, "Blocks", {/* … */});
+  Annotations.of(backend).acknowledgeWarning(
+    "blocks:apigateway:access-logging-disabled",
+  );
+  ```
+
+  Acknowledging on the `App` before `create()` does not suppress it.
+
+- 33edca2: Re-export `submitAuthAction` from the umbrella `@aws-blocks/blocks/ui` entry point, alongside the existing `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, and `broadcastAuthChange` exports. Consumers building a custom auth UI on `@aws-blocks/blocks` can now import the helper that pairs `setAuthState` with the local auth notification — so `onAuthChange` subscribers and `AuthenticatedContent` re-render on a real signed-in/signed-out transition — without reaching into `@aws-blocks/auth-common` directly. Relates to #185; addresses #208 review feedback.
+- 9a32674: fix(core): enforce TLS, enable versioning, and add access logging on the config bucket
+
+  The shared config bucket (`BlocksConfigBucket`, holding `blocks-config.json`) now sets `enforceSSL: true` (a bucket policy denying non-TLS access), `versioned: true` (making the pre-existing noncurrent-version expiration rule effective, so an overwritten config stays recoverable for ~24h before the 1-day noncurrent expiry removes it), and delivers S3 server access logs to a new dedicated, locked-down log bucket. Because `blocks-config.json` is derived from the CDK app, the durable way to restore a prior config is to redeploy; the ~24h window is only a short in-transit safety net. The log bucket resolves its removal policy and log-retention from the stack `defaults` (production ⇒ RETAIN + 365-day expiry, sandbox ⇒ DESTROY + 7-day expiry), so production access logs are not torn down with the stack. Every stack now synthesizes an additional log bucket + bucket policy + versioning config.
+
+  Note: enabling bucket versioning is one-way — S3 can only move a versioned bucket to Suspended, never back to unversioned — so reverting this change leaves the config bucket in the Suspended state rather than unversioned.
+
+- 4553866: feat(core): opt-in permissions boundary on every role AWS Blocks creates, plus a synth-time IAM report
+
+  - **`defaults.permissionsBoundary`** (new, optional) attaches an IAM permissions
+    boundary to every IAM role AWS Blocks creates: the shared execution role,
+    block-owned helper roles, the CDK custom-resource roles blocks cause, and
+    `Hosting`'s roles. That includes the Lambda@Edge and CloudFront-monitoring
+    roles in the separate `us-east-1` stacks and the cross-region-reference
+    provider roles, which CDK's own `@aws-cdk/core:permissionsBoundary` context
+    doesn't reach. Pass a policy name, a full policy ARN, or an `iam.IManagedPolicy`:
+
+    ```ts
+    defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' }
+    ```
+
+    A boundary is a ceiling; it never grants. It's unset in both presets, and
+    leaving it unset keeps synthesized templates unchanged. When both this option
+    and the CDK context are set, this option wins for Blocks-created roles and
+    synth warns.
+
+  - **IAM report:** every synth now writes `cdk.out/<stack>.blocks-iam.json`
+    (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`). It
+    lists every statement on the shared execution role, the managed policies, the
+    boundary, and the Building Blocks each statement's resources belong to, plus
+    an inventory of every IAM role AWS Blocks created with its boundary and tags as
+    the template carries them. The file is sorted and deterministic, so CI
+    (continuous integration) can diff it between builds or check every role's
+    boundary and tags. It doesn't change the CloudFormation template. The file is
+    written on every synth, whether or not a permissions boundary is set.
+  - **Shared multi-app accounts:** the core README has a new section on running
+    many apps in one AWS account: an example boundary policy that uses
+    attribute-based access control (`${aws:PrincipalTag/app}`) so one policy
+    serves every app, the deploy-role conditions that make the boundary
+    mandatory, and the limits of the approach.
+
+- ce5dfa9: feat(compute): the `Compute` block and container-backed AsyncJobs
+
+  Adds a single `Compute` Building Block for choosing where a workload runs, and
+  lets an `AsyncJob` run on a container (AWS Fargate) instead of the default
+  serverless compute — for long-running or high-memory work. All net-new,
+  unreleased surface.
+
+  **`Compute`.** `new Compute(scope, id, { type, ...options })` states the compute
+  type explicitly (`serverless` | `container`); Blocks maps the type to the AWS
+  service. Options are per-type (a discriminated union), so an attribute that
+  doesn't apply to the chosen type is a compile error, and the service name never
+  appears in the API. The concrete backing computes stay internal and extend
+  `Scope` like every other block.
+
+  - `serverless`: `memory`, `maxTimeoutSeconds` (the function's runtime ceiling).
+  - `container`: `size` (a valid `{ vcpu, memory }` combination — invalid pairs are
+    unrepresentable), `scaling` (real Application Auto Scaling —
+    `min/maxInstances` + `cpu`/`memory` target-tracking and `queue-depth`
+    step-scaling policies;
+    queue-depth sums the messages across the queues the compute drains), and a
+    custom `image`.
+
+  **`AsyncJob({ compute })`.** A job runs on the app default (serverless) unless
+  given a `Compute`. On a container, delivery is an owner-matched SQS poller the
+  container self-starts, and each delivery runs in its own worker thread so the
+  job's `timeoutSeconds` is hard-enforced (the worker is terminated at the
+  deadline). `maxConcurrencyPerCPU` sets in-flight deliveries per vCPU — the
+  per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`, and it is a
+  compile error (and a synth-time error) on a serverless job. Both are properties
+  of the work and live on the job; `size`/`scaling` live on the compute. In local
+  dev, compute assignment is transparent. `AsyncJobOptions` has no compute-kind
+  type parameter — the kind is inferred from the `compute` argument — so
+  `new AsyncJob<Payload>(…)` with a container compute compiles without spelling a
+  second generic.
+
+  **One shared VPC per backend, and stateful blocks stay put.** A container needs
+  a VPC, so Blocks provisions **one** shared VPC (and one ECS cluster) per backend
+  root at a fixed id — N container configs do **not** create N VPCs, and placement
+  is independent of declaration order. The shared VPC is tagged by origin:
+  `provided` (customer passed `defaults.vpc.network`) or `derived` (Blocks created
+  it). Stateless compute (Lambda, the container) uses whichever exists. A
+  **stateful** block — today `Database` — joins only a customer-`provided` VPC; it
+  never auto-joins a Blocks-`derived` one. This is a safety guarantee: without it,
+  adding a container (or upgrading to a version that derives a VPC) could move an
+  existing Aurora cluster into the new VPC, which CloudFormation applies as a
+  _replacement_ — destroying the database. A Database with no customer VPC keeps
+  building its own, exactly as before. (Moving a Database into a shared VPC remains
+  a deliberate, out-of-band migration.)
+
+- 7477b6e: Add `compute.type: 'web-function'` to run the SSR server on AWS Lambda Web Functions. The framework's own Node.js server runs directly on Lambda behind CloudFront origin access control, with no API Gateway and no Lambda Web Adapter. Each execution environment serves many concurrent requests and is billed for active CPU. It works with Astro, SvelteKit, Nuxt/Nitro and Next.js in the Regions where Web Functions are available. When this compute is selected, Nitro builds with the `node-server` preset and Next.js builds with OpenNext's `node` wrapper automatically. Tune it with `compute.webFunction` (`maxConcurrencyPerEnvironment`, `maxEnvironments`, `rateLimit`). The default (`'lambda'`) is unchanged.
+
+  Sandbox deploys (`npm run sandbox`) of a Web Function app skip CloudFormation Express Mode after the first deploy. Express Mode can't update a Web Function endpoint, so the deploy uses a full deploy with rollback instead.
+
+- 3d83cb6: feat(bb-secret): make `Secret` read-only at runtime by default; add `allowRuntimeWrite`
+
+  A `Secret` is now **read-only at runtime unless you opt in**. By default the instantiated object exposes only `get()` and `listVersions()` — there is no `put()` method (a call is a compile error _and_ the method is absent from the object at runtime), and the deployed execution role is granted **read-only** IAM (`GetSecretValue` + `ListSecretVersionIds`, no `PutSecretValue`). This is the least-privilege default: most apps read a credential that is set out-of-band (console / `aws` CLI / CI), so the running app never needs write access.
+
+  Pass the new `allowRuntimeWrite: true` option to opt into runtime writes — then `put()` is present on the object and the execution role is granted `PutSecretValue`. The option applies to every secret, including one wrapped via `Secret.fromExisting(arn)`.
+
+  ```typescript
+  // Read-only (default): no put(); role gets read-only IAM.
+  const stripeKey = new Secret(scope, "stripe-api-key");
+  const key = await stripeKey.get();
+
+  // Writable: the app sets/rotates the value itself.
+  const token = new Secret(scope, "self-rotating-token", {
+    allowRuntimeWrite: true,
+  });
+  await token.put("t-abc123");
+  ```
+
+  **Behavioral/typing change (bb-secret is pre-1.0).** `Secret` is now exposed as an overloaded constructor whose return type reflects `allowRuntimeWrite`: `true` yields a `WritableSecret<T>` (has `put`), otherwise the read-only `Secret<T>`. Existing code that called `put()` on a default secret must now pass `allowRuntimeWrite: true`. Deployed stacks created before this change that relied on the runtime writing the secret will lose `PutSecretValue` until the declaration sets `allowRuntimeWrite: true` — add it where the app genuinely writes.
+
+- 82ea78a: A project config can no longer re-enable telemetry that a global config disabled.
+
+  `isTelemetryEnabled()` returned early on a project `telemetry.enabled: true` before reading `~/.blocks/config.json`, so `blocks-telemetry --disable --global` followed by `--enable` left the send gate open while `--status` reported disabled. The gate now resolves through `getTelemetryStatus()`, so only `false` short-circuits and the two cannot disagree. `blocks-telemetry --enable` also warns, naming the mechanism, when a broader opt-out still applies. The env var already overrode both config files, and a project `false` still beats a global `true`.
+
+  Behavior change (0.x minor = breaking channel): if you globally disabled telemetry and relied on a project config to turn it back on, that project stays opted out. Re-enable globally with `npx blocks-telemetry --enable --global`.
+
+- f704a68: feat(auth-common): add the `StatusMessage` UI primitive
+
+  Adds `StatusMessage` to `@aws-blocks/auth-common/ui` (re-exported from `@aws-blocks/blocks/ui`) — a themed, accessible status line for the loading / success / error affordance the starter templates otherwise hand-roll with inline styles.
+
+  - `StatusMessage(options?)` returns a `StatusMessageHandle` (`{ element, set }`): mount `element`, then drive it with `set(kind, text)` as an async operation progresses.
+  - Four lifecycle states (`StatusKind`): `idle` (muted), `loading` (muted + spinner), `success` (green), `error` (red) — all driven by the existing `--bb-*` semantic tokens, so the message matches the active light/dark theme.
+  - The root is a polite ARIA live region (`role="status"`, `aria-live="polite"`); the `loading` spinner is decorative (`aria-hidden`) and holds still under `prefers-reduced-motion`.
+  - Adds the `.bb-status*` / `.bb-spinner` classes and a reduced-motion-aware `bb-spin` keyframe to the shared theme CSS.
+  - The `auth-cognito` template now renders its status lines through `StatusMessage` instead of a hand-built classed span.
+
+  No breaking changes — purely additive.
+
+### Patch Changes
+
+- aaa90b6: AuthBasic now revokes the session token server-side on sign-out. Each session
+  JWT carries a unique `jti`; `signOut` records that id on a revocation list (in
+  the existing codes store, expiring with the token) so a replayed cookie is
+  rejected even though the JWT is still unexpired and signature-valid. The
+  umbrella `@aws-blocks/blocks` is bumped because the bundled `bb-auth-basic`
+  README/DESIGN docs it mirrors have changed.
+
+  This is a `minor` (not `patch`) bump because it adds exported error constants —
+  `AuthBasicErrors.SessionRevoked` (`SessionRevokedException`, thrown by
+  `requireAuth` for a signed-out/revoked session, vs `SessionExpiredException` for
+  an absent/aged-out one) and `AuthBasicErrors.SignOutIncomplete`
+  (`SignOutIncompleteException`, 503, thrown when the revocation write fails) —
+  and documents a new throwable name on the shared `BlocksAuth.requireAuth`
+  contract in `@aws-blocks/auth-common`.
+
+  `signOut` always clears the local cookie (so sign-out on this device never
+  leaves the user stuck signed in), even when the server-side revocation write
+  fails; in that case it throws a stable `SignOutIncompleteException` rather than
+  the raw SDK error, so no `$metadata`/ARNs leak to the client.
+
+  Legacy-surface behavior change: the deprecated `buildApi().signOut` previously
+  always resolved to `{ success: true }`; it now awaits `signOut` and so can
+  reject with `SignOutIncompleteException` (503) when the revocation write fails.
+  Only direct `buildApi` callers are affected — the `createApi()` state machine
+  catches it into the `AuthState.error` field.
+
+  Operator note: the `codes` store gains `{ ttl: true }`. For an already-deployed
+  AuthBasic app this is an in-place DynamoDB TimeToLive enablement (an `UpdateTable`)
+  on the next `cdk deploy` — no data migration, and correctness does not depend on
+  the reaper (reads filter expired items regardless). Caveat: DynamoDB rejects
+  another `UpdateTimeToLive` on the same table for ~1 hour after a change, so if an
+  unrelated resource fails in the same deploy, CloudFormation rollback (which
+  disables TTL) — or a deploy → rollback → redeploy within that hour — can land in
+  `UPDATE_ROLLBACK_FAILED`. Deploy AuthBasic apps with this in mind.
+
+- 72c8165: AuthBasic can now lock an account after too many consecutive failed sign-ins,
+  an opt-in defense against credential-stuffing and password brute-forcing (issue
+  #766). Pass the new `lockout` policy to enable it:
+
+  ```typescript
+  const auth = new AuthBasic(scope, "auth", {
+    lockout: { maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
+  });
+  ```
+
+  Failed attempts are counted **per username** in the existing `codes` store
+  (under a `lockout:<username>` key, with a TTL so counters self-reap and never
+  grow unbounded). Once `maxAttempts` consecutive failures accumulate within
+  `windowSeconds`, the account is locked for `lockoutSeconds`; the lock is
+  enforced at the **top of `signIn`**, before the user record is read or the
+  password compared, so a locked account sheds the bcrypt cost under attack and
+  exposes no timing oracle. A successful sign-in clears the counter.
+
+  This is a `minor` (not `patch`) bump because it adds the exported error constant
+  `AuthBasicErrors.AccountLocked` (`AccountLockedException`, 429, branded so the
+  name crosses the wire) and the new `lockout` option (`LockoutPolicy`) on
+  `AuthBasicOptions`. The error message is generic — it reveals neither the
+  username nor any SDK metadata — and `retriable` is left `false` (a lockout
+  requires waiting out the window, not an immediate retry).
+
+  Throttling is **disabled unless `lockout` is passed**, so existing apps are
+  unaffected. This is per-account credential-guess protection, complementary to —
+  not a replacement for — infrastructure-layer rate limiting (CloudFront WAF, API
+  Gateway throttling) for volumetric/DDoS protection.
+
+  Per-username counting (rather than per-IP) matches `AuthCognito`'s managed
+  lockout and avoids locking out a whole shared NAT/corporate egress on one user's
+  typos. The umbrella `@aws-blocks/blocks` is bumped because the bundled
+  `bb-auth-basic` README/DESIGN docs it mirrors have changed.
+
+- ee69cd7: docs(bb-file-bucket): document that `corsRules` is required for browser uploads and downloads
+
+  Browser uploads and downloads that worked under `npm run dev` failed after
+  deploying to a sandbox or production stack with `No 'Access-Control-Allow-Origin'
+header is present on the requested resource`, and nothing in the docs explained
+  why. The local dev file-server accepts any origin, but the deployed S3 bucket has
+  no CORS configuration unless `corsRules` is set — and it does not inherit the
+  stack's `defaults.allowedOrigins` or the Hosting domain.
+
+  - **bb-file-bucket README** — new "Browser Uploads and Downloads (CORS)" section
+    with the failing error, a working `corsRules` example (`GET`/`PUT`,
+    `allowedHeaders: ['Content-Type']`), how to find the deployed Hosting origin
+    (`HostingUrl`), and notes on preflight headers, S3 origin syntax, the scope of
+    the wildcard synth guard, which requests need CORS, and wrapped buckets. The
+    `corsRules` option row, Best Practices, and Local Development sections now
+    point to it.
+  - **bb-file-bucket TSDoc / DESIGN.md** — `corsRules` documents its no-CORS
+    default, that it is ignored for wrapped buckets, and (new D-FB-15) why it is
+    not derived from `defaults.allowedOrigins` or the Hosting domain.
+  - **blocks README** — the Security Considerations list notes that
+    `defaults.allowedOrigins` covers the API only and FileBucket needs its own
+    `corsRules`.
+
+  Documentation only — no runtime or API change.
+
+- 943d405: fix: error constants can be imported in frontend code
+
+  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
+  package's `browser` entry. Some of those imports failed the frontend build:
+
+  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
+    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
+    `@aws-blocks/bb-logger`. They are now exported.
+  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
+    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
+    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
+  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
+    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
+    server's constants instead of keeping their own copies.
+  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
+    server build and failed to bundle. It now has one.
+
+  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
+  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
+
+- 50b8c94: `npm run deploy` and `npm run sandbox` now check that CDK has been bootstrapped in the target account and Region before they synthesize. In an account and Region that were never bootstrapped, a deploy used to fail only after synthesis, with `SSM parameter /cdk-bootstrap/hnb659fds/version not found`. The commands now read that parameter, with the credentials that the credential check verified and the qualifier from `@aws-cdk/core:bootstrapQualifier` in the CDK context, and stop right away with the command that bootstraps the account and Region: `npx cdk bootstrap aws://<account-id>/<region> --app=`. `--app=` keeps CDK from synthesizing the app to find environments. The commands never bootstrap for you, because bootstrapping creates IAM roles in the account. Only a missing parameter stops the deploy; a denied read, a network error or a timeout does not. The destroy commands do not run this check.
+- 943d405: fix: export types missing from the `cdk` entry point
+
+  Some types exported by the default entry point of `@aws-blocks/blocks` were missing from its `cdk` entry, so backend
+  code importing them failed to type-check under that condition — for example,
+  `import type { SubscribeOptions } from '@aws-blocks/blocks'`.
+
+  The `cdk` entry now exports `AuthActionInput`, `AgentTool`, `DefaultToolContext`, `ToolFactory`, `ToolHandlerArgs`,
+  `ToolsConfig`, the `AuthCognito` admin types (`AdminAction`, `AdminActionGate`, `AdminCreateInit`, `AdminDisabled`,
+  `AdminGetterOf`, `AdminGrants`, `AdminOptions`, `AdminSurface`, `AdminUser`, `AdminUserFilter`, `CodeDeliveryFn`,
+  `GroupAdmin`, `LifecycleAdmin`, `SetPasswordOptions`), `DisconnectReason`, `RealtimeChannel`, `RealtimeSubscription`,
+  `SubscribeOptions`.
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+
+- 8c73a24: chore(core): declare the `@aws-sdk` devDependencies its tests already use
+
+  `packages/core`'s `client-user-agent.test.ts` dynamically imports
+  `@aws-sdk/client-dynamodb` and `@aws-sdk/lib-dynamodb` but never declared them,
+  relying on the packages being hoisted to the root by `bb-kv-store`/
+  `bb-distributed-table`. A dependency bump that reshuffles hoisting drops that
+  incidental resolution and breaks `core`'s build. Declare both as
+  devDependencies so the imports resolve regardless of hoisting.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- d062eeb: Before they deploy, `npm run deploy` and `npm run sandbox` now print the deployment target: the credentials that CDK deploys with (an AWS profile, access keys from the environment, or container or web identity credentials) and the configured Region. As in CDK, access keys from the environment (including the `AMAZON_` names that CDK also reads) are used before `AWS_PROFILE` unless `cdk.json` sets a profile; the credential check now verifies those keys rather than the profile. When the credential check succeeds, they also show the account name and the AWS account plan (Free or Paid, with its status), read with the same credentials that the check verified. These reads are optional and never stop a deploy. If they are denied, unsupported, empty, malformed or take longer than 2.5 seconds, the value shows as "not available". Account IDs, ARNs, error text and plan credits are not printed. `npm run destroy` and `npm run sandbox:destroy` print only the deployment target.
+
+  When the credentials are the AWS-managed role from the new AWS sign-up experience (a role at the path `/managed/` that `account-access.amazonaws.com` can assume, read with `iam:GetRole`), the output also has a one-line link to `https://settings.aws.com/billing` for spend limits, with a reminder to check that the project selected there matches the deployment target. Other credentials, or a role that cannot be read in time, get no link. When a profile has no Region, the warning now explains how to use `aws login`: set the profile Region to your project's Region before you sign in, and sign in again after you change it.
+
+  `@aws-blocks/core` now depends on `@aws-sdk/client-account`, `@aws-sdk/client-freetier` and `@aws-sdk/client-iam`. They load only when a deploy command runs.
+
+- 63b154f: feat(core): multi-compute routing — per-namespace RPC paths + shared-gateway fan-out
+
+  Make the shared REST API gateway route each API namespace to the compute that hosts it, in two parts.
+
+  **Per-namespace paths.** The typed RPC client now POSTs to `/aws-blocks/api/{namespace}` (the namespace in the path) instead of the shared `/aws-blocks/api` — a gateway routes by URL path, not the JSON-RPC body, so giving each namespace its own path is what lets one gateway fan out to multiple computes. `{namespace}` is the backend export name. The body still carries `namespace.method`, and that is what the runtime handler and the local dev server dispatch: a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the request is rejected with a JSON-RPC `-32600` Invalid Request rather than silently running either one. `POST /aws-blocks/api` keeps working unchanged, so raw HTTP callers that use it are unaffected.
+
+  Migration note for `ApiNamespaceClientOptions.url`: pass the **base** URL (e.g. `/aws-blocks/api`, or `https://d123.cloudfront.net/aws-blocks/api`) — the client now appends `/{namespace}` itself. A pre-qualified URL that already includes the namespace routes to `{url}/{namespace}` and is not supported.
+
+  Deploy order: a web client built with this release calls `/aws-blocks/api/{namespace}`, which needs the gateway resource this release adds. Deploy the backend before, or together with, clients built against it; a gateway deployed from an earlier release may reject the per-namespace path (403). If you run your own proxy or rewrite in front of the API (nginx, a framework rewrite, your own CloudFront behavior), make it forward the whole `/aws-blocks/api/*` subtree, not just the exact `/aws-blocks/api` path — `Hosting` already does.
+
+  The native clients call the same per-namespace paths from `aws-blocks-swift` 0.2.0, `aws-blocks-kotlin` 0.3.0 and the next Dart `blocks_runtime` release. Native clients from earlier releases POST to the bare `/aws-blocks/api` URL, which keeps working and runs every call on the default compute.
+
+  **Gateway fan-out.** The shared gateway now routes each namespace's path to the compute that hosts it. The default compute's function stays behind the catch-all resources, so the RPC root, auth, `RawRoute`s, and any namespace left on the default compute all reach it; a new `/aws-blocks/api/{proxy+}` resource carries the per-namespace RPC paths for those namespaces. Every non-default compute gets its own Lambda integration plus a literal `/aws-blocks/api/{namespace}` (`ANY`) resource for each namespace it hosts. A literal resource wins over the sibling `{proxy+}`, so requests fan out within a single gateway — and a single CloudFront origin under `apiFrontDoor: 'cloudfront'`. Routes key on each namespace's export name — what the client calls — read from the backend module after it is imported, and each namespace's compute is resolved then (today: the compute of the scope it was built in). A non-default compute's function gets one API-scoped invoke permission however many namespaces it hosts. Synth fails with a clear error for a namespace on a compute that takes no API traffic, or for an export name API Gateway can't use as a path segment.
+
+  Internal only: there is still no public way to assign a namespace to a non-default compute, so for every app today every namespace resolves to the default compute. The only synthesized change is the additive `/aws-blocks/api/{proxy+}` resource; existing gateway resources keep their logical IDs. The customer-facing compute-assignment surface lands in a later release. The `createSharedGateway` signature (it now takes the per-compute namespace routes + default compute) is `@internal`, and so is the `ComputeBase.namespaces` list this replaces.
+
+- d366907: fix: closing a local Database or DistributedData engine no longer hangs with PGlite 0.5.10
+
+  PGlite 0.5.10's `close()` never resolves while the instance is still initializing. An engine destroyed before its
+  first query, for example in a test teardown or a process shutting down early, would hang forever. `destroy()` now waits
+  for PGlite's initialization to settle (or fail) before closing.
+
+- 72e3259: fix(core): stop `npm run sandbox` printing a DEP0190 deprecation warning on Node 24
+
+  The sandbox started the local dev server by splitting its command on spaces and passing the pieces as separate args together with `shell: true`. Node 24 warns about that combination (DEP0190, args are concatenated rather than escaped). The command now goes to the shell as a single string, so the warning is gone and the dev server starts exactly as before.
+
+- b16e5b6: feat(create-blocks-app): add a one-shot `npm run sandbox:deploy` script to every deployable template
+
+  `npm run sandbox` deploys and then keeps running (CDK watch plus the local dev server), so it never exits and can't be used from scripts or CI. The new `npm run sandbox:deploy` runs the same sandbox script with `--deploy-only`: it deploys once, writes `.blocks-sandbox/config.json`, prints the `BLOCKS_DEPLOYED api=…` line, generates the typed client, and exits. Wait for exit code 0 rather than for the line, since the client is generated after it. `npm run sandbox` is unchanged. The template READMEs and the scaffolded `AGENTS.md` list the new script.
+
+  Existing apps can adopt it by adding `deployOnly: process.argv.includes('--deploy-only')` to the `startSandbox({ ... })` call in `aws-blocks/scripts/sandbox.ts`, and a `"sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only"` script to `package.json`.
+
+- 0d4ede3: refactor(core, bb-kv-store, bb-distributed-table): share one DynamoDB PITR + encryption resolver
+
+  No synth output change: the same CloudFormation template and the same synth warnings are produced.
+
+  The point-in-time-recovery and encryption resolution — the `retentionDays` 1–35 validation, the `aws-managed`/`customer-managed`/`fromKmsKey` encryption selection, and the auto-created-CMK removal-policy alignment — was duplicated almost line-for-line between the two Blocks-provisioned DynamoDB tables (`bb-kv-store`, `bb-distributed-table`). Both blocks now resolve that behaviour through one shared internal helper in `@aws-blocks/core`. Durability (`removalPolicy`/`deletionProtection`) stays in each block, since the two surface it through different options.
+
+- 63b154f: Document the shared API gateway. The `@aws-blocks/core` README gains a "Shared API gateway" section covering how every path reaches the backend, per-namespace paths, default throttling, opt-in access logs, the 29-second / 10 MB limits, and attaching WAF to the gateway stage or to Hosting's CloudFront distribution. The `bb-lambda-compute` design notes now describe the multi-compute routing: catch-all resources go to the default compute, and per-namespace resources go to the others.
+- b6b8ade: fix(core): find the `ApiNamespace` handler by position when generating the native-client spec
+
+  The OpenRPC spec generator took the **last** `new ApiNamespace(...)` argument as
+  the handler. Given an argument after the handler (an options object), it read
+  that instead: the namespace's methods came out with `unknown` types in the
+  Swift, Kotlin and Dart bindings, and methods tagged `@blocksSkipCodegen` leaked
+  into the spec. It now uses the handler argument itself, whatever follows it.
+
+- Updated dependencies [d1d129f]
+- Updated dependencies [1076ccc]
+- Updated dependencies [aaa90b6]
+- Updated dependencies [72c8165]
+- Updated dependencies [33edca2]
+- Updated dependencies [ee69cd7]
+- Updated dependencies [943d405]
+- Updated dependencies [23fc09f]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [943d405]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [492d744]
+- Updated dependencies [d1b4900]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [a3969b5]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [2c73654]
+- Updated dependencies [7477b6e]
+- Updated dependencies [c8c26f7]
+- Updated dependencies [6a53068]
+- Updated dependencies [3803f19]
+- Updated dependencies [3b5a419]
+- Updated dependencies [14ee6f1]
+- Updated dependencies [d366907]
+- Updated dependencies [72e3259]
+- Updated dependencies [3d83cb6]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [f704a68]
+  - @aws-blocks/bb-agent@0.7.0
+  - @aws-blocks/bb-knowledge-base@0.2.7
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/bb-auth-basic@0.2.0
+  - @aws-blocks/auth-common@0.3.0
+  - @aws-blocks/bb-file-bucket@0.3.2
+  - @aws-blocks/bb-app-setting@0.3.3
+  - @aws-blocks/bb-auth-cognito@0.1.13
+  - @aws-blocks/bb-cron-job@0.3.1
+  - @aws-blocks/bb-dashboard@0.2.3
+  - @aws-blocks/bb-email-client@0.1.10
+  - @aws-blocks/bb-logger@0.2.3
+  - @aws-blocks/bb-realtime@0.4.1
+  - @aws-blocks/bb-metrics@0.1.10
+  - @aws-blocks/bb-auth-oidc@0.2.3
+  - @aws-blocks/bb-data@0.4.1
+  - @aws-blocks/bb-distributed-data@0.2.3
+  - @aws-blocks/bb-distributed-table@0.2.3
+  - @aws-blocks/bb-kv-store@0.3.2
+  - @aws-blocks/bb-secret@0.3.0
+  - @aws-blocks/bb-async-job@0.3.0
+  - @aws-blocks/bb-tracer@0.2.3
+  - @aws-blocks/bb-container-compute@0.2.0
+  - @aws-blocks/bb-compute@0.2.0
+  - @aws-blocks/bb-lambda-compute@0.7.0
+  - @aws-blocks/hosting@0.5.0
+
 ## 0.8.0
 
 ### Minor Changes
 
 - ec7eebe: feat(bb-secret): add the `Secret` Building Block — a single application secret backed by AWS Secrets Manager
-  
+
   Introduces `@aws-blocks/bb-secret`, re-exported from `@aws-blocks/blocks` as `Secret` (and `SecretErrors`, `SecretOptions`). Each instance is one high-value credential — a third-party API key, OAuth client secret, database connection string, webhook signing key, or encryption key — stored in AWS Secrets Manager (distinct from `AppSetting`, which is backed by SSM Parameter Store).
-  
+
   - `get(options?): Promise<T | null>` — reads the value, returning `null` when unset or missing (no throw for not-found). `options.version` reads `'current'` (default), `'previous'` (the value before the last change — a rotation grace window), or a specific `SecretVersion` from `listVersions()`.
   - `put(value): Promise<void>` — sets or updates the value at runtime; the prior value becomes the `'previous'` version.
   - `listVersions(): Promise<SecretVersionInfo[]>` — lists retained versions (metadata only, newest first — never values); a returned item passes straight to `get({ version })`.
@@ -17,18 +455,19 @@
   - Optional `schema` (any StandardSchemaV1 — Zod/Valibot/ArkType) for typed JSON secrets with validation on `get`/`put`.
   - `cacheTtlSeconds?` — the runtime caches each fetched value in-process so steady-state reads skip the API; a cached value is held for this long before the next `get()` re-fetches. **Defaults to 300s (5 minutes)**, matching the AWS Secrets Manager agent, so even a long-running process can't serve a rotated value indefinitely; `0` disables caching, and `put()` always clears the cache. Ignored by the mock.
   - `removalPolicy` per-instance override; otherwise follows the stack-wide defaults (production retains, sandbox destroys).
-  
+
   **Versions & rotation.** `get({ version })` + `listVersions()` expose the current/previous values and the labeled version list, so a key rollout can validate against the previous value during a grace window. `listVersions()` returns the labeled versions (current + previous); anything beyond that is left to the AWS SDK against the secret ARN (exposed on the CDK construct as `secret.secretArn`; the runtime/mock classes deliberately don't expose AWS primitives). The read surface is an options object with a `SecretVersion` / `SecretVersionInfo` (base/subtype) handle contract, so deeper access can be added non-breaking. Automatic rotation is intentionally out of scope — it is credential-type-specific (AWS ships hosted rotators only for database engines); rotate via `put()`/console/CLI, or drive `put()` from a `CronJob` for a custom schedule.
-  
+
   **Management & lifecycle.** A declaration carries only the name, never the value. Values are set out-of-band via three complementary approaches: auto-generated (random, via `generate: true`, for opaque values); the built-in `/aws-blocks/settings` route (redirects to the settings resource group in the console when deployed, opens `.bb-data/settings.json` locally); or a well-known `name` + the `aws secretsmanager` CLI for CI/CD. There is intentionally no constructor-time value seeding (no source literals, no env-seeding) — consistent with how hosting `secret()` separates declare from set.
-  
+
   **Resource group + local settings route (`@aws-blocks/core`).** BB-created secrets are tagged `aws-blocks-stack=<stackName>` and the stack's `-settings` resource group now matches `AWS::SecretsManager::Secret` alongside `AWS::SSM::Parameter`, so secrets appear next to `AppSetting` parameters in the console. The local mock persists to the shared `.bb-data/settings.json` (the same file `AppSetting` uses), and the `/aws-blocks/settings` route copy now covers both AppSetting and Secret values — one route for settings and secrets, local and deployed.
-  
+
   The CDK layer provisions one `secretsmanager.Secret`, grants the shared execution role scoped `GetSecretValue` + `PutSecretValue`, requests the Secrets Manager interface VPC endpoint, and passes the ARN to the runtime via `registerConfig` (`BLOCKS_SECRET_ARN_<ID>`). Runtime methods are `synthGuard`-stubbed on the construct. The browser entry throws `NotSupported`. Covered by unit tests (mock + CDK synth) and the shared `test-apps/comprehensive` e2e suite (local/sandbox/production).
+
 - 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
-  
+
   Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
-  
+
   - **Storage encryption at rest** is opt-in via the
     `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
     `create-blocks-app` cdk.json templates, so new projects encrypt by default with
@@ -48,17 +487,17 @@
     Logs, with retention following the stack-wide `defaults.logRetention`.
   - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
     Data API), and automatic secret rotation is documented as a follow-up.
-  
+
   `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
   template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
   context flag, and the Amplify overlay sets the same flag via `setContext`. As a
   result, a `Database` created in a newly scaffolded project encrypts its storage at
   rest by default.
-  
+
   **Breaking for existing stacks (0.x minor = breaking channel):** the
   backup-retention and CloudWatch log-export changes alter synthesized cluster
   properties, so existing stacks will show a CloudFormation diff.
-  
+
   Storage encryption is **opt-in** specifically so it does **not** silently replace
   existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
   set, the `StorageEncrypted` property is left unset and the existing cluster is
@@ -81,12 +520,13 @@
   a project that already deployed encrypted, e.g. deleting the cdk.json line or a
   merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
   cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+
 - 4ae500e: feat(create-blocks-app): add a dev:stop command for the local dev server
-  
+
   Adds a first-class, sanctioned way to stop the local dev server, so there is an
   alternative to `pkill -f tsx` / `killall node` — which match by process name and
   can kill the caller's own shell/agent process.
-  
+
   - `@aws-blocks/core/scripts` (re-exported by `@aws-blocks/blocks/scripts`) gains
     `stopDevServer`, the CLI entry `runStopCli`, `stopMessage`, and the
     `StopResult` type. Stop acts ONLY on the supervisor identity the dev server
@@ -97,17 +537,19 @@
     pidfile or an unrelated same-port process is never touched, and the pidfile is
     removed only once the port is confirmed free. Idempotent; never throws;
     `runStopCli` exits non-zero when the stop leaves the port bound.
-  
+
   - `@aws-blocks/create-blocks-app`: every standalone template gains a `dev:stop`
     npm script and a thin `stop.ts` wrapper; the existing-project and Amplify
     integration paths get `dev:stop` / `blocks:stop` too. The scaffolded
     `AGENTS.md` and the singleton-guard message point at `npm run dev:stop`
     instead of `pkill` / the blunt cleanup script.
+
 - 6d764f7: `AWS_BLOCKS_DISABLE_TELEMETRY` now accepts `true` and `yes` in addition to `1` (case-insensitive, trimmed).
-  
+
   Previously only the exact value `1` disabled telemetry, so `AWS_BLOCKS_DISABLE_TELEMETRY=true` kept telemetry on. Both packages now accept `1`, `true` and `yes`; `0`, `false`, empty and unset keep telemetry enabled. The `blocks-telemetry --help` output lists the accepted values, and the D-010 usage note in `docs/DECISIONS.md` is updated to match.
-  
+
   Behavior change (0.x minor = breaking channel): if you already export `AWS_BLOCKS_DISABLE_TELEMETRY=true` or `=yes` for another tool, Blocks telemetry is now disabled where it was previously still on.
+
 - 94a914a: A native package's Dart `name` and `library` are now validated against the
   grammar the Dart generator interpolates them into, and a binding's `export`
   against the one every generator upper-camel-cases, instead of both only being
@@ -116,8 +558,9 @@
   `My-Package`, `lib/x.dart` or `device link` used to pass spec generation and then
   break codegen in the customer's app, where the block that declared it is no
   longer visible. Swift and Android fields are unaffected.
-  
+
   `@aws-blocks/blocks` gets the same bump because it re-exports `@aws-blocks/core/scripts`.
+
 - cb0ec01: `blocks.spec.json` can now carry two top-level OpenRPC extensions,
   `x-blocks-native-packages` and `x-blocks-native-bindings`, so native codegen can
   resolve a transferable tag to a package export instead of a hard-coded switch.
@@ -125,10 +568,11 @@
   carrying the declarations, and invalid metadata throws `NativeCatalogError`
   before any file is written. Nothing populates the declarations yet, so a
   generated spec is unchanged.
-  
+
   `@aws-blocks/blocks` gets the same bump because it re-exports `@aws-blocks/core/scripts`.
+
 - 005c095: feat(core): read native package and binding declarations from each block's package.json
-  
+
   A Building Block declares its native packages and transferable bindings under an
   `aws-blocks.native` key in its own `package.json`. `blocks-generate-spec` reads
   that key from every `node_modules` level from the spec project upward and emits the
@@ -137,14 +581,14 @@
   as in Node's own resolution. The new `readNativeDeclarations` export supplies the
   same declarations to a project that calls `writeSpec` directly instead of through
   the bin.
-  
+
   A spec generated for an app where no block declares the key is byte-identical to
   before.
-  
+
   `blocks-generate-spec` names the packages whose declarations it read, so an author
   can see that an installed dependency contributed a native binding. The line is
   omitted when nothing declares any.
-  
+
   Generation now exits non-zero without writing a file when an installed block's
   declarations are invalid, or when an installed `package.json` cannot be parsed
   while it carries the `aws-blocks` key — such a manifest cannot be ruled out as a
@@ -153,46 +597,49 @@
   unparseable manifest that does not carry `aws-blocks` as a JSON key, are warned
   and skipped. A byte-order mark is accepted, as npm accepts one. A `packages` or
   `bindings` set to `null` is now reported rather than read as absent.
-  
+
   A native declaration error raised before any block could be named now reports
   the position the pass had reached.
-  
+
   `NativeDeclarationInput` is the same shape with `packages` and `bindings` typed
   `unknown`, which is what a `package.json` yields before anything checks it.
   `SpecGenerationOptions.nativeDeclarations` accepts it, and a typed
   `NativeDeclarationSource` built in code still assigns and stays readable. Code
   that reads `SpecGenerationOptions.nativeDeclarations` back narrows it to the
   exported `NativeDeclarationSource`.
-  
+
   `@aws-blocks/blocks` gets the same bump because it re-exports `@aws-blocks/core/scripts`.
+
 - 66f4be2: BREAKING: remove `BlocksStack.handler`, `BlocksBackend.handler`, and `Scope.handler`.
-  
+
   These returned the default compute's Lambda function, so anything wired through them reached only that one function — not every compute an app runs on. Use the stack-wide equivalents instead, which reach every compute:
-  
-  | Before | After |
-  |---|---|
-  | `blocksStack.handler.addEnvironment('KEY', value)` | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
-  | `resource.grantRead(blocksStack.handler)` | `resource.grantRead(blocksStack.executionRole)` |
-  | `blocksStack.handler.addToRolePolicy(statement)` | `blocksStack.executionRole.addToPrincipalPolicy(statement)` |
-  | `this.handler` inside a custom Building Block | `this.executionRole` / `registerConfig(this, …)` |
-  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }` |
-  
+
+  | Before                                              | After                                                                                                                                         |
+  | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `blocksStack.handler.addEnvironment('KEY', value)`  | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
+  | `resource.grantRead(blocksStack.handler)`           | `resource.grantRead(blocksStack.executionRole)`                                                                                               |
+  | `blocksStack.handler.addToRolePolicy(statement)`    | `blocksStack.executionRole.addToPrincipalPolicy(statement)`                                                                                   |
+  | `this.handler` inside a custom Building Block       | `this.executionRole` / `registerConfig(this, …)`                                                                                              |
+  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }`                                                                            |
+
   `registerConfig` and `executionRole` are exported from `@aws-blocks/blocks/cdk` (and `@aws-blocks/core/cdk`).
-  
+
   **Precedence differs from `addEnvironment`.** `addEnvironment` wrote a real Lambda environment variable, so the last call won. `registerConfig` entries are loaded at cold start only into keys that aren't already set, so a real environment variable of the same name always wins — for example one the framework sets itself (`NODE_ENV`, `BLOCKS_STACK_NAME`) or one set on the function outside CDK. When that happens with a different value, the compute now logs a warning at cold start naming the ignored keys (names only, never values).
-  
+
   `registerConfig` can be called from app code after `BlocksStack.create()` / `BlocksBackend.create()` resolves. This already worked for every stack, because the framework always registers config of its own; finalize now creates the config deployment unconditionally, so it no longer depends on that.
+
 - 122c49c: fix(telemetry): honor opt-out when `--telemetry-file` is set
-  
+
   The flag let an opted-out run build an event, which persisted the installation ID to `~/.blocks/telemetry/installation-id` and printed the first-run notice, and in `@aws-blocks/core` also persisted a project ID into `<project>/.blocks/config.json`. Consent is now checked before the event is built, and in `@aws-blocks/create-blocks-app` again before it is emitted, so an opt-out landing mid-command is honored too. A disabled run writes no identifiers, prints no notice, writes no file and sends no HTTP. `--telemetry-file` now also ignores a whitespace-only path in the space-separated form, matching the `=` form.
-  
+
   Behavior change (0.x minor = breaking channel): to capture events without sending them, use `BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 <cmd> --telemetry-file=<path>` rather than combining the flag with `AWS_BLOCKS_DISABLE_TELEMETRY`. The detached send worker still runs and fails fast against port 1. That run is consented, so it still writes the installation ID and prints the notice.
+
 - 8ca3692: feat: shared, framework-neutral `ui-theme` design-token layer
-  
+
   Introduce a design-token layer for the Blocks UI so the shared Auth
   components and the starter templates share one consistent, polished look
   with no new runtime framework dependency.
-  
+
   - `@aws-blocks/auth-common` ships a new theme module: CSS custom
     properties (`--bb-*` for color, spacing, radius, typography, elevation)
     on `:root`, a light and dark palette driven by `prefers-color-scheme`
@@ -221,17 +668,17 @@
     the token `<style>` so a dark-mode user never sees a white flash before
     the bundle runs. A `--bb-color-success` token keeps success messages
     from reading as accent blue.
-  
+
   Focus states use a real `outline` ring (preserved under forced-colors /
   Windows high-contrast mode) rather than an `outline: none` + `box-shadow`
   ring, which such modes drop.
-  
+
   Additive and non-breaking.
 
 ### Patch Changes
 
 - f8fbc6e: fix(bb-agent): capture the concrete S3 error shape when a deployed Agent's session snapshot cannot be read
-  
+
   A brand-new conversation has no session snapshot; `S3Storage` already returns
   `NoSuchKey`/`NoSuchBucket` as `null` (and a missing manifest as empty), which
   Strands' `SessionManager` treats as "start fresh", so a genuine first turn is
@@ -242,7 +689,7 @@
   logged at `error` level by `runAgent`, so the concrete production error shape is
   recorded for the first time instead of only the opaque `S3 error reading <key>`
   message.
-  
+
   The read paths deliberately still RETHROW a non-missing fault rather than
   starting fresh: `SessionManager` overwrites `snapshot_latest.json` after a fresh
   start, so swallowing a transient read fault would silently overwrite an
@@ -251,8 +698,9 @@
   `createDeployedSnapshotStorage` is internal and gains a `log: ChildLogger`
   parameter `(bucket, log, S3StorageImpl?)` so the logger is threaded to the
   storage seam.
+
 - 59c9dde: docs(bb-auth-basic): add the frontend login-UI mount + gate seam
-  
+
   The Quick Start documented the backend (`createApi()`, `requireAuth`) but not
   the frontend half, so builders and agents provisioned `AuthBasic` and assumed a
   login UI would appear — nothing rendered, leaving every authenticated route
@@ -262,53 +710,57 @@
   session, with a pointer to the already-shipped testid contract
   (`authenticator-<field>` / `authenticator-action-<action>`) in
   `auth-common/CUSTOMIZING-AUTH-UI.md`.
-  
+
   Documentation only — no runtime or API change.
+
 - e682ba7: `LambdaCompute` now reports `bbName`/`bbVersion` to `Scope`, so it appears in telemetry like every other Building Block.
-  
+
   `LambdaCompute` passed no `bbName` to `Scope`, and `Scope` records a block in its registry only when `bbName` is set, so `Scope.getRegisteredBlocks()` could never name the default compute and `product.buildingBlocks` omitted it. The package already carried the standard `prebuild` (`generate-version.mjs LambdaCompute`), which generates the `BB_NAME`/`BB_VERSION` its constructor now passes through — the same wiring the other blocks use.
-  
+
   `LambdaCompute` has no customer-facing export, so it is deliberately absent from the umbrella's `aws-blocks.vendorize` map that `scripts/generate-bb-names.mjs` reads. The generator now also emits a `NON_VENDORIZED_BB_NAMES` list, adding it to `OFFICIAL_BB_NAMES` so it is reported as an official block rather than filtered as an unnamed custom one. `@aws-blocks/core` is bumped because that generated file changes; the `cdk` entry point is left alone, as telemetry is reported by the runtime class, not the synth-time construct.
-  
+
   The default compute is built only at CDK synth, in a child process whose registry no telemetry path reads, so nothing constructs one where telemetry is emitted. Importing `@aws-blocks/blocks` through its default (Node) entry now declares it instead: `Scope._setDefaultBlockForTelemetry` records its name and version, and `getRegisteredBlocks()` folds that in only when telemetry actually reads the registry.
-  
+
   Declaring rather than constructing keeps the import inert — a process that imports the umbrella and emits no telemetry leaves `totalCount` untouched — and the entry is appended after the blocks the app constructed, so it never displaces them in `product.buildingBlocks`. An app-constructed `LambdaCompute` takes precedence over the declaration, so it is never counted twice. `getRegisteredBlocks()` still exposes only names already on the official list, and customer-chosen block names remain counted-but-unnamed.
+
 - e9241b5: Add umbrella integration-test coverage asserting the shared REST API gateway wiring through the `LambdaCompute` surface. Test-only; no runtime or public API change.
 - 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
-  
+
   Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
   so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
   the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
   export:
-  
+
   - `@aws-blocks/bb-agent`: `InterruptError`
   - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
   - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
     session lifetime is configured.
   - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
-  
+
   `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
   test now also checks every Building Block's `cdk` entry.
+
 - 78f4396: CORS guidance now points at the stack's `defaults.allowedOrigins` everywhere, the stack-level setting every Blocks compute picks up. The runtime warning for a disallowed origin says to add it to `defaults.allowedOrigins` instead of setting the `CORS_ALLOWED_ORIGINS` environment variable; the core README's production example configures `defaults.allowedOrigins` instead of calling `handler.addEnvironment`, credits the sandbox preset (not the CLI) for the localhost pattern, and explains where allowed origins come from (`defaults.allowedOrigins` and, with `Hosting`, the distribution's own domain); the umbrella security checklist follows suit.
 - 440ecce: When the AWS credential check before `npm run deploy` and `npm run sandbox` fails, the message now names the profile and the command that fixes its credentials. A profile without credentials gets sign-up and `aws login` guidance, with an AWS CLI install or update hint when the installed CLI does not have `aws login`. Expired `aws login` and IAM Identity Center (SSO) sessions get `aws login` or `aws sso login` for that profile. Rejected access keys, `credential_process`, web identity, a role assumed with environment keys, and environment credentials get guidance for that source. Rejected or expired credentials from outside the AWS config files, such as an instance role, get a hint to check that source instead of sign-up guidance. When AWS cannot be reached, including the SSO portal, the deploy still continues, and the warning now says that AWS could not be reached. The deploy docs and the generated app's `AGENTS.md` describe this behavior.
-  
+
   `@aws-blocks/core` now requires AWS SDK for JavaScript clients 3.936.0 or later, the first version that reads credentials from `aws login` profiles.
+
 - 92fa27b: Internal: route named-error minting through `@aws-blocks/core`'s `blocksError`. No behavior change.
 - 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
 - 5d6656a: feat(core): add the `apiFrontDoor` prop, the `cloudfront` tier, and `publicApiUrl`
-  
+
   A Blocks app's API is served by the stack's single shared API Gateway REST API. By
   default clients call that gateway's own `execute-api` endpoint — the `'apigateway'`
   tier. You can now put a Blocks-managed CloudFront distribution in front of it
   instead, with a new prop on `BlocksStackProps` / `BlocksBackendProps`:
-  
+
   ```ts
-  await BlocksStack.create(app, 'App', {
+  await BlocksStack.create(app, "App", {
     // …
-    apiFrontDoor: 'cloudfront', // default: 'apigateway'
+    apiFrontDoor: "cloudfront", // default: 'apigateway'
   });
   ```
-  
+
   - `'apigateway'` — clients call the API Gateway endpoint directly. Nothing extra to
     deploy; unchanged from before.
   - `'cloudfront'` — one CloudFront distribution in front of the gateway (CloudFront →
@@ -317,29 +769,30 @@
     gateway — uncached, all methods, everything except `Host`, HTTP→HTTPS. The
     distribution's URL is published to the runtime as `BLOCKS_PUBLIC_ORIGIN`, so
     absolute URLs the backend builds (such as AuthOIDC's sign-in callback) use it.
-  
+
   **`publicApiUrl`** on `BlocksStack` / `BlocksBackend` is the URL clients should call
   under either tier: the CloudFront URL + `/aws-blocks/api` under `'cloudfront'`, else
   `apiUrl`. `apiUrl` stays the gateway's own URL (what `Hosting` forwards to). A
   `BlocksStack`'s `ApiUrl` output — what `deploy` / `sandbox` hand a client as
   `BLOCKS_API_URL` — is `publicApiUrl`; with `BlocksBackend`, emit it yourself. The
   Amplify template now publishes `publicApiUrl` as `blocks_api_url`.
-  
+
   The default is a constant `'apigateway'` — it is **never** derived from the app's
   shape, so adding or removing Building Blocks never silently changes how the API is
   exposed. Any value other than `'apigateway'` or `'cloudfront'` fails synth.
-  
+
   When an app fronts its frontend with `Hosting`, the API is served from Hosting's
   distribution; under `'cloudfront'` the managed distribution then stands down — one
   distribution, same origin as the frontend, no CORS and no second hop.
-  
+
   ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
   changes the API's endpoint domain.** Browser auth cookies and sessions are bound to
   the origin they were set on, so the change signs every user out. (A stable custom
   domain, a future feature, would avoid this.) Pick a tier, and decide on Hosting,
   before you have real users, and treat a later change as a breaking migration.
+
 - 8b5ef4a: fix(hosting): stop the SSR REST API from leaking an IAM role on every teardown
-  
+
   The SSR origin's `RestApi` relied on CDK's default `cloudWatchRole: true`, which
   provisions an account-level `AWS::ApiGateway::Account` plus a CloudWatch Logs IAM
   role with `RemovalPolicy.RETAIN`. The SSR stage enables neither execution nor
@@ -353,39 +806,43 @@
   can be deleted manually — but first check `aws apigateway get-account`: if the
   region's `cloudwatchRoleArn` still points at that role, deleting it breaks
   logging for every other API Gateway stage in the region.
+
 - 382dac6: fix(hosting): the image-optimization Lambda no longer follows redirects on remote image fetches
-  
+
   The IPX image Lambda validated a remote image URL against the allowlist
   (`IMAGE_ALLOWED_HOSTNAMES` / `remotePatterns`) once, before fetching — and the
   fetch then followed HTTP redirects without re-validating the target. An allowlisted
   host with an open redirect (a user-content CDN, say) could therefore steer the fetch
   to any host, including `127.0.0.1` inside the Lambda sandbox.
-  
+
   Remote fetches now use `fetchOptions: { redirect: 'error' }`, so a 3xx fails the
   image request instead of being followed, and the allowlist holds for every request
   the Lambda makes. **If an allowlisted image host serves its images through a redirect,
   allowlist the final location instead.** The generated Lambda also pins `ipx` to an
   exact version (`3.1.1`) rather than `^3.0.0`, so the fetch behavior this guard relies
   on can't change at deploy time.
+
 - c6d9e49: fix(hosting): the image-optimization Lambda's SVG gate now decides by content, not file extension
-  
+
   With `dangerouslyAllowSVG` / `IMAGE_ALLOW_SVG` off, the image Lambda rejected SVG
   sources only when the URL ended in `.svg`. An origin's content type isn't tied to its
   path, so an SVG served from `/logo` or `/logo.png` passed the gate and was returned as
   `image/svg+xml` from the application's own origin. SVGO, which IPX runs on SVG input,
   is an optimiser rather than a sanitiser and keeps some script-capable constructs.
-  
+
   The Lambda now sniffs the image bytes from both the S3 originals bucket and allowlisted
   remote hosts, and rejects SVG content with a `415` before IPX processes it. That also
   covers rasterizing requests such as `?f=png`. As a backstop it refuses any SVG output
   unless SVG is enabled. The `.svg` extension check remains as a cheap pre-filter.
   Nothing changes when SVG is enabled, or for raster images.
+
 - 8a1a4a9: test: cover npm's `ci/<vendor>` user-agent token in the shared `isCI()` case table
-  
+
   Test-only change: `isCI()` reads `ci-info` and four extra environment variables; it does not look at `npm_config_user_agent`, so an npm user agent carrying a `ci/<vendor>` token is not CI on its own. Nothing pinned that: re-adding a user-agent check left the 30-case table fully green. The table now has a case for the token and one for a `ci/` substring inside another token, so a reintroduced check fails in both `@aws-blocks/core` and `create-blocks-app`, which share the table. The table is excluded from the published package, so no runtime or public API change.
+
 - 2be3318: Test-only: the `bb-knowledge-base` CDK test stub no longer mimics the default-compute `handler` accessor; it grants through the shared `executionRole` like the Building Block does. No runtime or public API change.
 - 38ce80c: fix: the local dev surface is no longer reachable from the network or from other websites
-  
+
   - **Dev server binds loopback.** `npm run dev` now listens on `127.0.0.1` instead of every
     interface. It serves your whole API against local mock data with no authentication, so it
     must not be reachable from other machines. For a container or remote devbox, opt in with
@@ -404,12 +861,14 @@
     spawns a process or echoes the working directory when the built-in routes run in a deployed
     Lambda, and it opens the file with `execFile` instead of a shell command.
   - **The `nextjs` template's frontend dev server binds loopback** (`next dev --hostname
-    127.0.0.1`), like the Blocks dev server.
+127.0.0.1`), like the Blocks dev server.
+
 - fd10117: Fix `cognitoFederated()` failing at `cdk synth` with `CannotFindAsset`.
-  
+
   The published `@aws-blocks/bb-auth-oidc` package was missing the bundled Lambda that registers the identity provider on the user pool (`dist/idp-registration-lambda/index.js`), so any app using `cognitoFederated()` failed to synthesize. This affected both the Cognito-hosted domain prefix and custom domains. The release build now produces the bundle, so it ships with the package again.
+
 - 03ce866: Keep the local dev server alive when a PGlite init trap aborts constructor-time migrations, and recover from it
-  
+
   A `Database` / `DistributedDatabase` configured with `migrationsPath` runs its
   migrations eagerly in the constructor, before any query awaits them. If PGlite's
   WASM `_pg_initdb` aborts (notably under memory pressure, where the WASM linear
@@ -419,51 +878,57 @@
   so the dev server survives; the same rejection still reaches callers via the
   ready-gate, so a query after a failed init surfaces a branded
   `QueryFailedException` rather than being swallowed.
-  
+
   A transient trap no longer wedges the data layer: on an init trap the cached
   rejected promise is cleared, so the next query re-runs the idempotent migrations
   once memory eases (matching the engine's own recover-on-retry behaviour).
+
 - 2da2fd4: Sanitize RawRoute uncaught exceptions so raw driver/SDK details no longer leak.
-  
+
   A RawRoute whose handler throws an uncaught exception previously forwarded that error's raw name and message to the client, the same leak class the RPC path was already fixed for. The RawRoute catch (both the deployed `lambda-handler` and the local `dev-server` paths) now runs the caught throw through core's shared sanitizer: a Building Block or `ApiError` keeps its BB-authored name and message, and everything else — a driver/SDK exception or a bare `Error` — collapses to a generic `500` / `"Internal error"`, with the full error still logged server-side. A handler's own deliberate `ctx.response` writes are untouched; only the uncaught-exception path is sanitized.
-  
+
   Two small behavior notes: a RawRoute uncaught exception that previously forwarded its raw name/message now returns a generic 500, and an `ApiError` built with the default name no longer emits `name: "ApiError"` on the wire (status is detected via `isApiErrorLike`, not a name compare).
+
 - 30fc4c2: Use `dsql-lint` for local and synth-time Aurora DSQL compatibility checks, allow
   foreign keys, and refresh the PostgreSQL compatibility guidance.
 - 32a4b73: Report `AuthOIDC` as the parent block of its session store, and assert the rendered chain on the wire.
-  
+
   `AuthOIDC` built its session store with the scope it was given rather than itself, so the store's requests reported only `bb/KVStore` and no owning block. It cannot pass `this`: the store becomes the engine's session store, and the engine is an argument to `super()`. It now passes a parent carrying the block's own name, version and fully-qualified ID, built by the new `buildingBlockParent` helper, and the store's own ID is shortened to `sessions` so the session table name is unchanged.
-  
+
   `core` adds two exports: `computeScopeFullId`, the rule `Scope.fullId` already applies, and `buildingBlockParent`, which wraps it for a block that must construct a child before `super()` has run. Both replace a copy of that rule inside `bb-auth-oidc`. The Cognito env var prefix moves into the package's shared `utils.ts` alongside the cookie-secret name, so the CDK writer and the runtime reader derive both names from one function.
-  
+
   Two names change, in local and other non-Lambda `aws-runtime` runs only, where `BLOCKS_STACK_NAME` is unset and the app's root is a `Scope`. In that case the old helper walked one scope too far and produced a leading-dash ID, so the cookie-secret and Cognito env var names it looked up were not the ones the CDK side wrote, and session cookies were named `oidc_-my-app-auth`. Both now resolve. A deployed Lambda always has `BLOCKS_STACK_NAME` set and is unaffected. Under the default condition, which is what a scaffolded app's dev server resolves, the cookie prefix also changes to `oidc_my-app-auth`, from `oidc_my-app_auth` under a plain root and `oidc__my-app_auth` under a `Scope` root, because the dev entry now names cookies with the same expression as the AWS runtime instead of its own. Existing sessions in those two setups are signed out once.
-  
+
   Nothing covered the chain inside the rendered header, so a change that stopped it reaching the wire would still have passed. `bb-kv-store`'s request-capture helper now takes a parent scope, and `bb-auth-oidc` gains a suite that runs under `--conditions=aws-runtime`, where the session store is the real AWS client, and asserts the captured `user-agent` header carries both blocks root-to-leaf. The CDK suite pins the literal env var names the synth side writes, which nothing checked before, and `core` gains tests for the new helper covering attribution, the official-name gate, and the derived ID.
+
 - da6d4c7: Scope shared Blocks synth state to the owning backend root (`BlocksStack`/`BlocksBackend`) instead of the enclosing `cdk.Stack`, so two `BlocksBackend`s in one stack — and multiple stacks in one synth — stay independent.
-  
+
   - **Registries** (config, compute, dashboard, tracer, VPC requirements) now key on the backend root, resolved by walking the construct tree (`getBlocksRoot`), not on `cdk.Stack.of(scope)`.
   - **Shared-infra Building Blocks** now provision and dedup their per-backend resources under the backend root: the realtime WebSocket API, the cron scheduler role, and the agent AgentCore runtime grants. Previously a second backend in the same stack could attach to the first's shared infra — most seriously, the agent's Bedrock grants could land on the wrong backend's execution role.
   - **RawRoute** registrations are tagged with their owning backend root; `Hosting` now adds CloudFront behaviors only for routes owned by the backend its distribution fronts, instead of every route in the process-global registry. The per-owner tag also scopes duplicate-route detection, so two backends may register the same method+path.
   - **`Hosting` now registers its origin config against the backend it fronts.** `BLOCKS_PUBLIC_ORIGIN` and `CORS_HOSTING_ORIGINS` are written to the backend named by `props.api`, matching the route-behavior owner — not to `this`, which (when two backends share a stack) resolved via the ambient pointer to the last-created backend and left the fronted backend without its origin config.
   - The config bucket is parented under the resolved backend root rather than read from an ambient process-global, removing a construction-order hazard.
   - **Stack-scoped exceptions — these deliberately keep a stable logical ID.** The app-setting secret bulk-init (`BlocksSecretsBulk`) and the distributed-table GSI manager provider (`BlocksGsiProvider`) stay direct stack children. Both are referenced by existing resources through immutable fields (a SecureString's physical name; a custom resource's `ServiceToken`), so a logical-ID change would force a replacement that CloudFormation either rejects (`ServiceToken` is immutable → failed upgrade) or that silently deletes the SecureString. Keeping them stack-scoped preserves the logical ID; their deploy-time IAM is still scoped (lazily) to only the parameters/tables that register. (Joins the API Gateway account resource as a documented stack-scoped exception.)
-  
+
   **Compatibility.** Single-`BlocksStack` apps (the common case) are byte-identical — no resource replacement. Apps that embed a `BlocksBackend` inside a customer `cdk.Stack` and use **realtime** or **cron** will see those resources re-parent from the stack to the backend construct, which CloudFormation treats as a replacement on upgrade; neither carries persistent data. For realtime specifically, the WebSocket API URL changes and its stack output key changes from `RealtimeWsUrl` to `BlocksRealtimeWsUrl<hash>` — scripts that read that output by name must update. Secret AppSettings and GSI-backed tables are **not** affected (their shared resources stay stack-scoped).
+
 - ec7eebe: docs: recommend `Secret` for production secrets; position `AppSetting(secret: true)` as a free fallback
-  
+
   Aligns the Secret ↔ AppSetting guidance with AWS's recommendation that credentials belong in a dedicated secret store. Customer- and agent-facing docs (READMEs, exported-symbol JSDoc) now steer users to `Secret` for any credential protecting a production app and describe `AppSetting` with `secret: true` as a free, encrypted fallback for a low-value secret only — phrased in Blocks terms (`Secret` / `AppSetting`) with a link out to the AWS guidance rather than naming the underlying services inline. The per-BB `DESIGN.md` docs carry the explicit service-level rationale (AWS Secrets Manager vs SSM Parameter Store SecureString).
-  
+
   Also corrects an inaccurate security tip in the umbrella README that said to "never use `.env` files" — the framework documents legitimate `.env` usage for local dev (e.g. hosting, `bb-data`). The tip now says what it means: don't hardcode secret values in source, and don't ship real secrets to a deployed app through plaintext environment variables — set them through `Secret`/`AppSetting`.
+
 - f1eb149: fix(telemetry): keep every event written to `--telemetry-file` instead of only the first
-  
+
   The sink created the file with `O_CREAT | O_EXCL` and swallowed the resulting `EEXIST`, so a run that emitted more than one event recorded only the first. In `@aws-blocks/core` a `dev` server that retries a port bind emits `dev/FAIL` then `dev/SUCCESS`, and the success was lost. Events after the first are now appended to the same JSON array. A path that already existed when the run started is still left untouched. The container is unchanged — a JSON array, 2-space indented — so a consumer reading the first element is unaffected, but a file can now hold more than one event: anything asserting exactly one needs updating.
+
 - 7c19c4f: feat: `npm run deploy -- --wait-live` holds `BLOCKS_DEPLOYED` until the new build is actually served
-  
+
   `cdk deploy` returning is not the same as the new frontend build being served.
   Two edge windows stay open after CloudFormation reports complete, and emitting
   `BLOCKS_DEPLOYED` while either is open lets a caller's immediate self-test hit a
   stale bundle and silently miss a regression.
-  
+
   - **New opt-in `--wait-live` flag.** When set, `npm run deploy` only prints
     `BLOCKS_DEPLOYED` once the new build is confirmed live, so a request issued
     immediately after the signal returns the new asset.
@@ -487,6 +952,7 @@
     a clear warning and exits non-zero rather than emitting a false "live" signal.
   - **No-op for backend-only apps** (no frontend to verify) and off by default, so the
     existing deploy flow is unchanged unless you opt in.
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [f8fbc6e]
 - Updated dependencies [59c9dde]
@@ -563,20 +1029,20 @@
 ### Minor Changes
 
 - 20be3f0: fix(bb-kv-store): wire point-in-time recovery from the stack preset and add customer-managed encryption
-  
+
   `KVStore` now honors `defaults.pointInTimeRecovery` (PITR on under `production`, off under `sandbox`) and accepts per-block `pointInTimeRecovery` and `encryption` options — mirroring `DistributedTable`. `encryption: 'customer-managed'` provisions a dedicated CMK, and `KVStore.fromKmsKey(arn)` reuses an existing key across stores. Previously `KVStore` ignored the preset, so production-preset consumers believed PITR was enabled when it was not.
-  
+
   The default encryption now emits the AWS-managed `aws/dynamodb` KMS key (`SSESpecification: { SSEEnabled: true }`), where before no `SSESpecification` was emitted at all (the AWS-owned key). On an already-deployed table this is an in-place SSE change applied on upgrade, and the `aws/dynamodb` key bills per-request KMS charges that the AWS-owned key does not.
-  
+
   **Behavior change on next production deploy of an existing app:** an existing `production`-preset `KVStore` table gains Point-in-Time Recovery in place on the next deploy (an in-place update, no table replacement); continuous backups are billed per GB-month of table size. Separately, passing `removalPolicy`, `deletionProtection`, or `ttl` alongside `fromExisting()` now warns at synth (previously only `pointInTimeRecovery` and `encryption` did), so a pipeline running `cdk synth --strict` will fail until those options are removed from the wrapped-table call.
 
 ### Patch Changes
 
 - 8da1d1f: feat(bb-agent): compute-agnostic client streaming API — `createChat` + `realtimeTransport`
-  
+
   Adds a redesigned client streaming surface that hides the runtime behind a single
   transport seam, so the same frontend code works across runtimes:
-  
+
   - `createChat({ transport, api })` — the client API. The common case is one call
     (`chat.sendMessage('Hello')`); subscribe and run are fused so the
     subscribe-before-send race can't surface. The flexible primitives `run()`
@@ -585,12 +1051,13 @@
   - `realtimeTransport(...)` — the Lambda + Realtime implementation of the
     `ChatTransport` seam. Configure it once; call sites never name the runtime. A
     future runtime supplies a different transport; nothing else on the client changes.
-  
+
   Additive and non-breaking. The `stream()` / `getChannel()` / `resume()` server
   methods are unchanged (the new transport is built on them). Only the `useChat`
   client hook is now marked `@deprecated`, superseded by `createChat`.
+
 - 773cef2: fix(astro): allow an empty `dist/client` for pure-SSR builds
-  
+
   A server/hybrid Astro app with no static assets — no `public/` files and no
   prerendered pages — produces an empty `dist/client`. The adapter treated that as
   a missing build output and threw `AstroBuildOutputMissingError`, blocking synth
@@ -598,8 +1065,9 @@
   absent) `dist/client` is valid, since CloudFront routes every request to the SSR
   Lambda. The adapter now requires only the server entry and ensures `dist/client`
   exists (creating it when absent, with a build-log breadcrumb) instead of failing.
+
 - ea5f91c: fix(bb-auth-basic): echo the username on the confirm-signup / confirm-reset forms
-  
+
   AuthBasic's `confirmingSignUp` and `confirmingPasswordReset` states rendered
   `username` as an empty, visible text field — so after signing up (or requesting a
   reset) the user had to **retype** their username on the confirmation step, and a
@@ -607,22 +1075,23 @@
   field prefilled with the value just entered (mirroring `bb-auth-cognito`), so the
   confirm form carries it automatically. The `code` / `password` / `newPassword`
   fields are unchanged.
+
 - 2e72825: fix(bb-auth-cognito): `requireRole` reads group membership live so admin group changes take effect without a re-login
-  
+
   `requireRole` checked the signed-in user's `cognito:groups` **token claim**, which
   is a snapshot from sign-in. After an admin ran `auth.admin.addUserToGroup(user,
-  'admins')`, that user's live session kept getting **403** until their token
+'admins')`, that user's live session kept getting **403** until their token
   refreshed or they re-logged in — the "admin surface is unreachable / `requireRole`
   returns 403 for everyone" symptom. The mirror bug: `removeUserFromGroup` did **not**
   revoke a live session, so a removed member kept access until their stale token
   expired.
-  
+
   `requireRole` now reads membership live at call time — AWS: `AdminListGroupsForUser`
   (paginated); mock: in-process `state.groups` — mirroring how `fetchUserAttributes`
   reads live rather than trusting the token. The returned `CognitoUser.groups`
   reflects the live read. Grants and revocations now apply on the user's next
   request, with no re-login.
-  
+
   - Costs one extra Cognito call per guarded request. The cheaper identity reads
     (`requireAuth` / `getCurrentUser` / `signIn`) still surface the cached
     `cognito:groups` claim — use `requireRole` when you need live membership.
@@ -632,12 +1101,13 @@
   - Added `admin.test.ts` cases covering the sign-in-then-mutate ordering in both
     directions (grant is honored, revocation locks out); updated the CDK IAM
     least-privilege test for the new baseline grant.
+
 - 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
 - 39628cb: fix(core): anchor and escape CORS allowlist origins
-  
+
   CORS allowlist entries are compiled to regular expressions. Two matching gaps let a
   plain-looking origin match more broadly than intended:
-  
+
   - An entry beginning with `^` was used verbatim with no end anchor, so
     `^https://app\.example\.com` also matched `https://app.example.com.extra`.
     `parseCorsPatterns` now compiles every entry as `^(?:<entry>)$`, so the anchors
@@ -649,35 +1119,38 @@
     literal channel (`CORS_HOSTING_ORIGINS`): the origin is registered raw at synth (so
     its CloudFormation token resolves to the real domain) and escaped literally at
     runtime, so a domain like `d123.cloudfront.net` matches its dots literally.
-  
+
   User-supplied `CORS_ALLOWED_ORIGINS` entries remain regex patterns (the `.*` escape
   hatch and subdomain patterns are unchanged); literal dots in an origin should be
   escaped (`https://app\.example\.com`), as the README documents.
-  
+
   **Migration.** Automatic end-anchoring of `^`-prefixed entries is a tightening: an
   entry like `^https://app\.example\.com` previously also matched
   `https://app.example.com:8443`, and now does not. If you relied on that prefix
   behavior, append an explicit suffix such as `(:\d+)?` or `.*` to the entry.
-  
+
   `CORS_HOSTING_ORIGINS` must now be a **raw** origin (it is escaped once at runtime); a
   pre-escaped value would be escaped a second time and stop matching.
+
 - d4b32f2: Add `README.md` and `DESIGN.md` to `@aws-blocks/create-block` and ship them in the published package (`files`), matching the first-party package convention.
-  
+
   Tidy two `extract-ts-types` test nits (test/comment only, no runtime change): replace a redundant re-assert with a direct check of the documented lingering-bare-key behavior, and link the array/tuple & nested-destructuring boundary to its tracking issue (#552).
+
 - a649895: Emit a machine-readable completion signal on a successful `npm run deploy` **and** `npm run sandbox`.
-  
+
   `deploy()` now prints one stable last line — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`) — so a caller (a coding agent, a CI step, a script) can detect "deploy finished + where it lives" by grepping one line instead of parsing streamed CloudFormation output or polling the stack for the URL. `sandbox()` prints the same line on its success path (backend-only — `BLOCKS_DEPLOYED api=<backend>`, since the sandbox serves the frontend locally), so a programmatic caller greps the identical token after either command. The existing human-readable `✅ Deployment complete!` / `📡 API URL` / `🌐 Frontend URL` lines are unchanged; the signal is additive. The formatting is extracted into a pure `formatDeploySignal()` helper with unit coverage, shared by both entry points. The scaffolded `AGENTS.md` documents the line so agents grep it rather than poll.
-  
+
   For `npm run deploy` specifically (which streams a real CloudFormation deploy), the heartbeat now also names the resource currently converging — e.g. `waiting on HostingDistribution (AWS::CloudFront::Distribution)` — and surfaces a rolling-back resource as a warning rather than silently clearing it, and the frontend URL is surfaced early (on the in-progress path) so a deploy killed at a caller timeout has still reported where the app lives.
+
 - 251aed2: fix(bb-file-bucket): align unknown-`versionId` behavior between the mock and AWS
-  
+
   On a versioned bucket, an unknown `versionId` diverged between runtimes. S3 does
   **not** signal an unknown `versionId` as `NoSuchVersion` (verified against real
   S3): an id it cannot resolve comes back as `InvalidArgument` ("Invalid version id
   specified") on `GetObject`/`DeleteObject` and `InvalidRequest` on `CopyObject`;
   `NoSuchVersion` is reserved for a well-formed id that no longer exists. The AWS
   runtime now normalizes all of these so the observable contract matches the mock:
-  
+
   - `get()` — returns `null` for an unknown `versionId` (matching the mock and
     `get()`'s documented "null if it does not exist" contract), instead of throwing.
   - `delete()` — is a silent no-op for an unknown `versionId` (matching the mock),
@@ -687,14 +1160,15 @@
     (`isBlocksError(e, FileBucketErrors.VersionNotFound)`) and the `.message` agree
     across runtimes — instead of the raw S3 error, whose enumerable `$metadata`
     (request IDs, ARNs) would leak to the client on serialization.
-  
+
   The raw S3 codes are folded only when a `versionId` was actually supplied, so an
   unrelated `InvalidArgument`/`InvalidRequest` still surfaces. Also adds the public
   `FileBucketErrors.VersionNotFound` constant, and encodes the caller-supplied
   `versionId` in `CopySource` (a value with `&`, `#`, `?`, or a space would
   otherwise corrupt the `x-amz-copy-source` header).
+
 - 6b7fe4c: fix(hosting): retain the ISR tag-table seed custom resource on stack delete
-  
+
   The `IsrTagTableSeed` custom resource is backed by a Lambda through a CDK
   `Provider`. On stack delete CloudFormation tore the provider's framework Lambda
   down before it sent the custom resource its `Delete`, so the delete invoke hit
@@ -706,8 +1180,9 @@
   OpenNext `dynamodb-provider` `remove()` path is a no-op, and the seeded rows
   live only in the ISR tag table, which is destroyed with the stack -- so
   retaining the custom resource orphans nothing.
+
 - dae7a86: fix(hosting): warn when a compute resource pins an end-of-life Node.js runtime
-  
+
   `resolveRuntime` still accepts an explicitly pinned `nodejs18.x` or `nodejs20.x`
   (so an existing/deployed function isn't hard-broken at synth), but both are past
   their AWS Lambda deprecation dates (Node 18: Apr 2025; Node 20: Apr 2026). It now
@@ -715,12 +1190,13 @@
   `nodejs22.x` / `nodejs24.x` (or omitting the runtime to use the default). A
   supported runtime, or omitting it, warns nothing; the accepted set and the
   hard error for unrecognized runtimes are unchanged.
+
 - 5454763: fix(bb-kv-store): align `delete()` conditional detection with the mock and `put()`
-  
+
   The AWS `delete()` path detected the value-equality condition with
   `'ifValueEquals' in conditions` (key presence), while the mock and AWS `put()`
   use `!== undefined`. Two consequences, both mock↔AWS parity breaks:
-  
+
   - `delete(key, { ifValueEquals: undefined })` was a silent no-op on the mock but,
     on AWS, emitted `#value = :expected` with `:expected = JSON.stringify(undefined)`
     (`undefined`) — a DynamoDB DocumentClient marshalling error instead of an
@@ -729,45 +1205,48 @@
     `ifValueEquals` were set, silently dropping the value check — so on AWS the
     item was deleted regardless of its value, while the mock (correctly) required
     both.
-  
+
   `delete()` conditions are now composed conjunctively (`attribute_exists(#pk) AND
-  #value = :expected`) with `!== undefined` detection, matching the mock branch-for-
+#value = :expected`) with `!== undefined` detection, matching the mock branch-for-
   branch. Added `parity.test.ts` cases asserting the `DeleteCommand` shape for each
   combination (value-only, exists-only, both, none, explicit `undefined` no-op, and
   `null` as a real condition).
+
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - 7b7a59f: fix(bb-cron-job,hosting): scope service-principal grants to the deploying account
-  
+
   - **bb-cron-job**: the EventBridge Scheduler role's trust policy is now limited to
     schedules in the stack's account and region (`aws:SourceAccount` and an `aws:SourceArn`
     schedule-group pattern).
   - **hosting**: removed a redundant CloudFront `kms:Decrypt` statement from the SSE-KMS key
     policy. The Origin Access Control wiring already grants CloudFront decrypt on the bucket key,
     conditioned on `AWS:SourceArn` matching the account's CloudFront distributions.
+
 - 465a002: fix(telemetry): use ci-info for CI detection so Taskcluster (`TASK_ID` + `RUN_ID`), Netlify, Vercel, and 40+ other CI providers are identified; also keep the previously checked `CODEBUILD_BUILD_ID`, `JENKINS_URL`, `BITBUCKET_BUILD_NUMBER` and `TASKCLUSTER_ROOT_URL` variables, and honor `CI=false`
 - e57da06: Report bbName/bbVersion in telemetry.
 - Updated dependencies [8da1d1f]
@@ -835,17 +1314,17 @@
 ### Minor Changes
 
 - d7312f9: Make observability **compute-driven** so it composes correctly once an app has more than one compute. Logging, tracing, and the dashboard now key off compute state rather than off the Logger / Tracer / Dashboard blocks poking a single implicit compute.
-  
+
   **Logging is always on; retention is a compute-level setting.** Every compute captures stdout to its own log group unconditionally — there is no "enable logging" step. The retention of that group is set per compute via a new `logRetention` prop on `LambdaCompute` (`@aws-blocks/bb-lambda-compute`), falling back to `defaults.logRetention`. Log **level** is purely per-instance runtime behavior: set it via a `Logger`'s `level` option (default `'info'`). There is no app-wide log-level default and no `LOG_LEVEL` env var.
-  
+
   **Tracing is presence-gated.** Creating any `Tracer` in the app now enables X-Ray on **every** compute (X-Ray provisions real, costed infrastructure, so it stays off until the app opts in by constructing a Tracer). This replaces the previous model where a Tracer turned on tracing for one implicit compute. `@aws-blocks/core/cdk` adds `registerTracer()` (records Tracer presence) and `finalizeTracing()` (enables tracing on all computes at finalize); `create()` runs it before finalizing dashboards. `Compute.enableTracing()` is now idempotent.
-  
+
   **The dashboard is organized by compute, with display toggles.** `DashboardOptions` gains `logs?: boolean` (default `true`) and `traces?: boolean` (default `true`) — app-wide display toggles applied uniformly to every compute section. `logs:false` hides the (always-captured) logs section; `traces:false` hides traces even when tracing is enabled.
-  
+
   The dashboard covers **every** compute in the app (resolved at finalize, so construction order never matters). Each compute renders a health section always, a logs section (unless `logs:false`), and a traces section only when tracing is enabled on it (unless `traces:false`). Metrics remain app-scoped and are passed explicitly. No `computes` selector is exposed yet — it would leak the internal `Compute` type before customers can construct a compute; it arrives with the multi-compute surface.
-  
+
   **⚠️ Behavior / API changes:**
-  
+
   - **`Logger` no longer reconfigures log retention.** The CDK `Logger` is now a no-op placeholder (logging is always on and retention moved to the compute). The `retention` option was removed from `LoggingOptions`; set `logRetention` on the compute instead.
   - **A `Tracer` now enables X-Ray on all computes, not one.** Any Tracer in the app turns on tracing fleet-wide.
   - **`Logger` no longer reads the `LOG_LEVEL` environment variable.** Log level is set solely via the per-`Logger` `level` option (default `'info'`); the previously supported `LOG_LEVEL` env-var override has been removed, and Blocks stamps no app-wide log-level config. `BlocksDefaults` has no `logLevel` field.
@@ -854,14 +1333,14 @@
 ### Patch Changes
 
 - 7b86b8e: fix(auth-oidc): make `cognitoFederated()` deployable by registering the IdP via a deploy-time custom resource
-  
+
   `@aws-blocks/bb-app-setting` now also exports `SECRETS_BULK_CONSTRUCT_ID` — the
   construct id of the shared per-stack secret-init custom resource — so sibling
   blocks can order a resource after the SecureString values are written without
   hard-coding the string. `bb-auth-oidc`'s IdP-registration custom resource uses
   it to take an explicit dependency on that resource (compile-time coupling, so a
   rename can't silently break the ordering guarantee).
-  
+
   `cognitoFederated()` previously produced a CloudFormation template that always
   failed to deploy (#447). It registered the federated identity provider with a
   native `AWS::Cognito::UserPoolIdentityProvider` resource, writing the IdP
@@ -871,38 +1350,39 @@
   `ProviderDetails`, so `cdk synth` succeeded but every deploy failed at
   change-set creation — before any resource was created — leaving the stack in
   `REVIEW_IN_PROGRESS` with `SSM Secure reference is not supported in [...ProviderDetails...]`.
-  
+
   The IdP is now registered by a **deploy-time custom resource**: a small
   Lambda-backed provider reads and decrypts the IdP credential SecureString
   parameters via the SDK at deploy time and calls Cognito's
   `CreateIdentityProvider` / `UpdateIdentityProvider` / `DeleteIdentityProvider`.
-  Only the parameter *names* cross into the CloudFormation template — the secret
+  Only the parameter _names_ cross into the CloudFormation template — the secret
   values never appear in it. The handler's role is least-privilege: scoped to
   `cognito-idp:{Create,Update,Delete}IdentityProvider` on the pool ARN,
   `ssm:GetParameter` on the specific parameter ARNs, and `kms:Decrypt` conditioned
   on `kms:ViaService = ssm.<region>`.
-  
+
   A `secret: true` `AppSetting` is an SSM SecureString at `/<fullId>` (not an AWS
   Secrets Manager entry — the `blocks secret` CLI does not apply). Set its value by
   writing the SecureString directly (`aws ssm put-parameter … --type SecureString
-  --overwrite`) or via the `AppSetting` runtime `put()`. Because the credentials
+--overwrite`) or via the `AppSetting` runtime `put()`. Because the credentials
   are read at deploy time and are not stack properties, the custom resource
   re-reads SSM on every `cdk deploy`, so a credential set or rotation takes effect
   on the next deploy. A synth-time check rejects two providers configured with the
   same `identityProvider`.
-  
+
   Verified end-to-end against a real account: `cdk deploy` succeeds (no change-set
   rejection) and the identity provider is created on the User Pool, including the
   path where a real `AppSetting(secret: true)` provisions the SecureString during
   the same deploy.
-  
+
   This is a `minor` bump for `@aws-blocks/bb-auth-oidc` (pre-1.0 minor = a behavior
   change): the synthesized template for a `cognitoFederated()` provider no longer
   contains a native `UserPoolIdentityProvider` resource — the IdP is now a custom
   resource — so anyone asserting on that resource in a snapshot will see a diff.
   The public API is unchanged.
+
 - 4342149: fix(bb-dashboard): depend on `@aws-blocks/bb-lambda-compute@^0.4.0`
-  
+
   `bb-dashboard` declared its `@aws-blocks/bb-lambda-compute` devDependency as
   `^0.3.0`, which excludes the current workspace version (`0.4.0`). npm therefore
   installed the published `0.3.0` tarball into `bb-dashboard` instead of linking
@@ -910,17 +1390,18 @@
   fell out of sync (breaking `npm ci` repo-wide), and `bb-dashboard`'s CDK test
   crashed with `ERR_PACKAGE_PATH_NOT_EXPORTED` importing
   `@aws-blocks/bb-lambda-compute/cdk` — a subpath the old `0.3.0` did not export.
-  
+
   Aligning the range to `^0.4.0` links the local workspace (which exports
   `./cdk`), fixing both. Dev-dependency-only; no runtime or API change.
+
 - e2c3c62: fix(bb-distributed-data): re-run the DSQL role grant when the app's IAM role is replaced
-  
+
   `DistributedDatabase` maps the app's IAM role ARN to a DSQL database role with
   `AWS IAM GRANT`. The migration/provisioning CustomResource is documented as running
   on every deploy so the mapping "stays in sync if the app Lambda's IAM role is
   recreated", but its properties were `{ migrationsHash, dbRole }` only — the role ARN
   reached the Lambda as an environment variable and nothing else.
-  
+
   CloudFormation re-invokes a CustomResource only when its **properties** change. When
   an IAM role replacement changed the ARN while migrations stayed the same, both
   properties were unchanged, so CloudFormation skipped the resource entirely. The
@@ -930,24 +1411,25 @@
   denied") while the deploy itself reported success and the IAM policy still showed a
   correct `dsql:DbConnect` — the breakage lived in DSQL's internal role mapping, which is
   invisible from the CloudFormation layer.
-  
+
   `appRoleArn` is now a CustomResource property, so a role replacement re-invokes the
   resource and `provisionAppRole()` re-issues the grant as part of the deploy. The value
   is a CDK token, so it differs only when the role is genuinely replaced — this does not
   force the resource to run on every deploy.
-  
+
   This was latent from the initial version and stayed dormant while each Lambda kept its
   own stable execution role. It surfaced once the shared execution role landed (#320,
   #341): upgrading `@aws-blocks/core` across that range replaces the per-Lambda
   `HandlerServiceRole` with the shared `BlocksRole`, which is exactly the role-ARN change
   that the CustomResource failed to notice.
-  
+
   `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-distributed-data`
   (satisfies the umbrella publish guard); no umbrella source changed.
-  
+
   Fixes #556.
+
 - f552ebe: fix(core): follow a factory-returned, destructured `ApiNamespace` when extracting spec schemas (#444)
-  
+
   `blocks-generate-spec` lost the TypeScript parameter/result schemas for an
   `ApiNamespace` that was constructed inside a factory, returned as a property,
   destructured, and then exported (e.g. `const { api } = new Factory().build()`).
@@ -956,39 +1438,43 @@
   schema was attributed to a bare, unqualified key — which, under a method-name
   collision with another namespace, cross-assigned or degraded to
   `{ "type": "unknown" }` (the same class of bug as #445, via the factory path).
-  
+
   The indirect pass now also handles **object binding patterns**: for each
   destructured binding it resolves the property's type off the initializer and
   extracts the methods keyed by the local (exported) namespace name — so a
   factory-returned namespace keys qualified (`api.method`) exactly like a
   directly-constructed one, and same-named methods across namespaces no longer
   collide. Renamed bindings (`const { foo: bar } = …`) read the correct property.
+
 - 9aa0814: `blocks-generate-spec`: stop cross-assigning schemas between namespaces that share a method name.
-  
+
   The TypeScript type extractor keyed method schemas by the bare method name, so when two `ApiNamespace`s each exposed an operation with the same name (e.g. `widgets.create` and `subscriptions.create`), one namespace's parameter/result schemas silently overwrote the other's in the generated OpenRPC document — producing incorrect client types. Method schemas are now keyed by the namespace-qualified name (`namespace.method`), matching how the spec routes operations; the consumer falls back to the bare name for methods the extractor couldn't attribute to a namespace, so no previously-working case regresses.
+
 - 81609a8: `KVStore.put`: allow `ifNotExists` and `ifValueEquals` to compose.
-  
+
   Previously the two conditional-write options were mutually exclusive — the AWS runtime silently ignored `ifValueEquals` when `ifNotExists` was also set, and the mock rejected the write outright, so passing both was unusable (and the two layers diverged). They now compose with **OR**: the write succeeds when the key is absent **or** its current value matches, and fails only when the key exists **and** the value differs. This is the optimistic "create it, or update it only if unchanged" pattern (`attribute_not_exists(pk) OR value = :expected`). Each option used alone is unchanged.
+
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 21443ba: fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
-  
+
   Optimistic-concurrency / conditional-write conflicts now surface to clients as
   JSON-RPC error **code 409 (Conflict)** instead of a generic **500**. Previously
   these conflicts were thrown as plain named `Error`s (or re-thrown raw driver
   errors), and the JSON-RPC serializer maps any non-`ApiError` to 500 — so a
   routine, expected conflict was indistinguishable from an internal server error.
-  
+
   Each affected conflict is now an `ApiError` with `status: 409`, so on the client
   `error.status === 409`. The structured `error.name` is preserved end-to-end, so
   `isBlocksError(e, ...)` keeps matching by name on both server and client, and the
   existing typed error constants are unchanged:
-  
+
   - `@aws-blocks/bb-kv-store` — a failed `ifNotExists` / `ifExists` /
     `ifValueEquals` write or delete (`KVStoreErrors.ConditionalCheckFailed`). The
     AWS runtime now also normalizes DynamoDB's raw `ConditionalCheckFailedException`
@@ -1002,26 +1488,27 @@
   - `@aws-blocks/bb-data` — a serializable-isolation conflict, SQLSTATE `40001`
     (`DatabaseErrors.SerializationFailure`), across the PGlite, pg-client, and
     Data API engines.
-  
+
   The `retriable` flag is scoped to genuine optimistic-lock conflicts: it is
   `true` for value/field-equals conflicts (`ifValueEquals` / `ifFieldEquals`) and
   the 40001 serialization failures, and omitted/`false` for existence/uniqueness
   assertions (`ifNotExists`, `ifExists`), where a blind identical retry would fail
   identically. Status (409) and `error.name` are unchanged in every case.
-  
+
   This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior: callers that
   branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
   code) will now see `409`. Code that matches conflicts by name via
   `isBlocksError` — the documented pattern — is unaffected.
-  
+
   `@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
   change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
   (no behavior or API change).
+
 - acd1628: Share the RawRoute registry across duplicate copies of `@aws-blocks/core` so routes registered through one copy are dispatched (and synthesized into CloudFront behaviors) by another, instead of silently returning 404. Unmatched routes now log a diagnostic, and a duplicate core copy warns once.
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - bd67438: feat(auth-oidc): let `stubIdp()` declare test users inline
-  
+
   `stubIdp()` gains an optional `users?: StubUser[]`. Previously the stub IdP's
   identity directory could only be seeded from a `users.json` file in the mock
   data dir (with a single default user otherwise), so declaring test users meant
@@ -1029,8 +1516,9 @@
   directory for the login screen and the `users` handed to `onAuthorize`, taking
   precedence over `users.json` and the built-in default. Omitting it is unchanged
   (file → default fallback), so existing apps and the AWS runtime are unaffected.
+
 - a47d71c: fix(data): map duplicate-key unique-constraint violations to JSON-RPC 409 (Conflict) instead of 500
-  
+
   A duplicate-key / unique-constraint violation (SQLSTATE `23505`,
   `UniqueConstraintViolation`) now surfaces to clients as JSON-RPC error
   **code 409 (Conflict)** instead of a generic **500**. Previously the engine
@@ -1039,13 +1527,13 @@
   expected duplicate-key conflict was indistinguishable from an internal server
   error. This mirrors the `40001`/OCC → 409 mapping already established for these
   Blocks.
-  
+
   Each affected conflict is now an `ApiError` with `status: 409`, so on the client
   `error.status === 409`. The structured `error.name` is preserved end-to-end, so
   `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` (and the
   `DistributedDatabaseErrors` equivalent) keeps matching by name on both server and
   client; the typed error constants are unchanged.
-  
+
   - `@aws-blocks/bb-data` — a duplicate-key violation (SQLSTATE `23505`,
     `DatabaseErrors.UniqueConstraintViolation`) across the PGlite, pg-client, and
     Data API engines (both the SQLState-parsed and message-matched Data API paths),
@@ -1053,7 +1541,7 @@
   - `@aws-blocks/bb-distributed-data` — a DSQL duplicate-key violation (SQLSTATE
     `23505`, `DistributedDatabaseErrors.UniqueConstraintViolation`) in
     `translateDsqlError`, in both the mock and real engines.
-  
+
   The conflict is **not** flagged `retriable`: a duplicate key is deterministic, so
   a blind retry of the same insert fails identically (unlike the `40001`
   serialization failures, which stay retriable). The client-visible message is a
@@ -1061,23 +1549,25 @@
   is retained only as `cause` for server-side diagnostics. Genuine infrastructure
   errors (`ConnectionFailed`, `QueryFailed`) are unchanged and correctly stay 500,
   and the `SerializationFailure`/OCC paths are untouched.
-  
+
   This is a `minor` bump. Both data packages are pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior: callers that
   branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
   code) will now see `409`. Code that matches conflicts by name via
   `isBlocksError` — the documented pattern — is unaffected.
-  
+
   `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-data` and
   `bb-distributed-data` (satisfies the umbrella publish guard); no umbrella source
   changed.
-  
+
   Fixes #508.
+
 - 0385f7e: `useChat`: widen `UseChatOptions.api.sendMessage` and `resume` return types from `Promise<void>` to `Promise<unknown>`.
-  
+
   The natural backend methods return objects (`agent.stream()` → `{ channelId }`, `resume` wrappers → `{ ok: true }`), but `Promise<{ channelId }>` is not assignable to `Promise<void>` (TS2322), which forced customers into an await-and-discard wrapper. `useChat` awaits both calls only for completion and discards the resolved value, so `Promise<unknown>` — assignable-from both object results and `void` — lets natural-shape backends wire up directly while existing `void`-returning backends keep compiling. Type-only change; no runtime behavior change.
+
 - daf523a: docs(bb-agent): add a concrete React `useChat` example
-  
+
   The `useChat` docs only showed the framework-agnostic callback form and warned
   that it is "a factory function, not a React hook — call it once, not on every
   render," without demonstrating the fix. Added a primary React example that holds
@@ -1087,14 +1577,15 @@
   resolving the "call once" footgun. Included a one-line Next.js note (same
   component, keep the `'use client'` directive) and kept the existing
   framework-agnostic example as the baseline.
+
 - 6496713: fix(bb-data): place shared-VPC Aurora in the subnets the VPC actually has
-  
+
   When `Database` runs inside a bring-your-own VPC, its Aurora cluster was pinned
   to `PRIVATE_ISOLATED` subnets. The VPC in every docs example
   (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`) has no isolated
   tier, so following the documented setup and adding a `Database` failed synth
   with "no isolated subnet groups in this VPC."
-  
+
   Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), not
   a raw Postgres socket, so the placement tier does not affect reachability — it
   only has to be a tier the VPC actually has. The shared-VPC path now prefers the
@@ -1102,20 +1593,21 @@
   back to `PRIVATE_WITH_EGRESS` otherwise, via the VPC context's `selectSubnets`.
   The standalone path is unchanged — it still builds its own VPC with a dedicated
   isolated tier.
-  
+
   This is a `patch` bump: pre-1.0, where this repo reserves `minor` for breaking
   changes. The behavior change only affects the shared-VPC path that previously
   failed synth, so it is strictly a fix. The umbrella `@aws-blocks/blocks` gets
   the same bump because it re-exports `Database`.
-  
+
   Also adds `Template.fromStack` unit coverage for `finalizeVpc` in
   `@aws-blocks/core` — asserting the provisioned `AWS::EC2::VPCEndpoint` set, the
   gateway/interface dedup, and the always-on CloudWatch Logs + SSM endpoints —
   which previously had no test exercising the provisioning path.
+
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -1124,29 +1616,30 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - 6496713: fix(core): harden VPC integration — scoped endpoint SG, runtime-subnet validation, instructive subnet errors
-  
+
   Second-pass hardening of VPC support based on review feedback.
-  
+
   **Interface endpoints are no longer reachable from the whole VPC.** They now get
   a dedicated security group that allows 443 only from the Blocks Lambda SG, and
   the endpoints are created with `open: false` to suppress CDK's default
   "allow 443 from the entire VPC CIDR" rule. On a bring-your-own VPC this stops
   unrelated workloads from reaching every Blocks interface endpoint.
-  
+
   **`VpcRequirements.subnetRole` is replaced by `requiresEgress`.** The old field
   was declared but never consumed. `requiresEgress` expresses a real, validated
   capability: whether the BB's parent runtime (the shared handler Lambda) must be
@@ -1156,28 +1649,29 @@
   `bb-distributed-data` (DSQL) declares `requiresEgress: true`, turning a
   previously silent runtime failure (DSQL in isolated subnets deploys clean, then
   every call times out) into a build-time error.
-  
+
   **`VpcContext.selectSubnets` is now instructive.** It takes the requesting BB and
   verifies the VPC actually has the requested subnet tier, throwing a BB-named,
   actionable error instead of the opaque CDK "no subnet groups" error. It accepts
   an explicit `{ fallback }` so a BB can opt into graceful degradation (e.g. Aurora
   over the Data API works from `private-with-egress` when there is no isolated
   tier); the downgrade is never silent. `bb-data` uses this.
-  
+
   **Other fixes:** Lambda placement now fails fast with an actionable error when a
   VPC has no private-with-egress tier and none was specified; `bb-data` drops its
   unused 5432 ingress rule (Aurora is reached over the RDS Data API, not a socket);
   removed `any` casts from the Lambda props and endpoint/CIDR handling; de-duplicated
   the VPC/non-VPC branches in `BlocksStack`.
-  
+
   All pre-1.0 `patch` bumps — no breaking changes to shipped, consumed API
   (`subnetRole` had no consumers). The umbrella `@aws-blocks/blocks` re-exports the
   affected types.
+
 - 6496713: fix(core): VPC review follow-ups — egress capability, endpoint trim, S3 gateway
-  
+
   Refines VPC support based on review feedback (all changes to the net-new,
   unreleased VPC feature).
-  
+
   **`VpcRequirements.runtimeSubnet` becomes `requiresEgress?: boolean`.** A BB's
   runtime need is a capability ("my code must reach the internet"), not a specific
   subnet tier. Modeling it as a single role wrongly rejected a valid placement
@@ -1187,20 +1681,22 @@
   egress can't be determined (e.g. an imported VPC whose subnets aren't known at
   synth) it warns rather than fabricating a pass/fail. `bb-distributed-data` (DSQL)
   now declares `requiresEgress: true`.
-  
+
   **SSM interface endpoint is no longer always provisioned.** Only `AppSetting` and
   the auth blocks (which compose `AppSetting`) use SSM, so it now flows from Building
   Block requirements. An app that uses neither no longer pays for an unused interface
   endpoint. CloudWatch Logs stays always-on (every in-VPC Lambda needs it for log
   delivery).
-  
+
   **The S3 gateway endpoint is now always provisioned.** The runtime pulls config,
   secrets, and migrations from S3 at cold start. Gateway endpoints are free
   (route-table entries, no ENI), so this closes a real cold-start access gap at no
   cost.
+
 - 302090a: Local dev server: handle raw-socket errors during the WebSocket upgrade instead of crashing.
-  
+
   The `upgrade` handlers routed the HTTP upgrade without attaching an `'error'` listener to the raw `net.Socket` first. A stale WebSocket client that reset its connection inside the upgrade window emitted ECONNRESET on a socket with no handler, so Node's default unhandled-`'error'` behaviour killed the dev server process right after port bind. Both upgrade paths now attach `socket.on('error', () => socket.destroy())` as their first statement, the HTTP server answers malformed/aborted requests via a `clientError` handler, and the `noServer` `WebSocketServer` logs server-level errors rather than throwing. The fix is scoped to the vulnerable socket — a genuine error anywhere else still crashes as before.
+
 - Updated dependencies [7b86b8e]
 - Updated dependencies [4342149]
 - Updated dependencies [e2c3c62]
@@ -1253,28 +1749,28 @@
 ### Minor Changes
 
 - 9111c0c: feat(bb-agent): cap model and tool calls per turn to bound runaway cost
-  
+
   Adds two per-turn safety caps to `AgentConfig`, both defaulting to `20`:
-  
+
   - `maxLlmCalls` — the maximum number of model (Bedrock) invocations in a single
     turn. Model calls are the unit Bedrock bills for, so this is the most direct
     guard against an agent that loops its reason→act cycle indefinitely; because
     every tool round needs a model call, it transitively bounds tool loops too.
   - `maxToolIterations` — the maximum number of tool calls in a single turn
     (parallel tool batches count each call).
-  
+
   When either cap is exceeded the turn is cancelled and the client receives an
   `error` chunk (so `complete()` rejects) instead of `done`. Both caps are
   enforced with in-loop Strands hooks, so they work identically on every compute
   target with no cross-process signaling.
-  
+
   Behavior change: turns are now capped at 20 model calls and 20 tool calls by
   default. This is generous for a single turn, but agents that legitimately reason
   over many steps or chain many tools must raise `maxLlmCalls` /
   `maxToolIterations`, or set a cap to `false` to disable it. The caps bound call
-  *count*, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
+  _count_, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
   on Bedrock spend for real cost protection.
-  
+
   This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior. The two options are
   new and optional and there's an opt-out (raise the cap, or set it to `false`),
@@ -1289,59 +1785,61 @@
   a new message always starts a fresh one. A cap value must be a positive integer
   or `false`; anything else throws `InvalidModelConfigException`. The umbrella
   `@aws-blocks/blocks` gets the same bump because it re-exports `AgentConfig`.
+
 - c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
-  
+
   `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
-  
+
   - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
   - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
   - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
-  
+
   Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
-  
+
   **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
-  
+
   **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
-  
+
   **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
-  
+
   **⚠️ Behavior changes on upgrade:**
   - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
   - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
   - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
   - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
-  
+
   `bb-dashboard` now points its log widgets at the framework-owned handler log
   group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
   `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
   CDK-generated name, so the old convention would leave the "Recent Errors" /
   "Log Volume" widgets querying an empty group.
-  
+
   Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+
 - 4a830a6: feat: route event-block resources to their resolved compute
-  
+
   AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
   compute resolved at synth rather than the stack's shared handler:
-  
+
   - AsyncJob attaches its SQS event source to the resolved compute's function;
   - CronJob points its EventBridge Scheduler target at the resolved compute's function;
   - Realtime binds its shared WebSocket API integrations to the stack's **default**
     compute (its routes are a stack-level singleton) and grants `postToConnection`
     to the shared execution role, so `publish()` works from any compute.
-  
+
   Each block requires a Lambda compute today and fails at synth with a typed
   `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
   The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
   backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
   when two copies of `bb-lambda-compute` resolve in one dependency tree.
-  
+
   On the default single-Lambda setup the resolved/default compute is the stack's
   default, whose function is the shared handler — so this is non-breaking with no
   change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
   execution role rather than the handler directly.
-  
+
   New public surface (hence `minor`):
-  
+
   - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
     the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
     (the single env-var-key sanitizer both config writers and runtime readers use).
@@ -1349,12 +1847,13 @@
     `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
   - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
     error member.
-  
+
   `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
   moves onto the `BlocksStack.create` harness instead of a handler-only stub.
   Test-only change — no runtime behavior change to the Agent.
+
 - f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
-  
+
   The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
   after `buildRetentionDays` (default 30), including the build that CloudFront KVS
   `meta.b` currently points to. An app that did not deploy within the retention
@@ -1362,63 +1861,65 @@
   stack — the router kept rewriting to the now-empty prefix, so every static path
   returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
   Recovery required a redeploy.
-  
+
   **Fix.** The lifecycle rule now matches only objects tagged
   `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
-  to the new build, the cutover handler tags the *outgoing* build's objects
+  to the new build, the cutover handler tags the _outgoing_ build's objects
   superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
   delete-object permission). The live build is never tagged, so it is never expired,
   regardless of deploy cadence. Superseded builds are still cleaned up after
   `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
   "NOT tagged" predicate), which is why the superseded build is tagged rather than
   the live build excluded.
-  
-  **Rollback-safety hardening.** The same cutover also *clears* the build-state tag
-  on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+
+  **Rollback-safety hardening.** The same cutover also _clears_ the build-state tag
+  on the _incoming_ build's objects, symmetric to tagging the outgoing one. Without
   this, a rollback that re-points `meta.b` back to a retained build that was tagged
   superseded by an earlier cutover would hand the now-live build to
   `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
   `s3:DeleteObjectTagging` (tags only, never objects).
-  
+
   **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
   `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
   to change retention was an L1 bucket override. It now flows through to the
   hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
   (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
   before.
-  
+
   **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
   synth-time **warning** (never an error) when the deploy cadence is at or beyond
   `buildRetentionDays`, i.e. when superseded builds could age out before the next
   deploy and shrink the rollback window. The live build is unaffected, so this is
   a rollback-window note, not a correctness gate.
-  
+
   Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
   lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
-  + Lambda-role update on the next deploy; no bucket replacement), and adds a new
-  IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
-  scoped to `builds/*`) to the
-  cutover handler. Build artifacts uploaded before the upgrade carry no
-  `build-state` tag and are therefore never expired by the new rule — including
-  the live build — so the upgrade cannot delete a running build; from the next
-  deploy onward each superseded build is tagged and reclaimed normally.
+  - Lambda-role update on the next deploy; no bucket replacement), and adds a new
+    IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+    scoped to `builds/*`) to the
+    cutover handler. Build artifacts uploaded before the upgrade carry no
+    `build-state` tag and are therefore never expired by the new rule — including
+    the live build — so the upgrade cannot delete a running build; from the next
+    deploy onward each superseded build is tagged and reclaimed normally.
+
 - 46b7c89: Generate the local `aws-blocks` package's client entry point on fresh checkouts, under the correct export conditions.
-  
+
   The templates declare `./client.js` as the package's `browser`/`import` entry and gitignore it as generated, so a scaffold built on any machine other than the one that scaffolded it failed to resolve the package, and `cdk synth` failed with it (the Hosting block builds the frontend during synthesis).
-  
+
   `@aws-blocks/blocks` gains a `blocks-generate-client` bin (mirroring `blocks-generate-spec` and `blocks-vendorize`) that spawns the core generator worker with `--conditions=aws-runtime`, so the emitted client imports `aws-middleware` rather than `mock-middleware` regardless of how the hook is invoked. `@aws-blocks/core` exports the existing `generate-client-worker` subpath so the bin can resolve it. The templates wire `"prebuild": "blocks-generate-client"` (including `backend`, where the hook is dormant until a `build` script exists) and gitignore `.hosting/`, the Vite output written during synthesis.
+
 - 2cb9d74: refactor(bb-agent): remove inert `structuredOutput` field from `AgentConfig`
-  
+
   `AgentConfig` declared `structuredOutput?: z.ZodType`, but the field was never
   implemented, read, or consumed anywhere — no JSDoc, no consumer, no docs, no
   tests. It advertised a capability that does not exist, so setting it was a silent
   no-op. The declaration is removed (along with its line in the generated
   `API.md` report); no runtime behavior changes, because nothing ever read it.
-  
+
   Structured output remains a planned future LLM-BB feature, tracked separately.
   This change only deletes the dead placeholder surface — it does not add or design
   any real structured-output support.
-  
+
   This is a `minor` bump. Removing a property from an exported interface is a
   breaking change to the public type surface, but every package here is pre-1.0,
   where this repo's convention is that `minor` — not `major` — is the signal for a
@@ -1432,45 +1933,49 @@
 ### Patch Changes
 
 - fe0f04a: fix(blocks): drop `jobQueueUrl` from the `Agent` `getSdkIdentifiers` overload
-  
+
   The Agent BB no longer runs its loop on an internal AsyncJob (it moved to a Bedrock AgentCore Runtime),
   so it no longer registers a `jobQueueUrl` identifier. The umbrella `getSdkIdentifiers(agent)` overload
   still declared it, promising a field that resolves to `undefined` at runtime. Remove it; the overload
   now returns only `conversationsTableName`, `messagesTableName`, `sessionBucketName`, `realtimeWsUrl`,
   and `realtimeCallbackUrl`.
+
 - 585feea: Document AuthCognito setAuthState error-state semantics, including retriable challenge failures and CodeMismatch handling.
 - 64ddd74: refactor(core): retarget the config registry to the shared role and every compute
-  
+
   `finalizeConfigRegistry` no longer takes a single handler function. It now takes
   the owning construct plus the shared execution role and the stack's computes
   (`finalizeConfigRegistry(root, executionRole, computes)`) and:
-  
+
   - grants `s3:GetObject` on the config object **once to the shared execution
     role** instead of to one function's role, so every compute that assumes the
     role can read it; and
   - stamps `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on **every compute** via
     `compute.setEnv(...)` rather than on a single hardcoded handler.
-  
+
   Adds a per-stack compute registry (`registerCompute` / `getComputes`): computes
   self-register on their owning stack in the `Compute` base constructor (state
   keyed on the stack, resolved via `cdk.Stack.of()`, like the config registry), so
   a multi-stack synth keeps each stack's computes isolated. `create()` reads the
   registry directly via `getComputes(stack)`.
-  
+
   Behavior-preserving for the default single-compute app: the same config object
   is written to S3, the same two coordinates reach the runtime, and the same
   `s3:GetObject` permission is available — now via the shared role. Internal
   refactor; no public API or runtime-config-loading change.
+
 - 165093b: `CronJob`: validate the schedule (and timezone) at synth so an invalid expression fails fast instead of after minutes of deploy.
-  
+
   The CDK layer passed `schedule`/`timezone` straight into the EventBridge `CfnSchedule` with no validation, so an invalid expression — e.g. `rate(10 seconds)` (EventBridge's minimum is 1 minute) or a malformed `cron(...)` — passed `cdk synth` and was only rejected by EventBridge minutes into provisioning. The mock already validated these, so local dev and deploy diverged.
-  
+
   The schedule parser and timezone check are now a shared `schedule` module used by both the mock and the CDK construct. `CronJob`'s constructor validates up front and throws `CronJobErrors.InvalidSchedule` / `CronJobErrors.InvalidTimezone` at synth, before any infrastructure is created.
-  
+
   The synth gate is deliberately lenient for `cron(...)` — it checks the 6-field shape and defers field-level semantics (`L`/`W`/`#`, year fields, named days) to EventBridge — so it never rejects an advanced-but-valid schedule. The local mock, which must actually simulate the schedule, still can't model those forms; it now throws the new `CronJobErrors.ScheduleNotSupported` (rather than `InvalidSchedule`) for them, so local dev doesn't call a deployable schedule "invalid". No behavior change for valid, mock-supported schedules.
+
 - 8de4a56: `DistributedTable` mock: order GSI sort-key ties deterministically to match DynamoDB.
-  
+
   When a GSI sort key was shared by multiple items, the mock's `query` fell back to Map insertion order for the tied rows — so results depended on write order / disk-reload order and diverged from deployed behavior. The mock now tie-breaks on the base-table primary key (partition key, then sort key), matching DynamoDB's observed ordering for index rows with equal sort keys, and reverses the whole order (ties included) under `order: 'desc'`. AWS doesn't document a contractual guarantee for the tie order, so the mock is intentionally deterministic even where DynamoDB's contract is unspecified. No change for unique sort keys.
+
 - Updated dependencies [9111c0c]
 - Updated dependencies [fe0f04a]
 - Updated dependencies [1b66571]
@@ -1522,58 +2027,59 @@
 ### Minor Changes
 
 - 08ab129: Add `pointInTimeRecovery: boolean | { retentionDays: number }` to `BlocksDefaults` (and to `BlocksPresets`: `true` in `production`, `false` in `sandbox`).
-  
+
   This extends the stack-wide infrastructure-defaults posture with the continuous-backup knob, so a Building Block whose service supports it (DynamoDB Point-in-Time Recovery) can resolve its default from `scope.defaults.pointInTimeRecovery` — read independently, the same way as `removalPolicy` and `deletionProtection`. `true` enables backups with the service default window, `false` disables them, and `{ retentionDays: n }` pins the window (the block validates `n` against its service's range) — on/off and window are one field since a window only means anything when backups are on. Blocks whose service has no equivalent simply ignore it. `bb-distributed-table` is the first consumer.
-  
+
   > The property **name** (`pointInTimeRecovery`) and its `{ retentionDays }` shape are a public `@aws-blocks/core/cdk` surface addition and want API-BR sign-off before release.
 
 ### Patch Changes
 
 - 1ff9d03: `AppSetting`: support a customer-managed KMS key for secrets via `kmsKeyArn`.
-  
+
   Secret (`SecureString`) parameters were always encrypted with the default `aws/ssm` AWS-managed key, so their decrypt scope couldn't be controlled (e.g. for cross-account access or a dedicated key policy). Passing `kmsKeyArn` (also accepted by `AppSetting.fromExisting`) now encrypts the secret with that customer-managed key:
-  
+
   - the bulk-init Custom Resource creates the parameter with the CMK (`KeyId`);
   - the shared handler is granted `kms:Decrypt`/`Encrypt` scoped to that specific key ARN (instead of the `aws/ssm` `ViaService` wildcard);
   - the runtime `put()` re-specifies the key on overwrite so it doesn't silently fall back to `aws/ssm`;
   - adding/changing/removing `kmsKeyArn` on an already-deployed secret re-encrypts its current value under the new key at deploy time, so decryption keeps working after a key rotation.
-  
+
   `kmsKeyArn` is only valid with `secret: true` and must be a non-empty ARN. The default (no `kmsKeyArn`) is unchanged.
+
 - 5798492: feat(bb-async-job): batch SQS messages by default, with a configurable batching window
-  
+
   `AsyncJob` triggered its Lambda with `batchSize: 1`, so every queued job cost a
   full invocation. The default is now `batchSize: 10` with a new
   `maxBatchingWindowSeconds` option (0–300, default 5) that trades latency for
   fuller batches. SQS partial batch failure reporting is always enabled, so only
   the failed records of a batch are redelivered.
-  
+
   Both options are now range-checked in the `AsyncJob` constructor, so an
   out-of-range value fails fast at synth time with `InvalidOptionException` naming
   the option instead of surfacing as an opaque CloudFormation error mid-deploy:
   `batchSize` must be 1–10 without a batching window (1–10000 with one), and
   `maxBatchingWindowSeconds` must be 0–300.
-  
+
   Retry semantics are unchanged. SQS tracks `ApproximateReceiveCount` per message
   and partial batch responses redeliver only failed records, so `maxRetries` still
   means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
   meaning at any batch size.
-  
+
   This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
   this repo's signal for a breaking change; this change is not breaking — the new
   default is a behavior change with an opt-out (`batchSize: 1` /
   `maxBatchingWindowSeconds: 0`), and both options are new and optional. The
   umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
   `AsyncJob` and `AsyncJobOptions`.
-  
+
   `@aws-blocks/core/cdk` now exports `SHARED_HANDLER_TIMEOUT_SECONDS`, the shared
   handler Lambda's timeout, so resources that must size their own timeouts against
   it stop re-hardcoding `900`.
-  
+
   The main queue's visibility timeout is now `SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds`
   seconds instead of a flat `900`. A message becomes invisible when the poller
   receives it, before the batching window elapses and before the handler runs, so
   a flat 900s let SQS redeliver a message whose invocation was still running.
-  
+
   `bb-agent` opts out of the new defaults with `batchSize: 1` and
   `maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent
   turn (plus a second on HITL resume) and the caller is blocked on that job
@@ -1582,8 +2088,9 @@
   others, which matters because the handler is not idempotent. Both the runtime
   and CDK construction sites set the same options so they synthesize an identical
   event source mapping.
+
 - ca8cfb6: feat(bb-async-job): submitBatch auto-chunks batches larger than SQS limits
-  
+
   `submitBatch` previously rejected any batch over 10 payloads with
   `BatchTooLarge`, so a caller with more than 10 jobs had to reimplement SQS's
   chunking rules by hand. It now accepts up to 10,000 payloads and packs them
@@ -1595,7 +2102,7 @@
   `getStatus()` / `waitUntilComplete()` look up. `BatchTooLarge` is now thrown
   only when a batch exceeds the 10,000-payload soft cap — a guardrail against a
   single call fanning out to an unbounded number of SQS requests.
-  
+
   A batch spanning multiple chunks is **not atomic**: an earlier chunk can land
   before a later one fails. The all-or-nothing signal is unchanged — a partial
   failure still throws `BatchSubmitFailed` — but the thrown error (now a typed
@@ -1609,36 +2116,37 @@
   short-circuits the chunks not yet started (`code: 'BatchSubmitAborted'`) instead
   of hammering an unhealthy endpoint. An entry SQS returns in neither list becomes
   a `MissingResult` failure so a `null` id never escapes as a success.
-  
+
   On full success the `trackStatus` write is now best-effort — a failure recording
   `queued` (e.g. DynamoDB throttling on a large fan-out) is logged rather than
   thrown, since the handler backfills the record anyway; otherwise a bookkeeping
   error would make a caller re-submit an already-enqueued batch. `recordQueuedBatch`
   also issues its conditional writes in groups of 25 (mirroring `BatchWriteItem`)
   rather than one unbounded `Promise.all`.
-  
+
   The mock runtime submits one message at a time and never partially fails, so the
   transport/abort paths are AWS-only; it enforces the same soft cap and validates
   every payload before enqueuing any, matching the AWS runtime.
-  
+
   This is a `patch` bump: pre-1.0, this repo uses `minor` to signal a breaking
   change, and this is not breaking — a batch of ≤10 behaves exactly as before, no
   public type changed (`BatchSubmitFailedError` is additive), and the previous
   `BatchTooLarge` threshold simply moved from 10 to 10,000. `@aws-blocks/blocks`
   gets the same bump because it re-exports `AsyncJob`.
+
 - f00adb0: feat(core): resolve `Scope.compute`; the default compute owns the handler + gateway
-  
+
   Add a `Scope.compute` getter that resolves the compute a block runs on: the
   nearest `_compute` assigned on the block or an ancestor scope, else the owning
   stack/backend's default compute.
-  
+
   The default is a `LambdaCompute` that now **owns** the Lambda function + API
   Gateway. `setupBlocksInfra` no longer creates them; `BlocksStack` /
   `BlocksBackend` expose `handler` / `gateway` / `apiUrl` as getters that delegate
   to the default compute. The compute is created in `create()` before the backend
   module is imported, so a block reading `this.compute` in its constructor
   resolves to it. `_compute` is internal (no public option yet).
-  
+
   Core no longer imports a concrete compute: `create()` requires a
   `defaultComputeFactory` on its props (`CoreBlocksStackProps` /
   `CoreBlocksBackendProps` — the public `BlocksStackProps` / `BlocksBackendProps`
@@ -1646,7 +2154,7 @@
   `@aws-blocks/blocks` supplies `LambdaCompute` by spreading the factory onto the
   props in a thin `create()` wrapper, so apps built on `@aws-blocks/blocks` are
   unaffected — their call site is unchanged.
-  
+
   **Breaking (direct `@aws-blocks/core` consumers only):** core no longer provides
   a built-in default compute. `BlocksStack.create()` / `BlocksBackend.create()`
   now require a `defaultComputeFactory` field on the props (typed
@@ -1654,14 +2162,14 @@
   type-check (and it throws at synth if forced). This break is inherent to moving
   the Lambda + API Gateway out of core — it is not specific to how the factory is
   passed. Migrate by either:
-  
+
   - using `@aws-blocks/blocks` (`import { BlocksStack } from '@aws-blocks/blocks/cdk'`),
     which injects a Lambda default for you — the recommended path; or
   - supplying your own factory on the props:
     `BlocksStack.create(scope, id, { ...props, defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute') })`,
     which requires depending on `@aws-blocks/bb-lambda-compute` and the internal
     `@aws-blocks/core/cdk/internal` types.
-  
+
   **Resource replacement on redeploy:** because the Lambda function and API
   Gateway now live under the default compute's construct path
   (`.../DefaultCompute/...`), their CloudFormation logical IDs change, so a
@@ -1671,27 +2179,32 @@
   current API Gateway URL (this repo carries a Gen2 nested-stack regression test,
   so Gen2 integration is real) — should confirm they can absorb a URL change
   before upgrading.
+
 - de4f209: `KnowledgeBase.retrieve`: validate `maxResults` consistently across the mock and AWS runtimes.
-  
+
   `maxResults` was normalized with `Math.min(Math.max(v ?? 10, 1), 100)`, which silently passed fractional and non-finite values (`1.5`, `NaN`, `Infinity`) straight through — the mock and the AWS `RetrieveCommand` then diverged, and Bedrock rejects a non-integer `numberOfResults`. A new shared `normalizeMaxResults` helper (used by both runtimes) keeps the documented clamp for finite integers and now rejects fractional/non-finite values up front with `KnowledgeBaseErrors.ValidationError`, before any search or Bedrock request.
-  
+
   Fixes #430.
+
 - f00adb0: `LambdaCompute`: default the function to **arm64 (AWS Graviton)**.
-  
+
   The compute's Lambda now defaults to `Architecture.ARM_64` instead of CDK's `x86_64` default. arm64 Lambda is ~20% cheaper per GB-second than x86_64 at equivalent performance. Because `LambdaCompute` is the default compute for every `@aws-blocks/blocks` app, the shared handler runs on Graviton out of the box.
-  
+
   The framework's own Building Blocks are pure-JavaScript esbuild bundles with no architecture-specific native code, so the switch is transparent for them. A backend `entry` bundle is the customer's own handler plus whatever they import, though — so an app that bundles an **x86-only native dependency** into its backend should be aware of the default. There is no per-app override yet; a customer-facing way to pin the architecture (`architecture` on `LambdaComputeProps` is present but internal for now) will be exposed alongside the public compute-configuration surface.
-  
+
   > **Behavior change on next deploy:** the handler function's architecture is `arm64` (an in-place update on an existing function).
+
 - 27346f3: Make AuthOIDC `requireAuth()` throw `ApiError(401, NotAuthenticatedException)` so the documented `handle401()` 401-redirect pattern works for a signed-out protected call.
-  
+
   Previously `requireAuth()` threw a bare `Error` with no `status`. Over the JSON-RPC boundary `errorResponseFromCatch` serializes a non-`ApiError` as code `500`, so the client received an `ApiError` with `status === 500`. The README's `if (handle401(e, provider)) return;` helper only acts on `err instanceof ApiError && err.status === 401`, so it never matched and the app never redirected to sign-in — the error just surfaced. This aligns AuthOIDC with AuthCognito, whose `requireAuth()` already throws `ApiError(401, …)`. The error name is preserved, so existing `isBlocksError(e, AuthOIDCErrors.NotAuthenticated)` checks are unaffected.
+
 - 5bfae0a: Reject oversized JSON-RPC request bodies at the shared parser. `parseRpcRequest` now caps the body at 10 MiB (`MAX_RPC_BODY_BYTES`, the same limit API Gateway enforces in production) and returns a `413` error named `PayloadTooLarge` before parsing or dispatch. In production API Gateway rejects an oversized body at the edge before the Lambda runs; enforcing the same limit at the parser means the local dev server rejects the same body instead of buffering it and wedging the local database (e.g. PGlite). Because both the Lambda handler and the dev server route through this one parser, the cap lives in a single place, and `decodeRpcResponse` surfaces it client-side as `ApiError.status === 413`.
 - 0ac3879: `sandbox` / `deploy`: fail fast with an actionable message when AWS credentials are missing or expired.
-  
+
   Both commands previously spent ~10 seconds synthesizing the CDK app before the first AWS call, so an unconfigured or expired credential surfaced only afterwards — as an opaque CDK/CloudFormation error that didn't name the real cause. `startSandbox` and `deploy` now run a bounded STS `GetCallerIdentity` check up front and, on a real credential error (missing/expired/invalid), exit immediately with guidance (`aws configure` / `aws sso login`, `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) instead of wasting the synth.
-  
-  The check is deliberately conservative: it only blocks on a genuine credential error (surfacing the SDK error *name*, never the raw message, which can embed an ARN/account id); a network or service error warns and lets the deploy proceed; and it skips (with a warning) when no region is set in `AWS_REGION` / `AWS_DEFAULT_REGION`, rather than guessing a region in the wrong partition (GovCloud/China). The scaffolded `sandbox` template entrypoint now `.catch`es and exits cleanly, matching `deploy`, so the guidance prints without an unhandled-rejection stack trace.
+
+  The check is deliberately conservative: it only blocks on a genuine credential error (surfacing the SDK error _name_, never the raw message, which can embed an ARN/account id); a network or service error warns and lets the deploy proceed; and it skips (with a warning) when no region is set in `AWS_REGION` / `AWS_DEFAULT_REGION`, rather than guessing a region in the wrong partition (GovCloud/China). The scaffolded `sandbox` template entrypoint now `.catch`es and exits cleanly, matching `deploy`, so the guidance prints without an unhandled-rejection stack trace.
+
 - Updated dependencies [1ff9d03]
 - Updated dependencies [5798492]
 - Updated dependencies [ca8cfb6]
@@ -1737,19 +2250,20 @@
 ### Patch Changes
 
 - 448a47c: fix(bb-lambda-compute): add package metadata, prebuild, and pin dependency ranges
-  
+
   Bring `@aws-blocks/bb-lambda-compute`'s package.json in line with its siblings:
-  
+
   - add the `repository` / `homepage` / `bugs` blocks. Without `repository.url`,
     provenance publishing fails with `E422 … "repository.url" is ""` because npm
     cannot match the package against the sigstore attestation's source repo;
   - add the `prebuild` version-generation script (`generate-version.mjs`);
   - pin `@aws-blocks/core` to `^0.2.0` instead of `*`, matching every other
     package.
-  
+
   Also pin the umbrella `@aws-blocks/blocks`'s dependency on
   `@aws-blocks/bb-lambda-compute` to `^0.2.0` instead of `*`, now that the package
   publishes a real version.
+
 - Updated dependencies [448a47c]
   - @aws-blocks/bb-lambda-compute@0.2.1
 
@@ -1758,35 +2272,35 @@
 ### Minor Changes
 
 - 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
-  
+
   `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
-  
+
   Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
-  
+
   The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
-  
+
   **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
 
 ### Patch Changes
 
 - 6df9e2d: fix(data): declare the `data-common` TypeScript project reference in `bb-data` and `bb-distributed-data`
-  
+
   Both packages depend on `@aws-blocks/data-common` in `package.json`, but neither
   listed it in its `tsconfig.json` `references`. Because `src/` ships in these
   tarballs, `data-common`'s declarations have to already exist for the compiler to
   resolve `@aws-blocks/data-common` — and nothing in the project-reference graph
   guaranteed that.
-  
+
   Correct build order was therefore supplied by the position of `data-common` in
   the root `workspaces` array (index 8, ahead of `bb-data` at 10 and
   `bb-distributed-data` at 11) rather than by the dependency graph. Any build that
   does not follow that array order fails with:
-  
+
   ```
   packages/bb-distributed-data/src/validation.ts(12,54): error TS2307:
     Cannot find module '@aws-blocks/data-common' or its corresponding type declarations.
   ```
-  
+
   That was already reachable from the repo's own scripts: the former
   `npm run build:packages` resolved its `-w` targets in a different order and hit
   exactly this, which is why `scripts/agent-bench/steps/1-init-bench-app.sh`
@@ -1794,12 +2308,13 @@
   bb-data". Adding the two missing references fixes the root cause, so build order
   now comes from the project-reference graph rather than from the ordering of the
   root `workspaces` array.
-  
+
   No API, runtime, or packaged-output change — `tsconfig.json` is not in either
   package's `files`, so the published tarballs are unchanged.
+
 - 3614a09: Stop `import.meta.url` from crashing the deployed Lambda. The backend handler is bundled to CommonJS, where `import.meta` is empty, so `fileURLToPath(import.meta.url)` in a handler, a Building Block's `aws-runtime` code, or a dependency became `fileURLToPath(undefined)` and threw at Lambda load (every request 502'd). esbuild only warned, so the broken bundle deployed. The handler bundling now shims `import.meta.url` / `import.meta.dirname` / `import.meta.filename` to their CommonJS equivalents (`pathToFileURL(__filename)`, `__dirname`, `__filename`) — the approach esbuild blesses and Rollup applies by default — so the bundle loads cleanly and a dependency that merely contains `import.meta` no longer trips a build failure. Exposes `blocksNodejsBundling()` from `@aws-blocks/core/cdk` (re-exported by `@aws-blocks/blocks`) so every framework `NodejsFunction` gets the same treatment. Note: inside the bundle these resolve to the bundled output location, not your source tree.
 - edbf1aa: fix(bb-knowledge-base): disable `installLatestAwsSdk` on the ingestion custom resource
-  
+
   The `StartIngestion` `AwsCustomResource` left `installLatestAwsSdk` at its default
   (`true`), so the provider Lambda ran an `npm install` of the AWS SDK on every
   invocation before it could call the API. That costs roughly 15-30s of extra cold
@@ -1807,47 +2322,51 @@
   reduction is only realized once every `AwsCustomResource` in the stack opts out —
   the provider is a stack-level singleton and its `memorySize` is resolved once at
   synth. The per-resource cold-start saving applies regardless.
-  
+
   Nothing needed it. The resource calls `BedrockAgent.startIngestionJob`, a stable
   API already bundled in the Lambda runtime's AWS SDK v3, so the bundled client is
   sufficient and the install is pure overhead. Setting `installLatestAwsSdk: false`
   also silences CDK's `installLatestAwsSdkNotSpecified` synth-time warning for this
   construct.
-  
+
   The tradeoff being accepted: the provider now uses whichever SDK v3 the Lambda
   runtime bundles at deploy time rather than installing the newest one. That is safe
   here because `startIngestionJob` is a foundational Bedrock Agent operation present
   since the client's initial release, not a recent addition.
-  
+
   Internal construct wiring only — no public API change. The synthesized
   `Custom::AWS` resource now renders `InstallLatestAwsSdk: false`.
-  
+
   Upgrade note: because `InstallLatestAwsSdk` renders as a property on the
   `Custom::AWS` resource while the `physicalResourceId` stays stable, the first
-  deploy after upgrading is a CloudFormation *Update* and fires `onUpdate` — so one
+  deploy after upgrading is a CloudFormation _Update_ and fires `onUpdate` — so one
   `startIngestionJob` kicks off. This is harmless (ingestion is idempotent and
   fire-and-forget), but expect to see an ingestion start right after upgrading.
+
 - 5262062: feat: extract `LambdaCompute` into `@aws-blocks/bb-lambda-compute`
-  
+
   The abstract `Compute` base stays in core as a framework primitive; the concrete
   `LambdaCompute` (a `NodejsFunction` fronted by its own API Gateway, assuming the
   shared execution role) moves into a new package, `@aws-blocks/bb-lambda-compute`.
-  
+
   The package is CDK-only and its sole export is internal — customers cannot
   instantiate a compute yet. Nothing in the default path constructs it, so this is
   additive and non-breaking.
+
 - bfb9a63: Polish the PGlite init-retry helper (`data-common`) following #205 review:
-  
+
   - Narrow the WASM-trap classifier to specific signatures (`RuntimeError: unreachable`, `wasm trap: unreachable`, Emscripten `Aborted(<reason>)`) instead of matching the bare word `unreachable`, so an unrelated probe failure whose text/stack merely contains "unreachable" (e.g. an `assertUnreachable` helper) is no longer misclassified as retryable. The `Aborted(` prefix (not just the empty `Aborted()`) is matched so memory-pressure aborts like `Aborted(Cannot enlarge memory arrays)` / `Aborted(OOM)` — the case this retry exists for — are caught. A `RuntimeError`-named error whose message contains `unreachable` is also treated as a trap, so the real V8/Node trap (message is literally `"unreachable"`, prefix only in the stack) is caught without depending on the stack surviving.
   - Classify retryability BEFORE consulting the attempt budget in `initializePgliteWithRetry`, so instance cleanup is uniform (a non-retryable error is always rethrown untouched) and `maxAttempts === 1` no longer closes the instance on a non-trap failure.
   - Guard `maxAttempts` against `NaN` (which `?? 3` does not default), preventing an unbounded close/recreate loop on a persistent trap.
   - Wrap a `recreate()` failure so the original init trap is preserved as the error `cause`, keeping debugging pointed at "PGlite kept trapping" rather than only the secondary recreate error.
   - Mark the four init-retry exports (`initializePgliteWithRetry`, `isPgliteUnreachableTrap`, `PgliteLike`, `PgliteInitRetryOptions`) `@internal` — they exist only so the engine packages can share the helper — and document the `PgliteLike` methods.
+
 - e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
-  
+
   PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+
 - 8966cfb: fix(telemetry): detect Render and Taskcluster as CI
-  
+
   Telemetry CI detection (`isCI()`) checked a fixed list of CI env vars but
   omitted Render and Taskcluster. Render sets `RENDER=true` on every build and
   service; Taskcluster tasks always set the namespaced `TASKCLUSTER_ROOT_URL`.
@@ -1856,6 +2375,7 @@
   now included in both `isCI()` implementations (`@aws-blocks/core` and
   `@aws-blocks/create-blocks-app`). The umbrella `@aws-blocks/blocks` gets a patch
   bump because it re-exports `@aws-blocks/core`.
+
 - Updated dependencies [7b4c62d]
 - Updated dependencies [5262062]
 - Updated dependencies [6df9e2d]

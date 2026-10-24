@@ -1,41 +1,108 @@
 # @aws-blocks/bb-auth-cognito
 
+## 0.1.13
+
+### Patch Changes
+
+- 943d405: fix: error constants can be imported in frontend code
+
+  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
+  package's `browser` entry. Some of those imports failed the frontend build:
+
+  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
+    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
+    `@aws-blocks/bb-logger`. They are now exported.
+  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
+    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
+    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
+  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
+    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
+    server's constants instead of keeping their own copies.
+  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
+    server build and failed to bundle. It now has one.
+
+  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
+  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- Updated dependencies [1076ccc]
+- Updated dependencies [aaa90b6]
+- Updated dependencies [33edca2]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [943d405]
+- Updated dependencies [a3969b5]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [72e3259]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [f704a68]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/auth-common@0.3.0
+  - @aws-blocks/bb-app-setting@0.3.3
+  - @aws-blocks/bb-logger@0.2.3
+  - @aws-blocks/bb-kv-store@0.3.2
+
 ## 0.1.12
 
 ### Patch Changes
 
 - 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
-  
+
   Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
   so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
   the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
   export:
-  
+
   - `@aws-blocks/bb-agent`: `InterruptError`
   - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
   - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
     session lifetime is configured.
   - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
-  
+
   `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
   test now also checks every Building Block's `cdk` entry.
+
 - 66f4be2: BREAKING: remove `BlocksStack.handler`, `BlocksBackend.handler`, and `Scope.handler`.
-  
+
   These returned the default compute's Lambda function, so anything wired through them reached only that one function — not every compute an app runs on. Use the stack-wide equivalents instead, which reach every compute:
-  
-  | Before | After |
-  |---|---|
-  | `blocksStack.handler.addEnvironment('KEY', value)` | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
-  | `resource.grantRead(blocksStack.handler)` | `resource.grantRead(blocksStack.executionRole)` |
-  | `blocksStack.handler.addToRolePolicy(statement)` | `blocksStack.executionRole.addToPrincipalPolicy(statement)` |
-  | `this.handler` inside a custom Building Block | `this.executionRole` / `registerConfig(this, …)` |
-  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }` |
-  
+
+  | Before                                              | After                                                                                                                                         |
+  | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `blocksStack.handler.addEnvironment('KEY', value)`  | `registerConfig(blocksStack, 'KEY', value)` — loaded into `process.env` on every compute at cold start, before the backend module is imported |
+  | `resource.grantRead(blocksStack.handler)`           | `resource.grantRead(blocksStack.executionRole)`                                                                                               |
+  | `blocksStack.handler.addToRolePolicy(statement)`    | `blocksStack.executionRole.addToPrincipalPolicy(statement)`                                                                                   |
+  | `this.handler` inside a custom Building Block       | `this.executionRole` / `registerConfig(this, …)`                                                                                              |
+  | `handler.addEnvironment('CORS_ALLOWED_ORIGINS', …)` | `defaults: { ...BlocksPresets.production, allowedOrigins: [...] }`                                                                            |
+
   `registerConfig` and `executionRole` are exported from `@aws-blocks/blocks/cdk` (and `@aws-blocks/core/cdk`).
-  
+
   **Precedence differs from `addEnvironment`.** `addEnvironment` wrote a real Lambda environment variable, so the last call won. `registerConfig` entries are loaded at cold start only into keys that aren't already set, so a real environment variable of the same name always wins — for example one the framework sets itself (`NODE_ENV`, `BLOCKS_STACK_NAME`) or one set on the function outside CDK. When that happens with a different value, the compute now logs a warning at cold start naming the ignored keys (names only, never values).
-  
+
   `registerConfig` can be called from app code after `BlocksStack.create()` / `BlocksBackend.create()` resolves. This already worked for every stack, because the framework always registers config of its own; finalize now creates the config deployment unconditionally, so it no longer depends on that.
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [e682ba7]
 - Updated dependencies [e7e96e6]
@@ -78,24 +145,25 @@
 ### Patch Changes
 
 - bd9a1b8: fix(bb-auth-cognito): stop leaking raw Cognito SDK text in ApiError wire messages
-  
+
   Cognito SDK failures are now translated to a BB-authored message keyed on the exception name; the raw SDK error stays on the non-enumerable `cause`. Error `name`, HTTP status, and `retriable` are unchanged. `auth.admin.scan()` now translates SDK failures the same way as every other admin method.
+
 - 2e72825: fix(bb-auth-cognito): `requireRole` reads group membership live so admin group changes take effect without a re-login
-  
+
   `requireRole` checked the signed-in user's `cognito:groups` **token claim**, which
   is a snapshot from sign-in. After an admin ran `auth.admin.addUserToGroup(user,
-  'admins')`, that user's live session kept getting **403** until their token
+'admins')`, that user's live session kept getting **403** until their token
   refreshed or they re-logged in — the "admin surface is unreachable / `requireRole`
   returns 403 for everyone" symptom. The mirror bug: `removeUserFromGroup` did **not**
   revoke a live session, so a removed member kept access until their stale token
   expired.
-  
+
   `requireRole` now reads membership live at call time — AWS: `AdminListGroupsForUser`
   (paginated); mock: in-process `state.groups` — mirroring how `fetchUserAttributes`
   reads live rather than trusting the token. The returned `CognitoUser.groups`
   reflects the live read. Grants and revocations now apply on the user's next
   request, with no re-login.
-  
+
   - Costs one extra Cognito call per guarded request. The cheaper identity reads
     (`requireAuth` / `getCurrentUser` / `signIn`) still surface the cached
     `cognito:groups` claim — use `requireRole` when you need live membership.
@@ -105,9 +173,10 @@
   - Added `admin.test.ts` cases covering the sign-in-then-mutate ordering in both
     directions (grant is honored, revocation locks out); updated the CDK IAM
     least-privilege test for the new baseline grant.
+
 - 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
 - 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-  
+
   Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
   request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
   dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
@@ -116,6 +185,7 @@
   so native attribution rides the SDK user-agent chain AWS service telemetry already
   counts. The Kotlin runtime already sends the header, so Kotlin
   callers are attributed as soon as this ships; Swift and Dart follow.
+
 - Updated dependencies [4456fd7]
 - Updated dependencies [fac0e75]
 - Updated dependencies [0e18d5b]
@@ -143,17 +213,18 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -162,19 +233,20 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - Updated dependencies [7b86b8e]
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
@@ -203,10 +275,11 @@
 
 - 585feea: Document AuthCognito setAuthState error-state semantics, including retriable challenge failures and CodeMismatch handling.
 - 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
-  
+
   Test-only change: both packages' CDK tests were updated to call
   `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
   signature. No runtime or public API change.
+
 - Updated dependencies [df667c5]
 - Updated dependencies [df667c5]
 - Updated dependencies [64ddd74]
@@ -228,17 +301,18 @@
 ### Patch Changes
 
 - 309a236: refactor(bb): attach IAM grants to the shared execution role
-  
+
   Data and auth blocks now grant permissions to the shared Blocks execution role
   (`this.executionRole`) instead of the handler function directly. Grants land on
   the same role the handler assumes, so the effective runtime permissions are
   identical — this decouples IAM wiring from the concrete Lambda function ahead of
   the multi-compute model.
-  
+
   For `bb-distributed-data`, the DSQL endpoint and region now flow through the
   config registry (loaded into `process.env` at cold start, like every other
   block) rather than being set as direct handler environment variables, and the
   migration Lambda maps the shared execution role's ARN.
+
 - Updated dependencies [1ff9d03]
 - Updated dependencies [5798492]
 - Updated dependencies [f00adb0]

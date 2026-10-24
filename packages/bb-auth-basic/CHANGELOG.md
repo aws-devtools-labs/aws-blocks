@@ -1,11 +1,140 @@
 # @aws-blocks/bb-auth-basic
 
+## 0.2.0
+
+### Minor Changes
+
+- aaa90b6: AuthBasic now revokes the session token server-side on sign-out. Each session
+  JWT carries a unique `jti`; `signOut` records that id on a revocation list (in
+  the existing codes store, expiring with the token) so a replayed cookie is
+  rejected even though the JWT is still unexpired and signature-valid. The
+  umbrella `@aws-blocks/blocks` is bumped because the bundled `bb-auth-basic`
+  README/DESIGN docs it mirrors have changed.
+
+  This is a `minor` (not `patch`) bump because it adds exported error constants —
+  `AuthBasicErrors.SessionRevoked` (`SessionRevokedException`, thrown by
+  `requireAuth` for a signed-out/revoked session, vs `SessionExpiredException` for
+  an absent/aged-out one) and `AuthBasicErrors.SignOutIncomplete`
+  (`SignOutIncompleteException`, 503, thrown when the revocation write fails) —
+  and documents a new throwable name on the shared `BlocksAuth.requireAuth`
+  contract in `@aws-blocks/auth-common`.
+
+  `signOut` always clears the local cookie (so sign-out on this device never
+  leaves the user stuck signed in), even when the server-side revocation write
+  fails; in that case it throws a stable `SignOutIncompleteException` rather than
+  the raw SDK error, so no `$metadata`/ARNs leak to the client.
+
+  Legacy-surface behavior change: the deprecated `buildApi().signOut` previously
+  always resolved to `{ success: true }`; it now awaits `signOut` and so can
+  reject with `SignOutIncompleteException` (503) when the revocation write fails.
+  Only direct `buildApi` callers are affected — the `createApi()` state machine
+  catches it into the `AuthState.error` field.
+
+  Operator note: the `codes` store gains `{ ttl: true }`. For an already-deployed
+  AuthBasic app this is an in-place DynamoDB TimeToLive enablement (an `UpdateTable`)
+  on the next `cdk deploy` — no data migration, and correctness does not depend on
+  the reaper (reads filter expired items regardless). Caveat: DynamoDB rejects
+  another `UpdateTimeToLive` on the same table for ~1 hour after a change, so if an
+  unrelated resource fails in the same deploy, CloudFormation rollback (which
+  disables TTL) — or a deploy → rollback → redeploy within that hour — can land in
+  `UPDATE_ROLLBACK_FAILED`. Deploy AuthBasic apps with this in mind.
+
+- 72c8165: AuthBasic can now lock an account after too many consecutive failed sign-ins,
+  an opt-in defense against credential-stuffing and password brute-forcing (issue
+  #766). Pass the new `lockout` policy to enable it:
+
+  ```typescript
+  const auth = new AuthBasic(scope, "auth", {
+    lockout: { maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
+  });
+  ```
+
+  Failed attempts are counted **per username** in the existing `codes` store
+  (under a `lockout:<username>` key, with a TTL so counters self-reap and never
+  grow unbounded). Once `maxAttempts` consecutive failures accumulate within
+  `windowSeconds`, the account is locked for `lockoutSeconds`; the lock is
+  enforced at the **top of `signIn`**, before the user record is read or the
+  password compared, so a locked account sheds the bcrypt cost under attack and
+  exposes no timing oracle. A successful sign-in clears the counter.
+
+  This is a `minor` (not `patch`) bump because it adds the exported error constant
+  `AuthBasicErrors.AccountLocked` (`AccountLockedException`, 429, branded so the
+  name crosses the wire) and the new `lockout` option (`LockoutPolicy`) on
+  `AuthBasicOptions`. The error message is generic — it reveals neither the
+  username nor any SDK metadata — and `retriable` is left `false` (a lockout
+  requires waiting out the window, not an immediate retry).
+
+  Throttling is **disabled unless `lockout` is passed**, so existing apps are
+  unaffected. This is per-account credential-guess protection, complementary to —
+  not a replacement for — infrastructure-layer rate limiting (CloudFront WAF, API
+  Gateway throttling) for volumetric/DDoS protection.
+
+  Per-username counting (rather than per-IP) matches `AuthCognito`'s managed
+  lockout and avoids locking out a whole shared NAT/corporate egress on one user's
+  typos. The umbrella `@aws-blocks/blocks` is bumped because the bundled
+  `bb-auth-basic` README/DESIGN docs it mirrors have changed.
+
+### Patch Changes
+
+- 943d405: fix: error constants can be imported in frontend code
+
+  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
+  package's `browser` entry. Some of those imports failed the frontend build:
+
+  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
+    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
+    `@aws-blocks/bb-logger`. They are now exported.
+  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
+    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
+    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
+  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
+    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
+    server's constants instead of keeping their own copies.
+  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
+    server build and failed to bundle. It now has one.
+
+  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
+  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- Updated dependencies [1076ccc]
+- Updated dependencies [aaa90b6]
+- Updated dependencies [33edca2]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [943d405]
+- Updated dependencies [a3969b5]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [72e3259]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [f704a68]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/auth-common@0.3.0
+  - @aws-blocks/bb-app-setting@0.3.3
+  - @aws-blocks/bb-logger@0.2.3
+  - @aws-blocks/bb-kv-store@0.3.2
+
 ## 0.1.11
 
 ### Patch Changes
 
 - 59c9dde: docs(bb-auth-basic): add the frontend login-UI mount + gate seam
-  
+
   The Quick Start documented the backend (`createApi()`, `requireAuth`) but not
   the frontend half, so builders and agents provisioned `AuthBasic` and assumed a
   login UI would appear — nothing rendered, leaving every authenticated route
@@ -15,12 +144,13 @@
   session, with a pointer to the already-shipped testid contract
   (`authenticator-<field>` / `authenticator-action-<action>`) in
   `auth-common/CUSTOMIZING-AUTH-UI.md`.
-  
+
   Documentation only — no runtime or API change.
+
 - c20cbfd: docs(bb-agent,bb-auth-basic): document conversation naming and same-origin cookies under Hosting
-  
+
   Two documentation gaps a builder had to infer from source:
-  
+
   - **bb-agent — conversation records and naming.** The README now documents the
     `Conversation` shape returned by `listConversations()` and states that
     `createConversationId()` sets `name` to the conversation's UUID, that the
@@ -28,15 +158,16 @@
     become one), and that there is no public API to set or rename `name`. Builders
     who want a readable title should keep that mapping in their own data layer and
     treat `conversationId` as the stable key.
-  
+
   - **bb-auth-basic — same-origin cookies under the Hosting block.** The "Cookies
     and sessions" section now states plainly that serving the frontend through the
     Hosting block puts the static site and the API behind one CloudFront origin,
     so the deployed app is same-origin and the `SameSite=Lax` default works with
     `crossDomain` left at `false` — `crossDomain: true` is only for genuinely
     different registrable domains in production.
-  
+
   Documentation only — no runtime or API change.
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [e682ba7]
 - Updated dependencies [e7e96e6]
@@ -79,7 +210,7 @@
 ### Patch Changes
 
 - ea5f91c: fix(bb-auth-basic): echo the username on the confirm-signup / confirm-reset forms
-  
+
   AuthBasic's `confirmingSignUp` and `confirmingPasswordReset` states rendered
   `username` as an empty, visible text field — so after signing up (or requesting a
   reset) the user had to **retype** their username on the confirmation step, and a
@@ -87,6 +218,7 @@
   field prefilled with the value just entered (mirroring `bb-auth-cognito`), so the
   confirm form carries it automatically. The `code` / `password` / `newPassword`
   fields are unchanged.
+
 - 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
 - Updated dependencies [4456fd7]
 - Updated dependencies [fac0e75]
@@ -115,12 +247,13 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - Updated dependencies [7b86b8e]
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]

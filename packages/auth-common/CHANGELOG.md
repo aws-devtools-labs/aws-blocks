@@ -1,15 +1,91 @@
 # @aws-blocks/auth-common
 
+## 0.3.0
+
+### Minor Changes
+
+- aaa90b6: AuthBasic now revokes the session token server-side on sign-out. Each session
+  JWT carries a unique `jti`; `signOut` records that id on a revocation list (in
+  the existing codes store, expiring with the token) so a replayed cookie is
+  rejected even though the JWT is still unexpired and signature-valid. The
+  umbrella `@aws-blocks/blocks` is bumped because the bundled `bb-auth-basic`
+  README/DESIGN docs it mirrors have changed.
+
+  This is a `minor` (not `patch`) bump because it adds exported error constants —
+  `AuthBasicErrors.SessionRevoked` (`SessionRevokedException`, thrown by
+  `requireAuth` for a signed-out/revoked session, vs `SessionExpiredException` for
+  an absent/aged-out one) and `AuthBasicErrors.SignOutIncomplete`
+  (`SignOutIncompleteException`, 503, thrown when the revocation write fails) —
+  and documents a new throwable name on the shared `BlocksAuth.requireAuth`
+  contract in `@aws-blocks/auth-common`.
+
+  `signOut` always clears the local cookie (so sign-out on this device never
+  leaves the user stuck signed in), even when the server-side revocation write
+  fails; in that case it throws a stable `SignOutIncompleteException` rather than
+  the raw SDK error, so no `$metadata`/ARNs leak to the client.
+
+  Legacy-surface behavior change: the deprecated `buildApi().signOut` previously
+  always resolved to `{ success: true }`; it now awaits `signOut` and so can
+  reject with `SignOutIncompleteException` (503) when the revocation write fails.
+  Only direct `buildApi` callers are affected — the `createApi()` state machine
+  catches it into the `AuthState.error` field.
+
+  Operator note: the `codes` store gains `{ ttl: true }`. For an already-deployed
+  AuthBasic app this is an in-place DynamoDB TimeToLive enablement (an `UpdateTable`)
+  on the next `cdk deploy` — no data migration, and correctness does not depend on
+  the reaper (reads filter expired items regardless). Caveat: DynamoDB rejects
+  another `UpdateTimeToLive` on the same table for ~1 hour after a change, so if an
+  unrelated resource fails in the same deploy, CloudFormation rollback (which
+  disables TTL) — or a deploy → rollback → redeploy within that hour — can land in
+  `UPDATE_ROLLBACK_FAILED`. Deploy AuthBasic apps with this in mind.
+
+- f704a68: feat(auth-common): add the `StatusMessage` UI primitive
+
+  Adds `StatusMessage` to `@aws-blocks/auth-common/ui` (re-exported from `@aws-blocks/blocks/ui`) — a themed, accessible status line for the loading / success / error affordance the starter templates otherwise hand-roll with inline styles.
+
+  - `StatusMessage(options?)` returns a `StatusMessageHandle` (`{ element, set }`): mount `element`, then drive it with `set(kind, text)` as an async operation progresses.
+  - Four lifecycle states (`StatusKind`): `idle` (muted), `loading` (muted + spinner), `success` (green), `error` (red) — all driven by the existing `--bb-*` semantic tokens, so the message matches the active light/dark theme.
+  - The root is a polite ARIA live region (`role="status"`, `aria-live="polite"`); the `loading` spinner is decorative (`aria-hidden`) and holds still under `prefers-reduced-motion`.
+  - Adds the `.bb-status*` / `.bb-spinner` classes and a reduced-motion-aware `bb-spin` keyframe to the shared theme CSS.
+  - The `auth-cognito` template now renders its status lines through `StatusMessage` instead of a hand-built classed span.
+
+  No breaking changes — purely additive.
+
+### Patch Changes
+
+- 33edca2: Add `submitAuthAction(api, input)` — a browser-only helper that calls `setAuthState` and then drives the local auth notification so `onAuthChange` subscribers and `AuthenticatedContent` re-render on a real signed-in/signed-out transition. This closes the `setAuthState` → `onAuthChange` reactivity gap where a custom auth UI stayed stale unless it also called `broadcastAuthChange` by hand. The framework's own `Authenticator` now routes every action through `submitAuthAction` as the single notifier, so there is no double-fire; challenge/retriable states are not broadcast. Fixes #185.
+- d366907: chore: manual dependency bump (2026-10-19)
+- Updated dependencies [1076ccc]
+- Updated dependencies [50b8c94]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [9a32674]
+- Updated dependencies [8c73a24]
+- Updated dependencies [4553866]
+- Updated dependencies [d366907]
+- Updated dependencies [d062eeb]
+- Updated dependencies [63b154f]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [72e3259]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+  - @aws-blocks/core@0.8.0
+
 ## 0.2.0
 
 ### Minor Changes
 
 - 8ca3692: feat: shared, framework-neutral `ui-theme` design-token layer
-  
+
   Introduce a design-token layer for the Blocks UI so the shared Auth
   components and the starter templates share one consistent, polished look
   with no new runtime framework dependency.
-  
+
   - `@aws-blocks/auth-common` ships a new theme module: CSS custom
     properties (`--bb-*` for color, spacing, radius, typography, elevation)
     on `:root`, a light and dark palette driven by `prefers-color-scheme`
@@ -38,11 +114,11 @@
     the token `<style>` so a dark-mode user never sees a white flash before
     the bundle runs. A `--bb-color-success` token keeps success messages
     from reading as accent blue.
-  
+
   Focus states use a real `outline` ring (preserved under forced-colors /
   Windows high-contrast mode) rather than an `outline: none` + `box-shadow`
   ring, which such modes drop.
-  
+
   Additive and non-breaking.
 
 ### Patch Changes
@@ -82,13 +158,14 @@
 
 - 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
 - fac0e75: fix(auth-common): Enter submits the Authenticator form from any field, not just the last
-  
+
   The rendered auth form isn't a native `<form>`, so submit-on-Enter is wired
-  explicitly — but the handler was bound only to the *last* visible input. In any
+  explicitly — but the handler was bound only to the _last_ visible input. In any
   multi-field form, pressing Enter in an earlier field did nothing: the username in
   a username+password sign-in, or the verification code in a code+newPassword
   confirm-reset form. Enter now submits from every visible field, matching native
   form behavior.
+
 - Updated dependencies [5501cb6]
 - Updated dependencies [b58f248]
 - Updated dependencies [39628cb]
@@ -107,12 +184,13 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
 - Updated dependencies [9aa0814]
