@@ -7,7 +7,7 @@
   "type": "module",
   "description": "Smoke test verifying container-backed Compute + AsyncJob work in a VPC",
   "scripts": {
-    "test": "echo 'Compute smoke tests run during e2e:sandbox:compute and e2e:production:compute'",
+    "test": "node --import tsx --test test/endpoints-template.test.ts",
     "test:e2e:local": "BLOCKS_TEST_ENV=local tsx -C browser test/compute-smoke.test.ts",
     "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox tsx -C browser test/compute-smoke.test.ts",
     "test:e2e:production": "BLOCKS_TEST_ENV=production tsx -C browser test/compute-smoke.test.ts"
