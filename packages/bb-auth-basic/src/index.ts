@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError, isBlocksError } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 import { buildCookieSecurityAttrs, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
@@ -147,6 +147,17 @@ interface UserRecord {
 const CODE_TTL = 600; // 10 minutes
 
 /**
+ * Maximum number of failed verification attempts allowed for a single
+ * verification code before it is invalidated. A 6-digit code (~19.8 bits) is
+ * exhaustively guessable within its {@link CODE_TTL} lifetime at any reasonable
+ * request rate, so the attempt cap — not the code entropy — is what bounds a
+ * brute-force reset/sign-up confirmation. Always on (not gated behind the
+ * opt-in sign-in `lockout` policy): unlimited OTP guesses is a flat security
+ * hole regardless of sign-in-throttling configuration.
+ */
+const MAX_CODE_ATTEMPTS = 5;
+
+/**
  * bcrypt cost factor. 12 is a sensible default aligned with current OWASP
  * guidance; raise it for higher-value credentials.
  */
@@ -278,28 +289,121 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		// Reap abandoned sign-up/reset codes via the store's TTL: the DynamoDB row
 		// self-expires at the code's own expiry, so unused codes don't pile up.
 		const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL;
-		await this.codes.put(`${purpose}:${username}`, JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000 }), {
-			expiresAt,
-		});
+		await this.codes.put(
+			`${purpose}:${username}`,
+			JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000, attempts: 0 }),
+			{ expiresAt },
+		);
 		return code;
 	}
 
 	private async verifyCode(purpose: string, username: string, code: string): Promise<void> {
-		const raw = await this.codes.get(`${purpose}:${username}`);
+		const key = `${purpose}:${username}`;
+		const raw = await this.codes.get(key);
 		if (!raw) {
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		const { hmac, expires } = JSON.parse(raw) as { hmac: string; expires: number };
-		if (Date.now() > expires) {
-			await this.codes.delete(`${purpose}:${username}`);
+		// `attempts` counts failed guesses so far; legacy rows written before
+		// attempt-limiting default to 0.
+		const { hmac, expires, attempts = 0 } = JSON.parse(raw) as {
+			hmac: string;
+			expires: number;
+			attempts?: number;
+		};
+		if (Date.now() > expires || attempts >= MAX_CODE_ATTEMPTS) {
+			// Expired, or the cap is already spent. Delete only if the row is still
+			// exactly what we read, so a concurrent fresh issuance isn't clobbered.
+			await this.deleteCodeIfUnchanged(key, raw);
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
+
+		// RESERVE the attempt before evaluating the guess, with a compare-and-swap
+		// on the exact row we read (`ifValueEquals: raw`). This is what makes the
+		// cap hold under concurrency: in a parallel burst every request reads the
+		// same row, but only ONE CAS write per `attempts` value can win — the losers
+		// get ConditionalCheckFailed and are rejected WITHOUT their guess being
+		// evaluated, so they consume no budget and leak nothing. A plain
+		// read-modify-write would instead let the whole burst read `attempts` and
+		// each write back the same `attempts + 1`, advancing the counter once per
+		// burst rather than once per guess (slack scaling with attacker
+		// parallelism). The same CAS runs across Lambda instances on one DynamoDB
+		// row. `ifValueEquals` compares the serialized value, so the guard MUST be
+		// the original `raw` string, never a re-stringified object (key order).
+		const reserved = JSON.stringify({ hmac, expires, attempts: attempts + 1 });
+		try {
+			await this.codes.put(key, reserved, {
+				ifValueEquals: raw,
+				expiresAt: Math.floor(expires / 1000),
+			});
+		} catch (e) {
+			// Lost the race (another guess advanced or consumed the row first): the
+			// guess was never evaluated, so reject it exactly like a wrong code.
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) {
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			throw e;
+		}
+
 		const secret = await this.getSecret();
 		const expected = crypto.createHmac('sha256', secret).update(`${purpose}:${username}:${code}`).digest('hex');
 		if (!constantTimeEquals(hmac, expected)) {
+			// Wrong guess, attempt already reserved above. The row stays at the
+			// incremented count until the cap is reached, at which point the next
+			// attempt is rejected by the `attempts >= MAX_CODE_ATTEMPTS` guard and
+			// the row is cleaned up — no delete-then-resurrect race (a late stale
+			// write cannot re-create a deleted row, because the row is not deleted
+			// on each wrong guess; it self-reaps at the code TTL).
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		await this.codes.delete(`${purpose}:${username}`);
+		// Correct code: succeed only if THIS request consumes the row. A plain
+		// swallow-on-conflict delete is unsafe here — a ConditionalCheckFailed on
+		// the success path is not only "a fresh code was issued"; it also fires
+		// when another request reserved the NEXT attempt between this request's
+		// reserve and its delete, leaving the row intact (same hmac). Swallowing
+		// that would return success while the code survives, so it could be
+		// replayed. Instead retry against the current row and FAIL CLOSED if the
+		// row is gone (consumed by another verifier) or its hmac changed (replaced
+		// by a fresh issuance). Bounded: a retry only happens when another request
+		// changed the row, and at most MAX_CODE_ATTEMPTS attempts can exist.
+		let current = reserved;
+		for (;;) {
+			try {
+				await this.codes.delete(key, { ifValueEquals: current });
+				return;
+			} catch (e) {
+				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+			}
+			const raw2 = await this.codes.get(key);
+			if (!raw2) {
+				// Already consumed by another verifier — this request did not win.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			const { hmac: curHmac } = JSON.parse(raw2) as { hmac: string };
+			if (curHmac !== hmac) {
+				// Replaced by a fresh issuance — the code this request verified is gone.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			current = raw2; // same code, attempts advanced by a concurrent guess — retry the delete
+		}
+	}
+
+	/**
+	 * Delete a code row only if it still holds exactly `expected`, swallowing a
+	 * ConditionalCheckFailed (another writer already replaced or removed it).
+	 *
+	 * Only safe on the **expired / exhausted** paths, where the code is already
+	 * unusable, so "someone else changed the row" is an acceptable no-op. The
+	 * success (correct-code) path must NOT use this: there, a swallowed conflict
+	 * would let the code survive and be replayed — it requires the fail-closed
+	 * retry loop in `verifyCode` instead.
+	 */
+	private async deleteCodeIfUnchanged(key: string, expected: string): Promise<void> {
+		try {
+			await this.codes.delete(key, { ifValueEquals: expected });
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return;
+			throw e;
+		}
 	}
 
 	// ── Validation ───────────────────────────────────────────────────────
