@@ -19,6 +19,26 @@ import type { ComputeBase } from './compute/compute.js';
  */
 const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
 
+/**
+ * Integration timeout for every API-Gateway→Lambda integration on the shared
+ * REST API, in seconds. This is API Gateway's **existing** default integration
+ * timeout for a REST integration (`LambdaIntegration` already defaults to
+ * `Duration.seconds(29)` when unset) — setting it explicitly changes no runtime
+ * behaviour; it documents the boundary in synthesized output so it is visible at
+ * review and in the template rather than implicit. A request still in flight at
+ * 29s is cut off with a 504 regardless of how long the Lambda may run: the
+ * shared handler's function timeout is the async-work ceiling (up to 900s for
+ * SQS/AsyncJob invocations) and is unreachable on the synchronous HTTP path.
+ * The explicit value is aligned with the handler's own 28s deadline guard
+ * (`APIGW_TIMEOUT_MS`), which emits a structured 504 just before this cut-off.
+ *
+ * 29s is API Gateway's default integration timeout and the hard cap for
+ * edge-optimized APIs. Regional and private REST APIs can raise it via a service
+ * quota increase (CDK validates only the lower bound, ~50 ms, so a larger value
+ * synthesizes without error). Kept at 29s here to match the handler's 28s guard.
+ */
+const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
+
 /** Inputs the shared REST API gateway is built from. @internal */
 export interface SharedGatewayProps {
 	/**
@@ -169,7 +189,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		restApi.deploymentStage.node.addDependency(apiGatewayAccount);
 	}
 
-	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler);
+	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler, {
+		timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+	});
 
 	// Nested resource tree for /aws-blocks/api. The intermediate resource
 	// gets a proxy so sub-paths (RawRoutes) still reach the function.
@@ -199,7 +221,10 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		// API, instead of CDK's default two per method (stage + test-invoke), so the
 		// function's resource policy stays flat however many namespaces it hosts.
 		// Safe because the only routes integrating this function are the ones below.
-		const integration = new apigateway.LambdaIntegration(handler, { scopePermissionToMethod: false });
+		const integration = new apigateway.LambdaIntegration(handler, {
+			scopePermissionToMethod: false,
+			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+		});
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(

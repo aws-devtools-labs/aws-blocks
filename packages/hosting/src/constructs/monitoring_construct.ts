@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
   ComparisonOperator,
@@ -13,7 +13,12 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
 import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import type { Queue } from 'aws-cdk-lib/aws-sqs';
-import { type ITopic, type ITopicSubscription, Topic } from 'aws-cdk-lib/aws-sns';
+import {
+  CfnSubscription,
+  type ITopic,
+  type ITopicSubscription,
+  Topic,
+} from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
@@ -170,9 +175,58 @@ export class MonitoringConstruct extends Construct {
     this.topic = new Topic(this, 'AlarmTopic', {
       masterKey: this.encryptionKey,
     });
+    const topic = this.topic;
     for (const sub of props.subscriptions ?? []) {
-      this.topic.addSubscription(sub);
+      topic.addSubscription(sub);
     }
+    // An alarm topic with no subscribers can flip to ALARM but deliver the
+    // notification nowhere — the same silent-delivery gap the "no silent gap"
+    // monitoring principle guards against. The topic ARN is also surfaced as a
+    // CloudFormation output so an operator can subscribe out-of-band, but that
+    // is easy to miss, so warn loudly at synth.
+    //
+    // Deferred to a validation (not an eager constructor check) because
+    // subscribing AFTER construction is a supported path: `monitoring.alarms`
+    // / `monitoring.alarmTopics` let a caller attach Lambda/SQS targets that
+    // `monitoring.subscriptions` (Email/Url only) cannot express, and a caller
+    // may also `topic.addSubscription(...)` directly. By validation time every
+    // such subscription has synthesized a `CfnSubscription`, so the check sees
+    // the real delivery state instead of only the constructor-time prop. Also
+    // gated on at least one alarm existing: with no alarm wired the topic can
+    // never enter ALARM, so the "delivers nowhere" warning would be spurious.
+    this.node.addValidation({
+      validate: (): string[] => {
+        if (this.alarms.length === 0) {
+          return [];
+        }
+        const stack = Stack.of(this);
+        const topicArn = stack.resolve(topic.topicArn);
+        const hasSubscriber = stack.node
+          .findAll()
+          .some(
+            (c) =>
+              c instanceof CfnSubscription &&
+              JSON.stringify(stack.resolve(c.topicArn)) ===
+                JSON.stringify(topicArn),
+          );
+        if (hasSubscriber) {
+          return [];
+        }
+        Annotations.of(this).addWarningV2(
+          '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers',
+          'Hosting monitoring is enabled but the alarm topic has no subscriber, ' +
+            'so it can enter ALARM but deliver to no one. Subscribe an endpoint ' +
+            'via `monitoring.subscriptions` (EmailSubscription / UrlSubscription), ' +
+            'attach a target through `monitoring.alarms` / `monitoring.alarmTopics`, ' +
+            'or subscribe the topic out-of-band using the MonitoringTopicArn stack ' +
+            'output. Set `monitoring: { enabled: false }` to turn monitoring off ' +
+            'deliberately, or call ' +
+            "`Annotations.of(scope).acknowledgeWarning('@aws-blocks/hosting:" +
+            "MonitoringAlarmTopicHasNoSubscribers')` to accept the gap knowingly.",
+        );
+        return [];
+      },
+    });
     const action = new SnsAction(this.topic);
 
     if (props.distribution && (props.createCloudFrontAlarmLocally ?? true)) {

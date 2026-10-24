@@ -151,6 +151,32 @@ describe('createSharedGateway — single shared REST API', () => {
 		});
 	});
 
+	test('caps every Lambda integration at API Gateway’s 29s request ceiling', () => {
+		const { stack, compute } = setup('SharedGwIntegrationTimeout');
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+		});
+
+		const template = Template.fromStack(stack);
+		// Every Lambda (AWS_PROXY) integration carries TimeoutInMillis: 29000 — the
+		// function timeout (up to 900s for async work) is unreachable on the
+		// synchronous HTTP path, so the integration pins the real boundary. The
+		// root MOCK method CDK auto-creates has no Lambda and no timeout.
+		const methods = template.findResources('AWS::ApiGateway::Method');
+		const proxyIntegrations = Object.values(methods)
+			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
+			.filter((i): i is { Type?: string; TimeoutInMillis?: number } => i?.Type === 'AWS_PROXY');
+		assert.ok(proxyIntegrations.length > 0, 'at least one Lambda integration is created');
+		for (const integration of proxyIntegrations) {
+			assert.strictEqual(
+				integration.TimeoutInMillis,
+				29000,
+				'each Lambda integration is pinned to the 29s API Gateway request ceiling',
+			);
+		}
+	});
+
 	test('routes the RPC endpoint, per-namespace RPC paths, RawRoute sub-paths, and every other path', () => {
 		const { stack, compute } = setup('SharedGwTree');
 		createSharedGateway(stack, {
@@ -244,6 +270,34 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 			'/aws-blocks/{proxy+}',
 			'/{proxy+}',
 		]);
+	});
+
+	test('pins the 29s integration timeout on the per-compute fan-out integration too', () => {
+		// The single-compute path and the per-compute fan-out build their Lambda
+		// integrations on separate code paths; this covers the fan-out loop so a
+		// dropped `timeout:` on the per-compute integration is caught.
+		const { stack, defaultCompute, ordersCompute } = fanOut('FanOutTimeout');
+		const backendModule = { orders: namespaceOn(stack, ordersCompute, 'orders') };
+
+		createSharedGateway(stack, {
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
+			defaultCompute,
+			defaults: BlocksPresets.production,
+		});
+
+		const methods = Template.fromStack(stack).findResources('AWS::ApiGateway::Method');
+		const proxyIntegrations = Object.values(methods)
+			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
+			.filter((i): i is { Type?: string; TimeoutInMillis?: number } => i?.Type === 'AWS_PROXY');
+		// Two computes ⇒ more than the single-compute count; every one pinned.
+		assert.ok(proxyIntegrations.length > 1, 'fan-out creates Lambda integrations on both computes');
+		for (const integration of proxyIntegrations) {
+			assert.strictEqual(
+				integration.TimeoutInMillis,
+				29000,
+				'each fan-out Lambda integration is pinned to the 29s API Gateway request ceiling',
+			);
+		}
 	});
 
 	test('gives each routed function one API-scoped invoke permission, however many namespaces it hosts', () => {
