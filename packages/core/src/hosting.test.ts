@@ -2464,13 +2464,13 @@ describe('Hosting', () => {
       assert.throws(() => hosting.distribution, /only available for a CloudFront front door/);
     });
 
-    it("claims the API front-door role with the door's url (the managed API distribution stands down)", () => {
+    it("doesn't claim the API front-door role (only CloudFront-backed doors do; the API keeps its own distribution)", () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'CustomDoorClaim', { env: { account: '111111111111', region: 'us-east-1' } });
       const claims: string[] = [];
       const api: BlocksStackApi = { apiUrl: MOCK_API.apiUrl, claimApiFrontDoor: (url) => claims.push(url) };
       new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'custom', door: edgeDoor() } });
-      assert.deepStrictEqual(claims, ['https://edge.example.com']);
+      assert.deepStrictEqual(claims, []);
     });
 
     it("hands the door the backend's API, including its raw routes and the sign-in subset", () => {
@@ -2585,7 +2585,8 @@ describe('Hosting', () => {
     const doors: Array<[string, HostingProps['frontDoor'], boolean, { scheme: string; type: string; attr: string; id?: RegExp }]> = [
       // A plain-HTTP door doesn't claim: native clients keep the backend's HTTPS API URL.
       ['alb', { kind: 'alb' }, false, { scheme: 'http://', type: 'AWS::ElasticLoadBalancingV2::LoadBalancer', attr: 'DNSName' }],
-      ['apiGateway', { kind: 'apiGateway' }, true, { scheme: '', type: 'AWS::ApiGatewayV2::Api', attr: 'ApiEndpoint' }],
+      // Only CloudFront-backed doors claim the API front-door role.
+      ['apiGateway', { kind: 'apiGateway' }, false, { scheme: '', type: 'AWS::ApiGatewayV2::Api', attr: 'ApiEndpoint' }],
       [
         'stacked',
         { kind: 'stacked', edge: 'cloudfront', router: 'alb' },
@@ -2679,7 +2680,7 @@ describe('Hosting', () => {
       ]?.entries;
       assert.strictEqual(hosting.url, 'https://app.example.com');
       assert.strictEqual(entries?.get('CORS_HOSTING_ORIGINS'), 'https://app.example.com');
-      assert.deepStrictEqual(claimed, ['https://app.example.com'], 'an HTTPS ALB claims the API role');
+      assert.deepStrictEqual(claimed, [], 'an ALB never claims the API role (only CloudFront-backed doors do)');
     });
 
     it('the ALB door with several domain names: every name is an allowed CORS origin (each one serves the app)', async () => {

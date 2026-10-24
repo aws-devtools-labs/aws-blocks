@@ -164,4 +164,26 @@ describe('BLOCKS_PUBLIC_ORIGIN belongs to whoever serves /aws-blocks/* to browse
 		assert.match(r.apiUrlOutput, /ApiFrontDoor/);
 		assert.match(r.publicOrigin ?? '', /"http:\/\/"/, 'the door still owns the browser origin');
 	});
+
+	// `apiFrontDoor: 'cloudfront'` makes CloudFront the API's public front door.
+	// Only a CloudFront-backed Hosting door takes that role over; any other door
+	// serves the browser same-origin and leaves the API its own distribution.
+	describe("only CloudFront-backed doors take over the API front-door role under 'cloudfront'", () => {
+		const domain = { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' };
+		for (const [label, frontDoor, claims] of [
+			['CloudFront default', undefined, true],
+			['stacked edge', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }, true],
+			['API Gateway (HTTP)', { kind: 'apiGateway' }, false],
+			['API Gateway (REST, domain)', { kind: 'apiGateway', api: 'rest', features: { domain } }, false],
+		] as const) {
+			test(`${label}: ${claims ? 'claims (one distribution)' : "doesn't claim (the API keeps its distribution)"}`, async () => {
+				const r = await synth('cloudfront', frontDoor);
+				assert.strictEqual(r.apiFrontDoorBuilt, !claims);
+				if (claims) assert.doesNotMatch(r.apiUrlOutput, /ApiFrontDoor/);
+				else assert.match(r.apiUrlOutput, /ApiFrontDoor/, 'native clients call the CloudFront distribution');
+				assert.doesNotMatch(r.publicOrigin ?? '', /ApiFrontDoor/, 'the browser origin stays the door');
+			});
+		}
+	});
 });
+

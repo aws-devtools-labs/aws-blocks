@@ -1270,17 +1270,18 @@ export class Hosting extends Construct {
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
       this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
-    } else if (props.api && props.frontDoor !== 'none' && !isPlainHttpUrl(this, publicUrl)) {
-      // Every other door that proxies the API same-origin (ALB, API Gateway, the
-      // stacked door, a custom door) routes it inside its own router. It is
-      // still the app's public origin for the API, so claim the API front-door
-      // role with the door's URL — the backend's managed `cloudfront`
-      // distribution then stands down, exactly as for the CloudFront default.
-      // `'none'` (S3 website) proxies nothing: the client calls the backend
-      // cross-origin, so it does not claim. Nor does a plain-HTTP door (an ALB
-      // without a certificate): the API URL native clients use (`ApiUrl`) stays
-      // the backend's own HTTPS endpoint — the browser app still reaches the
-      // API same-origin through the door.
+    } else if (props.api && cfOverRouter) {
+      // The stacked door's CloudFront edge routes the API through its router:
+      // a CloudFront distribution fronts the API, so it claims the role and the
+      // backend's managed `cloudfront` distribution stands down, as for the
+      // CloudFront default.
+      //
+      // No other door claims. `apiFrontDoor: 'cloudfront'` asks for CloudFront
+      // as the API's public front door; an ALB, API Gateway or bring-your-own
+      // door serves the API to the browser same-origin, but claiming would move
+      // `ApiUrl` (native clients) onto that door — through the ALB forwarder's
+      // limits, or a second gateway — and silently drop the distribution the
+      // app asked for. They publish the browser origin only (below).
       props.api.claimApiFrontDoor?.(publicUrl);
     }
 
@@ -1959,23 +1960,4 @@ export function buildConfigJson(props: HostingProps, buildId: string): Record<st
     ...(props.api ? { apiUrl: crossOrigin ? (props.api.publicApiUrl ?? props.api.apiUrl) : BLOCKS_RPC_PREFIX } : {}),
     [BLOCKS_BUILD_ID_CONFIG_KEY]: buildId,
   };
-}
-
-/**
- * Whether a door's public URL is plain HTTP. A literal URL is read directly; a
- * token (`Fn.join('', ['http://', host])`, or a template string around one) is
- * resolved in its stack and read from its leading literal. A URL whose scheme
- * can't be read is taken as HTTPS, as `originHandleFromUrl` does.
- *
- * @internal Framework-only.
- */
-function isPlainHttpUrl(scope: Construct, url: string): boolean {
-  if (url.startsWith('http://')) return true;
-  if (!cdk.Token.isUnresolved(url)) return false;
-  const leading = (value: unknown): string | undefined => {
-    if (typeof value === 'string') return value;
-    const join = (value as { 'Fn::Join'?: [string, unknown[]] } | null)?.['Fn::Join'];
-    return join && join[0] === '' ? leading(join[1][0]) : undefined;
-  };
-  return leading(cdk.Stack.of(scope).resolve(url))?.startsWith('http://') ?? false;
 }
