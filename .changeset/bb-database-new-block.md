@@ -9,3 +9,4 @@ feat(bb-database): add `@aws-blocks/bb-database`, a preview of one `Database` bl
 - A `Database` keeps its cluster for life: `bb-database predeploy` stops a production deploy that would move a block or replace a cluster, and lets a deleted block's retained cluster go.
 - `@aws-blocks/core`: the `deploy` and `sandbox` scripts run pre-deploy hooks that installed blocks declare in `package.json` under `aws-blocks.predeploy`; `bb-database` declares its deploy guard there. `runPredeployHooks()` and the hook types are exported from `@aws-blocks/core/scripts`.
 - `@aws-blocks/blocks` does not depend on or re-export the block yet; import from `@aws-blocks/bb-database`.
+- `bigint` results (identity columns, `count(*)`, `sum()` over integers) are JavaScript numbers on DSQL as they are locally; a value beyond ±2^53 is a `BigInt` in both.

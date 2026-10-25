@@ -19,6 +19,27 @@ export interface DsqlEngineConfig {
 	searchPath?: string;
 }
 
+/** PostgreSQL `bigint` (`int8`). */
+const INT8_OID = 20;
+
+/**
+ * Parse a `bigint` the way the local PGlite engine does: a `number` when the
+ * value is a safe integer, otherwise a `BigInt`. pg's default is a string, which
+ * would make every identity column, `count(*)` and `sum()` over integers a
+ * number locally and a string on DSQL.
+ */
+export function parseInt8(text: string): number | bigint {
+	const big = BigInt(text);
+	const num = Number(big);
+	return Number.isSafeInteger(num) ? num : big;
+}
+
+/** pg type parsers for DSQL: pg's defaults, with `bigint` matching the local engine. */
+export const dsqlTypeParsers: pg.CustomTypesConfig = {
+	getTypeParser: (oid: number, format?: 'text' | 'binary') =>
+		oid === INT8_OID && format !== 'binary' ? parseInt8 : pg.types.getTypeParser(oid, format),
+};
+
 /** Retries a statement once when DSQL reports a stale schema cache (`OC001`); the fix is a catalog refresh. */
 async function withStaleCacheRetry<T>(fn: () => Promise<T>): Promise<T> {
 	try {
@@ -42,6 +63,7 @@ export class DsqlEngine implements DatabaseEngine {
 			ssl: true,
 			max: config.poolSize ?? DEFAULT_POOL_SIZE,
 			password: config.getAuthToken,
+			types: dsqlTypeParsers,
 		});
 		if (config.searchPath) {
 			const searchPath = config.searchPath;

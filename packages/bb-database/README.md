@@ -76,6 +76,8 @@ const cluster = new DatabaseCluster(scope, id, { type: 'distributed', removalPol
 | `db.schemaName` | `string` | The schema this block's tables live in. |
 
 `sql` is a tagged template: every `${value}` becomes a bound parameter, never string interpolation. Table and column names cannot be parameters.
+`bigint` values (identity columns, `count(*)`, `sum()` over integers) come back as JavaScript numbers, locally and on DSQL. A value beyond ±2^53 comes back as a `BigInt`, which JSON cannot serialize, so returning one from an `ApiNamespace` method fails at the RPC serializer; cast such a column in the query (`::text`, or `::float8` when precision loss is acceptable).
+
 
 **Runtime only.** Call the data methods inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, not at the top level of `aws-blocks/index.ts`. Top-level code also runs during CDK synth, where the block is its infrastructure construct and every data method throws `Database.query() cannot be called during CDK synth`. Constructing the block at module scope is fine; only the calls must move into handlers. Every `ApiNamespace` method is a public endpoint, so gate it with `await auth.requireAuth(context)` from an auth block.
 

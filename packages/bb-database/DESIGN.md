@@ -157,4 +157,5 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | DSQL compatibility checks and the migration rewriter | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
+| DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Binding record and deploy-time checks | `src/bindings.ts`, `src/deploy-guard.ts`, `src/cli.ts` |
