@@ -12,6 +12,7 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 import { EmailErrors } from './errors.js';
+import { validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
@@ -102,6 +103,8 @@ export class EmailClient extends Scope {
 	 */
 	async send(message: EmailMessage): Promise<SendResult> {
 		const { to, subject, body, html, cc, bcc } = message;
+		// Same checks as the mock, so local and deployed accept the same input.
+		validateMessage(message, this.fromAddress);
 		const recipients = Array.isArray(to) ? to : [to];
 
 		const command = new SendEmailCommand({
@@ -147,28 +150,58 @@ export class EmailClient extends Scope {
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> =
 			new Array(messages.length);
 
-		// Process in chunks of BATCH_CHUNK_SIZE
-		for (let chunkStart = 0; chunkStart < messages.length; chunkStart += BATCH_CHUNK_SIZE) {
-			const chunkIndices = messages
-				.slice(chunkStart, chunkStart + BATCH_CHUNK_SIZE)
-				.map((_, i) => chunkStart + i);
-			const chunk = chunkIndices.map(idx => messages[idx]);
+		// Validate each entry the way send() and the mock do. An invalid entry is
+		// marked failed and never reaches SES, matching the mock's per-entry status.
+		const withHtml: number[] = [];
+		const textOnly: number[] = [];
+		for (let i = 0; i < messages.length; i++) {
+			try {
+				validateMessage(messages[i], this.fromAddress);
+			} catch (err: any) {
+				results[i] = { status: 'failed', error: err.message ?? 'Invalid message' };
+				continue;
+			}
+			(messages[i].html ? withHtml : textOnly).push(i);
+		}
 
-			const command = new SendBulkEmailCommand({
-				FromEmailAddress: this.fromAddress,
-				...(this.replyTo && { ReplyToAddresses: this.replyTo }),
-				...(this.configurationSet ? { ConfigurationSetName: this.configurationSet } : {}),
-				DefaultContent: {
-					Template: {
-						TemplateContent: {
-							Subject: '{{subject}}',
-							Html: '{{html}}',
-							Text: '{{body}}',
-						},
-						TemplateData: JSON.stringify({ subject: '', body: '', html: '' }),
+		// A SendBulkEmail call shares one template across its entries. Messages
+		// without `html` go through a text-only template, so their plain-text body
+		// is never placed in an HTML part where a mail client would render it as
+		// markup. This matches send(), which adds an HTML part only when `html` is set.
+		for (const [indices, withHtmlPart] of [[withHtml, true], [textOnly, false]] as const) {
+			for (let chunkStart = 0; chunkStart < indices.length; chunkStart += BATCH_CHUNK_SIZE) {
+				const chunkIndices = indices.slice(chunkStart, chunkStart + BATCH_CHUNK_SIZE);
+				await this.sendBulkChunk(messages, chunkIndices, withHtmlPart, results);
+			}
+		}
+
+		return { results };
+	}
+
+	/** Send one SendBulkEmail call (at most 50 entries) and record each entry's result by input index. */
+	private async sendBulkChunk(
+		messages: EmailMessage[],
+		chunkIndices: number[],
+		withHtmlPart: boolean,
+		results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }>,
+	): Promise<void> {
+		const command = new SendBulkEmailCommand({
+			FromEmailAddress: this.fromAddress,
+			...(this.replyTo && { ReplyToAddresses: this.replyTo }),
+			...(this.configurationSet ? { ConfigurationSetName: this.configurationSet } : {}),
+			DefaultContent: {
+				Template: {
+					TemplateContent: {
+						Subject: '{{subject}}',
+						Text: '{{body}}',
+						...(withHtmlPart ? { Html: '{{html}}' } : {}),
 					},
+					TemplateData: JSON.stringify(withHtmlPart ? { subject: '', body: '', html: '' } : { subject: '', body: '' }),
 				},
-				BulkEmailEntries: chunk.map(msg => ({
+			},
+			BulkEmailEntries: chunkIndices.map((idx) => {
+				const msg = messages[idx];
+				return {
 					Destination: {
 						ToAddresses: Array.isArray(msg.to) ? msg.to : [msg.to],
 						CcAddresses: msg.cc || [],
@@ -179,37 +212,35 @@ export class EmailClient extends Scope {
 							ReplacementTemplateData: JSON.stringify({
 								subject: msg.subject,
 								body: msg.body,
-								...(msg.html ? { html: msg.html } : { html: msg.body }),
+								...(withHtmlPart ? { html: msg.html } : {}),
 							}),
 						},
 					},
-				})),
-			});
+				};
+			}),
+		});
 
-			try {
-				const response = await this.client.send(command);
-				const bulkResults = response.BulkEmailEntryResults ?? [];
+		try {
+			const response = await this.client.send(command);
+			const bulkResults = response.BulkEmailEntryResults ?? [];
 
-				for (let i = 0; i < chunkIndices.length; i++) {
-					const globalIdx = chunkIndices[i];
-					const entry = bulkResults[i];
+			for (let i = 0; i < chunkIndices.length; i++) {
+				const globalIdx = chunkIndices[i];
+				const entry = bulkResults[i];
 
-					if (entry?.Status === 'SUCCESS') {
-						results[globalIdx] = { status: 'success', messageId: entry.MessageId ?? '' };
-					} else {
-						const errorMsg = entry?.Error ?? 'Unknown bulk send error';
-						results[globalIdx] = { status: 'failed', error: errorMsg };
-					}
-				}
-			} catch (err: any) {
-				// Entire chunk failed — mark all as failed
-				for (const globalIdx of chunkIndices) {
-					const mapped = mapSesError(err);
-					results[globalIdx] = { status: 'failed', error: mapped.message };
+				if (entry?.Status === 'SUCCESS') {
+					results[globalIdx] = { status: 'success', messageId: entry.MessageId ?? '' };
+				} else {
+					const errorMsg = entry?.Error ?? 'Unknown bulk send error';
+					results[globalIdx] = { status: 'failed', error: errorMsg };
 				}
 			}
+		} catch (err: any) {
+			// Entire chunk failed — mark all as failed
+			for (const globalIdx of chunkIndices) {
+				const mapped = mapSesError(err);
+				results[globalIdx] = { status: 'failed', error: mapped.message };
+			}
 		}
-
-		return { results };
 	}
 }
