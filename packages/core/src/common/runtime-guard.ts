@@ -16,7 +16,8 @@
  * falls back to `default` and the deployed artifact contains the mocks. This
  * module is the runtime twin of `assertCdkConditionActive()` for that case:
  * every BB mock entry calls {@link assertNotMockInDeployedEnv} at module load,
- * so a mis-bundled artifact fails at startup instead of running mocks.
+ * so a mis-bundled artifact fails when the backend loads (at process start on
+ * container/AgentCore, on the first invocation on Lambda) instead of running mocks.
  *
  * @module
  */
@@ -76,13 +77,15 @@ export function assertNotMockInDeployedEnv(bbName: string): void {
 	if (!isDeployedEnv()) return;
 
 	throw new Error(
-		`The mock implementation of ${bbName} was loaded in a deployed environment.\n\n` +
+		`A Building Block mock entry (first detected: ${bbName}) was loaded in a deployed environment.\n\n` +
 			'This artifact was bundled without the `aws-runtime` export condition, so module resolution ' +
-			'fell back to the `default` (mock) entry. The mock runs an in-memory stub instead of the real ' +
-			'AWS-backed implementation.\n\n' +
-			'Fix: bundle with the aws-runtime condition, e.g.\n' +
+			'fell back to the `default` (mock) entries. Every Building Block resolved this way runs an ' +
+			'in-memory stub instead of the real AWS-backed implementation; the one named above is just the ' +
+			'first whose guard ran.\n\n' +
+			'Fix: resolve the aws-runtime condition, e.g.\n' +
 			'  esbuild --conditions=aws-runtime ...\n' +
-			"  or conditions: ['aws-runtime', 'node'] in esbuild build() options.\n\n" +
-			'See docs/guides/extending-with-existing-aws-resources.md.',
+			"  or conditions: ['aws-runtime', 'module'] in esbuild build() options\n" +
+			'  or, for unbundled Node, node --conditions=aws-runtime ... / NODE_OPTIONS=--conditions=aws-runtime\n\n' +
+			'See https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md',
 	);
 }

@@ -49,7 +49,13 @@ await Promise.all(
       platform: 'node',
       // Resolve Building Block `aws-runtime` export conditions so the bundle
       // picks the real AWS implementations, never the `default` (mock) entry.
-      conditions: ['aws-runtime', 'node'],
+      // `module` is kept so esbuild still prefers packages' ESM builds: passing
+      // custom conditions otherwise drops esbuild's implicit `module` condition
+      // and would pull CJS AWS SDK builds. (`node` is already implied by
+      // platform: 'node'.) bb-container-compute/src/bundle.ts and
+      // bb-agent/src/agentcore-bundle.ts still use ['aws-runtime', 'node'] —
+      // aligning them is a follow-up.
+      conditions: ['aws-runtime', 'module'],
       // Match the Lambda runtime (DEFAULT_NODE_RUNTIME). Bump together.
       target: 'node24',
       format: 'esm',

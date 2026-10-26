@@ -515,6 +515,9 @@ accurate to what your BB actually implements rather than aspirational.
   Lambda bundlers de-duplicate.
 - Document the BB's contract (options, methods, mock semantics) in a
   `README.md` — community BBs without docs don't get adopted.
+- Call `assertNotMockInDeployedEnv('<your-bb-name>')` (from
+  `@aws-blocks/core/bb-utils`) at the top level of your mock (`default`) entry,
+  so a deploy bundled without `aws-runtime` fails closed like the first-party BBs.
 - Keep the export-conditions exact:
   ```json
   "exports": {
@@ -549,8 +552,26 @@ await build({
   entryPoints: ['src/handler.ts'],
   bundle: true,
   platform: 'node',
-  conditions: ['aws-runtime', 'node'],
+  // Keep `module`: passing custom conditions drops esbuild's implicit `module`
+  // condition, which would switch dependencies to their CJS builds.
+  conditions: ['aws-runtime', 'module'],
 });
+```
+
+```bash
+# Unbundled Node (e.g. a container running `node dist/server.js` with node_modules)
+node --conditions=aws-runtime dist/server.js
+# or
+NODE_OPTIONS=--conditions=aws-runtime node dist/server.js
+```
+
+```js
+// webpack
+module.exports = {
+  resolve: {
+    conditionNames: ['aws-runtime', 'node', 'import', 'module', 'default'],
+  },
+};
 ```
 
 Without it, module resolution falls back to each Building Block's `default`
@@ -558,8 +579,11 @@ export — the mock entry — and the bundle runs in-memory local-dev stubs inst
 of the real AWS implementations.
 
 Building Blocks fail closed on compute that Blocks configures: when a BB's mock
-entry is loaded in a deployed environment it throws at startup instead of
-silently running the mock. A deployed environment is detected from the
+entry is loaded in a deployed environment it throws instead of silently running
+the mock. Where that surfaces depends on the compute: on container and
+AgentCore computes the process fails at start, while on Lambda the backend is
+imported lazily on the first invocation (`createLambdaHandler`), so the deploy
+itself succeeds and every request then returns an error. A deployed environment is detected from the
 `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which Blocks sets only
 on compute it configures, so the check works the same on Lambda, ECS/Fargate,
 and AgentCore — it is not Lambda-specific. Local dev and tests are unaffected.
