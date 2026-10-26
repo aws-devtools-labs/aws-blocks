@@ -143,6 +143,8 @@ export const coalesceRoutes = (
     groups.get(parent)!.push(r);
   }
   const out: [string, TerseRouteKind][] = [];
+  // Wildcards produced by flipping a coalesced STATIC group to COMPUTE under ISR.
+  const isrComputeWildcards = new Set<string>();
   for (const parent of order) {
     const members = groups.get(parent)!;
     const uniformKind = members.every((m) => m[1] === members[0][1]);
@@ -157,6 +159,7 @@ export const coalesceRoutes = (
       const kind: TerseRouteKind =
         isrActive && members[0][1] === 's' ? 'c' : members[0][1];
       out.push([`${parent}/*`, kind]);
+      if (kind !== members[0][1]) isrComputeWildcards.add(`${parent}/*`);
     } else {
       out.push(...members);
     }
@@ -165,8 +168,20 @@ export const coalesceRoutes = (
   // `/<page>` and a `/<page>/*` subtree per page (Nuxt) coalesce each form to
   // the SAME `<parent>/*` wildcard, producing duplicate rows; collapse them so
   // the table stays minimal.
+  //
+  // Under ISR, an explicit STATIC wildcard can also equal a coalesced COMPUTE
+  // wildcard: Nitro emits `/blog/*` static for the top-level `public/blog/`
+  // dir, while the prerendered pages under it (`/blog/featured`,
+  // `/blog/featured/*`) coalesce to a `/blog/*` compute wildcard. Both rows
+  // would survive with the static one first, and every front door takes the
+  // first match — so a non-prerendered ISR child (`/blog/any-other-post`)
+  // would hit the asset origin and 404. Keep only the compute row: the SSR
+  // Lambda renders the subtree on demand and serves prerendered pages from its
+  // ISR cache; paths with their own more specific rows still match those
+  // first, and everything else under the subtree goes to the server.
   const seen = new Set<string>();
   return out.filter(([p, k]) => {
+    if (k === 's' && isrComputeWildcards.has(p)) return false;
     const key = `${p} ${k}`;
     if (seen.has(key)) return false;
     seen.add(key);

@@ -123,6 +123,41 @@ describe('buildRouteTable — coalescing, basePath, ordering', () => {
     // /blog/x/admin (3 literal segs) must sort before the coalesced /blog/* (1 seg).
     assert.equal(entries[0]?.pattern, '/blog/x/admin');
   });
+
+  it('under ISR, keeps only the compute row when a coalesced wildcard equals an explicit static wildcard', () => {
+    // Nitro shape for `routeRules: { '/blog/**': { isr: 60 }, '/blog/featured': { prerender: true } }`:
+    // the top-level `.output/public/blog/` dir emits `/blog/*` static, and the
+    // prerendered page emits `/blog/featured` + `/blog/featured/*` static. Under
+    // ISR the page pair coalesces to a `/blog/*` COMPUTE wildcard. Both rows used
+    // to survive with the static one first, so `/blog/any-other-post` went to S3.
+    const routes: RouteBehavior[] = [
+      { pattern: '/_nuxt/*', target: 'static' },
+      { pattern: '/blog/*', target: 'static' },
+      { pattern: '/blog/featured', target: 'static' },
+      { pattern: '/blog/featured/*', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ];
+    const manifest = manifestWith(routes, { cache: { computeResource: 'default', driver: 'nitro-s3' } });
+    const entries = buildRouteTable({ manifest, hasServer: true, hasImage: false, isrActive: true });
+    const blogRows = entries.filter((e) => e.pattern === '/blog/*');
+    assert.deepEqual(blogRows, [{ pattern: '/blog/*', kind: 'server' }]);
+    // Unrelated static rows are untouched.
+    assert.ok(entries.some((e) => e.pattern === '/_nuxt/*' && e.kind === 'static'));
+  });
+
+  it('without ISR, the same Nitro shape collapses to a single static /blog/* row', () => {
+    const routes: RouteBehavior[] = [
+      { pattern: '/blog/*', target: 'static' },
+      { pattern: '/blog/featured', target: 'static' },
+      { pattern: '/blog/featured/*', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern === '/blog/*'),
+      [{ pattern: '/blog/*', kind: 'static' }],
+    );
+  });
 });
 
 describe('coalesceRoutes / routeSpecificity (relocated, still exported here)', () => {
