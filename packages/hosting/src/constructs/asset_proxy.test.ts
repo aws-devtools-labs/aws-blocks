@@ -482,6 +482,30 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     assert.equal(decode(ipx), 'png-bytes');
   });
 
+  it('a local query source passes the path checks: no raw control bytes reach a redirect', async () => {
+    const proxy = loadHandler(
+      generateApiGwAssetProxyCode({
+        spaFallback: false,
+        imageFallback: { hosts: [] },
+        redirects: [
+          { source: '/go/*', destination: '*', statusCode: 302 },
+          { source: '/old/*', destination: '/new/*', statusCode: 301 },
+        ],
+      }),
+      IMAGE_OBJECTS,
+    );
+    for (const [endpoint, src] of [
+      ['/_image', '/go/\u0001//evil.com'],
+      ['/_next/image', '/old/a\r\nSet-Cookie: x=y'],
+      ['/_image', '/img/..\\cat.png'],
+    ]) {
+      const res = await proxy(get(endpoint, { url: src, href: src }));
+      const location = res.headers?.location ?? '';
+      assert.doesNotMatch(location, /[\u0000-\u001f\\]/, `${endpoint} ${JSON.stringify(src)}`);
+      assert.strictEqual(new URL(location, 'https://site.example/a/b').origin, 'https://site.example', `stays on the site: ${location}`);
+    }
+  });
+
   it('redirects an allowlisted remote source to itself (302), exact or wildcard host', async () => {
     const exact = await handler()(get('/_next/image', { url: 'https://images.example.com/a.jpg', w: '640' }));
     assert.equal(exact.statusCode, 302);

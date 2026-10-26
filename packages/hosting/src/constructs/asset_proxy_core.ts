@@ -340,6 +340,11 @@ function blocksImageSource(requestUri, query) {
     src = slash === -1 ? '' : rest.substring(slash + 1).replace(/^(https?):\\/+/i, '$1://');
   } else if (rel === '/_next/image' || rel === '/_image') {
     src = (query && (query.url || query.href)) || '';
+    // API Gateway hands the query value over percent-decoded. A local source
+    // is re-encoded into path form, so the app's redirects and the path
+    // checks (control characters, backslashes, '..') see it as they see a
+    // request path; a raw CR/LF or C0 byte never reaches a Location header.
+    if (!/^https?:/i.test(src)) src = src.split('/').map(encodeURIComponent).join('/');
   } else {
     return null;
   }
