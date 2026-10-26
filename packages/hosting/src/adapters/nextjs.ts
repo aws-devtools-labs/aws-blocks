@@ -450,6 +450,7 @@ const applyNextImageConfig = (
   let parsed: {
     config?: {
       images?: {
+        domains?: unknown;
         remotePatterns?: unknown;
         dangerouslyAllowSVG?: boolean;
         minimumCacheTTL?: number;
@@ -486,6 +487,13 @@ const applyNextImageConfig = (
     if (patterns.length > 0) {
       manifest.imageOptimization.remotePatterns = patterns;
     }
+  }
+  // `images.domains` (deprecated in Next.js, still honored): exact hosts. The
+  // L3 reads it only for the remote-source allowlist of a build with no image
+  // function; the image function itself reads Next's own config.
+  if (Array.isArray(images.domains)) {
+    const domains = images.domains.filter((d): d is string => typeof d === 'string' && d.length > 0);
+    if (domains.length > 0) manifest.imageOptimization.domains = domains;
   }
   if (typeof images.dangerouslyAllowSVG === 'boolean') {
     manifest.imageOptimization.dangerouslyAllowSVG = images.dangerouslyAllowSVG;

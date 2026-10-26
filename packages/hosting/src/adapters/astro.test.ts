@@ -379,6 +379,15 @@ void describe('astroAdapter — remote image allowlist with no image function', 
     });
   });
 
+  it('records a remotePattern with no hostname as any host', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'astro.config.mjs'),
+      "export default { output: 'server', image: { remotePatterns: [{ protocol: 'https' }] } };\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () => astroAdapter({ projectDir: tmp, skipBuild: true }));
+    assert.deepStrictEqual(manifest.imageRemoteSources, { remotePatterns: [{ protocol: 'https', hostname: '**' }] });
+  });
+
   it('records nothing for a build that keeps its image service', () => {
     const manifest = astroAdapter({ projectDir: tmp, skipBuild: true });
     assert.strictEqual(manifest.imageRemoteSources, undefined);

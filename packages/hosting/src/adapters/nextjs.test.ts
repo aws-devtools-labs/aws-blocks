@@ -857,6 +857,39 @@ void describe('nextjsAdapter', () => {
     assert.deepStrictEqual(manifest.imageOptimization!.sizes, [640, 1080]);
   });
 
+  void it('records images.domains and remotePatterns hostnames for the image allowlist', () => {
+    const openNextDir = path.join(tmpDir, '.open-next');
+    for (const dir of ['server-functions/default', 'image-optimization-function', 'assets']) {
+      fs.mkdirSync(path.join(openNextDir, dir), { recursive: true });
+    }
+    fs.writeFileSync(path.join(openNextDir, 'server-functions/default/index.mjs'), 'export const handler = async () => {};');
+    fs.writeFileSync(path.join(openNextDir, 'image-optimization-function/index.mjs'), 'export const handler = async () => {};');
+    fs.writeFileSync(
+      path.join(openNextDir, 'open-next.output.json'),
+      JSON.stringify({
+        origins: {
+          default: { type: 'function', handler: 'index.handler' },
+          imageOptimizer: { type: 'function', handler: 'index.handler' },
+        },
+        behaviors: [
+          { pattern: '/_next/image*', origin: 'imageOptimizer' },
+          { pattern: '/*', origin: 'default' },
+        ],
+        additionalProps: {},
+      }),
+    );
+    fs.mkdirSync(path.join(tmpDir, '.next'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.next', 'required-server-files.json'),
+      JSON.stringify({
+        config: { images: { domains: ['images.example.com', 7], remotePatterns: [{ hostname: '**.cdn.example.com' }] } },
+      }),
+    );
+    const manifest = nextjsAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.deepStrictEqual(manifest.imageOptimization?.domains, ['images.example.com']);
+    assert.deepStrictEqual(manifest.imageOptimization?.remotePatterns, [{ hostname: '**.cdn.example.com' }]);
+  });
+
   void it('handles ecs/docker origin type', () => {
     const openNextDir = path.join(tmpDir, '.open-next');
     const ecsDir = path.join(openNextDir, 'server-functions', 'ecs-origin');

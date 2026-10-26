@@ -516,6 +516,18 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     assert.equal(wildcard.headers.location, 'https://eu.cdn.example.com/b.jpg');
   });
 
+  it("an any-host allowlist entry ('**', an Astro pattern with no hostname) redirects any http(s) host", async () => {
+    const anyHost = loadHandler(
+      generateApiGwAssetProxyCode({ spaFallback: false, imageFallback: { hosts: ['**'] } }),
+      IMAGE_OBJECTS,
+    );
+    const res = await anyHost(get('/_image', { href: 'https://anything.example.org/x.png' }));
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.headers.location, 'https://anything.example.org/x.png');
+    const userinfo = await anyHost(get('/_image', { href: 'https://user@anything.example.org/x.png' }));
+    assert.equal(userinfo.statusCode, 404);
+  });
+
   it('answers 404 for a remote source whose host is not allowlisted (no open redirect)', async () => {
     for (const url of [
       'https://evil.example.net/x.png',

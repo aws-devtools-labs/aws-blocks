@@ -308,12 +308,13 @@ function gzipOnce(key, version, buf) {
 }
 
 // A remote image host is allowed when it equals an allowlisted host, or
-// matches a '*.' / '**.' wildcard entry (Next.js remotePatterns hostnames).
+// matches a '*.' / '**.' wildcard entry (Next.js remotePatterns hostnames), or
+// the allowlist has '**' (an Astro remotePattern with no hostname: any host).
 function imageHostAllowed(host) {
   host = host.toLowerCase();
   for (var i = 0; i < IMAGE_REMOTE_HOSTS.length; i++) {
     var entry = IMAGE_REMOTE_HOSTS[i].toLowerCase();
-    if (entry === host) return true;
+    if (entry === host || entry === '**') return true;
     var star = entry.indexOf('**.') === 0 ? 3 : entry.indexOf('*.') === 0 ? 2 : 0;
     if (star && host.length > entry.length - star && host.slice(-(entry.length - star + 1)) === '.' + entry.slice(star)) return true;
   }

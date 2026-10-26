@@ -98,7 +98,10 @@ export type DeployManifest = {
   imageRemoteSources?: {
     /** Exact hostnames. */
     domains?: string[];
-    /** Patterns; only `hostname` (with an optional `*.` / `**.` prefix) is matched. */
+    /**
+     * Patterns; only `hostname` (with an optional `*.` / `**.` prefix) is
+     * matched. Hostname `'**'` matches any host.
+     */
     remotePatterns?: RemotePattern[];
   };
 
