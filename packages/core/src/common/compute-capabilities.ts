@@ -124,7 +124,10 @@ export interface ServerlessComputeOptions {
 	 * This is the ASYNC ceiling: the synchronous API path is bounded separately
 	 * by API Gateway's 29s integration timeout no matter how high this is, so
 	 * raising it only affects async/queue work. An API-only compute does not need
-	 * a large value here.
+	 * a large value here, but keep it at or above 30s: the handler caps each HTTP
+	 * request at the smaller of its 28s guard and this timeout, so a smaller value
+	 * cuts the sync request deadline short. Leave it at the default unless async
+	 * jobs need a specific ceiling.
 	 */
 	maxTimeoutSeconds?: number;
 }

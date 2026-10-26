@@ -34,6 +34,8 @@ import {
 } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
+import { Topic } from 'aws-cdk-lib/aws-sns';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { MonitoringConstruct } from './monitoring_construct.js';
 
 const createStack = (): Stack => {
@@ -169,6 +171,54 @@ void describe('MonitoringConstruct', () => {
         ssrFunction: newLambda(stack, 'Ssr'),
       });
       m.topic?.addSubscription(new subs.EmailSubscription('oncall@example.com'));
+      Annotations.fromStack(stack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when the subscriber lives in another stack', () => {
+      // LambdaSubscription / SqsSubscription synthesize their CfnSubscription
+      // in the TARGET's stack, so a stack-scoped search would miss it and warn
+      // spuriously. The check walks the whole app, so a cross-stack subscriber
+      // counts.
+      const app = new App();
+      const hostingStack = new Stack(app, 'TestStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const opsStack = new Stack(app, 'OpsStack', {
+        env: { account: '123456789012', region: 'us-west-2' },
+      });
+      const m = new MonitoringConstruct(hostingStack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(hostingStack, 'Ssr'),
+      });
+      const target = newLambda(opsStack, 'OncallFn');
+      m.topic?.addSubscription(new subs.LambdaSubscription(target));
+      Annotations.fromStack(hostingStack).hasNoWarning(
+        '/TestStack/Monitoring',
+        Match.stringLikeRegexp(
+          '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+        ),
+      );
+    });
+
+    void it('does NOT warn when every alarm already routes to another action', () => {
+      // A caller who wires alarm actions themselves via `monitoring.alarms`
+      // (e.g. an SnsAction onto a topic they already subscribe) has handled
+      // delivery, so telling them to subscribe THIS topic would be wrong.
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        ssrFunction: newLambda(stack, 'Ssr'),
+      });
+      const otherTopic = new Topic(stack, 'OncallTopic');
+      otherTopic.addSubscription(new subs.EmailSubscription('oncall@x.com'));
+      for (const alarm of m.alarms) {
+        alarm.addAlarmAction(new SnsAction(otherTopic));
+      }
       Annotations.fromStack(stack).hasNoWarning(
         '/TestStack/Monitoring',
         Match.stringLikeRegexp(

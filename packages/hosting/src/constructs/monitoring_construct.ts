@@ -2,6 +2,7 @@ import { Construct } from 'constructs';
 import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
+  CfnAlarm,
   ComparisonOperator,
   MathExpression,
   Metric,
@@ -137,6 +138,96 @@ export const createAlarmTopicKey = (scope: Construct): Key => {
   return key;
 };
 
+/** Stable id of the no-subscriber warning; also the `acknowledgeWarning` id. */
+export const MONITORING_NO_SUBSCRIBER_WARNING_ID =
+  '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers';
+
+/**
+ * Register a synth-time validation that warns when `topic` carries alarm
+ * notifications it can deliver to no one. An alarm topic with no subscriber
+ * can flip to ALARM but drop the notification silently — the gap the "no
+ * silent gap" monitoring principle guards against. The topic ARN is also a
+ * CloudFormation output for out-of-band subscription, but that is easy to
+ * miss, so warn loudly.
+ *
+ * Judged on a single topic's OWN alarms and subscribers, so it is correct for
+ * both the regional construct and the us-east-1 support stack — off-region the
+ * 5xx alarm lives in its own stack with its own topic, and each must be
+ * checked independently or that topic's undeliverable alarm goes unnoticed.
+ *
+ * Deferred to a validation (not an eager check) because delivery can be wired
+ * AFTER construction: a caller may `topic.addSubscription(...)` directly, and
+ * `LambdaSubscription` / `SqsSubscription` place their `CfnSubscription` in the
+ * TARGET's stack (`subscriberScope`), so the whole app is searched, not just
+ * this topic's stack. The topic is also treated as deliverable when every
+ * alarm already routes to some OTHER action (the caller took delivery into
+ * their own hands via `monitoring.alarms`), and skipped entirely when no alarm
+ * is wired (nothing can enter ALARM, so the warning would be spurious).
+ */
+export const warnIfUndeliverable = (
+  scope: Construct,
+  topic: ITopic,
+  alarms: Alarm[],
+): void => {
+  scope.node.addValidation({
+    validate: (): string[] => {
+      if (alarms.length === 0) {
+        return [];
+      }
+      const stack = Stack.of(scope);
+      const topicArn = JSON.stringify(stack.resolve(topic.topicArn));
+
+      // A subscriber anywhere in the app counts. LambdaSubscription /
+      // SqsSubscription synthesize their CfnSubscription in the subscriber's
+      // stack, so searching only this topic's stack would miss a cross-stack
+      // target. resolve() still yields this topic's { Ref } from the producer.
+      const hasSubscriber = scope.node.root.node
+        .findAll()
+        .some(
+          (c) =>
+            c instanceof CfnSubscription &&
+            JSON.stringify(stack.resolve(c.topicArn)) === topicArn,
+        );
+      if (hasSubscriber) {
+        return [];
+      }
+
+      // Treat as deliverable when every alarm already has at least one action
+      // OTHER than this topic — the caller routed delivery themselves via
+      // `monitoring.alarms`, so a "subscribe this topic" warning is wrong.
+      // (The construct wires its own topic action onto each alarm it creates,
+      // so the test is "has a non-topic action too", not "has no topic action".)
+      const everyAlarmRoutesElsewhere = alarms.every((alarm) => {
+        const cfnAlarm = alarm.node.defaultChild;
+        if (!(cfnAlarm instanceof CfnAlarm)) {
+          return false;
+        }
+        const actions: unknown[] = stack.resolve(cfnAlarm.alarmActions) ?? [];
+        return actions.some(
+          (a) => JSON.stringify(stack.resolve(a)) !== topicArn,
+        );
+      });
+      if (everyAlarmRoutesElsewhere) {
+        return [];
+      }
+
+      Annotations.of(scope).addWarningV2(
+        MONITORING_NO_SUBSCRIBER_WARNING_ID,
+        'Hosting monitoring is enabled but an alarm topic has no subscriber, ' +
+          'so an alarm can enter ALARM but deliver to no one. Subscribe an ' +
+          'endpoint via `monitoring.subscriptions` (EmailSubscription / ' +
+          'UrlSubscription), subscribe the topic out-of-band using the ' +
+          'MonitoringTopicArn stack output, or route the alarm actions ' +
+          'elsewhere via `monitoring.alarms`. Set `monitoring: { enabled: ' +
+          'false }` to turn monitoring off deliberately, or call ' +
+          `\`Annotations.of(scope).acknowledgeWarning('${MONITORING_NO_SUBSCRIBER_WARNING_ID}')\` ` +
+          'to accept the gap knowingly.',
+      );
+      return [];
+    },
+  });
+};
+
 /**
  * CloudWatch alarm wiring construct. See module-level doc-comment for
  * the rationale and the alarm set.
@@ -179,54 +270,10 @@ export class MonitoringConstruct extends Construct {
     for (const sub of props.subscriptions ?? []) {
       topic.addSubscription(sub);
     }
-    // An alarm topic with no subscribers can flip to ALARM but deliver the
-    // notification nowhere — the same silent-delivery gap the "no silent gap"
-    // monitoring principle guards against. The topic ARN is also surfaced as a
-    // CloudFormation output so an operator can subscribe out-of-band, but that
-    // is easy to miss, so warn loudly at synth.
-    //
-    // Deferred to a validation (not an eager constructor check) because
-    // subscribing AFTER construction is a supported path: `monitoring.alarms`
-    // / `monitoring.alarmTopics` let a caller attach Lambda/SQS targets that
-    // `monitoring.subscriptions` (Email/Url only) cannot express, and a caller
-    // may also `topic.addSubscription(...)` directly. By validation time every
-    // such subscription has synthesized a `CfnSubscription`, so the check sees
-    // the real delivery state instead of only the constructor-time prop. Also
-    // gated on at least one alarm existing: with no alarm wired the topic can
-    // never enter ALARM, so the "delivers nowhere" warning would be spurious.
-    this.node.addValidation({
-      validate: (): string[] => {
-        if (this.alarms.length === 0) {
-          return [];
-        }
-        const stack = Stack.of(this);
-        const topicArn = stack.resolve(topic.topicArn);
-        const hasSubscriber = stack.node
-          .findAll()
-          .some(
-            (c) =>
-              c instanceof CfnSubscription &&
-              JSON.stringify(stack.resolve(c.topicArn)) ===
-                JSON.stringify(topicArn),
-          );
-        if (hasSubscriber) {
-          return [];
-        }
-        Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers',
-          'Hosting monitoring is enabled but the alarm topic has no subscriber, ' +
-            'so it can enter ALARM but deliver to no one. Subscribe an endpoint ' +
-            'via `monitoring.subscriptions` (EmailSubscription / UrlSubscription), ' +
-            'attach a target through `monitoring.alarms` / `monitoring.alarmTopics`, ' +
-            'or subscribe the topic out-of-band using the MonitoringTopicArn stack ' +
-            'output. Set `monitoring: { enabled: false }` to turn monitoring off ' +
-            'deliberately, or call ' +
-            "`Annotations.of(scope).acknowledgeWarning('@aws-blocks/hosting:" +
-            "MonitoringAlarmTopicHasNoSubscribers')` to accept the gap knowingly.",
-        );
-        return [];
-      },
-    });
+    // Warn at synth if this topic's alarms have nowhere to deliver. The shared
+    // helper reads `this.alarms` (populated below) lazily at validation time,
+    // and the us-east-1 support stack runs the same check on its own topic.
+    warnIfUndeliverable(this, topic, this.alarms);
     const action = new SnsAction(this.topic);
 
     if (props.distribution && (props.createCloudFrontAlarmLocally ?? true)) {
