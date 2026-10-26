@@ -43,6 +43,7 @@ interface BuildingBlockCensus {
  * - CDK version reporting is turned off (`cdk --no-version-reporting`, `"versionReporting": false`
  *   in `cdk.json`, `new App({ analyticsReporting: false })`, or the context key
  *   `aws:cdk:version-reporting` set to `false`).
+ *   Via the CDK CLI, use `--no-version-reporting` or `cdk.json`; `-c aws:cdk:version-reporting=false` is overridden.
  * The CLI telemetry opt-out (`AWS_BLOCKS_DISABLE_TELEMETRY`, `.blocks/config.json`) does not
  * affect it. The `blocks:deployment-type` tag is applied either way.
  *
