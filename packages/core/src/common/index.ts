@@ -468,9 +468,12 @@ export interface BlocksStackProps extends StackProps {
    *   CloudFront layer), and clients call the distribution's domain instead.
    *
    * Whichever tier you pick, `publicApiUrl` (and the `ApiUrl` stack output) is the
-   * URL clients should call. When a `Hosting` construct fronts the API, the API is
-   * served from Hosting's distribution; under `'cloudfront'` Blocks then creates no
-   * second distribution.
+   * URL clients should call. When a CloudFront-backed `Hosting` door (the default
+   * CloudFront door, or the stacked door's edge) fronts the API, the API is served
+   * from Hosting's distribution; under `'cloudfront'` Blocks then creates no second
+   * distribution. Behind any other `Hosting` door (ALB, API Gateway, your own), the
+   * browser still reaches the API same-origin through the door, and under
+   * `'cloudfront'` the API keeps its own distribution for every other client.
    *
    * The default is a constant `'apigateway'` — it is NEVER derived from the app's
    * shape, so adding or removing Building Blocks never silently changes how the
