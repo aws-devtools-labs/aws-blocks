@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
+import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
 import 'token_store.dart';
@@ -31,10 +32,14 @@ class BlocksClient {
        tokenStore = tokenStore ?? InMemoryTokenStore();
 
   /// Calls a JSON-RPC method with the given params and returns the result.
+  ///
+  /// The request is POSTed to `{baseUrl}/{namespace}` (e.g.
+  /// `…/aws-blocks/api/reports` for `reports.build`), so a namespace that runs
+  /// on its own compute is served by it.
   Future<dynamic> call(String method, Map<String, dynamic> params) async {
     final response = await _doCall(method, params);
 
-    if (response.statusCode == 401 && authProvider != null) {
+    if (response.response.statusCode == 401 && authProvider != null) {
       await authProvider!.onAuthFailure();
       final retry = await _doCall(method, params);
       return _parseResponse(retry);
@@ -43,7 +48,7 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<http.Response> _doCall(
+  Future<ResponseWithUrl> _doCall(
     String method,
     Map<String, dynamic> params,
   ) async {
@@ -55,6 +60,7 @@ class BlocksClient {
       'id': id,
     });
 
+    final requestUri = _rpcUri(baseUrl, method);
     final headers = <String, String>{
       'Content-Type': 'application/json',
       ...rpcUserAgentHeaders(),
@@ -67,18 +73,44 @@ class BlocksClient {
         headers['authorization'] = 'Bearer $token';
       }
     } else {
-      final cookie = sessionStore.cookieHeader;
+      final cookie = sessionStore.cookieHeaderFor(requestUri);
       if (cookie != null) {
         headers['cookie'] = cookie;
       }
     }
 
-    return _httpClient.post(Uri.parse(baseUrl), headers: headers, body: body);
+    return postWithResponseUrl(
+      _httpClient,
+      requestUri,
+      headers: headers,
+      body: body,
+    );
   }
 
-  dynamic _parseResponse(http.Response response) {
+  /// The URL a call to [method] is POSTed to: `{baseUrl}/{namespace}`, where
+  /// the namespace is the part of [method] before the first `.` — the path the
+  /// TypeScript client uses, so the backend's gateway can route each namespace
+  /// to the compute that hosts it. The body still carries the full
+  /// `namespace.method`, which is what the server dispatches on. A [method]
+  /// without a namespace goes to [baseUrl] unchanged.
+  static Uri _rpcUri(String baseUrl, String method) {
+    final dot = method.indexOf('.');
+    if (dot <= 0) return Uri.parse(baseUrl);
+    var end = baseUrl.length;
+    while (end > 0 && baseUrl[end - 1] == '/') {
+      end--;
+    }
+    final segment = Uri(pathSegments: [method.substring(0, dot)]).path;
+    return Uri.parse('${baseUrl.substring(0, end)}/$segment');
+  }
+
+  dynamic _parseResponse(ResponseWithUrl result) {
+    final response = result.response;
     // Parse set-cookie headers
-    sessionStore.setCookies(response.headers['set-cookie']);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: result.url,
+    );
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     if (json.containsKey('error')) {

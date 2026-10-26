@@ -5,3 +5,5 @@
 export class EmailClient {
   constructor(...args: any[]) {}
 }
+
+export { EmailErrors } from './errors.js';

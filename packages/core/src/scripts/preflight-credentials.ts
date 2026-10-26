@@ -12,7 +12,13 @@ import {
 	profileArg,
 	profileName,
 } from './credential-guidance.js';
-import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
+import {
+	type DeploymentTargetOptions,
+	environmentAccessKeys,
+	REGION_CODE,
+	resolveDeploymentTarget,
+} from './deployment-target.js';
+import { type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bootstrap.js';
 
 /**
  * Pre-deploy AWS credential check.
@@ -46,6 +52,9 @@ import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentT
  * `profile` in `cdk.json` or `~/.cdk.json` overrides them. SDK clients do the
  * opposite when `AWS_PROFILE` is set, so the check passes those keys explicitly.
  * Otherwise it would verify and describe a different account from the deploy.
+ *
+ * With `checkBootstrap`, the verified credentials also check that CDK has been
+ * bootstrapped in the account and Region; see `preflight-bootstrap.ts`.
  */
 
 /**
@@ -69,6 +78,8 @@ export interface VerifiedCredentials {
 	credentials: AwsCredentialIdentity;
 	/** The caller ARN from STS GetCallerIdentity. Used only to find the caller's role; never printed. */
 	callerArn?: string;
+	/** The account ID from STS GetCallerIdentity. Used for the CDK bootstrap check and its `cdk bootstrap` command. */
+	account?: string;
 }
 
 /**
@@ -107,8 +118,8 @@ const stsProbe: CredentialProbe = async (region, profile, environmentKeys) => {
 	}
 	const client = new STSClient({ ...config, credentials });
 	try {
-		const { Arn } = await client.send(new GetCallerIdentityCommand({}));
-		return { credentials, callerArn: Arn };
+		const { Arn, Account } = await client.send(new GetCallerIdentityCommand({}));
+		return { credentials, callerArn: Arn, account: Account };
 	} finally {
 		client.destroy();
 	}
@@ -131,13 +142,18 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	 * The destroy commands turn it off and print only the deployment target.
 	 */
 	accountDetails?: boolean;
+	/**
+	 * Check that CDK has been bootstrapped in the account and Region, and stop with the
+	 * `cdk bootstrap` command when it has not. Default `false`; the deploy commands turn it on.
+	 * The check runs only when the probe returns the account it verified.
+	 */
+	checkBootstrap?: boolean;
+	/** Reads the CDK bootstrap version parameter. Override in tests. */
+	readBootstrapVersion?: BootstrapVersionReader;
 }
 
 const BILLING_URL = 'https://settings.aws.com/billing';
 const PROJECTS_URL = 'https://settings.aws.com/projects';
-
-/** A Region code; any other value prints quoted, so that it cannot write terminal control sequences. */
-const REGION_CODE = /^[a-z0-9-]+$/;
 
 const NO_METADATA: AccountMetadata = { accountName: null, plan: null, managedRole: false };
 
@@ -206,8 +222,14 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  * never throw or block the deploy. With `accountDetails: false` it prints only
  * the deployment target.
  *
+ * With `checkBootstrap`, the check also reads the CDK bootstrap version parameter
+ * with the verified credentials, alongside the metadata reads. After printing the
+ * deployment target, it stops the deploy only when that parameter does not exist,
+ * with the `cdk bootstrap` command for the account and Region.
+ *
  * @throws {Error} With actionable guidance when the probe reports a credential error,
- * or when the CDK configuration cannot be read.
+ * when `checkBootstrap` finds that CDK is not bootstrapped, or when the CDK
+ * configuration cannot be read.
  */
 export async function assertAwsCredentials({
 	command,
@@ -216,10 +238,12 @@ export async function assertAwsCredentials({
 	metadataClients,
 	metadataTimeoutMs,
 	accountDetails = true,
+	checkBootstrap = false,
+	readBootstrapVersion,
 	...options
 }: AssertAwsCredentialsOptions): Promise<void> {
 	const env = options.env ?? process.env;
-	const { region, profile } = await resolveDeploymentTarget(options);
+	const { region, profile, bootstrapQualifier } = await resolveDeploymentTarget(options);
 	// CDK deploys with access keys from the environment unless cdk.json selects a profile;
 	// with environment keys, resolveDeploymentTarget returns only that setting as `profile`.
 	const environmentKeys = profile ? undefined : environmentAccessKeys(env);
@@ -290,15 +314,28 @@ export async function assertAwsCredentials({
 		}
 	}
 
-	if (!accountDetails) {
-		console.log(targetSummary(target, region, null));
-		return;
-	}
-	const metadata = verified
-		? await readAccountMetadata(
-				{ region, profile, credentials: verified.credentials, callerArn: verified.callerArn },
-				{ clients: metadataClients, timeoutMs: metadataTimeoutMs },
-			)
-		: NO_METADATA;
+	// Runs alongside the metadata reads; it never rejects.
+	const bootstrapFailure =
+		checkBootstrap && verified?.account
+			? cdkBootstrapFailure({
+					command,
+					account: verified.account,
+					region,
+					profile,
+					credentials: verified.credentials,
+					qualifier: bootstrapQualifier,
+					read: readBootstrapVersion,
+				})
+			: undefined;
+	const metadata = !accountDetails
+		? null
+		: verified
+			? await readAccountMetadata(
+					{ region, profile, credentials: verified.credentials, callerArn: verified.callerArn },
+					{ clients: metadataClients, timeoutMs: metadataTimeoutMs },
+				)
+			: NO_METADATA;
 	console.log(targetSummary(target, region, metadata));
+	const failure = await bootstrapFailure;
+	if (failure) throw new Error(failure);
 }
