@@ -138,6 +138,10 @@ export function databaseTests(getApi: () => typeof apiType) {
     // named 4xx over the wire, not a generic 500 QueryFailed, so a client can
     // branch on them with isBlocksError. The PGlite mock enforces every
     // constraint and policy, so this exercises the real translate path locally.
+    test('Database - withRLS() switches to the authenticated role', async () => {
+      assert.strictEqual(await getApi().dbRlsCurrentRole(), 'authenticated');
+    });
+
     const requestErrorCases = [
       { method: 'dbCheckViolation', status: 400, name: DatabaseErrors.CheckViolation },
       { method: 'dbNotNullViolation', status: 400, name: DatabaseErrors.NotNullViolation },

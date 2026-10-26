@@ -1761,6 +1761,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     );
   },
 
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
   async dbRlsViolation(id: string) {
     const scoped = await db.withRLS({ userId: 'user-a' });
     await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
