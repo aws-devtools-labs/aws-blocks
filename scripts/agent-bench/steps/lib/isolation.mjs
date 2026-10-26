@@ -74,7 +74,7 @@ function asAgent(envPairs, argv) {
 /**
  * Whether commands can run as the agent user via passwordless sudo+runuser (probed once, with the
  * exact transition used for every command). The harness user holds `NOPASSWD:ALL` on the hosted
- * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab/chmod` work too; the agent
+ * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab/chmod/setfacl` work too; the agent
  * user holds no sudo rights (agent-bench.yml fails the job otherwise).
  * @returns {boolean}
  */
@@ -97,6 +97,11 @@ export function isolationAvailable() {
  * Grant the agent user + the harness user rwx on `root` (recursive + default ACL, so files either
  * creates stay mutually accessible) and the agent user search (x) on every ancestor: absolute-path
  * opens (npm/node/tsc) need x on each parent. x only traverses; it lists or reads nothing.
+ *
+ * The recursive grants run as root: from the second agent phase on (step 3 after step 2), the
+ * workspace holds files the agent user created, and only a file's owner or root may set its ACL.
+ * -P keeps that root walk from following a symlink the agent planted out of the workspace, so the
+ * root itself is passed as its real path (-P also skips a symlink argument).
  * @param {string} root
  * @returns {boolean} true only if the workspace grants succeeded
  */
@@ -104,10 +109,15 @@ export function prepareWorkspaceIsolation(root) {
 	if (!isolationAvailable()) return false;
 	let me = process.env.USER ?? '';
 	if (!me) me = spawnSync(BIN.id, ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
-	const abs = resolve(root);
+	let abs;
+	try {
+		abs = realpathSync(resolve(root));
+	} catch {
+		return false;
+	}
 	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync(BIN.setfacl, ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync(BIN.setfacl, ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const access = spawnSync(BIN.sudo, ['-n', BIN.setfacl, '-R', '-P', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const dflt = spawnSync(BIN.sudo, ['-n', BIN.setfacl, '-R', '-P', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
 	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
 	for (let dir = dirname(abs), prev = ''; dir && dir !== prev && dir !== '/'; prev = dir, dir = dirname(dir)) {
 		spawnSync(BIN.setfacl, ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });

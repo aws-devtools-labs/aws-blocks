@@ -241,6 +241,45 @@ describe('the agent-user boundary on a real host', () => {
 		}
 	});
 
+	// Step 3 enters a second agent phase on the workspace step 2's agent wrote to. Only a file's
+	// owner (or root) may set its ACL, so a runner-uid setfacl failed there on every cell.
+	it('enterAgentPhase re-grants a workspace holding files the agent user created', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const made = asAgent(`cd '${ws}' && mkdir dist && echo built > dist/out.js && echo notes > notes.md`);
+			assert.equal(made.status, 0, made.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const { file, args } = buildAgentSpawn('cat dist/out.js notes.md', ws, true, { PATH: '/usr/bin:/bin' });
+			const r = spawnSync(file, args, { encoding: 'utf-8' });
+			assert.equal(r.status, 0, r.stderr);
+			assert.equal(r.stdout, 'built\nnotes\n');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// The grant runs as root, so it must not follow a symlink the agent planted in the workspace.
+	it('the root workspace grant does not follow an agent-planted symlink out of the workspace', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		const outside = mkdtempSync(join(tmpdir(), 'bench-outside-'));
+		try {
+			writeFileSync(join(outside, 'secret'), `${FAKE_SECRET}\n`, { mode: 0o600 });
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const planted = asAgent(`cd '${ws}' && ln -s '${outside}' escape`);
+			assert.equal(planted.status, 0, planted.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			assert.deepEqual(verifyAgentIsolation({ paths: [outside, join(outside, 'secret')] }), []);
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
 	// Writable trusted executable paths: the hosted image ships e.g. /usr/local/bin and
 	// /opt/hostedtoolcache world-writable, so the agent could plant a binary a later runner-uid step
 	// (or sudo, as root) executes. This reproduces that layout in scratch dirs.
