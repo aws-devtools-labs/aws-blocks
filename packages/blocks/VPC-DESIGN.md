@@ -42,6 +42,7 @@ interface BlocksVpcOptions {
 ### Customer Usage
 
 ```typescript
+import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
@@ -53,8 +54,16 @@ await BlocksStack.create(app, stackName, {
   defaults: { ...BlocksPresets.production, vpc: { network: vpc } },
 });
 
-// Bring existing VPC with pre-provisioned endpoints
-const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
+// Bring existing VPC with pre-provisioned endpoints.
+// fromLookup must be called inside a Stack scope (not the App) and that stack
+// needs an explicit env; host the lookup in a sibling stack and pass the
+// resolved IVpc into BlocksStack.
+const env = {
+  account: process.env.CDK_DEFAULT_ACCOUNT,
+  region: process.env.CDK_DEFAULT_REGION,
+};
+const lookupStack = new cdk.Stack(app, `${stackName}-vpc-ref`, { env });
+const sharedVpc = ec2.Vpc.fromLookup(lookupStack, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),

@@ -425,6 +425,39 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
+
+      test('reset code is invalidated after 5 wrong verification attempts (#911)', async () => {
+        const api = getApi();
+        const username = uniqueUser();
+        await api.authSignUp(username, 'password123');
+        let code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code!.code);
+        await api.authResetPassword(username);
+        code = await pollForCode(api, username, { not: code!.code });
+        const realCode = code!.code;
+
+        // Five wrong guesses — each rejected; the fifth invalidates the code.
+        for (let i = 0; i < 5; i++) {
+          try {
+            await api.authConfirmResetPassword(username, '000000', 'newpass123');
+            assert.fail(`Expected rejection on wrong guess #${i + 1}`);
+          } catch (e) {
+            assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
+          }
+        }
+
+        // The real code no longer works — it was invalidated on exhaustion, so
+        // the old password still authenticates (reset never completed).
+        try {
+          await api.authConfirmResetPassword(username, realCode, 'newpass123');
+          assert.fail('Expected the invalidated code to be rejected');
+        } catch (e) {
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
+        }
+        const user = await api.authSignIn(username, 'password123');
+        assert.strictEqual(user.username, username);
+        await api.authSignOut();
+      });
     });
 
     // ── Code read-back durability (regression, #172) ─────────────────────
