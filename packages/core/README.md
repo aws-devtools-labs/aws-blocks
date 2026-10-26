@@ -190,7 +190,7 @@ POST /aws-blocks/api/{namespace}
 
 where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's front door takes the front-door role and no second distribution is created. This holds for every `Hosting` `frontDoor` that proxies the API same-origin (the CloudFront default, `alb`, `apiGateway`, `stacked`, `custom`); `'none'` serves static files only, so the browser calls the API cross-origin.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
@@ -409,7 +409,7 @@ A `config()` domain works in `frontDoor.features.domain` too, through the async 
 | `domain` | ✓ | ✓ (with `certificate`; no `wwwRedirect`) | ✓ (no `wwwRedirect`) | `router.domain` (the name the edge reaches the router at over HTTPS, with `certificate`) | ✓ |
 | `waf` | ✓ | ✓ (REGIONAL) | – | `edge.waf.webAclArn` (CLOUDFRONT), `router.waf` (REGIONAL) | ✓ |
 | `logging` | ✓ | ✓ (off unless set) | – | `router.logging` | ✓ |
-| `monitoring` | ✓ | ✓ (`enabled` only, off unless set) | – | `router.monitoring` (`enabled` only) | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only, on unless `enabled: false`) | – | `router.monitoring` (`enabled` only) | ✓ |
 | `skewProtection` | ✓ | – | – | – | ✓ |
 | `geoRestriction` | ✓ | – | – | – | ✓ |
 | `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |

@@ -485,7 +485,7 @@ frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', count
 | `domain` | ✓ (certificate in us-east-1, aliases, Route 53 records, `wwwRedirect`) | ✓ (regional certificate, HTTPS listener, :80 → :443 redirect, Route 53 alias records; no `wwwRedirect`) | ✓ (regional; no `wwwRedirect`) | ✓ |
 | `waf` | ✓ (CLOUDFRONT-scoped web ACL) | ✓ (REGIONAL web ACL) | – | ✓ |
 | `logging` | ✓ | ✓ (the ALB's own logs: off unless set) | – | ✓ |
-| `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, off unless set, no topic or subscriptions) | – | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, on unless `enabled: false`, no topic or subscriptions) | – | ✓ |
 | `skewProtection` | ✓ | – | – | ✓ |
 | `geoRestriction` | ✓ | – | – | ✓ |
 | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
@@ -523,9 +523,26 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted. It also doesn't take over the
-API's address: the `ApiUrl` native clients use stays the backend's own HTTPS
-endpoint.
+cookies and every RPC then travel unencrypted.
+
+Only a CloudFront-backed door (the default, or the stacked door's edge) takes
+over the API's address. Under the backend's `apiFrontDoor: 'cloudfront'` it
+claims the API front-door role: the backend builds no distribution of its own,
+and `ApiUrl` (what native clients call) is the door's. Behind the ALB, API
+Gateway or a bring-your-own door, the API keeps the distribution
+`apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it; under the
+default `'apigateway'` tier, `ApiUrl` is the backend's own API Gateway URL
+behind every door. The browser reaches the API same-origin through the door
+either way.
+
+**The host the server sees.** The CloudFront door and the stacked door's edge
+set `x-forwarded-host` from the viewer's `Host`. Behind the ALB and API Gateway
+doors nothing in front does, so the server is given `Host` instead: a native
+Lambda handler (Nitro's `aws-lambda` preset, OpenNext) through a small shim, and
+a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
+`HOST_HEADER` (SvelteKit) by reading `host`. Any other Lambda Web Adapter server
+(Astro's Node adapter, Nitro's `node-server`) receives the request's headers as
+sent, so don't configure it to trust `x-forwarded-host` behind these doors.
 
 A door that invokes the server without streaming (the ALB, the stacked door's
 ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
@@ -613,7 +630,9 @@ from a file bucket. The same limits bind everything else these doors carry:
 
 **ALB listener rules.** Consecutive paths bound for the same target share a
 rule (up to five path values each, four beside the stacked router's header
-check), and routes that go where the default goes get no rule. A load balancer
+check, and at most six wildcards, `*` or `?`, per rule), and routes that go
+where the default goes get no rule. A single pattern with more than six
+wildcards fails synth (`UnsupportedRoutePatternError`). A load balancer
 allows 100 rules by default; synth warns above that
 (`@aws-blocks/hosting:AlbRuleLimit`).
 
@@ -722,8 +741,9 @@ it is not an in-place update.
   `BLOCKS_PUBLIC_ORIGIN`, the CORS origin), so existing sessions (cookies are
   scoped to the old host) and bookmarks to the old address stop working.
 - **CloudFront → ALB or stacked** deletes the default distribution and its
-  alarms; the ALB door's (and the router's) alarms and access logs are off
-  unless you set them. The stacked door has no custom domain yet.
+  alarms; the ALB door's (and the router's) own alarms are on unless
+  `monitoring: { enabled: false }`, and its access logs are off unless you set
+  them. The stacked door has no custom domain yet.
 - **A custom domain moving between doors** (for example the CloudFront door's
   `domain` to an API Gateway or ALB door) creates Route 53 records of the same
   name under new logical IDs, which collides with the old ones while both
