@@ -18,6 +18,7 @@ export {
   withComputeTarget,
 } from './shared/compute_target.js';
 export { type BuildProfile, buildProfile, withBuildProfile } from './shared/build_profile.js';
+export { LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS, lambdaWebAdapterAvailableIn } from './shared/web_adapter_regions.js';
 export type { SpaAdapterOptions } from './spa.js';
 export { nextjsAdapter } from './nextjs.js';
 export type { NextjsAdapterOptions } from './nextjs.js';

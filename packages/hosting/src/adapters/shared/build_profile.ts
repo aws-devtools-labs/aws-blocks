@@ -9,6 +9,9 @@
  *   wrapper, and Nitro builds `node-server` (a Lambda Web Adapter server, run
  *   buffered) unless the app picked a preset. `'default'` keeps the API Gateway
  *   REST (payload 1.0, streamed) build.
+ * - `lambdaWebAdapter` — `false` when the stack's region has no Lambda Web
+ *   Adapter layer (see `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`). Nitro then
+ *   builds `aws-lambda` behind the HTTP API instead of `node-server`.
  * - `edgeToRegional` — build Next.js `runtime: 'edge'` routes as regional
  *   Lambda functions instead of Lambda@Edge.
  * - `skipIsr` — build without the incremental-regeneration machinery: no tag
@@ -28,6 +31,7 @@
  */
 export type BuildProfile = {
   serverInvoke?: 'default' | 'http-api';
+  lambdaWebAdapter?: boolean;
   edgeToRegional?: boolean;
   skipIsr?: boolean;
   skipImageOptimization?: boolean;
@@ -53,9 +57,10 @@ export const buildProfile = (): BuildProfile => {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
   const value: Record<string, unknown> = { ...parsed };
-  const { serverInvoke, edgeToRegional, skipIsr, skipImageOptimization, deterministicBuildId } = value;
+  const { serverInvoke, lambdaWebAdapter, edgeToRegional, skipIsr, skipImageOptimization, deterministicBuildId } = value;
   return {
     ...(serverInvoke === 'default' || serverInvoke === 'http-api' ? { serverInvoke } : {}),
+    ...(typeof lambdaWebAdapter === 'boolean' ? { lambdaWebAdapter } : {}),
     ...(typeof edgeToRegional === 'boolean' ? { edgeToRegional } : {}),
     ...(typeof skipIsr === 'boolean' ? { skipIsr } : {}),
     ...(typeof skipImageOptimization === 'boolean' ? { skipImageOptimization } : {}),

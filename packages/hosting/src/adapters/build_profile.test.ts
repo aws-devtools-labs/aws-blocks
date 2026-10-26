@@ -18,6 +18,7 @@ void describe('buildProfile', () => {
   void it('round-trips what withBuildProfile writes', () => {
     const profile = {
       serverInvoke: 'http-api',
+      lambdaWebAdapter: false,
       edgeToRegional: true,
       skipIsr: true,
       skipImageOptimization: false,
@@ -32,6 +33,7 @@ void describe('buildProfile', () => {
   void it('keeps only known fields with the right type', () => {
     process.env[BUILD_PROFILE_ENV] = JSON.stringify({
       serverInvoke: 'grpc',
+      lambdaWebAdapter: 'no',
       edgeToRegional: 'yes',
       skipIsr: true,
       skipImageOptimization: 1,

@@ -9,6 +9,7 @@ import {
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
+  lambdaWebAdapterAvailableIn,
   normalizeBasePath,
   withBuildProfile,
   withComputeTarget,
@@ -636,8 +637,12 @@ export interface HostingProps {
    * API door; another door fails synth (`UnsupportedHostingSettingError`).
    * Other frameworks ignore it.
    *
+   * Behind the API Gateway HTTP API door it defaults to `'regional'`, because
+   * that door can't invoke Lambda@Edge. `'edge'` set there explicitly fails
+   * synth when the app has edge routes (`EdgeRouteNeedsCloudFrontDoorError`).
+   *
    * Set to `'regional'` by {@link HostingPresets}`.preview`.
-   * @default 'edge'
+   * @default `'regional'` behind the API Gateway HTTP API door, `'edge'` otherwise
    */
   edgeRoutes?: 'edge' | 'regional';
 
@@ -1045,11 +1050,18 @@ export class Hosting extends Construct {
     // Arm64 native modules (Astro's sharp). They also build for the door that
     // invokes the server (an API Gateway HTTP API: payload 2.0, buffered) and
     // for the settings that trim the build.
+    // A region with no Lambda Web Adapter layer can't run a Nitro
+    // `node-server` behind the HTTP API; an unresolved region keeps the default.
+    const region = cdk.Stack.of(this).region;
+    const noWebAdapter = !cdk.Token.isUnresolved(region) && !lambdaWebAdapterAvailableIn(region);
     const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
       withBuildProfile(
         {
           serverInvoke: isHttpApiDoor(props.frontDoor) ? 'http-api' : 'default',
-          ...(props.edgeRoutes === 'regional' ? { edgeToRegional: true } : {}),
+          ...(noWebAdapter ? { lambdaWebAdapter: false } : {}),
+          ...((props.edgeRoutes ?? (isHttpApiDoor(props.frontDoor) ? 'regional' : 'edge')) === 'regional'
+            ? { edgeToRegional: true }
+            : {}),
           ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
           ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
           ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),

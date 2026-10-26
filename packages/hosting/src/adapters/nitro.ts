@@ -61,7 +61,10 @@ export type NitroAdapterOptions = {
    * `'node-server'` instead — Web Functions run the HTTP server directly.
    * Behind an API Gateway HTTP API (`serverInvoke: 'http-api'`, see
    * `withBuildProfile`) it is `'node-server'` too: the Lambda Web Adapter
-   * server runs buffered, whatever `awsLambda.streaming` says.
+   * server runs buffered, whatever `awsLambda.streaming` says. In a region
+   * with no Lambda Web Adapter layer (`lambdaWebAdapter: false`) it stays
+   * `'aws-lambda'`, which serves the HTTP API as long as
+   * `awsLambda.streaming` is off.
    */
   preset?: string;
   /**
@@ -262,10 +265,12 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // Gateway HTTP API invokes the server buffered, which a streaming
   // `aws-lambda` handler (`awsLambda.streaming: true`) can't answer → a
   // `node-server` Lambda Web Adapter server, built buffered by the L3. Lambda
-  // compute behind the REST API → `aws-lambda`.
+  // compute behind the REST API, or behind the HTTP API in a region with no
+  // Lambda Web Adapter layer → `aws-lambda`.
+  const profile = buildProfile();
+  const httpApiServer = profile.serverInvoke === 'http-api' && profile.lambdaWebAdapter !== false;
   const effectivePreset =
-    preset ??
-    (targetCompute() === 'web-function' || buildProfile().serverInvoke === 'http-api' ? 'node-server' : 'aws-lambda');
+    preset ?? (targetCompute() === 'web-function' || httpApiServer ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');

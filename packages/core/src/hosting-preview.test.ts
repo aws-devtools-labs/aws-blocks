@@ -204,7 +204,7 @@ describe('Hosting with HostingPresets.preview', () => {
     });
   });
 
-  it('the HTTP API door builds the server for the HTTP API without preview too', () => {
+  it('the HTTP API door builds the server for the HTTP API without preview too, with edge routes regional', () => {
     const seen: { profile?: BuildProfile } = {};
     new Hosting(newStack('HttpDoorProfile'), 'Hosting', {
       root: tmpDir,
@@ -214,7 +214,7 @@ describe('Hosting with HostingPresets.preview', () => {
       frontDoor: { kind: 'apiGateway' },
     });
 
-    assert.deepStrictEqual(seen.profile, { serverInvoke: 'http-api' });
+    assert.deepStrictEqual(seen.profile, { serverInvoke: 'http-api', edgeToRegional: true });
   });
 
   it('the CloudFront door keeps the default build', () => {
@@ -453,6 +453,60 @@ describe('the trim settings on their own', () => {
       incrementalRegeneration: false,
     });
     assert.deepStrictEqual(seen.profile, { serverInvoke: 'default', skipIsr: true });
+  });
+
+  it("edgeRoutes defaults to 'regional' behind the HTTP API door, and stays 'edge' elsewhere", () => {
+    const httpSeen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('EdgeDefaultHttp'), 'Hosting', {
+      root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, httpSeen),
+      frontDoor: { kind: 'apiGateway' },
+    });
+    assert.strictEqual(httpSeen.profile?.edgeToRegional, true);
+    const cfSeen: { profile?: BuildProfile } = {};
+    new Hosting(newStack('EdgeDefaultCf'), 'Hosting', {
+      root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, cfSeen),
+    });
+    assert.strictEqual(cfSeen.profile?.edgeToRegional, undefined);
+  });
+
+  it("a Lambda@Edge route behind a door other than CloudFront fails synth (explicit edgeRoutes: 'edge' on the HTTP API door)", () => {
+    const seen: { profile?: BuildProfile } = {};
+    const fixture = ssrFixture(tmpDir, seen);
+    assert.throws(
+      () =>
+        new Hosting(newStack('EdgeExplicitHttp'), 'Hosting', {
+          root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+          frontDoor: { kind: 'apiGateway' },
+          edgeRoutes: 'edge',
+          customAdapter: (dir) => {
+            const manifest = fixture(dir);
+            const edge = manifest.compute.edge1;
+            manifest.compute.edge1 = { ...edge, type: 'edge', placement: 'global' };
+            return manifest;
+          },
+        }),
+      (err: Error) => err.name === 'EdgeRouteNeedsCloudFrontDoorError' && /only the CloudFront door invokes/.test(err.message),
+    );
+  });
+
+  it('a region with no Lambda Web Adapter layer tells the adapters so', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const stack = new Stack(new App(), 'NoWebAdapterRegion', { env: { account: '111111111111', region: 'il-central-1' } });
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      frontDoor: { kind: 'apiGateway' },
+    });
+    assert.strictEqual(seen.profile?.lambdaWebAdapter, false);
+    const supported: { profile?: BuildProfile } = {};
+    new Hosting(newStack('WebAdapterRegion'), 'Hosting', {
+      root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, supported),
+      frontDoor: { kind: 'apiGateway' },
+    });
+    assert.strictEqual(supported.profile?.lambdaWebAdapter, undefined);
   });
 
   it("`buildId: 'fixed'` works behind the ALB (no edge cache)", () => {

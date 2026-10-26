@@ -805,6 +805,7 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertEdgeRoutesReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -2971,6 +2972,30 @@ const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string,
     resolution:
       "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or move the middleware's logic into the pages " +
       'or route handlers before choosing another door.',
+  });
+};
+
+/**
+ * Fail synth for a Lambda@Edge compute (`type: 'edge'`, for example a Next.js
+ * `runtime: 'edge'` route) behind a door other than CloudFront: only a
+ * CloudFront distribution invokes Lambda@Edge, so the route would never reach
+ * its function.
+ *
+ * @throws HostingError('EdgeRouteNeedsCloudFrontDoorError') naming the computes and the door.
+ */
+const assertEdgeRoutesReachableByDoor = (manifest: DeployManifest, kind: string, label: string = kind): void => {
+  if (kind === 'cloudfront') return;
+  const edge = Object.entries(manifest.compute)
+    .filter(([, resource]) => resource.type === 'edge')
+    .map(([name]) => name);
+  if (edge.length === 0) return;
+  throw new HostingError('EdgeRouteNeedsCloudFrontDoorError', {
+    message:
+      `The app has Lambda@Edge computes (${edge.join(', ')}), which only the CloudFront door invokes; the '${label}' ` +
+      'front door would deploy them with no route reaching them.',
+    resolution:
+      "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind the API Gateway " +
+      'HTTP API door), or use the CloudFront door.',
   });
 };
 

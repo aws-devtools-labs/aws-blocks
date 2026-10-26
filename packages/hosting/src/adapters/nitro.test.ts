@@ -574,6 +574,20 @@ void describe('nitroAdapter — preset + feature validation', () => {
     assert.ok((fs.statSync(path.join(server.bundle, 'run.sh')).mode & 0o111) !== 0, 'run.sh is executable');
   });
 
+  void it('stays aws-lambda behind an HTTP API in a region with no Lambda Web Adapter layer', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withBuildProfile({ serverInvoke: 'http-api', lambdaWebAdapter: false }, () =>
+      nitroAdapter({ projectDir: tmpDir }),
+    );
+    assert.strictEqual(presetSeen, 'aws-lambda');
+    assert.strictEqual(manifest.compute.default?.type, 'handler');
+  });
+
   void it('an explicit preset wins behind an HTTP API', () => {
     writePackageJson(tmpDir);
     let presetSeen: string | undefined;
