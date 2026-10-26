@@ -211,7 +211,8 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 	// `admin.scan` escapes `\` and `"` in the filter value before sending it as a
 	// ListUsers Filter. Only Cognito decides how the escaped string is read (the
 	// mock compares the raw value), so on a sandbox this checks the escaping
-	// against the real service; locally it pins the mock to the same results.
+	// against the real service; locally it checks only the mock's literal matching
+	// (the escaped wire string is pinned by the toCognitoFilter unit test).
 	// Each special character gets its own user so a failure shows which one the
 	// service reads differently.
 	describe('AuthCognito admin.scan filter values with backslashes and quotes', () => {
@@ -225,16 +226,16 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 				mixed: `${base} a\\b "c" \\"d\\"`,
 			};
 			const users: Record<string, string> = {};
-			for (const [key, name] of Object.entries(names)) {
-				users[key] = uniqueUser();
-				await api.authCAdminCreateUserWithName(users[key], PW, name);
-			}
 			try {
+				for (const [key, name] of Object.entries(names)) {
+					users[key] = uniqueUser();
+					await api.authCAdminCreateUserWithName(users[key], PW, name);
+				}
 				// ListUsers can trail AdminCreateUser; wait until a plain prefix sees all four.
 				let all: string[] = [];
 				for (let i = 0; i < 10 && all.length < 4; i++) {
 					if (i > 0) await new Promise((r) => setTimeout(r, 1000));
-					all = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: base });
+					all = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: `${base} ` });
 				}
 				// Record a rejected filter as its error name, so one run shows every case.
 				const scan = (filter: Parameters<typeof api.authCAdminScan>[0]) =>
@@ -254,8 +255,7 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 					match: 'startsWith',
 					value: `${base} a\\b "c" \\`,
 				});
-				// Two backslashes where the user has one must not match: each backslash is
-				// escaped on its own, so the service never reads the pair back as one.
+				// Two backslashes where the user has one must not match.
 				results['doubled backslash equals'] = await scan({
 					attribute: 'name',
 					match: 'equals',
