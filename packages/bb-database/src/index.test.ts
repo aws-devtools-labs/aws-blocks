@@ -460,6 +460,14 @@ describe('construction-time rules', () => {
 		);
 	});
 
+	test('closing a local cluster that never ran a statement resolves', async () => {
+		// Regression: PGlite 0.5.10's close() hangs before its init completes, and a
+		// block whose migration fails validation never reaches the engine.
+		new Database(app(), 'idle');
+		const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 15_000).unref());
+		assert.notStrictEqual(await Promise.race([_closeAllPgliteClusters().then(() => 'closed'), timeout]), 'timeout');
+	});
+
 	test('an explicit migrationsPath must exist; the default may be absent', () => {
 		const scope = app();
 		assert.throws(

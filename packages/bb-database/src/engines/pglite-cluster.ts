@@ -186,7 +186,17 @@ export class PgliteCluster {
 	async destroy(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
-		await this.db.close();
+		// PGlite's close() never resolves when it runs before the lazy WASM init
+		// has finished (seen on 0.5.10), and a block that only failed validation
+		// never ran a statement. Wait for the init first; if it failed there is
+		// nothing to close.
+		const db = this.ready
+			? await this.ready.catch(() => undefined)
+			: await this.db.waitReady.then(
+					() => this.db,
+					() => undefined,
+				);
+		if (db) await db.close();
 	}
 }
 
