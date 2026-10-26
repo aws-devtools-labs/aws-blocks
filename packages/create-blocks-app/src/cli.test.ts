@@ -159,6 +159,90 @@ describe('create-blocks-app template metadata', () => {
     }
     assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
   });
+
+  it('every deployable template has a one-shot sandbox:deploy script', () => {
+    // `npm run sandbox` keeps watching and never exits, so scripts and CI need
+    // a variant that deploys once and returns: the same sandbox script with
+    // --deploy-only.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      if (!scripts.sandbox) continue;
+      if (scripts['sandbox:deploy'] !== `${scripts.sandbox} --deploy-only`) {
+        problems.push(`${entry.name}: "sandbox:deploy" should be "${scripts.sandbox} --deploy-only"`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it('every HTML template declares a UTF-8 charset', () => {
+    // Without it, a host that sends `Content-Type: text/html` with no charset
+    // (S3, most static servers) makes the browser decode the page as
+    // windows-1252, so any non-ASCII text in the HTML or a classic script
+    // renders as mojibake. Browsers only honour the tag in the first 1024 bytes.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const htmlPath = join(templatesDir, entry.name, 'index.html');
+      if (!existsSync(htmlPath)) continue;
+      const head = readFileSync(htmlPath, 'utf-8').slice(0, 1024);
+      if (!/<head>\s*<meta charset="utf-8"\s*\/?>/i.test(head)) {
+        problems.push(`${entry.name}: index.html should open <head> with <meta charset="utf-8">`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it('nextjs template wraps each page section in its own error boundary', () => {
+    // error.tsx covers the whole route: without per-section boundaries, one
+    // failing Server Component replaces the page, client components included.
+    const pageDir = join(__dirname, '..', 'templates', 'nextjs', 'src', 'app');
+    assert.ok(existsSync(join(pageDir, 'section-boundary.tsx')), 'section-boundary.tsx is missing');
+    const sections = readFileSync(join(pageDir, 'page.tsx'), 'utf-8').match(/<section[\s\S]*?<\/section>/g) ?? [];
+    assert.ok(sections.length > 0, 'page.tsx has no <section> elements');
+    const unwrapped = sections.filter((section) => !section.includes('<SectionBoundary>'));
+    assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
+  });
+
+  it('every template sandbox script forwards --deploy-only to startSandbox and exits', () => {
+    // Run each template's real aws-blocks/scripts/sandbox.ts against a stubbed
+    // `@aws-blocks/blocks/scripts` that records the options it receives. The
+    // stub resolves at once for deployOnly and never resolves otherwise (like
+    // watch mode), so a script that drops the flag would also hang until the
+    // timeout. The script uses no TypeScript-only syntax, so plain node runs it.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const scriptPath = join(templatesDir, entry.name, 'aws-blocks', 'scripts', 'sandbox.ts');
+      if (!existsSync(scriptPath)) continue;
+      const dir = mkdtempSync(join(tmpdir(), `cba-sandbox-${entry.name}-`));
+      try {
+        const stubDir = join(dir, 'node_modules', '@aws-blocks', 'blocks');
+        mkdirSync(stubDir, { recursive: true });
+        writeFileSync(join(stubDir, 'package.json'), JSON.stringify({ name: '@aws-blocks/blocks', type: 'module', exports: { './scripts': './scripts.js' } }));
+        writeFileSync(
+          join(stubDir, 'scripts.js'),
+          'export async function startSandbox(o) { console.log("deployOnly=" + JSON.stringify(o.deployOnly)); if (!o.deployOnly) await new Promise(() => setInterval(() => {}, 1000)); return "https://api.example"; }\n',
+        );
+        mkdirSync(join(dir, 'aws-blocks', 'scripts'), { recursive: true });
+        const runnable = join(dir, 'aws-blocks', 'scripts', 'sandbox.mjs');
+        writeFileSync(runnable, readFileSync(scriptPath, 'utf-8'));
+        const stdout = execFileSync(process.execPath, [runnable, '--deploy-only'], { cwd: dir, encoding: 'utf-8', timeout: 15000 });
+        if (!stdout.includes('deployOnly=true')) problems.push(`${entry.name}: startSandbox did not get deployOnly: true (${stdout.trim()})`);
+      } catch (err: any) {
+        problems.push(`${entry.name}: ${err.signal === 'SIGTERM' ? 'did not exit (deployOnly not forwarded)' : err.message}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
 });
 
 describe('create-blocks-app auto-detection', () => {

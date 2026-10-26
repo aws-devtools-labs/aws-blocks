@@ -72,7 +72,10 @@ function changeset(entries, body = "A change.") {
  */
 function baseRepo(t, files = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "changeset-guard-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	// Retry the removal: a git child process can still be writing into `.git`
+	// when the test ends, and a single pass then fails with ENOTEMPTY / EBUSY
+	// in the hook (failing the test although its assertions passed).
+	t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 	mkdirSync(join(dir, "scripts"), { recursive: true });
 	copyFileSync(GUARD_SRC, join(dir, "scripts", "changeset-guard.ts"));

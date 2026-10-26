@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 
@@ -35,14 +35,20 @@ describe('resolveDeploymentTarget', () => {
 			region: 'eu-west-1',
 			profile: 'deployment',
 		});
-		await assertAwsCredentials({
-			command: 'deploy',
-			env,
-			projectRoot,
-			probe: async (region) => {
-				assert.equal(region, 'eu-west-1');
-			},
-		});
+		const log = mock.method(console, 'log', () => {});
+		try {
+			await assertAwsCredentials({
+				command: 'deploy',
+				env,
+				projectRoot,
+				probe: async (region) => {
+					assert.equal(region, 'eu-west-1');
+					return undefined;
+				},
+			});
+		} finally {
+			log.mock.restore();
+		}
 		assert.deepEqual(env, { HOME: home });
 	});
 
@@ -97,6 +103,13 @@ describe('resolveDeploymentTarget', () => {
 			}),
 			{ region: 'eu-west-1', profile: undefined },
 		);
+		assert.deepEqual(
+			await resolveDeploymentTarget({
+				env: { ...env, AMAZON_ACCESS_KEY_ID: 'id', AMAZON_SECRET_ACCESS_KEY: 'key' },
+				projectRoot,
+			}),
+			{ region: 'eu-west-1', profile: undefined },
+		);
 		assert.deepEqual(await resolveDeploymentTarget({ env: { ...env, AWS_PROFILE: 'default' }, projectRoot }), {
 			region: 'us-east-1',
 			profile: undefined,
@@ -106,6 +119,26 @@ describe('resolveDeploymentTarget', () => {
 	it('ignores context entries and CDK_DEFAULT_REGION', async () => {
 		await writeFile(join(projectRoot, 'cdk.json'), '{"context":{"region":"eu-west-3","profile":"deployment"}}');
 		env.CDK_DEFAULT_REGION = 'ap-south-1';
+		assert.deepEqual(await resolveDeploymentTarget({ env, projectRoot }), {
+			region: 'us-east-1',
+			profile: undefined,
+		});
+	});
+
+	it('reads the bootstrap qualifier from cdk.json, cdk.context.json, then ~/.cdk.json, as CDK does', async () => {
+		const key = '@aws-cdk/core:bootstrapQualifier';
+		const qualifier = async () => (await resolveDeploymentTarget({ env, projectRoot })).bootstrapQualifier;
+		assert.equal(await qualifier(), undefined);
+		await writeFile(join(home, '.cdk.json'), JSON.stringify({ context: { [key]: 'user' } }));
+		assert.equal(await qualifier(), 'user');
+		await writeFile(join(projectRoot, 'cdk.context.json'), JSON.stringify({ [key]: 'cached' }));
+		assert.equal(await qualifier(), 'cached');
+		await writeFile(join(projectRoot, 'cdk.json'), JSON.stringify({ context: { [key]: 'project' } }));
+		assert.equal(await qualifier(), 'project');
+	});
+
+	it('treats a malformed cdk.context.json as setting no qualifier, and leaves the error to CDK', async () => {
+		await writeFile(join(projectRoot, 'cdk.context.json'), '{not json');
 		assert.deepEqual(await resolveDeploymentTarget({ env, projectRoot }), {
 			region: 'us-east-1',
 			profile: undefined,

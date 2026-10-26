@@ -12,6 +12,7 @@ the server, and a **Client Component** that calls the API from the browser.
 npm run dev          # Start the Next.js dev server (mocks, no AWS needed)
 npm run test:e2e     # Run the e2e test against the dev server
 npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
@@ -24,7 +25,8 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/page.tsx` | Server Component — fetches on the server |
 | `src/app/client.tsx` | Client Component — calls the API from the browser |
 | `src/app/layout.tsx` | Root layout |
-| `src/app/error.tsx` | Error boundary |
+| `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
+| `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
 | `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
 
 ## What's Included
@@ -46,6 +48,7 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run build` | `next build` (standalone output) |
 | `npm run start` | Serve the production build locally |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
 | `npm run destroy` | Tear down the production stack |

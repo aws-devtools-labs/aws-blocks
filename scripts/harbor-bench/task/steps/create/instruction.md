@@ -15,3 +15,5 @@ Don't deploy, call AWS, inspect credentials or print environment variables; the 
 - In each item: checkbox labelled **Completed**, text input labelled **Edit title**, buttons **Save todo** and **Delete todo**.
 
 Adding, listing, editing the title, toggling completion both ways and deleting must work through the backend, and survive a page reload, a fresh browser and a server restart. Stop any servers you started before finishing.
+
+Playwright with Chromium is preinstalled for browser testing: `import { chromium } from '/opt/playwright/index.mjs'`.

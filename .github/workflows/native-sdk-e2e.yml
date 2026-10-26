@@ -226,7 +226,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
@@ -370,7 +370,7 @@ jobs:
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -513,7 +513,7 @@ jobs:
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -630,7 +630,11 @@ jobs:
             gradle-task: iosSimulatorArm64Test
             timeout: 45
     env:
-      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # Manual runs have no PR number. They use the short run number (d-prefixed
+      # so it can't match a PR number), not the 11-digit run id: with the run id
+      # the derived bucket name `bb-test-nb-<suffix>-native-bindings-files` is
+      # 64 characters for the Kotlin legs, over S3's 63-character limit.
+      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -642,7 +646,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
