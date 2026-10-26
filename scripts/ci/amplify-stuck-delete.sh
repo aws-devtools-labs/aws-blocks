@@ -270,7 +270,9 @@ leftovers() {
 			continue
 		fi
 		[ -z "$rows" ] && continue
-		mapfile -t ids <<<"$rows"
+		# A read loop, not mapfile: stock macOS bash 3.2 has no mapfile.
+		ids=()
+		while IFS= read -r logical; do ids+=("$logical"); done <<<"$rows"
 		names=$(table_names "$id" "${ids[@]}")
 		for logical in "${ids[@]}"; do
 			table=$(awk -F'\t' -v id="$logical" '$1 == id { print $2; exit }' <<<"$names")
