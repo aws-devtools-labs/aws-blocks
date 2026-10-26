@@ -67,6 +67,9 @@ Returns `{ results: Array<{ status, messageId?, error? }> }`.
 Never throws on send failures. Both partial and total failures are reported per-entry in the
 `results` array (with `status: 'failed'`).
 
+A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
+as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
+
 Each message in the array is an `EmailMessage` (same type as `send()`):
 
 | Field | Type | Description |
@@ -77,6 +80,19 @@ Each message in the array is an `EmailMessage` (same type as `send()`):
 | `html` | `string?` | HTML body (optional) |
 | `cc` | `string[]?` | CC addresses (optional) |
 | `bcc` | `string[]?` | BCC addresses (optional) |
+
+### Input validation
+
+`send()` and `sendBatch()` validate each message the same way locally and when deployed, before
+calling SES:
+
+- every address (To, CC, BCC and `fromAddress`) must be a valid email address, either bare
+  (`jane@example.com`) or with a display name (`Jane Doe <jane@example.com>`);
+- at most 50 recipients per message (To + CC + BCC combined);
+- at most 40 MB per message.
+
+A malformed address or too many recipients throws `InvalidInputException`; an oversized message
+throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
 
 ## Error Handling
 
