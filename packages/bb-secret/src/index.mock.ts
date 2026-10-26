@@ -8,11 +8,14 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { blocksError, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-secret');
 
 // Re-export public types and errors (canonical source)
 export { SecretErrors } from './errors.js';
