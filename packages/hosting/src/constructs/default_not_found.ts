@@ -21,22 +21,27 @@ import type { DeployManifest } from '../manifest/types.js';
  * this default. An SPA keeps its `index.html` fallback (a miss is the app,
  * at 200), and a site with a server keeps its own 404.
  *
- * The SPA flag is the adapter's `staticAssets.spaFallback`, else the legacy
- * heuristic (no server and no error pages means an SPA).
+ * The SPA flag is the adapter's `staticAssets.spaFallback`, read as routing
+ * reads it (`plan/hosting-plan.ts`): only an explicit `true` is an SPA. A
+ * manifest that leaves it unset (a custom adapter, a hand-written manifest)
+ * gets no `index.html` fallback on any door, so it is a multi-page site here
+ * too, and a miss gets the default page rather than S3's 403 or plain text.
+ *
+ * Whether the site has a server is read from the manifest too, the same way
+ * for every door: a regional compute resource, or a route to one. An image
+ * optimizer is not a server (it never answers a page miss), and neither is an
+ * edge function.
  *
  * @param manifest the deploy manifest.
- * @param opts.hasCompute whether the deploy runs a server (or any regional compute).
  * @param opts.userNotFound whether the app set `errorPages.notFound`.
  * @internal Framework-only.
  */
-export const needsDefaultNotFoundPage = (
-  manifest: DeployManifest,
-  opts: { hasCompute: boolean; userNotFound: boolean },
-): boolean => {
-  const isSpaFallback =
-    manifest.staticAssets.spaFallback ??
-    (!opts.hasCompute && (manifest.errorPages === undefined || Object.keys(manifest.errorPages).length === 0));
-  return !opts.hasCompute && !isSpaFallback && !manifest.errorPages?.[404] && !opts.userNotFound;
+export const needsDefaultNotFoundPage = (manifest: DeployManifest, opts: { userNotFound: boolean }): boolean => {
+  const hasServer =
+    Object.values(manifest.compute ?? {}).some((c) => c.type !== 'edge') ||
+    manifest.routes.some((r) => r.target !== 'static' && r.target !== 's3');
+  const isSpaFallback = manifest.staticAssets.spaFallback === true;
+  return !hasServer && !isSpaFallback && !manifest.errorPages?.[404] && !opts.userNotFound;
 };
 
 // Built-in default 404 page for multi-page static sites that ship no

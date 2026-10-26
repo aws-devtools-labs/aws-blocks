@@ -25,6 +25,8 @@ import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { cf } from './cf_helpers.js';
+import { cloudFrontEdgeDoor } from './cloudfront_edge_door.js';
+import { buildFrontDoor } from './custom_door.js';
 import { customErrorResponses } from './error_responses.js';
 import { type DoorInput, defineFrontDoor } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
@@ -120,12 +122,28 @@ describe('the default 404 page behind every front door', () => {
     assert.ok(uploadsDefaultPage(t));
     // `cf.errorPages` serves the page at its own key (the default page is not `404.html`).
     assert.deepEqual(errorResponsePaths(t), [[404, `/${NOT_FOUND_PAGE_KEY}`]]);
+    // ...and the 404 can fire: CloudFront may list the bucket, so S3 answers a miss with 404, not 403.
+    const listGrant = Object.values(t.findResources('AWS::S3::BucketPolicy'))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Effect: string; Principal?: { Service?: string }; Action: string | string[] }>)
+      .some((s) => s.Effect === 'Allow' && s.Principal?.Service === 'cloudfront.amazonaws.com' && [s.Action].flat().includes('s3:ListBucket'));
+    assert.ok(listGrant, 'CloudFront can list the bucket, so a miss is a 404 from S3, not a 403');
   });
 
-  it("the stacked door's router uploads the default page and hands it to the edge", () => {
-    const { t, hosting } = synth(mpa(), { kind: 'stackedRouter' });
-    assert.ok(uploadsDefaultPage(t));
+  it("the stacked door's router uploads the default page and the edge serves it at its key", () => {
+    const stack = new Stack(new App(), 'D404Stacked', { env: { account: '111111111111', region: 'us-west-2' } });
+    const hosting = new HostingConstruct(stack, 'Hosting', { manifest: mpa(), frontDoor: { kind: 'stackedRouter' } });
     assert.deepEqual(hosting.doorInput.app.errorPages, { notFound: NOT_FOUND_PAGE_KEY });
+    // The edge, built on the router's DoorInput as `@aws-blocks/core`'s `Hosting` builds it.
+    const router = hosting.frontDoor;
+    buildFrontDoor(
+      stack,
+      cloudFrontEdgeDoor,
+      { ...hosting.doorInput, upstream: { service: router.service, url: router.url, originHandle: router.originHandle } },
+      { wiringCheck: false },
+    );
+    const t = Template.fromStack(stack);
+    assert.ok(uploadsDefaultPage(t));
+    assert.deepEqual(errorResponsePaths(t).find(([code]) => code === 404), [404, `/builds/d404/${NOT_FOUND_PAGE_KEY}`]);
   });
 
   it('error pages are served at their own keys behind the edge (stacked) and cf.errorPages', () => {
@@ -143,6 +161,35 @@ describe('the default 404 page behind every front door', () => {
   it('the CloudFront door still uploads it (unchanged)', () => {
     assert.ok(uploadsDefaultPage(synth(mpa(), undefined).t));
   });
+
+  it('the CloudFront door maps each error code once when the site ships a 500 page but no 404 page', () => {
+    fs.writeFileSync(path.join(tmpDir, '500.html'), '<html>500</html>');
+    const { t } = synth(mpa({ errorPages: { 500: '/500.html' } }), undefined);
+    const paths = errorResponsePaths(t);
+    const codes = paths.map(([code]) => code);
+    assert.deepEqual(codes, [...new Set(codes)], `one error response per code: ${JSON.stringify(paths)}`);
+    assert.deepEqual(paths.find(([code]) => code === 403), [403, `/builds/d404/${NOT_FOUND_PAGE_KEY}`]);
+    assert.deepEqual(paths.find(([code]) => code === 500), [500, '/builds/d404/500.html']);
+  });
+
+  // Routing falls back to index.html only for an explicit `spaFallback: true`
+  // (`plan/hosting-plan.ts`), so a manifest that leaves it unset (a custom
+  // adapter, a hand-written manifest) is a multi-page site on every door.
+  for (const [label, frontDoor, extra] of [['CloudFront', undefined, {}], ...regionalDoors] as const) {
+    it(`${label}: a manifest without spaFallback is routed as multi-page, so it gets the default page`, () => {
+      const { t } = synth(mpa({ staticAssets: { directory: tmpDir } }), frontDoor, extra);
+      assert.ok(uploadsDefaultPage(t));
+    });
+  }
+
+  // One decision, from the manifest, on every door: an image optimizer is not
+  // a server (it never answers a page miss), so it doesn't turn the page off.
+  for (const [label, frontDoor, extra] of [['CloudFront', undefined, {}], ...regionalDoors] as const) {
+    it(`${label}: a static site with an image optimizer (and no image route) still gets the default page`, () => {
+      const { t } = synth(mpa({ imageOptimization: { bundle: bundleDir, handler: 'index.handler', formats: ['image/webp'], sizes: [640] } }), frontDoor, extra);
+      assert.ok(uploadsDefaultPage(t));
+    });
+  }
 
   describe('no default page where the site has its own answer for a miss', () => {
     const cases: Array<[string, () => DeployManifest, Partial<HostingConstructProps>]> = [

@@ -397,7 +397,6 @@ export class CdnConstruct extends Construct {
     // user errorPages.notFound > framework errorPages[404] > this default.
     // The same decision every other door makes (see `default_not_found.ts`).
     const needsDefaultNotFound = needsDefaultNotFoundPage(manifest, {
-      hasCompute: Boolean(hasCompute),
       userNotFound: !!props.customErrorPages?.notFound,
     });
     this.defaultNotFoundPageHtml = needsDefaultNotFound
@@ -1268,13 +1267,19 @@ export class CdnConstruct extends Construct {
         ? [
             // S3 with OAC returns 403 for missing keys — map to the
             // custom 404 page so deep links render the framework's
-            // not-found page instead of a raw CloudFront error.
-            {
-              httpStatus: 403,
-              responseHttpStatus: 404,
-              responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
-              ttl: Duration.seconds(0),
-            },
+            // not-found page instead of a raw CloudFront error. Skipped
+            // when the default page already maps 403 (a site that ships a
+            // 500 page but no 404 page): one response per error code.
+            ...(needsDefaultNotFound
+              ? []
+              : [
+                  {
+                    httpStatus: 403,
+                    responseHttpStatus: 404,
+                    responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
+                    ttl: Duration.seconds(0),
+                  },
+                ]),
             ...(manifest.errorPages?.[404]
               ? [
                   {

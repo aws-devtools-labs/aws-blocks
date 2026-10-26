@@ -2049,12 +2049,16 @@ export class HostingConstruct extends Construct {
         ? DEFAULT_NOT_FOUND_PAGE_HTML
         : undefined;
     if (defaultNotFoundPageHtml) {
-      new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
-        sources: [Source.data(NOT_FOUND_PAGE_KEY, defaultNotFoundPageHtml)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      // A build upload like any other: the cutover waits for it, so a miss
+      // never reaches the new build before its 404 page does.
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
+          sources: [Source.data(NOT_FOUND_PAGE_KEY, defaultNotFoundPageHtml)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
 
     // ---- 11a. Custom error pages ----
@@ -2533,10 +2537,7 @@ export class HostingConstruct extends Construct {
    */
   private servesDefaultNotFoundPage(manifest: DeployManifest, props: HostingConstructProps): boolean {
     if (this.frontDoorKind === 'none') return false;
-    const hasCompute =
-      Object.values(manifest.compute ?? {}).some((c) => c.type !== 'edge') ||
-      manifest.routes.some((r) => r.target !== 'static' && r.target !== 's3');
-    return needsDefaultNotFoundPage(manifest, { hasCompute, userNotFound: !!props.errorPages?.notFound });
+    return needsDefaultNotFoundPage(manifest, { userNotFound: !!props.errorPages?.notFound });
   }
 
   private assembleDoorInput(

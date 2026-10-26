@@ -18,7 +18,23 @@ on every door: the app's `errorPages.notFound`, then the framework's
 `_not_found.html`, or a framework page under any name) instead of always
 pointing at `404.html` / `500.html`. An SPA keeps its `index.html` fallback, a
 site with a server keeps its own 404, and the `'none'` door keeps its S3
-website error document. The CloudFront door's template is unchanged.
+website error document.
+
+Every door now makes the same decision from the manifest:
+- only an explicit `staticAssets.spaFallback: true` is an SPA, as in routing,
+  so a custom adapter's manifest that leaves it unset gets the default page
+  rather than S3's 403 (the built-in adapters always set it);
+- an image optimizer doesn't count as a server, so a static site with one
+  still gets the default page on CloudFront too;
+- the build's cutover waits for the default page's upload, so a miss never
+  reaches a new build before its 404 page does.
+
+The CloudFront door no longer maps 403 twice for a static site that ships a
+500 page but no 404 page. `cf.origin` now lets CloudFront list the assets
+bucket (scoped to the door's distribution, as on the built-in doors), so a
+missing file is a 404 and a bring-your-own door's `cf.errorPages` can serve
+the page. The CloudFront template of an app built by a built-in adapter is
+otherwise unchanged.
 
 The docs now match the doors' behavior:
 - the ALB door's own alarms are on unless `monitoring: { enabled: false }`;
