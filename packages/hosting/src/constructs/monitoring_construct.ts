@@ -174,23 +174,40 @@ export const warnIfUndeliverable = (
       if (alarms.length === 0) {
         return [];
       }
-      const stack = Stack.of(scope);
-      const topicArn = JSON.stringify(stack.resolve(topic.topicArn));
+      const topicStack = Stack.of(scope);
 
-      // A subscriber anywhere in the app counts. LambdaSubscription /
-      // SqsSubscription synthesize their CfnSubscription in the subscriber's
-      // stack, so searching only this topic's stack would miss a cross-stack
-      // target. resolve() still yields this topic's { Ref } from the producer.
-      const hasSubscriber = scope.node.root.node
-        .findAll()
-        .some(
-          (c) =>
-            c instanceof CfnSubscription &&
-            JSON.stringify(stack.resolve(c.topicArn)) === topicArn,
+      // A subscriber anywhere in the app counts, as long as it shares this
+      // topic's environment: `LambdaSubscription` / `SqsSubscription` put their
+      // `CfnSubscription` in the TARGET's stack, so a same-stack-only search
+      // would miss a cross-stack target in the same account/region. A
+      // DIFFERENT-environment stack (e.g. the off-region us-east-1 support
+      // stack) owns its OWN topic and is validated on its own, so skip those
+      // here — resolving a cross-environment token in this stack's scope would
+      // force an unwanted cross-stack reference (`CannotUseCrossEnvironment`).
+      const hasSubscriber = scope.node.root.node.findAll().some((c) => {
+        if (!(c instanceof CfnSubscription)) {
+          return false;
+        }
+        const subStack = Stack.of(c);
+        if (
+          subStack.account !== topicStack.account ||
+          subStack.region !== topicStack.region
+        ) {
+          return false;
+        }
+        // Resolve both arns in the SUBSCRIPTION's own stack so same-stack
+        // subscriptions compare as `{ Ref }` and same-environment cross-stack
+        // ones compare as the same import, without a cross-env resolve.
+        return (
+          JSON.stringify(subStack.resolve(c.topicArn)) ===
+          JSON.stringify(subStack.resolve(topic.topicArn))
         );
+      });
       if (hasSubscriber) {
         return [];
       }
+
+      const topicArn = JSON.stringify(topicStack.resolve(topic.topicArn));
 
       // Treat as deliverable when every alarm already has at least one action
       // OTHER than this topic — the caller routed delivery themselves via
@@ -202,9 +219,10 @@ export const warnIfUndeliverable = (
         if (!(cfnAlarm instanceof CfnAlarm)) {
           return false;
         }
-        const actions: unknown[] = stack.resolve(cfnAlarm.alarmActions) ?? [];
+        const actions: unknown[] =
+          topicStack.resolve(cfnAlarm.alarmActions) ?? [];
         return actions.some(
-          (a) => JSON.stringify(stack.resolve(a)) !== topicArn,
+          (a) => JSON.stringify(topicStack.resolve(a)) !== topicArn,
         );
       });
       if (everyAlarmRoutesElsewhere) {
