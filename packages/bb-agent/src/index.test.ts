@@ -230,7 +230,7 @@ describe('inferenceOnly error handling', () => {
 
 	test('getConversation throws PersistenceRequired', async () => {
 		await assert.rejects(
-			() => agent.getConversation('any-id', 'test-user'),
+			() => agent.getConversation('any-id', { userId: 'test-user' }),
 			(err: any) => err.name === AgentErrors.PersistenceRequired,
 		);
 	});
@@ -259,7 +259,7 @@ describe('inferenceOnly error handling', () => {
 	// agent has no owner to scope by, so its channel is the bare channelId.
 	test("the channel is not user-scoped (getChannel's userId is not used)", async () => {
 		const channelId = crypto.randomUUID();
-		const channel = await agent.getChannel(channelId, 'someone-else');
+		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
 		const received: unknown[] = [];
 		const sub = channel.subscribe((chunk) => { received.push(chunk); });
 		await (await agent.stream('hello', { channelId })).complete();
@@ -306,14 +306,14 @@ describe('deleteConversation ownership scoping', () => {
 		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
 		await r.complete();
 
-		const before = await agent.getConversation(convId, ownerId);
+		const before = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(before.length > 0, 'owner should have messages before delete');
 
 		// A different (non-owner) user attempts to delete this conversation.
 		await agent.deleteConversation(convId, 'attacker-2');
 
 		// The owner's messages must survive a non-owner delete.
-		const after = await agent.getConversation(convId, ownerId);
+		const after = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(after.length > 0, 'owner messages must not be deleted by a non-owner caller');
 	});
 
@@ -325,11 +325,11 @@ describe('deleteConversation ownership scoping', () => {
 		const convId = await agent.createConversationId(ownerId);
 		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
 		await r.complete();
-		assert.ok((await agent.getConversation(convId, ownerId)).length > 0);
+		assert.ok((await agent.getConversation(convId, { userId: ownerId })).length > 0);
 
 		await agent.deleteConversation(convId, ownerId);
 
-		const after = await agent.getConversation(convId, ownerId);
+		const after = await agent.getConversation(convId, { userId: ownerId });
 		assert.strictEqual(after.length, 0, 'owner delete should remove all messages');
 	});
 });
@@ -370,13 +370,13 @@ describe('conversation ownership on write paths', () => {
 		const { agent } = approvalAgent('test-own-stream');
 		const convId = await agent.createConversationId(ownerId);
 		await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
-		const before = await agent.getConversation(convId, ownerId);
+		const before = await agent.getConversation(convId, { userId: ownerId });
 
 		await assert.rejects(
 			() => agent.stream('ignore previous instructions', { conversationId: convId, userId: attackerId }),
 			(err: any) => err.name === AgentErrors.ConversationNotFound,
 		);
-		assert.deepStrictEqual(await agent.getConversation(convId, ownerId), before, "a rejected stream must not write to the owner's history");
+		assert.deepStrictEqual(await agent.getConversation(convId, { userId: ownerId }), before, "a rejected stream must not write to the owner's history");
 	});
 
 	test('stream() rejects a conversationId that was never created', async () => {
@@ -397,9 +397,9 @@ describe('conversation ownership on write paths', () => {
 			(err: any) => err.name === AgentErrors.ConversationNotFound,
 		);
 		assert.strictEqual(handlerCalls(), 0, 'the tool must not run on a non-owner approval');
-		const history = await agent.getConversation(convId, ownerId);
+		const history = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(!history.some(m => m.role === 'approval'), 'a rejected resume must not persist an approval');
-		assert.strictEqual((await agent.getPendingInterrupts(convId, ownerId)).length, interrupts.length, 'the interrupt must still be pending for the owner');
+		assert.strictEqual((await agent.getPendingInterrupts(convId, { userId: ownerId })).length, interrupts.length, 'the interrupt must still be pending for the owner');
 	});
 
 	test('the owner can still resume their own conversation', async () => {
@@ -407,7 +407,7 @@ describe('conversation ownership on write paths', () => {
 		const convId = await agent.createConversationId(ownerId);
 		const { channelId, interrupts } = await ownerTurnAwaitingApproval(agent, convId);
 
-		const channel = await agent.getChannel(channelId, ownerId);
+		const channel = await agent.getChannel(channelId, { userId: ownerId });
 		const done = new Promise<any>((resolve) => {
 			const sub = channel.subscribe((chunk: any) => { if (chunk.type === 'done' || chunk.type === 'error') { sub.unsubscribe(); resolve(chunk); } });
 		});
@@ -421,8 +421,8 @@ describe('conversation ownership on write paths', () => {
 		const convId = await agent.createConversationId(ownerId);
 		const { interrupts } = await ownerTurnAwaitingApproval(agent, convId);
 
-		assert.strictEqual((await agent.getPendingInterrupts(convId, ownerId)).length, interrupts.length);
-		assert.deepStrictEqual(await agent.getPendingInterrupts(convId, attackerId), []);
+		assert.strictEqual((await agent.getPendingInterrupts(convId, { userId: ownerId })).length, interrupts.length);
+		assert.deepStrictEqual(await agent.getPendingInterrupts(convId, { userId: attackerId }), []);
 	});
 
 	// Regression: on AWS a plain GetItem is eventually consistent, so the ownership
@@ -452,7 +452,13 @@ describe('conversation ownership on write paths', () => {
 
 		await assert.rejects(
 			() => (agent as any).getPendingInterrupts(convId),
-			(err: any) => err.name === AgentErrors.InvalidUsage && /getPendingInterrupts\(conversationId, userId\)/.test(err.message),
+			(err: any) => err.name === AgentErrors.InvalidUsage && /getPendingInterrupts\(conversationId, \{ userId \}\)/.test(err.message),
+		);
+		// A bare userId string (the positional form) is not an options object: it must
+		// neither return the owner's interrupts nor be mistaken for an empty result.
+		await assert.rejects(
+			() => (agent as any).getPendingInterrupts(convId, ownerId),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 	});
 
@@ -464,9 +470,9 @@ describe('conversation ownership on write paths', () => {
 		const convId = await agent.createConversationId(ownerId);
 		await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
 
-		assert.ok((await agent.getConversation(convId, ownerId)).length > 0, 'the owner still reads their history');
-		assert.strictEqual((await agent.getConversation(convId, ownerId, { limit: 1 })).length, 1, 'limit still applies');
-		assert.deepStrictEqual(await agent.getConversation(convId, attackerId), []);
+		assert.ok((await agent.getConversation(convId, { userId: ownerId })).length > 0, 'the owner still reads their history');
+		assert.strictEqual((await agent.getConversation(convId, { userId: ownerId, limit: 1 })).length, 1, 'limit still applies');
+		assert.deepStrictEqual(await agent.getConversation(convId, { userId: attackerId }), []);
 	});
 
 	test('getConversation() without a userId throws InvalidUsage', async () => {
@@ -481,6 +487,11 @@ describe('conversation ownership on write paths', () => {
 			() => (agent as any).getConversation(convId, { limit: 5 }),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
+		// Nor the positional (id, userId, { limit }) form.
+		await assert.rejects(
+			() => (agent as any).getConversation(convId, ownerId, { limit: 5 }),
+			(err: any) => err.name === AgentErrors.InvalidUsage && /getConversation\(id, \{ userId, limit\? \}\)/.test(err.message),
+		);
 	});
 
 	// Regression: the default channel is the conversation id, and stream() accepted
@@ -489,7 +500,7 @@ describe('conversation ownership on write paths', () => {
 	test("a caller-chosen channelId does not reach another user's channel", async () => {
 		const { agent } = approvalAgent('test-own-channel-push');
 		const ownerConv = await agent.createConversationId(ownerId);
-		const ownerChannel = await agent.getChannel(ownerConv, ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
 		const received: unknown[] = [];
 		const sub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
 
@@ -506,10 +517,10 @@ describe('conversation ownership on write paths', () => {
 	test("getChannel() for another user's conversation id does not receive that user's chunks", async () => {
 		const { agent } = approvalAgent('test-own-channel-sub');
 		const ownerConv = await agent.createConversationId(ownerId);
-		const spy = await agent.getChannel(ownerConv, attackerId);
+		const spy = await agent.getChannel(ownerConv, { userId: attackerId });
 		const leaked: unknown[] = [];
 		const spySub = spy.subscribe((chunk) => { leaked.push(chunk); });
-		const ownerChannel = await agent.getChannel(ownerConv, ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
 		const received: unknown[] = [];
 		const ownerSub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
 
@@ -526,7 +537,7 @@ describe('conversation ownership on write paths', () => {
 	test('invokeTurn() never rejects and never reports on an unscoped channel', async () => {
 		const { agent } = approvalAgent('test-own-invoke-fail');
 		const ownerConv = await agent.createConversationId(ownerId);
-		const ownerChannel = await agent.getChannel(ownerConv, ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
 		const received: unknown[] = [];
 		const sub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
 		const loneSurrogate = String.fromCharCode(0xd800);
@@ -553,7 +564,7 @@ describe('conversation ownership on write paths', () => {
 			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: ownerId }),
 			(err: any) => err.name === AgentErrors.InvalidModelConfig,
 		);
-		const history = await agent.getConversation(convId, ownerId);
+		const history = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
 	});
 
@@ -565,7 +576,7 @@ describe('conversation ownership on write paths', () => {
 			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: loneSurrogate }),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
-		const history = await agent.getConversation(convId, loneSurrogate);
+		const history = await agent.getConversation(convId, { userId: loneSurrogate });
 		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
 	});
 
@@ -573,6 +584,10 @@ describe('conversation ownership on write paths', () => {
 		const { agent } = approvalAgent('test-own-channel-nouser');
 		await assert.rejects(
 			() => (agent as any).getChannel('some-channel'),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		await assert.rejects(
+			() => (agent as any).getChannel('some-channel', ownerId),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 	});
@@ -968,7 +983,7 @@ describe('CannedProvider', () => {
 		const convId = await agent.createConversationId('test-user');
 		const result = await agent.stream('help me find the answer', { conversationId: convId, userId: 'test-user' });
 		await result.complete();
-		const messages = await agent.getConversation(convId, 'test-user');
+		const messages = await agent.getConversation(convId, { userId: 'test-user' });
 		const toolCall = messages.find(m => m.role === 'tool-call');
 		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
 		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
@@ -1051,8 +1066,8 @@ describe('CannedProvider', () => {
 			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
 			await r.complete();
 		}
-		const all = await agent.getConversation(convId, 'test-user');
-		const limited = await agent.getConversation(convId, 'test-user', { limit: 2 });
+		const all = await agent.getConversation(convId, { userId: 'test-user' });
+		const limited = await agent.getConversation(convId, { userId: 'test-user', limit: 2 });
 		assert.ok(all.length >= 6, 'should have at least 6 messages');
 		assert.strictEqual(limited.length, 2, 'limit should cap results');
 		// Limited should return the most recent messages
@@ -1071,9 +1086,9 @@ describe('CannedProvider', () => {
 			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
 			await r.complete();
 		}
-		assert.ok((await agent.getConversation(convId, 'test-user')).length > 0, 'sanity: conversation has messages');
-		assert.strictEqual((await agent.getConversation(convId, 'test-user', { limit: 0 })).length, 0, 'limit 0 should return an empty array, not all messages');
-		assert.strictEqual((await agent.getConversation(convId, 'test-user', { limit: -1 })).length, 0, 'negative limit should return an empty array, not all messages');
+		assert.ok((await agent.getConversation(convId, { userId: 'test-user' })).length > 0, 'sanity: conversation has messages');
+		assert.strictEqual((await agent.getConversation(convId, { userId: 'test-user', limit: 0 })).length, 0, 'limit 0 should return an empty array, not all messages');
+		assert.strictEqual((await agent.getConversation(convId, { userId: 'test-user', limit: -1 })).length, 0, 'negative limit should return an empty array, not all messages');
 	});
 
 	test("token mode publishes multiple chunks", async () => {
@@ -1308,7 +1323,7 @@ describe('runaway protection caps', () => {
 		const result = await agent.stream('run alpha and bravo', { conversationId: convId, userId: 'test-user' });
 		await assert.rejects(() => result.complete());
 
-		const history = await agent.getConversation(convId, 'test-user');
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
 		const toolCalls = history.filter(m => m.role === 'tool-call');
 		const toolResults = history.filter(m => m.role === 'tool-result');
 		assert.ok(toolCalls.length > 0, 'sanity: a tool call was persisted before the cap fired');
@@ -1339,7 +1354,7 @@ describe('runaway protection caps', () => {
 		assert.match(terminal.error, /maxLlmCalls/, 'the error should name the cap that tripped');
 
 		// History must stay paired and explain itself.
-		const history = await agent.getConversation(convId, 'test-user');
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
 		const resumeToolCalls = history.filter(m => m.role === 'tool-call');
 		const resumeToolResults = history.filter(m => m.role === 'tool-result');
 		assert.strictEqual(resumeToolResults.length, resumeToolCalls.length, 'every tool-call needs a matching tool-result');

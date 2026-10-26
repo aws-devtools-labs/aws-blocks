@@ -826,14 +826,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	/**
-	 * Throws InvalidUsage when `userId` is missing (or isn't a string), so a caller on
-	 * an older signature without the userId argument fails loudly instead of getting
-	 * an empty result on the mock and an opaque marshalling error on AWS.
+	 * Returns `options.userId`, or throws InvalidUsage when `options` is not an object with a
+	 * non-empty string `userId`. A caller on an older signature (no second argument, `{ limit }`
+	 * only, or the userId as a bare string) fails loudly instead of getting an empty result on
+	 * the mock and an opaque marshalling error on AWS, and can never read another user's data.
 	 */
-	private requireUserId(userId: unknown, method: string, signature: string): asserts userId is string {
+	private requireUserId(options: unknown, method: string, signature: string): string {
+		const userId = typeof options === 'object' && options !== null ? (options as { userId?: unknown }).userId : undefined;
 		if (typeof userId !== 'string' || !userId) {
-			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires the caller's userId (${signature}). Take it from the authenticated session.`);
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires the caller's userId in an options object: ${signature}. Take it from the authenticated session.`);
 		}
+		return userId;
 	}
 
 	/**
@@ -880,9 +883,12 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
 	 * agent has no owner to scope by, so its channels are not user-scoped and the
 	 * `userId` is not used.
+	 *
+	 * @param options.userId - The caller's user id (the same one passed to stream()/resume()).
 	 */
-	async getChannel(channelId: string, userId: string) {
-		if (this.conversations) this.requireUserId(userId, 'getChannel', 'getChannel(channelId, userId)');
+	async getChannel(channelId: string, options: { userId: string }) {
+		if (!this.conversations) return this.rt.getChannel('chunks', channelId);
+		const userId = this.requireUserId(options, 'getChannel', 'getChannel(channelId, { userId })');
 		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
 	}
 
@@ -890,13 +896,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *
 	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
 	 * non-owner can't read another user's pending tool calls (or their interrupt IDs).
-	 * Throws InvalidUsage when `userId` is missing (with persistence enabled).
+	 * Throws InvalidUsage when `options.userId` is missing (with persistence enabled).
+	 *
+	 * @param options.userId - The caller's user id; the conversation must have been created by
+	 *   createConversationId(userId).
 	 *
 	 * TODO: optimize — query in reverse with limit instead of loading all messages.
 	 */
-	async getPendingInterrupts(conversationId: string, userId: string): Promise<Array<{ id: string; name: string; reason?: any }>> {
+	async getPendingInterrupts(conversationId: string, options: { userId: string }): Promise<Array<{ id: string; name: string; reason?: any }>> {
 		if (!this.messages) return [];
-		this.requireUserId(userId, 'getPendingInterrupts', 'getPendingInterrupts(conversationId, userId)');
+		const userId = this.requireUserId(options, 'getPendingInterrupts', 'getPendingInterrupts(conversationId, { userId })');
 		if (!(await this.ownsConversation(conversationId, userId))) return [];
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
@@ -932,18 +941,18 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
 	 * caller who knows another user's conversation id can't read its history. Pass the
 	 * `userId` from the authenticated session (see the "Authorization" section in the
-	 * README). Throws InvalidUsage when `userId` is missing.
+	 * README). Throws InvalidUsage when `options.userId` is missing.
 	 *
-	 * @param userId - The caller's user id; the conversation must have been created by
+	 * @param options.userId - The caller's user id; the conversation must have been created by
 	 *   createConversationId(userId).
 	 * @param options.limit - Maximum number of (most recent) messages to return.
 	 *   A `limit` of `0` returns an empty array, and any negative value is treated
 	 *   the same as `0` (returns no messages). Omit `limit` to return all messages.
 	 * TODO: support pagination
 	 */
-	async getConversation(id: string, userId: string, options?: { limit?: number }): Promise<Message[]> {
+	async getConversation(id: string, options: { userId: string; limit?: number }): Promise<Message[]> {
 		if (!this.messages) throw blocksAgentError(AgentErrors.PersistenceRequired, 'getConversation() requires persistence. Set inferenceOnly: false (default).');
-		this.requireUserId(userId, 'getConversation', 'getConversation(id, userId, options?)');
+		const userId = this.requireUserId(options, 'getConversation', 'getConversation(id, { userId, limit? })');
 		if (!(await this.ownsConversation(id, userId))) return [];
 		// A limit of 0 means "zero messages", and a negative limit is nonsensical
 		// for a message count. The previous `options?.limit && ...` guard treated 0

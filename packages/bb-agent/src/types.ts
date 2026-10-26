@@ -384,7 +384,7 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 	/**
 	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
 	 * With persistence the chunks are published on this channel scoped to `userId`; subscribe with
-	 * `getChannel(channelId, userId)`.
+	 * `getChannel(channelId, { userId })`.
 	 */
 	channelId?: string;
 	/**
@@ -412,7 +412,7 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 export interface AgentStreamResult {
 	/**
 	 * Realtime channel ID where chunks are published (the one you passed, or the default). With
-	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, userId)`.
+	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, { userId })`.
 	 */
 	channelId: string;
 	/**

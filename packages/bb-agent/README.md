@@ -22,7 +22,7 @@ const agent = new Agent(scope, 'support-agent', {
 
 // Create a conversation and stream a response
 const conversationId = await agent.createConversationId('user-123');
-const channel = await agent.getChannel(conversationId, 'user-123');
+const channel = await agent.getChannel(conversationId, { userId: 'user-123' });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 const result = await agent.stream('Until when are you open tomorrow?', { conversationId, userId: 'user-123' });
@@ -42,11 +42,11 @@ const agent = new Agent(scope, id, config)
 | `stream(message, options?)` | `Promise<AgentStreamResult>` | Submit a message. Returns immediately with `{ channelId, channel, complete }`. |
 | `resume(channelId, responses, options?)` | `Promise<void>` | Resume an interrupted agent with user responses. Chunks publish to the same channel. |
 | `createConversationId(userId)` | `Promise<string>` | Generate a new conversation ID (UUID). |
-| `getConversation(id, userId, options?)` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. Empty unless `userId` owns the conversation. See [Reading conversation history](#reading-conversation-history). |
+| `getConversation(id, { userId, limit? })` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. Empty unless `userId` owns the conversation. See [Reading conversation history](#reading-conversation-history). |
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
-| `getPendingInterrupts(conversationId, userId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
-| `getChannel(channelId, userId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns (not used by `inferenceOnly` agents, whose channels are not user-scoped). |
+| `getPendingInterrupts(conversationId, { userId })` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
+| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns (not used by `inferenceOnly` agents, whose channels are not user-scoped). |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -54,14 +54,14 @@ const agent = new Agent(scope, id, config)
 
 ```typescript
 // Correct: subscribe first, await established, then send
-const channel = await agent.getChannel(conversationId, userId);
+const channel = await agent.getChannel(conversationId, { userId });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 await agent.stream(message, { conversationId, userId });
 
 // Wrong: send first, subscribe after — early chunks lost
 await agent.stream(message, { conversationId, userId });
-const channel = await agent.getChannel(conversationId, userId); // too late!
+const channel = await agent.getChannel(conversationId, { userId }); // too late!
 ```
 
 The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
@@ -71,10 +71,10 @@ The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this order
 Every method that takes a `userId` treats it as the caller's identity and checks it against the conversation's owner (the `userId` passed to `createConversationId`):
 
 - `stream()` and `resume()` throw `AgentErrors.ConversationNotFound` when `options.conversationId` doesn't belong to `options.userId`. A non-owner can't add turns to someone else's conversation or approve their pending tool calls.
-- `getConversation(id, userId)` and `getPendingInterrupts(conversationId, userId)` return `[]` for a conversation the user doesn't own.
+- `getConversation(id, { userId })` and `getPendingInterrupts(conversationId, { userId })` return `[]` for a conversation the user doesn't own.
 - `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
-- `getChannel(channelId, userId)` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
-- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` when the `userId` argument is missing, so a call written for an older signature fails loudly.
+- `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
+- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call written for an older signature, with no `userId` or with `userId` as a bare string, fails loudly instead of returning data.
 - A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
@@ -85,7 +85,7 @@ These checks are only as good as the `userId` you pass. **Derive it from the aut
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getMessages(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getConversation(conversationId, user.userId);
+    return agent.getConversation(conversationId, { userId: user.userId });
   },
 }));
 ```
@@ -155,13 +155,13 @@ user → interrupt → approval → tool-call → tool-result → assistant
 
 #### Reading conversation history
 
-`getConversation(id, userId)` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
+`getConversation(id, { userId })` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
 
 - With no `limit`, you get every message in chronological order.
 - With `{ limit: N }`, you get the **most recent N** messages, still ordered oldest-first (not the first N). `limit: 0` (or any negative value) returns an empty array.
 
 ```typescript
-const recent = await agent.getConversation(id, userId, { limit: 10 }); // last 10, oldest-first
+const recent = await agent.getConversation(id, { userId, limit: 10 }); // last 10, oldest-first
 const first = recent[0];           // oldest of the 10
 const last  = recent.at(-1);       // newest message
 ```
@@ -394,7 +394,7 @@ import { isBlocksError } from '@aws-blocks/core';
 import { AgentErrors } from '@aws-blocks/bb-agent';
 
 try {
-  await agent.getConversation(id, userId);
+  await agent.getConversation(id, { userId });
 } catch (e: unknown) {
   if (isBlocksError(e, AgentErrors.PersistenceRequired)) {
     // agent is in inferenceOnly mode
@@ -1079,11 +1079,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   async getConversation(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { messages: await agent.getConversation(conversationId, user.userId) };
+    return { messages: await agent.getConversation(conversationId, { userId: user.userId }) };
   },
   async getPendingInterrupts(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { interrupts: await agent.getPendingInterrupts(conversationId, user.userId) };
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userId }) };
   },
   async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
     const user = await auth.requireAuth(context);
@@ -1091,7 +1091,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   async getChannel(channelId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getChannel(channelId, user.userId);
+    return agent.getChannel(channelId, { userId: user.userId });
   },
 }));
 ```
