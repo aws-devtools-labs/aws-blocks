@@ -249,6 +249,10 @@ jobs:
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
 
+      # Deletes the stacks a cancelled or crashed E2E job leaves behind.
+      - name: Test the E2E teardown
+        run: node --test scripts/ci/e2e-teardown.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -546,6 +550,28 @@ jobs:
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
 
+      # The suite destroys its stack in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes.
+      # Delete what this checkout deployed: skipped when nothing was synthesized,
+      # one ListStacks call when the suite cleaned up. Fresh credentials, since
+      # the first session can expire before a long or timed-out job gets here.
+      # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
+      # steps get 3 minutes together.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/comprehensive
+
   e2e-sandbox-vpc:
     permissions:
       contents: read
@@ -721,6 +747,28 @@ jobs:
 
       - name: E2E Test Production
         run: npm run test:e2e:production
+
+      # The suite destroys its stack in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes.
+      # Delete what this checkout deployed: skipped when nothing was synthesized,
+      # one ListStacks call when the suite cleaned up. Fresh credentials, since
+      # the first session can expire before a long or timed-out job gets here.
+      # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
+      # steps get 3 minutes together.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/comprehensive
 
   e2e-supabase:
     permissions:
