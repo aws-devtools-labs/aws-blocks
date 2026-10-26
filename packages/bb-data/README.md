@@ -117,13 +117,17 @@ const scoped = db.withRLS({ userId: 'user-123', role: 'authenticated' });
 const myPosts = await scoped.query<Post>(sql`SELECT * FROM posts`);
 ```
 
-> **Local (PGlite) prerequisite:** `withRLS` issues `SET LOCAL ROLE <role>` (default `authenticated`). PGlite has no such role by default, so a migration must create it or local queries fail with `role "authenticated" does not exist`. Add to your migrations:
+> **Prerequisite (local and AWS):** `withRLS` issues `SET LOCAL ROLE <role>` (default `authenticated`). The role must exist, and the database user must be a member of it. On PostgreSQL 16 and later, which Aurora runs, the user that creates a role gets only `ADMIN` on it, not `SET`, so grant the roles explicitly. Add to your migrations:
 >
 > ```sql
 > CREATE ROLE authenticated;
 > CREATE ROLE anon;
+> GRANT authenticated TO CURRENT_USER;
+> GRANT anon TO CURRENT_USER;
 > -- grant table privileges to these roles as needed, then define RLS policies
 > ```
+>
+> If the role switch is refused, every `withRLS()` call fails with a 500 `QueryFailed`, and the server log names the missing `GRANT`.
 
 ## CRUD Handlers
 
@@ -218,9 +222,9 @@ try {
     // not retriable (a blind retry of the same insert fails identically).
   }
   if (isBlocksError(e, DatabaseErrors.PermissionDenied)) {
-    // A row-level-security policy rejected the row (for example a withRLS()
-    // user writing someone else's row), or the role has no grant on the table.
-    // Serialized as HTTP 403.
+    // Your statement was refused: a row-level-security policy rejected the row
+    // (for example a withRLS() user writing someone else's row), or the role has
+    // no grant on the table. Serialized as HTTP 403.
   }
   if (isBlocksError(e, DatabaseErrors.CheckViolation) || isBlocksError(e, DatabaseErrors.NotNullViolation)) {
     // A value fails a CHECK constraint, or a required column is missing.
@@ -253,6 +257,12 @@ error's `cause`. Only `SerializationFailure` and `ConnectionFailed` are worth
 retrying: the request errors (`PermissionDenied`, `CheckViolation`,
 `NotNullViolation`, `ForeignKeyViolation`, `UniqueConstraintViolation`) fail the
 same way every time.
+
+Each of these errors aborts the enclosing Postgres transaction. Inside a
+`db.transaction()` callback, a caught error leaves the transaction unusable: the
+next statement fails as `QueryFailed`. Catch them outside `transaction()`, or
+wrap the statement in a savepoint (`SAVEPOINT s` … `ROLLBACK TO SAVEPOINT s`) if
+the transaction should continue.
 
 ## What It Provisions (AWS)
 
