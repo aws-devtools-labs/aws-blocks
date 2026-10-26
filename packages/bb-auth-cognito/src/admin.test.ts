@@ -4,7 +4,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { AuthCognito, AuthCognitoErrors } from './index.js';
 
@@ -253,6 +253,20 @@ describe('auth.admin user lifecycle', () => {
 			seen.push(u.username);
 		}
 		assert.deepStrictEqual(seen.sort(), ['albert', 'alice']);
+	});
+
+	test('scan rejects a filter value containing a double quote or a backslash', async () => {
+		// Cognito ListUsers does not match such values (it unescapes the filter more than
+		// once), so the mock refuses them the same way the AWS runtime does.
+		const auth = new AuthCognito(ROOT, unique(), { admin: {} });
+		await auth.admin.createUser('a"b');
+		for (const value of ['a"b', 'a\\b', 'a\\']) {
+			assert.throws(
+				() => auth.admin.scan({ attribute: 'username', match: 'equals', value }),
+				(e: unknown) => isBlocksError(e, AuthCognitoErrors.InvalidParameter) && e instanceof ApiError && e.status === 400,
+				`expected InvalidParameter for ${JSON.stringify(value)}`,
+			);
+		}
 	});
 
 	test('revokeUserSessions deletes the user session (forces re-auth)', async () => {

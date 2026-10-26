@@ -389,7 +389,11 @@ export interface AdminUserFilter {
 	attribute: string;
 	/** Comparison operator. Cognito supports prefix (`^=`) and exact (`=`). */
 	match: 'startsWith' | 'equals';
-	/** Value to compare against. Quotes and backslashes are escaped for you. */
+	/**
+	 * Value to compare against. It cannot contain `"` or `\`: `scan()` throws a 400
+	 * `AuthCognitoErrors.InvalidParameter` for such a value (locally too), because
+	 * Cognito `ListUsers` does not match them literally.
+	 */
 	value: string;
 }
 

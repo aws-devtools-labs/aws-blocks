@@ -87,6 +87,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
+import { assertScanFilterValue } from './scan-filter.js';
 
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';
@@ -438,6 +439,8 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			},
 			scan: (filter?: AdminUserFilter) => {
 				this.assertAdminAction('lifecycle');
+				// Same refusal as the AWS runtime, which Cognito's filter parsing requires.
+				assertScanFilterValue(filter);
 				const self = this;
 				return (async function* () {
 					// Snapshot keys so concurrent mutation during iteration is safe.

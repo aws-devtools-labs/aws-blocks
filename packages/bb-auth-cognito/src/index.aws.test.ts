@@ -245,10 +245,15 @@ describe('toCognitoFilter', () => {
 		assert.strictEqual(toCognitoFilter({ attribute: 'username', match: 'equals', value: 'alice' }), 'username = "alice"');
 	});
 
-	test('escapes backslashes and quotes so the value cannot close the quoted string', () => {
-		const filter = (value: string) => toCognitoFilter({ attribute: 'name', match: 'equals', value });
-		assert.strictEqual(filter('a"b'), String.raw`name = "a\"b"`);
-		assert.strictEqual(filter('a\\'), String.raw`name = "a\\"`);
-		assert.strictEqual(filter(String.raw`\"`), String.raw`name = "\\\""`);
+	test('rejects a value containing a double quote or a backslash with a 400 InvalidParameter', () => {
+		// Cognito unescapes the filter more than once, so no escaping makes such a value match literally.
+		for (const value of ['a"b', 'a\\', String.raw`\"`]) {
+			assert.throws(
+				() => toCognitoFilter({ attribute: 'name', match: 'equals', value }),
+				(e: unknown) =>
+					e instanceof ApiError && e.status === 400 && e.name === AuthCognitoErrors.InvalidParameter,
+				`expected InvalidParameter for ${JSON.stringify(value)}`,
+			);
+		}
 	});
 });
