@@ -1732,6 +1732,55 @@ void describe('nextjsAdapter — Pages Router i18n header lift', () => {
   });
 });
 
+void describe('nextjsAdapter — a hand-written open-next.config.ts under the preview trims', () => {
+  let tmpDir: string;
+  let lenientBackup: string | undefined;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nextjs-usercfg-'));
+    mock.method(spawn, 'sync', () => undefined);
+    lenientBackup = process.env.HOSTING_LENIENT_PATCHES;
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+    if (lenientBackup === undefined) delete process.env.HOSTING_LENIENT_PATCHES;
+    else process.env.HOSTING_LENIENT_PATCHES = lenientBackup;
+  });
+  const userConfig = (body: string) => fs.writeFileSync(path.join(tmpDir, 'open-next.config.ts'), `export default ${body};\n`);
+  const httpDefault = "default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' } }";
+
+  void it('edgeRoutes regional: rejects an edge function left on Lambda@Edge (global placement, CloudFront converter)', () => {
+    userConfig(`{ ${httpDefault}, functions: { edge1: { runtime: 'edge', placement: 'global', override: { converter: 'aws-cloudfront', wrapper: 'aws-lambda' }, routes: ['app/api/edge/route'], patterns: ['/api/edge'] } } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', edgeToRegional: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code === 'IncompatibleOpenNextConfigError' && /placement: 'regional'/.test(err.message),
+    );
+  });
+
+  void it('edgeRoutes regional: accepts a regional edge function on the payload 2.0 converter', () => {
+    userConfig(`{ ${httpDefault}, functions: { edge1: { runtime: 'edge', placement: 'regional', override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' }, routes: ['app/api/edge/route'], patterns: ['/api/edge'] } } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', edgeToRegional: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code !== 'IncompatibleOpenNextConfigError',
+    );
+  });
+
+  void it('incrementalRegeneration false: requires disableTagCache and the dummy queue', () => {
+    userConfig(`{ ${httpDefault} }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) =>
+        err.code === 'IncompatibleOpenNextConfigError' && /disableTagCache: true/.test(err.message) && /queue: 'dummy'/.test(err.message),
+    );
+    userConfig(`{ default: { override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda', queue: 'dummy' } }, dangerous: { disableTagCache: true } }`);
+    assert.throws(
+      () => withBuildProfile({ serverInvoke: 'http-api', skipIsr: true }, () => nextjsAdapter({ projectDir: tmpDir })),
+      (err: Error & { code?: string }) => err.code !== 'IncompatibleOpenNextConfigError',
+    );
+  });
+});
+
 void describe('nextjsAdapter — incompatible open-next.config.ts', () => {
   let tmpDir: string;
   let lenientBackup: string | undefined;

@@ -1123,12 +1123,32 @@ const validateUserOpenNextConfig = (
   // requirement. Detect by checking for any `runtime: 'edge'` token in
   // the user's config when edgeRoutes were detected from the user's
   // source tree.
+  const profile = buildProfile();
   const needsEdgeBlock = edgeRoutes.length > 0;
   const hasEdgeBlock = /\bruntime\s*:\s*['"`]edge['"`]/.test(source);
   if (needsEdgeBlock && !hasEdgeBlock) {
     missing.push(
-      "functions: { edge: { runtime: 'edge', placement: 'global', routes: [...] } }",
+      profile.edgeToRegional
+        ? "functions: { edge: { runtime: 'edge', placement: 'regional', override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' }, routes: [...] } }"
+        : "functions: { edge: { runtime: 'edge', placement: 'global', routes: [...] } }",
     );
+  }
+  // `edgeRoutes: 'regional'`: each edge function becomes a regional handler
+  // invoked by the HTTP API (payload 2.0), so a Lambda@Edge shape (global
+  // placement, the CloudFront converter) would fail on every request.
+  if (profile.edgeToRegional && hasEdgeBlock) {
+    if (!findOverride(source, 'placement', 'regional') || findOverride(source, 'placement', 'global')) {
+      missing.push("placement: 'regional' on every edge function");
+    }
+    if (findOverride(source, 'converter', 'aws-cloudfront')) {
+      missing.push("converter: 'aws-apigw-v2' on every edge function (not 'aws-cloudfront')");
+    }
+  }
+  // `incrementalRegeneration: false`: no tag table and no revalidation queue
+  // are deployed, so the server must not use them.
+  if (profile.skipIsr) {
+    if (!/\bdisableTagCache\s*:\s*true\b/.test(source)) missing.push('dangerous: { disableTagCache: true }');
+    if (!findOverride(source, 'queue', 'dummy')) missing.push("queue: 'dummy' on the default function");
   }
   if (missing.length === 0) return;
   throw new HostingError('IncompatibleOpenNextConfigError', {
