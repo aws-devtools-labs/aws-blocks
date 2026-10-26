@@ -334,6 +334,7 @@ describe('AuthBasic session revocation on sign-out', () => {
 function codesStore(auth: AuthBasic): {
 	get: (k: string) => Promise<string | null>;
 	put: (k: string, v: string, o?: { ttlSeconds?: number }) => Promise<void>;
+	delete: (k: string, o?: { ifValueEquals?: string }) => Promise<void>;
 } {
 	return (auth as unknown as { codes: ReturnType<typeof codesStore> }).codes;
 }
@@ -515,6 +516,272 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 		// …so her very first real sign-in succeeds instead of hitting the lock.
 		const user = await auth.signIn('heidi', 'password123', ctx());
 		assert.strictEqual(user.username, 'heidi');
+	});
+});
+
+/**
+ * Verification-code attempt-limiting tests (issue #911). A 6-digit OTP is
+ * brute-forceable within its validity window, so `verifyCode` caps the number
+ * of wrong guesses per code and invalidates the code on exhaustion. Always on
+ * (not gated behind the opt-in sign-in `lockout` policy).
+ */
+describe('AuthBasic verification-code attempt limiting', () => {
+	/** Capture the code `codeDelivery` hands out so a test can present it. */
+	function captureAuth(): { auth: AuthBasic; lastCode: () => string } {
+		let code = '';
+		const auth = makeAuth({
+			codeDelivery: async (_username, c) => {
+				code = c;
+			},
+		});
+		return { auth, lastCode: () => code };
+	}
+
+	test('invalidates a reset code after MAX_CODE_ATTEMPTS wrong guesses', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('alice', 'password123');
+		await auth.resetPassword('alice');
+		const realCode = lastCode();
+
+		// Five wrong guesses (the cap): each rejects, and the fifth burns the code.
+		for (let i = 0; i < 5; i++) {
+			await assert.rejects(
+				auth.confirmResetPassword('alice', '000000', 'newpassword123'),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+				`wrong guess #${i + 1} is rejected`,
+			);
+		}
+
+		// The row remains at the spent cap (it self-reaps at the code TTL rather
+		// than being deleted per guess — deleting per guess would open a
+		// delete-then-stale-resurrect race under concurrency).
+		const spent = await codesStore(auth).get('reset:alice');
+		assert.ok(spent, 'the code row persists at the spent cap');
+		assert.strictEqual(JSON.parse(spent!).attempts, 5, 'attempts is pinned at the cap');
+
+		// Even the CORRECT code is now rejected: the cap is spent.
+		await assert.rejects(
+			auth.confirmResetPassword('alice', realCode, 'newpassword123'),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			'the correct code is rejected after the cap is exhausted',
+		);
+	});
+
+	test('counts attempts per code and resets the count after a fresh code is issued', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('bob', 'password123');
+		await auth.confirmSignUp('bob', lastCode()); // confirm so the final sign-in can succeed
+		await auth.resetPassword('bob');
+
+		// Two wrong guesses — below the cap, so the code survives.
+		await assert.rejects(auth.confirmResetPassword('bob', '000000', 'newpassword123'));
+		await assert.rejects(auth.confirmResetPassword('bob', '111111', 'newpassword123'));
+		const afterTwo = await codesStore(auth).get('reset:bob');
+		assert.ok(afterTwo, 'the code survives below the cap');
+		assert.strictEqual(JSON.parse(afterTwo!).attempts, 2, 'two failed attempts are recorded on the code');
+
+		// Issuing a fresh code resets the attempt count to 0.
+		await auth.resetPassword('bob');
+		const fresh = await codesStore(auth).get('reset:bob');
+		assert.strictEqual(JSON.parse(fresh!).attempts, 0, 'a freshly issued code starts with zero attempts');
+
+		// The fresh correct code still works (count was not inherited from the old one).
+		await auth.confirmResetPassword('bob', lastCode(), 'newpassword123');
+		const user = await auth.signIn('bob', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'bob');
+	});
+
+	test('a correct guess before the cap succeeds and consumes the code', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('carol', 'password123');
+		await auth.confirmSignUp('carol', lastCode()); // confirm so the final sign-in can succeed
+		await auth.resetPassword('carol');
+
+		// One wrong guess, then the right one before hitting the cap.
+		await assert.rejects(auth.confirmResetPassword('carol', '000000', 'newpassword123'));
+		await auth.confirmResetPassword('carol', lastCode(), 'newpassword123');
+
+		assert.strictEqual(await codesStore(auth).get('reset:carol'), null, 'the code is consumed on success');
+		const user = await auth.signIn('carol', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'carol');
+	});
+
+	test('attempt limiting also applies to sign-up confirmation codes', async () => {
+		const { auth } = captureAuth();
+		await auth.signUp('dave', 'password123'); // unconfirmed; a signup code was sent
+
+		for (let i = 0; i < 5; i++) {
+			await assert.rejects(
+				auth.confirmSignUp('dave', '000000'),
+				(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			);
+		}
+		const spent = await codesStore(auth).get('signup:dave');
+		assert.ok(spent, 'the signup code row persists at the spent cap');
+		assert.strictEqual(JSON.parse(spent!).attempts, 5, 'signup attempts pinned at the cap');
+	});
+
+	test('concurrent wrong guesses cannot bypass the cap (worst-case interleaving)', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('erin', 'password123');
+		await auth.confirmSignUp('erin', lastCode());
+		await auth.resetPassword('erin');
+		const realCode = lastCode();
+
+		// Spend 4 of the 5 attempts sequentially, leaving exactly one in the budget.
+		for (let i = 0; i < 4; i++) {
+			await assert.rejects(auth.confirmResetPassword('erin', '000000', 'newpassword123'));
+		}
+
+		// Install a read barrier on the codes store: every `get` in the burst
+		// below blocks until ALL of them have read, so each request sees the SAME
+		// row (attempts: 4) before any CAS write lands — the exact interleaving a
+		// plain Promise.all would NOT force (submitted ≠ consumed budget). A
+		// non-atomic read-modify-write would let the whole burst past; the CAS
+		// reserve means only ONE request wins the single remaining attempt.
+		const store = codesStore(auth);
+		const originalGet = store.get.bind(store);
+		const BURST = 20; // 19 wrong + the correct code, all submitted together
+		let arrived = 0;
+		let release!: () => void;
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		store.get = async (k: string) => {
+			const v = await originalGet(k);
+			if (k === 'reset:erin') {
+				arrived += 1;
+				if (arrived >= BURST) release();
+				await gate; // hold until the whole burst has read
+			}
+			return v;
+		};
+
+		// 19 wrong guesses + the correct code, submitted concurrently. With only
+		// one attempt left, at most one guess may be evaluated; the rest lose the
+		// CAS and are rejected without being evaluated.
+		const guesses = [...Array(BURST - 1)].map(() =>
+			auth.confirmResetPassword('erin', '000000', 'hijackedpw123').then(
+				() => 'ok',
+				() => 'rejected',
+			),
+		);
+		guesses.push(
+			auth.confirmResetPassword('erin', realCode, 'hijackedpw123').then(
+				() => 'ok',
+				() => 'rejected',
+			),
+		);
+		const results = await Promise.all(guesses);
+		store.get = originalGet; // restore
+
+		// The password must NOT have been reset by the burst: the cap held.
+		const succeeded = results.filter((r) => r === 'ok').length;
+		assert.strictEqual(succeeded, 0, 'no guess in the over-budget burst succeeded');
+
+		// Sign-in with the attacker password must fail; the original still works.
+		await assert.rejects(
+			auth.signIn('erin', 'hijackedpw123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+			'the attacker password was never set',
+		);
+		const user = await auth.signIn('erin', 'password123', ctx());
+		assert.strictEqual(user.username, 'erin', 'the original password still authenticates');
+
+		// The row ends pinned at the cap, not resurrected or over-counted.
+		const after = await codesStore(auth).get('reset:erin');
+		assert.ok(after, 'the row persists');
+		assert.strictEqual(JSON.parse(after!).attempts, 5, 'attempts ends exactly at the cap');
+	});
+
+	test('a correct code is single-use even when a concurrent wrong guess interleaves the delete', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('frank', 'password123');
+		await auth.confirmSignUp('frank', lastCode());
+		await auth.resetPassword('frank');
+		const realCode = lastCode();
+
+		// Hold the FIRST (correct-code) request's delete until a second request has
+		// run, forcing the consume-side interleaving: the correct verifier reserves
+		// attempt 1, then a wrong guess reserves attempt 2 before the first delete
+		// lands — so the first request's `ifValueEquals: reserved` no longer matches.
+		const store = codesStore(auth);
+		const originalDelete = store.delete.bind(store);
+		let release!: () => void;
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		let firstDelete = true;
+		store.delete = async (k: string, o?: { ifValueEquals?: string }) => {
+			if (k === 'reset:frank' && firstDelete) {
+				firstDelete = false;
+				await held; // stall the correct verifier's delete
+			}
+			return originalDelete(k, o);
+		};
+
+		const correct = auth
+			.confirmResetPassword('frank', realCode, 'newpassword123')
+			.then(() => 'ok', () => 'rejected');
+		// Let the correct verifier reserve + reach its (stalled) delete, then run a
+		// wrong guess that advances the row, then release the first delete.
+		await new Promise((r) => setTimeout(r, 20));
+		const wrong = await auth
+			.confirmResetPassword('frank', '000000', 'hijackedpw123')
+			.then(() => 'ok', () => 'rejected');
+		release();
+		const correctResult = await correct;
+		store.delete = originalDelete; // restore
+
+		assert.strictEqual(wrong, 'rejected', 'the interleaved wrong guess is rejected');
+		assert.strictEqual(correctResult, 'ok', 'the correct code still succeeds (its retry consumed the row)');
+
+		// The code must be single-use: the row is gone and a replay is rejected.
+		assert.strictEqual(await codesStore(auth).get('reset:frank'), null, 'the row is consumed, not left behind');
+		await assert.rejects(
+			auth.confirmResetPassword('frank', realCode, 'replayedpw123'),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCode,
+			'replaying the code after a successful reset is rejected',
+		);
+		// The reset happened exactly once: the first new password works.
+		const user = await auth.signIn('frank', 'newpassword123', ctx());
+		assert.strictEqual(user.username, 'frank');
+	});
+
+	test('two concurrent verifiers of the same correct code yield exactly one success', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('grace', 'password123');
+		await auth.confirmSignUp('grace', lastCode());
+		await auth.resetPassword('grace');
+		const realCode = lastCode();
+
+		// Hold the first verifier's delete until the second has run to completion,
+		// so both evaluate the same correct code against the same row.
+		const store = codesStore(auth);
+		const originalDelete = store.delete.bind(store);
+		let release!: () => void;
+		const held = new Promise<void>((r) => {
+			release = r;
+		});
+		let firstDelete = true;
+		store.delete = async (k: string, o?: { ifValueEquals?: string }) => {
+			if (k === 'reset:grace' && firstDelete) {
+				firstDelete = false;
+				await held;
+			}
+			return originalDelete(k, o);
+		};
+
+		const first = auth.confirmResetPassword('grace', realCode, 'firstpw12345').then(() => 'ok', () => 'rejected');
+		await new Promise((r) => setTimeout(r, 20));
+		const second = await auth.confirmResetPassword('grace', realCode, 'secondpw12345').then(() => 'ok', () => 'rejected');
+		release();
+		const firstResult = await first;
+		store.delete = originalDelete;
+
+		const successes = [firstResult, second].filter((r) => r === 'ok').length;
+		assert.strictEqual(successes, 1, 'exactly one of the two concurrent correct verifications succeeds');
+		assert.strictEqual(await codesStore(auth).get('reset:grace'), null, 'the code is consumed exactly once');
 	});
 });
 
