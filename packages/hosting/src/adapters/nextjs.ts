@@ -1192,13 +1192,37 @@ const isEsmProject = (projectDir: string): boolean => {
 /** The first-line marker of the wrapper {@link pinNextBuildId} writes. */
 const PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
 
+/** The wrapper's owner line: the pid of the build that wrote it. */
+const pinnedOwnerLine = (pid: number) => `// AWS Blocks: pinned by pid ${pid}.`;
+
+/** The pid that wrote a wrapper, or `undefined` for a wrapper without one. */
+const pinnedOwnerOf = (config: string): number | undefined => {
+  const match = /^\/\/ AWS Blocks: pinned by pid (\d+)\.$/m.exec(config);
+  return match ? Number(match[1]) : undefined;
+};
+
+/** Whether `pid` is a running process other than this one. */
+const isOtherLiveProcess = (pid: number): boolean => {
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: the process exists but belongs to another user.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
 /**
  * Put back a `next.config.*` left wrapped by {@link pinNextBuildId} when a
  * build was interrupted before its restore ran (e.g. Ctrl-C while the build
  * was blocked in a child process). A config counts as wrapped only when it
  * carries the wrapper's marker and its `next.config.blocks-base.<ext>` is
- * still there; anything else is left alone. Every Next.js build calls this
- * first, so a later build never runs on a leftover wrapper.
+ * still there; anything else is left alone. A wrapper whose build is still
+ * running (its owner pid is alive) is left alone too, so an overlapping build
+ * of the same checkout never pulls the config out from under it. Every
+ * Next.js build calls this first, so a later build never runs on a leftover
+ * wrapper.
  *
  * @param projectDir the Next.js project root.
  * @returns whether a config was restored.
@@ -1209,7 +1233,10 @@ export const restorePinnedNextConfig = (projectDir: string): boolean => {
     const configFile = path.join(projectDir, `next.config.${ext}`);
     const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
     if (!fs.existsSync(baseFile) || !fs.existsSync(configFile)) continue;
-    if (!fs.readFileSync(configFile, 'utf8').includes(PINNED_CONFIG_MARKER)) continue;
+    const config = fs.readFileSync(configFile, 'utf8');
+    if (!config.includes(PINNED_CONFIG_MARKER)) continue;
+    const owner = pinnedOwnerOf(config);
+    if (owner !== undefined && isOtherLiveProcess(owner)) continue;
     fs.rmSync(configFile, { force: true });
     fs.renameSync(baseFile, configFile);
     process.stderr.write(`ℹ️  Restored ${path.basename(configFile)}, left wrapped by an interrupted build.\n`);
@@ -1245,6 +1272,7 @@ export const pinNextBuildId = (projectDir: string, buildId: string): (() => void
   const wrapper = isCjs
     ? `// @ts-nocheck
 ${PINNED_CONFIG_MARKER}
+${pinnedOwnerLine(process.pid)}
 const blocksBase = require(${spec});
 const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
 module.exports = async (phase, ctx) => {
@@ -1254,6 +1282,7 @@ module.exports = async (phase, ctx) => {
 `
     : `// @ts-nocheck
 ${PINNED_CONFIG_MARKER}
+${pinnedOwnerLine(process.pid)}
 import blocksBase from ${spec};
 export default async function blocksPinnedBuildIdConfig(phase, ctx) {
   const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;
@@ -1268,13 +1297,12 @@ export default async function blocksPinnedBuildIdConfig(phase, ctx) {
   return () => {
     if (restored) return;
     restored = true;
-    // Best-effort: a failure here must not mask the build's own error.
+    // Best-effort: a failure here must not mask the build's own error. Only
+    // this build's own wrapper is replaced: if another build already put the
+    // app's config back, deleting `configFile` would delete the app's config.
     try {
+      if (fs.readFileSync(configFile, 'utf8') !== wrapper || !fs.existsSync(baseFile)) return;
       fs.rmSync(configFile, { force: true });
-    } catch {
-      // ignore
-    }
-    try {
       fs.renameSync(baseFile, configFile);
     } catch {
       // ignore

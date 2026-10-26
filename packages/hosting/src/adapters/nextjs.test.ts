@@ -2631,6 +2631,23 @@ void describe('pinNextBuildId', () => {
     assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
   });
 
+  void it('an overlapping build: a running build keeps its wrapper, and a finished one never deletes the restored config', () => {
+    const configFile = path.join(tmpDir, 'next.config.ts');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    const restoreA = pinNextBuildId(tmpDir, 'fixed');
+    assert.ok(restoreA);
+    // Build A is still running in another process: build B leaves its wrapper alone.
+    const wrapper = fs.readFileSync(configFile, 'utf-8');
+    fs.writeFileSync(configFile, wrapper.replace(/pinned by pid \d+/, `pinned by pid ${process.ppid}`));
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
+    // Build B (or the user) put the config back anyway; A finishing must not delete it.
+    fs.renameSync(path.join(tmpDir, 'next.config.blocks-base.ts'), configFile);
+    restoreA();
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+  });
+
   void it('restorePinnedNextConfig leaves a base file alone when the config is not our wrapper', () => {
     fs.writeFileSync(path.join(tmpDir, 'next.config.ts'), 'export default {};\n');
     fs.writeFileSync(path.join(tmpDir, 'next.config.blocks-base.ts'), 'export default { a: 1 };\n');
