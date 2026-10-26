@@ -4,7 +4,7 @@
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import { resolveKmsEncryption } from '@aws-blocks/core/cdk/internal';
@@ -23,6 +23,9 @@ export type {
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
+
+/** Annotation-ID prefix for this block's synth warnings (matches the sibling storage blocks). */
+const WARNING_PREFIX = '@aws-blocks/bb-file-bucket';
 
 const httpMethodMap: Record<string, s3.HttpMethods> = {
 	GET: s3.HttpMethods.GET,
@@ -59,7 +62,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
-			// grant read/write to the Blocks runtime Lambda.
+			// grant read/write to the Blocks runtime Lambda. The wrapped bucket owns
+			// its own encryption and Object Lock, so say so when either was set.
+			const ignored = (['encryption', 'objectLock'] as const).filter(k => options[k] !== undefined);
+			if (ignored.length > 0) {
+				Annotations.of(this).addWarningV2(
+					`${WARNING_PREFIX}:OptionsIgnoredForExisting`,
+					`${ignored.join(', ')} ${ignored.length > 1 ? 'are' : 'is'} ignored for a bucket wrapped with FileBucket.fromExisting — ` +
+						`configure ${ignored.length > 1 ? 'them' : 'it'} on the existing bucket itself.`,
+				);
+			}
 			this.bucket = s3.Bucket.fromBucketName(this, 'bucket', options.bucket.bucketName);
 			this.bucket.grantReadWrite(this.executionRole);
 			return;
@@ -109,7 +121,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// imported CMK on request. The `encryption` values (and the warning on an
 		// unrecognized one) are shared with the DynamoDB-backed blocks.
 		const encryptionChoice = resolveKmsEncryption(this, options?.encryption, {
-			warningPrefix: BB_NAME,
+			warningPrefix: WARNING_PREFIX,
 			fromKmsKeyHint: 'FileBucket.fromKmsKey',
 		});
 		// `'customer-managed'` mints a dedicated key here (rather than letting
@@ -168,6 +180,15 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			});
 		}
 
+		// Object Lock default retention (validated above; requires versioning and a
+		// retained bucket).
+		const objectLock = options?.objectLock;
+		const objectLockDefaultRetention = objectLock
+			? (objectLock.mode === 'compliance' ? s3.ObjectLockRetention.compliance : s3.ObjectLockRetention.governance)(
+				Duration.days(objectLock.retentionDays),
+			)
+			: undefined;
+
 		// Main-bucket lifecycle rules: the noncurrent-version expiration (only
 		// when versioning is on, to bound version-storage growth) merged with
 		// any customer-supplied lifecycle rules into a single array.
@@ -200,11 +221,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			...(encryptionKey
 				? { encryption: s3.BucketEncryption.KMS, encryptionKey, bucketKeyEnabled: true }
 				: { encryption: s3.BucketEncryption.S3_MANAGED }),
-			objectLockDefaultRetention: options?.objectLock
-				? (options.objectLock.mode === 'compliance'
-					? s3.ObjectLockRetention.compliance(Duration.days(options.objectLock.retentionDays))
-					: s3.ObjectLockRetention.governance(Duration.days(options.objectLock.retentionDays)))
-				: undefined,
+			objectLockDefaultRetention,
 			// All FileBucket traffic (SDK calls + presigned URLs) is HTTPS, so
 			// enforce TLS to close the in-transit exposure gap unconditionally.
 			enforceSSL: true,

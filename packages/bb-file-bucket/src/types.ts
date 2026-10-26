@@ -93,6 +93,7 @@ export interface FileBucketOptions {
 	 * new FileBucket(scope, 'invoices', { encryption: key });
 	 * ```
 	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
 	 * Ignored by the mock and browser runtimes (no AWS resource to encrypt).
 	 */
 	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
@@ -140,6 +141,8 @@ export interface FileBucketOptions {
 	 *   objectLock: { mode: 'governance', retentionDays: 365 },
 	 * });
 	 * ```
+	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
 	 *
 	 * The mock validates the option and rejects presigned uploads, but does not
 	 * enforce retention.

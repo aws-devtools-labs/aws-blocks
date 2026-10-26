@@ -521,6 +521,7 @@ test('CDK: an unrecognized encryption value warns and falls back to SSE-S3', () 
   template.resourceCountIs('AWS::KMS::Key', 0);
   const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
   assert.strictEqual(warnings.length, 1);
+  assert.match(String(warnings[0].entry.data), /\[ack: @aws-blocks\/bb-file-bucket:UnknownEncryption\]/);
 });
 
 test('CDK: fromExisting ignores encryption (no key minted for a wrapped bucket)', () => {
@@ -639,4 +640,27 @@ test('CDK: both presets leave storageAccessLogging unset, so behavior is unchang
   const { stack, parent } = setup();
   new FileBucket(parent, 'uploads');
   assert.strictEqual(logBucketCount(stack), 0);
+});
+
+test('CDK: encryption / objectLock alongside fromExisting warn that they are ignored', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'wrapped', {
+    bucket: FileBucket.fromExisting('existing'),
+    encryption: 'customer-managed',
+    objectLock: { mode: 'governance', retentionDays: 30 },
+  });
+  const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning(
+    '*',
+    Match.stringLikeRegexp('ignored for a bucket wrapped with FileBucket.fromExisting'),
+  );
+  assert.strictEqual(warnings.length, 1);
+  assert.match(String(warnings[0].entry.data), /encryption, objectLock/);
+  assert.match(String(warnings[0].entry.data), /\[ack: @aws-blocks\/bb-file-bucket:OptionsIgnoredForExisting\]/);
+});
+
+test('CDK: fromExisting without encryption / objectLock emits no ignored-options warning', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'wrapped', { bucket: FileBucket.fromExisting('existing') });
+  const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ignored for a bucket wrapped'));
+  assert.strictEqual(warnings.length, 0);
 });
