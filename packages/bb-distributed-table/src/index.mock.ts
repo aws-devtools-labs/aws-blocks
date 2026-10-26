@@ -9,9 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-// Fail closed if this MOCK entry is loaded in a deployed environment (the
-// artifact was bundled without the `aws-runtime` export condition). No-op
-// locally. See assertNotMockInDeployedEnv.
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-distributed-table');
 
 export { DistributedTableErrors } from './errors.js';

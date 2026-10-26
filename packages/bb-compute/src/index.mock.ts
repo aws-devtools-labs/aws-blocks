@@ -10,9 +10,7 @@
 
 import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 
-// Fail closed if this MOCK entry is loaded in a deployed environment (the
-// artifact was bundled without the `aws-runtime` export condition). No-op
-// locally. See assertNotMockInDeployedEnv.
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-compute');
 
 export { Compute } from './index.aws.js';

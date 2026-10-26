@@ -14,9 +14,7 @@ import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-// Fail closed if this MOCK entry is loaded in a deployed environment (the
-// artifact was bundled without the `aws-runtime` export condition). No-op
-// locally. See assertNotMockInDeployedEnv.
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-secret');
 
 // Re-export public types and errors (canonical source)

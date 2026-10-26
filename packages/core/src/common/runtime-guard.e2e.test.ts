@@ -76,12 +76,22 @@ describe('runtime guard through a built BB entry', { concurrency: 1, skip: skipR
 	it('mock entry fails to load in a deployed env without the aws-runtime condition', () => {
 		const result = importInChild([], DEPLOYED_ENV);
 		assert.notEqual(result.status, 0, `expected non-zero exit; stderr:\n${result.stderr}`);
-		assert.match(result.stderr, /deployed environment/);
-		// bb-kv-store's mock entry statically imports @aws-blocks/bb-logger, and
-		// ESM evaluates that import first, so bb-logger's guard fires before
-		// bb-kv-store's (see the load-order note on assertNotMockInDeployedEnv).
-		// Either name is the guard firing on the mis-resolved mock graph.
-		assert.match(result.stderr, /The mock implementation of bb-(kv-store|logger) was loaded/);
+		// The hard assertion is the name-independent `deployed environment` text.
+		// The specific BB name is intentionally not asserted: bb-kv-store's mock
+		// entry statically imports @aws-blocks/bb-logger, and ESM evaluates that
+		// import first, so a nested BB's guard can fire before bb-kv-store's (see
+		// the load-order note on assertNotMockInDeployedEnv).
+		assert.ok(
+			result.stderr.includes('deployed environment'),
+			`expected guard message; stderr:\n${result.stderr}`,
+		);
+		assert.ok(
+			result.stderr.includes('The mock implementation of'),
+			`expected mock-guard message; stderr:\n${result.stderr}`,
+		);
+		// Informational only: report which BB's guard surfaced first.
+		const firedBb = /The mock implementation of (bb-[\w-]+) was loaded/.exec(result.stderr)?.[1];
+		console.log(`runtime guard fired for: ${firedBb ?? 'unknown'}`);
 	});
 
 	it('aws-runtime entry loads in a deployed env with --conditions=aws-runtime', () => {
