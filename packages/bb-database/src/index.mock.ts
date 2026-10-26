@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { DatabaseEngine, SqlQuery, Transaction } from '@aws-blocks/data-common';
+import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { enforceLocalBinding } from './bindings.js';
 import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID, quoteIdent } from './constants.js';
@@ -31,6 +31,8 @@ import type {
 	DatabaseOptions,
 	DistributedDatabaseOptions,
 	OwnedDatabaseOptions,
+	QueryOptions,
+	Transaction,
 	TransactionOptions,
 } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -149,24 +151,40 @@ export class Database extends Scope {
 	/**
 	 * Execute a SQL query and return all matching rows.
 	 *
+	 * Pass `{ schema }` (a Standard Schema: Zod, Valibot, ArkType) to derive the
+	 * row type from a value and validate every row against it; without it the
+	 * type argument is an unchecked assertion.
+	 *
 	 * @param query - A `sql` tagged template expression
+	 * @param options - `schema`: validates each row and types the result
 	 * @returns Array of rows; empty when nothing matches
 	 * @throws {DatabaseErrors.QueryFailed} If the query fails
+	 * @throws {DatabaseErrors.ResultValidationFailed} If a row does not match `schema`
 	 * @example
 	 * const users = await db.query<User>(sql`SELECT * FROM users WHERE active = ${true}`);
+	 * @example
+	 * const User = z.object({ id: z.string(), email: z.string() });
+	 * const users = await db.query(sql`SELECT id, email FROM users`, { schema: User }); // { id: string; email: string }[]
 	 */
-	query<T>(query: SqlQuery): Promise<T[]> {
-		return this.core.query<T>(query);
+	query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]> {
+		return this.core.query<T>(query, options);
 	}
 
 	/**
 	 * Execute a SQL query and return the first row, or `null` when nothing matches.
 	 *
+	 * With `{ schema }` the first row is validated and the result type is the
+	 * schema's output (or `null`).
+	 *
+	 * @param options - `schema`: validates the row and types the result
+	 * @throws {DatabaseErrors.ResultValidationFailed} If the row does not match `schema`
 	 * @example
 	 * const user = await db.queryOne<User>(sql`SELECT * FROM users WHERE id = ${id}`);
+	 * @example
+	 * const user = await db.queryOne(sql`SELECT id, email FROM users WHERE id = ${id}`, { schema: User });
 	 */
-	queryOne<T>(query: SqlQuery): Promise<T | null> {
-		return this.core.queryOne<T>(query);
+	queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
+		return this.core.queryOne<T>(query, options);
 	}
 
 	/**
@@ -186,7 +204,11 @@ export class Database extends Scope {
 	 * throws. Pass `{ retryOnConflict: true }` to re-run a side-effect-free
 	 * callback when the commit hits a serialization conflict.
 	 *
-	 * @throws {DatabaseErrors.TransactionFailed} If `fn` throws a non-database error or the commit fails
+	 * An `ApiError` thrown inside `fn` (a 404, or the 401 from `requireAuth`) and
+	 * any branded Blocks error reach the caller unchanged; the transaction still
+	 * rolls back. Any other error becomes `TransactionFailed`.
+	 *
+	 * @throws {DatabaseErrors.TransactionFailed} If `fn` throws an error that is not an `ApiError`, a Blocks error or a database error, or the commit fails
 	 * @throws {DatabaseErrors.SerializationFailure} On an unretried conflict (HTTP 409, retriable)
 	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When the transaction changes more than 3,000 rows or 10 MiB on a `distributed` cluster
 	 * @example

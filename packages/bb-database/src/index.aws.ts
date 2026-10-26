@@ -7,7 +7,7 @@
  */
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import type { DatabaseEngine, SqlQuery, Transaction } from '@aws-blocks/data-common';
+import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID, ENV_VAR_PREFIX, sanitizeDbRoleName, toEnvName } from './constants.js';
@@ -22,6 +22,8 @@ import type {
 	DatabaseOptions,
 	DistributedDatabaseOptions,
 	OwnedDatabaseOptions,
+	QueryOptions,
+	Transaction,
 	TransactionOptions,
 } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -101,12 +103,12 @@ export class Database extends Scope {
 		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
 	}
 
-	query<T>(query: SqlQuery): Promise<T[]> {
-		return this.core.query<T>(query);
+	query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]> {
+		return this.core.query<T>(query, options);
 	}
 
-	queryOne<T>(query: SqlQuery): Promise<T | null> {
-		return this.core.queryOne<T>(query);
+	queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
+		return this.core.queryOne<T>(query, options);
 	}
 
 	execute(query: SqlQuery): Promise<{ rowCount: number }> {

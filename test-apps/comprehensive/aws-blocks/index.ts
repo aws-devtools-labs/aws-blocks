@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiError, ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -356,6 +356,8 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
 // `dbx` owns a distributed (Aurora DSQL) cluster; migrations default to
 // ./aws-blocks/migrations/dbx and go through the rewriter.
 const dbx = new SqlDatabase(scope, 'dbx');
+// A result schema: the row type derives from this value, and every row is validated against it.
+const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
 // `dbxa` and `dbxb` share one distributed cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
 // check constraint, an index and a view, all rewritten for DSQL.
@@ -1664,6 +1666,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
+  // A 404 thrown inside the callback must reach the client as a 404, not as TransactionFailed.
+  async dbxTransferStrict(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(async (tx) => {
+      const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+      if (!sender) throw new ApiError('no such sender', 404);
+      await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+      await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+    });
+    return { success: true };
+  },
+
+  // The result type comes from the schema, not from a type argument.
+  async dbxGetValidated(id: string) {
+    return await dbx.queryOne(sql`SELECT id, name, value, category FROM dbx_items WHERE id = ${id}`, { schema: DbxItem });
+  },
+
+  async dbxSchemaMismatch(id: string) {
+    try {
+      await dbx.queryOne(sql`SELECT id, name, value FROM dbx_items WHERE id = ${id}`, {
+        schema: z.object({ id: z.string(), name: z.string(), value: z.string() }),
+      });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
   // Local mode only: simulateConflict() throws in the Lambda runtime, so the
   // handler reports that nothing was simulated and the test skips.
   async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
@@ -1743,11 +1772,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // Shared distributed cluster: two blocks, two schemas, one table name.
   async dbxaAdd(sku: string, qty: number) {
-    const row = await dbxa.queryOne<{ id: number | string; sku: string; qty: number }>(
-      sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`,
-    );
-    // BIGINT identity: pg returns bigint as a string; normalize for the client.
-    return row ? { id: Number(row.id), sku: row.sku, qty: row.qty } : null;
+    // BIGINT identity: a number locally and on DSQL alike; the schema checks it in both.
+    return await dbxa.queryOne(sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`, {
+      schema: z.object({ id: z.number(), sku: z.string(), qty: z.number() }),
+    });
   },
 
   async dbxaDelete(sku: string) {

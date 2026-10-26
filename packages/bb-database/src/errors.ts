@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ApiError, brandBlocksError } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**
  * Error names for query and transaction failures. Match with
  * `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` on either side of
  * the RPC wire. The strings are bb-data's, so an app moving between the two
  * blocks keeps its catch clauses. See the README's Errors table for when each
- * is raised and how it is retried.
+ * is raised and how it is retried. `ResultValidationFailed` is this block's
+ * own: a row did not match the `schema` passed to `query()` or `queryOne()`.
  */
 export const DatabaseErrors = {
 	QueryFailed: 'QueryFailedException',
@@ -17,6 +19,7 @@ export const DatabaseErrors = {
 	UniqueConstraintViolation: 'UniqueConstraintViolationException',
 	SerializationFailure: 'SerializationFailureException',
 	TransactionRowLimitExceeded: 'TransactionRowLimitExceededException',
+	ResultValidationFailed: 'ResultValidationFailedException',
 } as const;
 
 /**
@@ -70,6 +73,22 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
 		name: DatabaseErrors.UniqueConstraintViolation,
 		cause,
 	});
+}
+
+/**
+ * Build the error for a row that failed the result `schema`. The message names
+ * the row and the schema's first issue (its path and text), which describe the
+ * expected shape, not the data; the row itself stays on the server.
+ */
+export function resultValidationFailed(rowIndex: number, issues: ReadonlyArray<StandardSchemaV1.Issue>): Error {
+	const first = issues[0];
+	const path = first?.path?.map((segment) => (typeof segment === 'object' ? segment.key : segment)).join('.');
+	const detail = first ? `${path ? `${path}: ` : ''}${first.message}` : 'the row did not match the schema';
+	const error = new Error(
+		`${DatabaseErrors.ResultValidationFailed}: row ${rowIndex} did not match the result schema (${detail})`,
+	);
+	error.name = DatabaseErrors.ResultValidationFailed;
+	return brandBlocksError(error);
 }
 
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));

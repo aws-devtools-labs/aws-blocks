@@ -59,5 +59,7 @@ export type {
 	MigrationPlan,
 	OwnedDatabaseOptions,
 	PlanStep,
+	QueryOptions,
+	Transaction,
 	TransactionOptions,
 } from './types.js';

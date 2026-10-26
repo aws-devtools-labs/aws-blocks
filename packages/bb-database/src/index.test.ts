@@ -11,7 +11,8 @@ import assert from 'node:assert';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
+import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
 import { createKyselyAdapter, Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
 import { _resetDatabaseRegistry } from './registry.js';
@@ -100,6 +101,98 @@ describe('Database (owned distributed cluster)', () => {
 			await db.execute(sql`INSERT INTO t VALUES (${'b'})`);
 		});
 		assert.strictEqual((await db.query(sql`SELECT * FROM t`)).length, 2);
+	});
+
+	test('an ApiError or a branded Blocks error thrown inside transaction() reaches the caller unchanged; the transaction still rolls back', async () => {
+		const db = new Database(app(), 'db');
+		await withMigrations(db, { '001.sql': 'CREATE TABLE acct (id TEXT PRIMARY KEY, balance INTEGER NOT NULL);' });
+		await db.execute(sql`INSERT INTO acct VALUES (${'a'}, ${100})`);
+		// What a handler does: a 404 (or the 401 from requireAuth) from inside the callback.
+		await assert.rejects(
+			db.transaction(async (tx) => {
+				await tx.execute(sql`UPDATE acct SET balance = 0 WHERE id = ${'a'}`);
+				throw new ApiError('no such customer', 404);
+			}),
+			(e: unknown) => e instanceof ApiError && e.status === 404 && e.message === 'no such customer',
+		);
+		// A branded named error (blocksError / brandBlocksError) keeps its name too.
+		await assert.rejects(
+			db.transaction(async () => {
+				throw blocksError('InsufficientFundsException', 'not enough');
+			}),
+			(e: Error) => e.name === 'InsufficientFundsException' && e.message.includes('not enough'),
+		);
+		// An unbranded error still becomes TransactionFailed (its message never leaves the server).
+		await assert.rejects(
+			db.transaction(async () => {
+				throw new Error('driver text');
+			}),
+			(e: Error) => e.name === DatabaseErrors.TransactionFailed && !e.message.includes('driver text'),
+		);
+		assert.strictEqual(
+			(await db.queryOne<{ balance: number }>(sql`SELECT balance FROM acct WHERE id = ${'a'}`))?.balance,
+			100,
+		);
+	});
+
+	test('a result schema types and validates rows; a mismatch is ResultValidationFailed and rolls a transaction back', async () => {
+		const db = new Database(app(), 'db');
+		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL);' });
+		await db.execute(sql`INSERT INTO t VALUES (${'a'}, ${1}), (${'b'}, ${2})`);
+		const Row = schemaOf(
+			(v): v is { id: string; n: number } => isRecord(v) && typeof v.id === 'string' && typeof v.n === 'number',
+		);
+		const rows = await db.query(sql`SELECT id, n FROM t ORDER BY id`, { schema: Row });
+		type _Rows = Expect<Equal<typeof rows, { id: string; n: number }[]>>;
+		assert.deepStrictEqual(rows, [
+			{ id: 'a', n: 1 },
+			{ id: 'b', n: 2 },
+		]);
+		const one = await db.queryOne(sql`SELECT id, n FROM t WHERE id = ${'a'}`, { schema: Row });
+		type _One = Expect<Equal<typeof one, { id: string; n: number } | null>>;
+		assert.deepStrictEqual(one, { id: 'a', n: 1 });
+		assert.strictEqual(await db.queryOne(sql`SELECT id, n FROM t WHERE id = ${'zzz'}`, { schema: Row }), null);
+		// The schema's output is what comes back, so a transform applies.
+		const Upper = {
+			'~standard': {
+				version: 1,
+				vendor: 'test',
+				validate: (v: unknown) =>
+					isRecord(v) && typeof v.id === 'string'
+						? { value: { id: v.id.toUpperCase() } }
+						: { issues: [{ message: 'no id' }] },
+			},
+		} satisfies StandardSchemaV1<unknown, { id: string }>;
+		assert.deepStrictEqual(await db.query(sql`SELECT id FROM t ORDER BY id`, { schema: Upper }), [
+			{ id: 'A' },
+			{ id: 'B' },
+		]);
+		// A mismatch names the error and the row.
+		const Wrong = schemaOf(
+			(v): v is { id: number } => isRecord(v) && typeof v.id === 'number',
+			'id must be a number',
+		);
+		await assert.rejects(db.query(sql`SELECT id FROM t`, { schema: Wrong }), (e: Error) => {
+			assert.ok(isBlocksError(e, DatabaseErrors.ResultValidationFailed));
+			assert.match(e.message, /id must be a number/);
+			return true;
+		});
+		// Inside a transaction the same error passes through and the write is rolled back.
+		await assert.rejects(
+			db.transaction(async (tx) => {
+				await tx.execute(sql`UPDATE t SET n = 99 WHERE id = ${'a'}`);
+				await tx.queryOne(sql`SELECT id FROM t WHERE id = ${'a'}`, { schema: Wrong });
+			}),
+			(e: Error) => e.name === DatabaseErrors.ResultValidationFailed,
+		);
+		assert.strictEqual(
+			(
+				await db.queryOne(sql`SELECT n FROM t WHERE id = ${'a'}`, {
+					schema: schemaOf((v): v is { n: number } => isRecord(v) && typeof v.n === 'number'),
+				})
+			)?.n,
+			1,
+		);
 	});
 
 	test('simulateConflict makes the next commit a retriable 409; retryOnConflict re-runs the callback', async () => {
@@ -406,3 +499,21 @@ async function withMigrations(db: Database, files: Record<string, string>): Prom
 	const plan = buildMigrationPlan(loadMigrationFiles(dir));
 	await engine.withDdl(() => runMigrationPlan(engine, plan, { schemaName: db.schemaName, log: () => {} }));
 }
+
+/** A minimal Standard Schema built from a type guard, so the tests need no schema library. */
+function schemaOf<T>(check: (v: unknown) => v is T, message = 'invalid row'): StandardSchemaV1<unknown, T> {
+	return {
+		'~standard': {
+			version: 1,
+			vendor: 'bb-database-test',
+			validate: (value) => (check(value) ? { value } : { issues: [{ message }] }),
+		},
+	};
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === 'object' && v !== null;
+}
+
+type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;

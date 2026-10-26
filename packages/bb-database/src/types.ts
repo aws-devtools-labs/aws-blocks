@@ -5,6 +5,8 @@
  * Public types for the Database Building Block. Types only, no runtime code.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { SqlQuery } from '@aws-blocks/data-common';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**
  * The categories of cluster a {@link DatabaseCluster} can provision.
@@ -96,6 +98,45 @@ export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
 
 /** Every options shape a `Database` constructor accepts. */
 export type DatabaseOptions = OwnedDatabaseOptions | DistributedDatabaseOptions;
+
+/**
+ * Options for `query()` and `queryOne()`, on a `Database` and on the `tx` a
+ * `transaction()` callback receives.
+ */
+export interface QueryOptions<T> {
+	/**
+	 * A [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, or
+	 * your own) that every returned row is validated against. The method's result
+	 * type is the schema's output type, so no type argument is needed, and a row
+	 * that does not match throws `DatabaseErrors.ResultValidationFailed` instead
+	 * of reaching a handler as the wrong shape. The schema's output is what comes
+	 * back, so a transform or default applies. The first issue's path and message
+	 * are in the error message, which reaches the client; keep custom refinement
+	 * messages free of row values.
+	 *
+	 * @example
+	 * ```ts
+	 * const Customer = z.object({ id: z.string(), email: z.string() });
+	 * const customers = await shop.query(sql`SELECT id, email FROM customers`, { schema: Customer });
+	 * // customers: { id: string; email: string }[]
+	 * ```
+	 */
+	schema?: StandardSchemaV1<unknown, T>;
+}
+
+/**
+ * The handle a `transaction()` callback receives. Every call runs inside the
+ * open transaction; the methods mirror `Database.query`, `queryOne` and
+ * `execute`, including the `schema` option.
+ */
+export interface Transaction {
+	/** Run a query inside this transaction and return every row. */
+	query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]>;
+	/** Run a query inside this transaction and return the first row, or `null`. */
+	queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null>;
+	/** Run an `INSERT`, `UPDATE` or `DELETE` inside this transaction and return the rows affected. */
+	execute(query: SqlQuery): Promise<{ rowCount: number }>;
+}
 
 /** Options for `transaction()`. */
 export interface TransactionOptions {

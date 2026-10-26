@@ -39,6 +39,8 @@ A block that owns its cluster uses the `public` schema. A block on a shared clus
 
 `Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'distributed'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
 
+A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`result-schema.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`, naming the row and the first issue's path; the row's values stay on the server. This is the first step of the typed-tables track and leaves the type argument form in place.
+
 ## 4. Execution environments
 
 ### 4.1 Local execution
@@ -129,6 +131,8 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | `ASYNC` DDL | Runs synchronously | Asynchronous job followed by a poll |
 | 3,000-row and 10 MiB transaction limits | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` | Available | Throws |
+| `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `dsql-engine.ts` installs a parser that matches PGlite |
+| An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 
 ## 10. Limitations and future work
 
@@ -153,6 +157,8 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | Public types and option shapes | `src/types.ts`; constructor overloads in `src/index.mock.ts` |
 | Resolution of the `cluster` option | `src/cluster-ref.ts` (shared by all entry points) |
 | Queries, transactions and retries | `src/database-core.ts`, `src/transaction.ts` |
+| Result schema validation | `src/result-schema.ts` |
+| DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Local engine and schema switching | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
 | DSQL compatibility checks and the migration rewriter | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |

@@ -7,12 +7,13 @@
  * mock and aws classes differ only in how they produce the engine, so that is
  * injected as an async factory.
  */
-import { type DatabaseEngine, type SqlQuery, type Transaction, unwrapQuery } from '@aws-blocks/data-common';
+import { type DatabaseEngine, type SqlQuery, unwrapQuery } from '@aws-blocks/data-common';
 import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from './constants.js';
 import { runInTransactionScope } from './engines/tx-scope.js';
 import { isSerializationConflict } from './errors.js';
+import { validateRow, validateRows } from './result-schema.js';
 import { asTransactionError, TransactionImpl } from './transaction.js';
-import type { TransactionOptions } from './types.js';
+import type { QueryOptions, Transaction, TransactionOptions } from './types.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -28,7 +29,7 @@ export class DatabaseCore {
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
 
-	/** @internal The underlying engine. Used by `createKyselyAdapter()`. */
+	/** @internal The underlying engine, for adapters and tests. Not part of the public API. */
 	getEngine(): Promise<DatabaseEngine> {
 		if (!this.engine) {
 			this.engine = this.options.engine();
@@ -57,15 +58,21 @@ export class DatabaseCore {
 		}
 	}
 
-	async query<T>(query: SqlQuery): Promise<T[]> {
+	/** Run a query with the auto-commit conflict retry; rows come back as the engine returned them. */
+	private async fetch<T>(query: SqlQuery): Promise<T[]> {
 		const engine = await this.getEngine();
 		const { sql, params } = unwrapQuery(query);
 		return this.withConflictRetry(() => engine.query<T>(sql, params));
 	}
 
-	async queryOne<T>(query: SqlQuery): Promise<T | null> {
-		const rows = await this.query<T>(query);
-		return rows[0] ?? null;
+	async query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]> {
+		return validateRows(await this.fetch<T>(query), options?.schema);
+	}
+
+	async queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
+		const rows = await this.fetch<T>(query);
+		if (rows.length === 0) return null;
+		return options?.schema ? validateRow(rows[0], options.schema, 0) : rows[0];
 	}
 
 	async execute(query: SqlQuery): Promise<{ rowCount: number }> {

@@ -17,6 +17,12 @@ type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], 'distributed'>>;
 type _DbxaKind = Expect<Equal<Info['dbxa']['cluster']['kind'], 'distributed'>>;
 type KyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
 type _KyselyRow = Expect<Equal<KyselyRow, { id: string; name: string; value: number }>>;
+// A result schema, not a type argument, is what types these two: the inferred
+// type must be the schema's output, and `id` must be a number on both environments.
+type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
+type _Validated = Expect<Equal<Validated, { id: string; name: string; value: number; category: string }>>;
+type Added = NonNullable<Awaited<ReturnType<typeof apiType.dbxaAdd>>>;
+type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 
 export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
@@ -54,6 +60,38 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.strictEqual((await api.dbxGet(a))?.value, 300);
       await api.dbxDelete(a);
       await api.dbxDelete(b);
+    });
+
+    test('dbx - an ApiError thrown inside transaction() reaches the client with its status, and the transaction rolls back', async () => {
+      const api = getApi();
+      const b = `x-${Date.now().toString(36)}-s`;
+      await api.dbxInsert(b, 'receiver', 0);
+      try {
+        await assert.rejects(
+          () => api.dbxTransferStrict('missing-sender', b, 5),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError);
+            assert.strictEqual(e.status, 404);
+            assert.strictEqual(e.message, 'no such sender');
+            return true;
+          },
+        );
+        assert.strictEqual((await api.dbxGet(b))?.value, 0, 'nothing was credited');
+      } finally {
+        await api.dbxDelete(b);
+      }
+    });
+
+    test('dbx - a result schema types and validates rows; a mismatch is ResultValidationFailed', async () => {
+      const api = getApi();
+      const id = `x-v-${Date.now().toString(36)}`;
+      await api.dbxInsert(id, 'validated', 5);
+      try {
+        assert.deepStrictEqual(await api.dbxGetValidated(id), { id, name: 'validated', value: 5, category: 'general' });
+        assert.strictEqual((await api.dbxSchemaMismatch(id)).error, DatabaseErrors.ResultValidationFailed);
+      } finally {
+        await api.dbxDelete(id);
+      }
     });
 
     test('dbx - a simulated conflict is retried with retryOnConflict (local mode)', async () => {
@@ -124,7 +162,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const account = `acct-${stamp}`;
       const before = await api.sharedClusterCounts();
       const item = await api.dbxaAdd(sku, 3);
-      assert.ok(item && Number.isInteger(item.id), 'the rewritten identity column assigned an id');
+      assert.ok(item && typeof item.id === 'number', 'the rewritten identity column assigned an id, returned as a number');
       assert.deepStrictEqual(await api.dbxbAdd(account, 'alice', 40), { account_id: account, total: 40 });
       assert.deepStrictEqual(await api.dbxbAdd(account, 'alice', 2), { account_id: account, total: 42 });
       const after = await api.sharedClusterCounts();

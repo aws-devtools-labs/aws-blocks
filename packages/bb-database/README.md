@@ -67,8 +67,8 @@ const cluster = new DatabaseCluster(scope, id, { type: 'distributed', removalPol
 
 | Method | Returns | Description |
 |---|---|---|
-| `query<T>(sql)` | `Promise<T[]>` | Run a query and return every row. Empty array when nothing matches. |
-| `queryOne<T>(sql)` | `Promise<T \| null>` | Run a query and return the first row, or `null` when nothing matches. |
+| `query(sql, options?)` | `Promise<T[]>` | Run a query and return every row. Empty array when nothing matches. `options.schema` types and validates the rows, see [Typed results](#typed-results). |
+| `queryOne(sql, options?)` | `Promise<T \| null>` | Run a query and return the first row, or `null` when nothing matches. Same `options.schema`. |
 | `execute(sql)` | `Promise<{ rowCount: number }>` | Run an `INSERT`, `UPDATE`, or `DELETE` and return the rows affected. |
 | `transaction(fn, options?)` | `Promise<T>` | Run `fn(tx)` in one transaction; `tx` has the three methods above. Commits when `fn` resolves, rolls back when it throws. See [Transactions](#transactions). |
 | `simulateConflict()` | `void` | Local mode only: make the next commit fail with `SerializationFailure`. Throws in the Lambda runtime. |
@@ -78,6 +78,26 @@ const cluster = new DatabaseCluster(scope, id, { type: 'distributed', removalPol
 `sql` is a tagged template: every `${value}` becomes a bound parameter, never string interpolation. Table and column names cannot be parameters.
 `bigint` values (identity columns, `count(*)`, `sum()` over integers) come back as JavaScript numbers, locally and on DSQL. A value beyond ±2^53 comes back as a `BigInt`, which JSON cannot serialize, so returning one from an `ApiNamespace` method fails at the RPC serializer; cast such a column in the query (`::text`, or `::float8` when precision loss is acceptable).
 
+
+`bigint` values (identity columns, `count(*)`, `sum()` over integers) come back as JavaScript numbers, locally and on DSQL. A value beyond ±2^53 comes back as a `BigInt`, which JSON cannot serialize, so returning one from an `ApiNamespace` method fails at the RPC serializer; cast such a column in the query (`::text`, or `::float8` when precision loss is acceptable).
+
+### Typed results
+
+A query's row type can come from a value instead of a type argument. Pass `{ schema }`, any [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, or your own), and the method returns the schema's output type after validating every row against it. A row that does not match throws `DatabaseErrors.ResultValidationFailed`, naming the row and the failing field, instead of reaching your handler as the wrong shape. The same option is on the `tx` inside `transaction()`. The first issue's path and message are part of the error message, which reaches the client; the schema libraries' built-in messages describe only the expected shape, so keep any custom refinement message free of row values.
+
+```ts
+import { z } from 'zod';
+
+const Customer = z.object({ id: z.string(), email: z.string() });
+
+const customers = await shop.query(sql`SELECT id, email FROM customers`, { schema: Customer });
+// customers: { id: string; email: string }[]
+
+const one = await shop.queryOne(sql`SELECT id, email FROM customers WHERE id = ${id}`, { schema: Customer });
+// one: { id: string; email: string } | null
+```
+
+`query<T>(sql)` with a type argument still works; the argument is an unchecked assertion, so prefer `schema` where the shape matters.
 
 **Runtime only.** Call the data methods inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, not at the top level of `aws-blocks/index.ts`. Top-level code also runs during CDK synth, where the block is its infrastructure construct and every data method throws `Database.query() cannot be called during CDK synth`. Constructing the block at module scope is fine; only the calls must move into handlers. Every `ApiNamespace` method is a public endpoint, so gate it with `await auth.requireAuth(context)` from an auth block.
 
@@ -176,12 +196,15 @@ DSQL uses optimistic concurrency: a transaction never waits on a lock, and two t
 - A `transaction()` callback is re-run only when you pass `{ retryOnConflict: true }`, because a callback may have side effects. `maxRetries` defaults to 3.
 - A transaction may change at most 3,000 rows (cascaded deletes included) and 10 MiB of data; past either it fails with `TransactionRowLimitExceeded` and nothing is kept. Split bulk work into batches.
 - DDL and DML never share a transaction, and only migrations run DDL.
+- A throw inside the callback rolls the transaction back. An `ApiError` (a 404 you throw, or the 401 from `requireAuth`) and any branded Blocks error reach the caller unchanged; any other error becomes `TransactionFailed` and its text stays on the server.
 
 ```ts
+import { ApiError } from '@aws-blocks/core';
+
 // Safe to re-run: the callback reads, decides, writes, and has no side effects outside the database.
 await shop.transaction(async (tx) => {
   const row = await tx.queryOne<{ total: number }>(sql`SELECT total FROM orders WHERE id = ${orderId} FOR UPDATE`);
-  if (!row) throw new Error('no such order');
+  if (!row) throw new ApiError('no such order', 404); // the client receives a 404
   await tx.execute(sql`UPDATE orders SET total = ${row.total + delta} WHERE id = ${orderId}`);
 }, { retryOnConflict: true });
 ```
@@ -196,10 +219,11 @@ Query and transaction failures carry a `DatabaseErrors` name. Match them with `i
 |---|---|---|
 | `QueryFailed` | Any other SQL error, including a foreign-key or check violation | No |
 | `ConnectionFailed` | Endpoint or network failure | No |
-| `TransactionFailed` | The callback threw, or the commit failed for a reason other than a conflict | No |
+| `TransactionFailed` | The callback threw an error that is not an `ApiError`, a Blocks error or a database error, or the commit failed for a reason other than a conflict | No |
 | `UniqueConstraintViolation` | SQLSTATE `23505` (HTTP 409) | No |
 | `SerializationFailure` | SQLSTATE `40001` at commit (HTTP 409, retriable) | A single `query` or `execute`: three times. A `transaction()` callback: only with `retryOnConflict: true` |
 | `TransactionRowLimitExceeded` | More than 3,000 rows changed (cascades included) or more than 10 MiB written in one transaction, locally and on DSQL (SQLSTATE `54000`) | No; split the work |
+| `ResultValidationFailed` | A row did not match the `schema` passed to `query()` or `queryOne()`; the message, which reaches the client, names the row and the first issue's path and text | No; fix the schema or the query |
 
 DSQL's stale-schema-cache error (`OC001`) is retried once wherever it happens.
 

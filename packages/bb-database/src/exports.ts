@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
+export type { SqlQuery } from '@aws-blocks/data-common';
 /**
  * The named exports every runtime entry point (mock, aws, cdk) shares. Keeping
  * them in one file is what makes the conditional-export parity test trivially
@@ -25,5 +25,7 @@ export type {
 	MigrationPlan,
 	OwnedDatabaseOptions,
 	PlanStep,
+	QueryOptions,
+	Transaction,
 	TransactionOptions,
 } from './types.js';
