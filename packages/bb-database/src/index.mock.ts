@@ -12,7 +12,7 @@ import { join } from 'node:path';
  */
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { enforceLocalBinding } from './bindings.js';
 import { resolveCluster } from './cluster-ref.js';
@@ -37,6 +37,9 @@ import type {
 	TransactionOptions,
 } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-database');
 
 /**
  * A cluster several `Database` blocks share, each in its own schema. Pick a
