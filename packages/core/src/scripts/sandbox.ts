@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
+import { runPredeployHooks } from './predeploy-hooks.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
@@ -229,6 +230,14 @@ export async function startSandbox(options: SandboxOptions) {
   // Apply external-database migrations to the sandbox database before
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   await applyExternalMigrations({ stage: 'sandbox' });
+
+  // Pre-deploy hooks the installed blocks declare in their package.json
+  // (`aws-blocks.predeploy`) for the sandbox stage. A stop aborts here.
+  await runPredeployHooks({
+    stage: 'sandbox',
+    projectRoot: process.cwd(),
+    app: `npm exec tsx -- -C cdk ${backendPath}`,
+  });
 
   // Import backend to populate Scope BB registry (for telemetry).
   // Runs before CDK deploy so both success and failure paths include block info.
