@@ -37,16 +37,30 @@ export type BuildProfile = {
 /** @internal */
 export const BUILD_PROFILE_ENV = 'BLOCKS_HOSTING_BUILD_PROFILE';
 
-/** The profile the current adapter run builds for. Default: `{}` (the production build). */
+/**
+ * The profile the current adapter run builds for. Default: `{}` (the production
+ * build). Only the known fields with the right type are read, so a malformed
+ * env value can't hand an adapter an unexpected shape.
+ */
 export const buildProfile = (): BuildProfile => {
   const raw = process.env[BUILD_PROFILE_ENV];
   if (!raw) return {};
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as BuildProfile) : {};
+    parsed = JSON.parse(raw);
   } catch {
     return {};
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const value: Record<string, unknown> = { ...parsed };
+  const { serverInvoke, edgeToRegional, skipIsr, skipImageOptimization, deterministicBuildId } = value;
+  return {
+    ...(serverInvoke === 'default' || serverInvoke === 'http-api' ? { serverInvoke } : {}),
+    ...(typeof edgeToRegional === 'boolean' ? { edgeToRegional } : {}),
+    ...(typeof skipIsr === 'boolean' ? { skipIsr } : {}),
+    ...(typeof skipImageOptimization === 'boolean' ? { skipImageOptimization } : {}),
+    ...(typeof deterministicBuildId === 'string' ? { deterministicBuildId } : {}),
+  };
 };
 
 /** Run `fn` (an adapter invocation) with `profile`, restoring the previous value after. */

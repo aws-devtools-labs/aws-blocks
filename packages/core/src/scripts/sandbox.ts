@@ -52,10 +52,16 @@ export interface SandboxOptions {
    * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
    * applied straight to the Lambda functions in seconds, falling back to a
    * CloudFormation deploy (direct, no change set) for anything that can't be
-   * hotswapped. Hotswap
-   * leaves the stack drifted from its template, which is acceptable for a
-   * throwaway preview only, so every other sandbox keeps the CloudFormation
-   * deploy.
+   * hotswapped. Hotswap leaves the stack drifted from its template, which is
+   * acceptable for a throwaway preview only, so every other sandbox keeps the
+   * CloudFormation deploy.
+   *
+   * A deploy counts as a re-deploy when `<outDir>/outputs.json` exists in the
+   * current working directory (the previous deploy wrote it); the stack itself
+   * is not queried. So a re-deploy from another directory, or after deleting
+   * that file, runs a full deploy (slower, but correct). A stale file left
+   * after the stack was deleted makes `--hotswap-fallback` find no stack, and
+   * it falls back to a full deploy.
    */
   preview?: boolean;
 }

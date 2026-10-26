@@ -653,9 +653,11 @@ export interface HostingProps {
    * (`startSandbox({ preview: true })`). There is no atomic switch-over, so
    * use it only for throwaway environments. With nothing to switch, the
    * door's asset proxy is not held back until the uploads finish:
-   * CloudFormation creates it alongside them, which shortens a first deploy. Not available behind a door with
-   * an edge cache (CloudFront, the stacked door), which would keep serving the
-   * overwritten files; those fail synth (`UnsupportedHostingSettingError`).
+   * CloudFormation creates it alongside them, which shortens a first deploy.
+   *
+   * Not available behind a door with an edge cache (CloudFront, the stacked
+   * door), which would keep serving the overwritten files; those fail synth
+   * (`UnsupportedHostingSettingError`).
    *
    * Set to `'fixed'` by {@link HostingPresets}`.preview`.
    * @default 'per-deploy'
