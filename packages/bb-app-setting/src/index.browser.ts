@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Browser stub - AppSetting runs server-side only
+export { AppSettingErrors } from './errors.js';
 export { SECRETS_BULK_CONSTRUCT_ID } from './secrets-bulk.js';
 
 export class AppSetting {

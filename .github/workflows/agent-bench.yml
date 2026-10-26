@@ -45,7 +45,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -56,7 +56,7 @@ jobs:
           npm run build
           npm run publish:local
       - name: Upload dist-registry
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-registry
           path: dist-registry/
@@ -129,7 +129,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # cache: npm so the per-cell root `npm ci` restores from the Actions cache.
           node-version-file: '.nvmrc'
@@ -186,7 +186,7 @@ jobs:
         id: oidc
         continue-on-error: true
         if: steps.initresult.outcome == 'success'
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -237,7 +237,7 @@ jobs:
       - name: 1a. Download prebuilt dist-registry
         continue-on-error: true
         if: steps.initresult.outcome == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-registry
           path: dist-registry/
@@ -402,7 +402,7 @@ jobs:
       - name: 5. Upload result
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/result/result.json
@@ -416,7 +416,7 @@ jobs:
       - name: 6. Upload source
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/source
@@ -429,7 +429,7 @@ jobs:
       - name: 6b. Upload trace
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/trace
@@ -450,7 +450,7 @@ jobs:
         id: oidc_s3
         if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -502,11 +502,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: scripts/agent-bench
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: '.nvmrc' }
       # Each result.json already carries its per-cell `analysis`, so the roll-up consumes these
       # directly — no re-download of bench-trace-* needed.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: results, pattern: bench-result-* }
 
       # OIDC for S3 (read/write the baseline). Best-effort: a creds failure degrades the overview
@@ -514,7 +514,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         id: oidc
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: us-east-1
@@ -631,7 +631,7 @@ jobs:
       - name: Upload analysis (best-effort)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-analysis
           path: ${{ github.workspace }}/bench-analysis.json
@@ -684,7 +684,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm

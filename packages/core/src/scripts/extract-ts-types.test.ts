@@ -117,6 +117,63 @@ describe('extractMethodTypes — direct ApiNamespace calls', () => {
 	});
 });
 
+// `new ApiNamespace(scope, name, handler, { compute })` — the handler is the third
+// argument, not the last; taking the options object as the handler dropped every
+// method (methods became `unknown` and `@blocksSkipCodegen` tags were missed).
+describe('ApiNamespace with a fourth options argument', () => {
+	const tsconfig = JSON.stringify({ compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true } });
+
+	it('extractMethodTypes reads the handler, not the options object', () => {
+		const dir = createTempProject({
+			'tsconfig.json': tsconfig,
+			'index.ts': `
+				interface ApiNamespaceConstructor { new <T>(scope: any, name: string, handler: (ctx: any) => T, options?: { compute?: unknown }): T; }
+				const ApiNamespace: ApiNamespaceConstructor = class {} as any;
+				const compute = {};
+
+				export const reports = new ApiNamespace(null, 'reportsApi', (context) => ({
+					async build(month: string): Promise<{ rows: number }> {
+						return { rows: 1 };
+					},
+				}), { compute });
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const build = types.get('reports.build');
+			assert.ok(build, 'should find reports.build');
+			assert.strictEqual(build.params[0].schema.type, 'string');
+			assert.strictEqual(build.returnType.type, 'object');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('extractSkipCodegenMethods still finds @blocksSkipCodegen methods', () => {
+		const dir = createTempProject({
+			'index.ts': `
+				class ApiNamespace { constructor(scope: any, name: any, handler: any, options?: any) {} }
+
+				export const reports = new ApiNamespace(null, 'reports', (context) => ({
+					async build() { return { ok: true }; },
+
+					/**
+					 * @blocksSkipCodegen
+					 */
+					async devOnly() { return null; },
+				}), { compute: {} });
+			`,
+		});
+		try {
+			const skipped = extractSkipCodegenMethods(join(dir, 'index.ts'));
+			assert.ok(skipped.has('reports.devOnly'), `devOnly should be skipped: ${[...skipped].join(', ')}`);
+			assert.ok(!skipped.has('reports.build'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
 describe('extractSkipCodegenMethods — pure-AST scan', () => {
 	it('returns names of methods tagged with @blocksSkipCodegen, ignoring untagged ones', () => {
 		const dir = createTempProject({

@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope, blocksError } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-email-client');
 
 // ── Public types ────────────────────────────────────────────────────────────
 

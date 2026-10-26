@@ -1744,6 +1744,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
+  // Request errors: each statement is rejected by Postgres for something the
+  // caller did (a constraint, a foreign key, a row-level-security policy or a
+  // missing grant), and must reach the client as a named 4xx, not a 500.
+  async dbCheckViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
+  },
+
+  async dbNotNullViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
+  },
+
+  async dbForeignKeyViolation(id: string) {
+    await db.execute(
+      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
+    );
+  },
+
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
+  async dbRlsViolation(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
+  },
+
+  async dbMissingGrant(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
+  },
+
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
   // Runs a balance transfer entirely through Kysely's `.transaction()`. If the
   // adapter does not drive a real engine transaction, the debit and credit do not

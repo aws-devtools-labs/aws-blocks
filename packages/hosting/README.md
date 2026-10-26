@@ -1,15 +1,17 @@
 # @aws-blocks/hosting
 
 Low-level CDK L3 constructs for deploying web applications on AWS
-(CloudFront, S3, Lambda, WAF, monitoring, DNS).
+(S3, Lambda, WAF, monitoring, DNS), behind a front door of your choice:
+CloudFront by default, an Application Load Balancer, Amazon API Gateway, an S3
+website, or your own (see [Front doors](#front-doors)).
 
 ## Overview
 
 This package provides:
 
 1. **`HostingConstruct`** -- a CDK L3 construct that provisions a full hosting
-   stack (CloudFront distribution, S3 origin, Lambda compute, optional WAF,
-   monitoring dashboards, and DNS records).
+   stack (a front door — a CloudFront distribution by default —, S3 origin,
+   Lambda compute, optional WAF, monitoring alarms, and DNS records).
 
 2. **Framework adapters** (Next.js, Nuxt, Astro, SPA) that run the framework
    build, produce a `DeployManifest`, and hand off to the construct for
@@ -300,7 +302,7 @@ immediate — SSM Parameter Store has no recovery window.)
                    ▼
 ┌──────────────────────────────────────────────┐
 │  HostingConstruct (CDK L3)                   │
-│  - CloudFront distribution                   │
+│  - front door (CloudFront by default)        │
 │  - S3 origin (static assets)                 │
 │  - Lambda compute (SSR / API / middleware)   │
 │  - Optional: WAF, DNS, monitoring, warmup    │
@@ -394,7 +396,8 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
   - It counts against the account's response headers policy quota (20 by
     default). That's one policy per Web Function stack.
   - To share one policy across stacks instead, create it once with
-    `removeHeaders` and pass it as `cdn.responseHeadersPolicy` in each stack:
+    `removeHeaders` and pass it as `frontDoor.features.responseHeadersPolicy`
+    in each stack (`cdn.responseHeadersPolicy` is its deprecated alias):
 
     ```ts
     // once, e.g. in a shared-infra stack
@@ -403,7 +406,9 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
       removeHeaders: ['lambda-web-logstream'],
     });
     // in each hosting stack
-    cdn: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) }
+    frontDoor: {
+      features: { responseHeadersPolicy: ResponseHeadersPolicy.fromResponseHeadersPolicyId(this, 'Headers', policyId) },
+    }
     ```
 
     A BYO policy gets a synth reminder to include the removal, because
@@ -418,6 +423,567 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
 - **Resource policy.** CloudFormation has no resource type for a Web Function's
   resource-based policy. A small custom resource grants the distribution
   `lambda:InvokeWebFunctionEndpoint`.
+
+## Front doors
+
+The front door is the public entry point in front of the app: it exposes one
+address and routes each request to the static assets, the server-rendering
+compute, image optimization, or the backend API. Pick it with the `frontDoor`
+prop (on `HostingConstruct`, or on `Hosting` from `@aws-blocks/core`):
+
+| `frontDoor` | What serves the app |
+|---|---|
+| omitted / `'cloudfront'` / `{ features }` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
+| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms; HTTPS at your domain with `certificate` + `features.domain`. SSR responses are buffered. |
+| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). |
+| `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
+| `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
+| `{ kind: 'custom', door }` | Your own door (see below). |
+
+`frontDoor` is checked at synth: an unknown door (`'alb'` as a string,
+`{ kind: 'ALB' }`), an option the kind doesn't take, or a value of the wrong
+shape (`api: 'REST'`, an ARN string as `certificate`) fails with
+`UnsupportedFrontDoorError` or `InvalidFrontDoorOptionError`, and an unknown key
+inside a `features` setting (`waf: { enable: true }`) with
+`InvalidFrontDoorSettingError`.
+
+Some apps need the CloudFront door:
+
+- `'none'` fails synth for an app with a server, because a website bucket only
+  serves static files.
+- `compute: { type: 'web-function' }` (AWS Lambda Web Functions) works with the
+  CloudFront door only: every other door routes to Lambda functions, so a Web
+  Function behind it would get no traffic. Synth fails with
+  `UnsupportedComputeFrontDoorError` for any other door.
+- Next.js middleware (`middleware.ts`, built as a Lambda@Edge function) runs
+  only on the CloudFront door. Behind any other door synth fails with
+  `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
+  middleware (and any route gating it does) skipped.
+- A streaming server (Next.js through OpenNext, or Nitro with
+  `awsLambda.streaming: true`) answers only through a door that streams: the
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. The ALB door, the
+  stacked door (its router is an ALB) and the HTTP API invoke the server
+  without streaming, so synth fails with
+  `StreamingServerNeedsStreamingDoorError` instead of deploying an app whose
+  pages never answer.
+
+### Settings per door kind
+
+Each door kind takes its settings as `features`, typed for that kind: a
+setting the chosen door doesn't implement does not compile. `{ features }`
+with no `kind` is the CloudFront default with settings.
+
+```ts
+frontDoor: { features: { waf: { enabled: true }, priceClass: PriceClass.PRICE_CLASS_ALL } }
+frontDoor: { kind: 'alb', certificate, features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com' }, waf: { enabled: true } } }
+frontDoor: { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com' } } }
+frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', countries: ['US'] } } } // ✗ type error
+```
+
+| Setting | CloudFront | ALB | API Gateway | Custom (BYO) |
+|---|---|---|---|---|
+| `domain` | ✓ (certificate in us-east-1, aliases, Route 53 records, `wwwRedirect`) | ✓ (regional certificate, HTTPS listener, :80 → :443 redirect, Route 53 alias records; no `wwwRedirect`) | ✓ (regional; no `wwwRedirect`) | ✓ |
+| `waf` | ✓ (CLOUDFRONT-scoped web ACL) | ✓ (REGIONAL web ACL) | – | ✓ |
+| `logging` | ✓ | ✓ (the ALB's own logs: off unless set) | – | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, on unless `enabled: false`, no topic or subscriptions) | – | ✓ |
+| `skewProtection` | ✓ | – | – | ✓ |
+| `geoRestriction` | ✓ | – | – | ✓ |
+| `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
+
+`geoRestriction.type` is `'allowlist'` or `'denylist'` (the legacy `'whitelist'`
+/ `'blacklist'` still work and mean the same; any other value fails synth). The
+asset bucket's own access logs are on by default on every door;
+`logging: { enabled: false }` turns them off.
+
+The door's own options (`vpc`, `internal`, `certificate`, `api`, `door`,
+`wiringCheck`) stay next to `features`. On the ALB, a `certificate` needs
+`features.domain` (synth fails with `AlbCertificateNeedsDomainError`
+otherwise): a certificate can't cover the ALB's own `*.elb.amazonaws.com` name,
+so the app is browsed at your domain, which must then be its URL (the trusted
+origin and the CORS origin). The stacked door (`Hosting` from
+`@aws-blocks/core`) takes its settings per layer:
+`features: { edge: { waf: { webAclArn }, contentSecurityPolicy }, router: { domain, waf, logging, monitoring } }`
+— the edge takes your CLOUDFRONT-scoped web ACL, the ALB router a REGIONAL one.
+`'none'` takes no settings.
+
+**Migrating from the top-level props.** `domain`, `waf`, `logging`,
+`monitoring`, `skewProtection` and the `cdn.*` settings (`cdn.priceClass` →
+`features.priceClass`, …; `cdn.webAclArn` → `features.waf.webAclArn`) are
+deprecated aliases. They keep working: at construction they are merged into
+the effective `frontDoor.features`, and an existing app that sets them with no
+`frontDoor` (or `'cloudfront'`) synthesizes the same template. Move each one
+into `frontDoor.features` under the same name. Setting a setting both ways
+fails synth with `FrontDoorSettingConflictError`, naming both; a top-level prop
+the chosen kind doesn't implement (for example `cdn.geoRestriction` with
+`{ kind: 'alb' }`) fails synth with `UnsupportedFrontDoorSettingError`, naming
+the kind and the prop.
+
+Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/*`
+(RPC and sign-in) and each of the backend's raw routes registered before
+`Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
+into behaviors). A door served over plain HTTP with an API (an ALB without a
+certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
+cookies and every RPC then travel unencrypted.
+
+Only a CloudFront-backed door (the default, or the stacked door's edge) takes
+over the API's address. Under the backend's `apiFrontDoor: 'cloudfront'` it
+claims the API front-door role: the backend builds no distribution of its own,
+and `ApiUrl` (what native clients call) is the door's. Behind the ALB, API
+Gateway or a bring-your-own door, the API keeps the distribution
+`apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it; under the
+default `'apigateway'` tier, `ApiUrl` is the backend's own API Gateway URL
+behind every door. The browser reaches the API same-origin through the door
+either way.
+
+**The host the server sees.** The CloudFront door and the stacked door's edge
+set `x-forwarded-host` from the viewer's `Host`. Behind the ALB and API Gateway
+doors nothing in front does, so the server is given `Host` instead: a native
+Lambda handler (Nitro's `aws-lambda` preset, OpenNext) through a small shim, and
+a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
+`HOST_HEADER` (SvelteKit) by reading `host`. Any other Lambda Web Adapter server
+(Astro's Node adapter, Nitro's `node-server`) receives the request's headers as
+sent, so don't configure it to trust `x-forwarded-host` behind these doors.
+
+A door that invokes the server without streaming (the ALB, the stacked door's
+ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
+is the exception: its OpenNext build targets a streaming API Gateway REST
+integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
+that streams.
+
+Behind the ALB, the server's target group sends and expects multi-value
+headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
+(Astro, SvelteKit, Nitro `node-server`) reads the ALB event as is; a native
+handler server (Nitro's default `aws-lambda` preset) runs behind a small ALB
+event shim (`blocks_alb_event.mjs`, written next to the handler at synth) that
+maps the ALB event to the API Gateway REST shape and the response back.
+
+### The ALB and API Gateway doors: rules and limits
+
+**Static files.** The asset proxy answers like the CloudFront door: a missing
+file 404s (the SPA fallback is for extensionless paths only), and each file
+keeps the `Cache-Control` it was uploaded with. It also:
+
+- percent-decodes the path (`/My%20Resume.pdf`), and answers 400 for a dot
+  segment, an encoded slash or backslash, or a malformed escape;
+- gzips text, JSON, JavaScript, SVG and similar files of 1 KiB or more for a
+  client that accepts it (`Vary: accept-encoding`);
+- returns `ETag` and `Last-Modified`, and answers a matching `If-None-Match` /
+  `If-Modified-Since` with a body-less 304;
+- adds `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`
+  and `Referrer-Policy` to every response (an app header rule of the same name
+  wins). Server and API responses don't pass the proxy and don't get them.
+
+**The build cutover.** The asset proxy's environment names the build
+(`builds/<buildId>`), and it changes only after every upload of the build —
+the resolved runtime config included — has landed, so the previous build keeps
+serving until then. There is no skew protection on these doors: a tab opened
+before a deploy that later loads a code-split chunk of the previous build gets
+a 404. Old builds are kept (rollback works); they are not tagged for the
+lifecycle rule as on the CloudFront door, so they are kept until you remove
+them.
+
+**Redirects, headers and error pages.** The app's redirects, per-pattern
+response headers and error pages are applied by the door's asset proxy (and,
+on the ALB, the headers also by the API forwarder) with the CloudFront door's
+semantics, using the same matching code:
+
+- redirects: first match wins, a wildcard destination gets the matched tail
+  (`/old/*` → `/new/*`), and the status is kept exactly (301, 302, 307, 308).
+  A spliced target that starts with extra slashes or backslashes keeps one
+  (`/old//evil.example` never becomes `Location: //evil.example`). Every
+  redirect source is routed to the asset proxy (an ALB listener rule, an HTTP
+  API route, a REST resource);
+- header rules: every matching rule is added to a successful response (not to
+  a redirect or an error, as at the CloudFront edge);
+- error pages: a missing static file answers with the 404 page (status 404),
+  an S3 failure with the 500 page (status 500). The 404 page is the app's
+  `errorPages.notFound`, else the framework build's, else, for a multi-page
+  static site that ships none (Astro `output: 'static'` without a 404 page),
+  AWS Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
+  An SPA keeps its `index.html` fallback.
+
+Responses the door sends straight to a function or the backend don't pass
+through those proxies: server-rendered (SSR) and image-optimization responses,
+and on API Gateway the API (proxied natively). Synth names exactly what is not
+applied (`@aws-blocks/hosting:DoorRulesNotApplied`). The CloudFront door and
+the stacked door's edge apply the rules to every response.
+
+**Size and time limits.** The asset proxy returns each file base64-encoded (a
+third larger; gzipped first when compressible) in its Lambda response, so a
+file is capped by that response's limit:
+
+| Door | Limit on the base64-encoded response | Largest file, about |
+|---|---|---|
+| ALB (Lambda target) | 1 MB | 750 KB (a compressible file: 750 KB gzipped) |
+| API Gateway (Lambda proxy integration) | 6 MB (Lambda's response limit, below API Gateway's 10 MB payload limit) | 4.5 MB |
+
+Synth lists every build asset over the limit
+(`@aws-blocks/hosting:AssetExceedsProxyLimit`). Serve large files from the
+CloudFront door or the stacked door (static files come straight from S3), or
+from a file bucket. The same limits bind everything else these doors carry:
+
+- ALB: a Lambda target's request body and response are each capped at 1 MB,
+  for server-rendered pages and API calls alike. The API forwarder returns text
+  as UTF-8 (no base64 inflation) and times out after 30 seconds.
+- API Gateway: a 10 MB request payload, a 6 MB Lambda response, and a 29-second
+  integration timeout.
+
+**ALB listener rules.** Consecutive paths bound for the same target share a
+rule (up to five path values each, four beside the stacked router's header
+check, and at most six wildcards, `*` or `?`, per rule), and routes that go
+where the default goes get no rule. A single pattern with more than six
+wildcards fails synth (`UnsupportedRoutePatternError`). A load balancer
+allows 100 rules by default; synth warns above that
+(`@aws-blocks/hosting:AlbRuleLimit`).
+
+**ALB custom domain.** `{ kind: 'alb', certificate, features: { domain } }`
+serves HTTPS (TLS 1.2+, the `RECOMMENDED_TLS` policy) with a port 80 → 443
+redirect, Route 53 alias records to the ALB when you give a hosted zone, and
+the domain as the app's URL. Without `certificate`, `domain.certificate` is
+used, else a DNS-validated regional certificate (needs `hostedZone` /
+`hostedZoneId`). Without a hosted zone, point your DNS at the ALB (the
+`AlbDnsName` output).
+
+**Internal ALB.** `internal: true` with the default VPC places the ALB in
+isolated private subnets (the VPC still has no NAT gateway). With your own VPC,
+it goes in that VPC's private subnets. The API forwarder isn't VPC-attached: it
+still reaches the backend at its public endpoint.
+
+**API Gateway routes.** Each function gets one API-scoped invoke permission
+(not one per route, which would fill Lambda's 20 KB resource policy). A raw
+route `/hooks/*` also serves `/hooks` (a greedy `{proxy+}` needs at least one
+character). A backend route with a wildcard inside a segment (`/files*`) has
+no API Gateway form and fails synth (`UnsupportedRoutePatternError`); a
+route-table pattern of that shape is served by the default integration, with a
+synth warning (`@aws-blocks/hosting:RouteNotExpressible`). A REST API allows
+300 resources by default (every path segment is one); synth warns above that.
+
+### The `'none'` door
+
+`'none'` publishes the build to its own public S3 website bucket, at the root.
+Each deploy prunes what the build no longer ships (a removed `*.map` stops being
+downloadable), and uploads with the same cache tiers as the other doors (hashed
+assets immutable, HTML and the rest revalidated). Pruning includes the previous
+build's hashed assets: a tab opened before a deploy that then lazy-loads one of
+its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
+API is cross-site, so an auth Building Block needs `crossDomain: true`; its
+session cookie is then set by the API's own HTTPS response.
+
+### The stacked door
+
+`{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` puts a CloudFront edge
+(TLS, cache, security headers, your edge web ACL) in front of the ALB router.
+
+- **Static routes come from S3.** The edge serves the app's static routes
+  straight from the private assets bucket (origin access control); only the
+  API and the dynamic routes (server rendering, image optimization) go to the
+  ALB. Its behaviors follow the router's precedence (the API first, then the
+  routes most-specific first), and a viewer-request function resolves the path
+  as the router would (basePath, directory index, single-page-app fallback),
+  answers the app's redirects, and prefixes the build (`/builds/<buildId>`), so
+  a new build never hits the previous build's cached files. The cutover waits
+  for the build's uploads, the resolved runtime config included. The app's
+  header rules and error pages apply at the edge to every response.
+- **Caching.** The API is never cached at the edge. Server-rendered routes
+  honor the server's `Cache-Control` and key on cookies; image routes honor
+  the origin's TTLs without cookies in the key, and so does the router default
+  of a site without a server (where static routes beyond the behavior budget
+  go). With a server, those static routes share the server's default (cookies
+  in the key). An app with a server gets a CloudFront invalidation on each deploy
+  (`manifest.invalidationPaths`, else `/*`), after the new build and server are
+  live. The router sees the public host in `x-forwarded-host`.
+- **Behavior budget.** A distribution allows 25 behaviors, the default
+  included. Over that, the router becomes the default, API paths no static
+  route can shadow are left to it first, and the rest goes through the ALB
+  (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`); files that then reach the
+  router are checked against its 1 MB limit.
+- **The ALB admits only the edge.** Every listener rule requires a secret
+  header (`x-blocks-origin-verify`) that the edge sends; without it the ALB
+  answers 403. The value is generated once by Secrets Manager (a secret in the
+  stack) and both the edge's origin and the listener rules read it through a
+  CloudFormation dynamic reference, so it is in no template and changes only
+  when you rotate the secret. To rotate it, put a new value and then deploy a
+  change that updates both the distribution and the listener rules:
+  CloudFormation re-reads a dynamic reference only for a resource it updates.
+  Each rule matches one value, and the listener rules update within seconds
+  while the distribution takes minutes to propagate, so expect 403s from the
+  router until the edge carries the new value; rotate in a quiet window.
+  The ALB forwards the header to its Lambda targets. A native handler server
+  (behind the ALB event shim) never sees it; a Lambda Web Adapter server and
+  the image-optimization function do, so don't log or report request headers
+  verbatim from them (a leaked value lets any CloudFront distribution reach
+  the router, past the edge's web ACL).
+  An internet-facing ALB's security group admits only the CloudFront
+  origin-facing managed prefix list
+  (`com.amazonaws.global.cloudfront.origin-facing`, looked up per region at
+  deploy). With `internal: true`, the edge reaches the ALB through a CloudFront
+  VPC origin, and the ALB's security group admits only that VPC origin's
+  service security group (`CloudFront-VPCOrigins-Service-SG`). The standalone
+  `{ kind: 'alb' }` door stays public by design.
+- **The edge → router hop.** With a router `certificate` and
+  `features.router.domain` (the name the certificate covers; Route 53 alias
+  records point it at the ALB), the edge connects to the router over HTTPS on
+  port 443. A domain with a hosted zone and no certificate gets a DNS-validated
+  one. Without either, the hop is plain HTTP on port 80 and unencrypted:
+  through a VPC origin (`internal: true`) it stays on the AWS network; to an
+  internet-facing ALB it reaches the ALB's public addresses, and synth warns
+  (`@aws-blocks/hosting:StackedRouterPlainHttp`). The router's `x-forwarded-proto`
+  is `http` on a plain-HTTP hop. A certificate without a router domain fails
+  synth (`StackedRouterCertificateNeedsDomainError`).
+- There is no custom domain or skew protection on the edge yet.
+
+### Switching doors on a deployed app
+
+Changing `frontDoor` on a deployed stack replaces the front door's resources;
+it is not an in-place update.
+
+- **The address changes.** The new door has a new URL (`HostingUrl`,
+  `BLOCKS_PUBLIC_ORIGIN`, the CORS origin), so existing sessions (cookies are
+  scoped to the old host) and bookmarks to the old address stop working.
+- **CloudFront → ALB or stacked** deletes the default distribution and its
+  alarms; the ALB door's (and the router's) own alarms are on unless
+  `monitoring: { enabled: false }`, and its access logs are off unless you set
+  them. The stacked door has no custom domain yet.
+- **A custom domain moving between doors** (for example the CloudFront door's
+  `domain` to an API Gateway or ALB door) creates Route 53 records of the same
+  name under new logical IDs, which collides with the old ones while both
+  exist. Remove the domain from the old door in one deploy, then add it to the
+  new door.
+
+### Bring your own front door
+
+A door is one function. `defineFrontDoor` types it:
+
+```ts
+// aws-blocks/my-door.ts
+import {
+  AllowedMethods,
+  CachePolicy,
+  Distribution,
+  OriginRequestPolicy,
+  ViewerProtocolPolicy,
+} from 'aws-cdk-lib/aws-cloudfront';
+import { cf, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+
+export const myDoor = defineFrontDoor({
+  // A name for this door, used in error messages.
+  service: 'my-cdn',
+
+  // Called ONCE at synth, after AWS Blocks has created the bucket, the compute
+  // and the API, and before it declares the asset uploads.
+  build(scope, { app, origins, features }) {
+    const pages = cf.errorPages(app.errorPages, origins); // the app's 404/500 pages
+    const dist = new Distribution(scope, 'Cdn', {
+      defaultBehavior: {
+        origin: cf.origin(origins.server ?? origins.assets),
+        // A server renders per request: every method, no edge cache, the viewer's
+        // cookies and query string forwarded (all but Host, which a Function URL rejects).
+        ...(origins.server
+          ? {
+              allowedMethods: AllowedMethods.ALLOW_ALL,
+              cachePolicy: CachePolicy.CACHING_DISABLED,
+              originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            }
+          : {}),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        // the app's redirects (viewer request) and per-pattern headers (viewer response)
+        functionAssociations: [...cf.redirects(scope, app.redirects), ...cf.headers(scope, app.headers)],
+      },
+      // A static site: `/` serves the index (the assets origin sits at the build prefix).
+      ...(origins.server ? {} : { defaultRootObject: 'index.html' }),
+      additionalBehaviors: {
+        ...cf.behaviors(app.routes), // each route → its origin
+        ...cf.apiBehaviors(origins.api), // /aws-blocks/* and raw routes → the API
+        ...pages.behaviors, // the error pages, from the assets
+      },
+      errorResponses: pages.errorResponses,
+      webAclId: features.waf?.webAclArn,
+    });
+    return {
+      url: `https://${dist.distributionDomainName}`, // the app's address (required)
+      onUpload: ({ uploads }) => cf.invalidate(dist, { after: uploads }), // purge after the uploads
+    };
+  },
+});
+```
+
+```ts
+// aws-blocks/index.cdk.ts
+new Hosting(stack, 'Hosting', { root: '..', api: stack, frontDoor: { kind: 'custom', door: myDoor } });
+```
+
+This door doesn't do two things the built-in CloudFront door does:
+
+- **Single-page-app deep links.** A deep link (`/dashboard/settings`) has no
+  file, so S3 answers 403/404. Map those to `/index.html` with `errorResponses`
+  (status 200), or resolve the path in a viewer-request function as the
+  stacked door's edge does.
+- **POST bodies to the server.** `cf.origin(origins.server)` reaches the
+  server's Function URL with origin access control, and CloudFront then
+  requires the viewer to send an `x-amz-content-sha256` header with any request
+  body. Browsers don't, so form posts and server actions answer 403. The
+  built-in door reaches the server through an API Gateway REST API with a
+  secret header instead. Use a door like that, or the built-in door, for an app
+  that posts to its server.
+
+**Streaming or buffered.** A door that invokes the server without streaming
+(an ALB Lambda target, an API Gateway HTTP API integration, a `BUFFERED`
+Function URL) declares `serverResponse: 'buffered'`, and AWS Blocks builds the
+server to answer with a complete response. The default is `'streaming'`.
+
+```ts
+export const myAlbDoor = defineFrontDoor({
+  service: 'my-alb',
+  serverResponse: 'buffered', // the ALB invokes the server without streaming
+  build: buildMyAlb, // your build: an ALB whose default target is origins.server.fn
+});
+```
+
+**What the door receives (`DoorInput`).**
+
+- `app`: the app facts. `buildId`, `basePath`, `assetPrefix` (Next.js
+  `assetPrefix`; only the Next.js adapter sets it), `spaFallback`, `routes`
+  (most-specific first, each already joined to its origin object), `redirects`,
+  `headers` and `errorPages` (the app's, else the framework build's, else, for
+  a multi-page static site with no 404 page, AWS Blocks' default
+  `_not_found.html`).
+- `origins`: what AWS Blocks provisioned.
+  - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
+    `builds/<buildId>/` prefix.
+  - `server`: `{ fn, url, streaming }`. `streaming` says whether the server
+    streams its response (see `serverResponse`). The Function URL is created on
+    first read, in the matching invoke mode.
+  - `image`: `{ fn, url }`. Its routes are in `app.routes`.
+  - `api`: `{ url, host, stagePath, paths }`. `paths` is `/aws-blocks/*` (RPC
+    and sign-in) plus every raw route.
+- `features`: the door's `frontDoor.features`, under the same names and shapes,
+  each present only when asked for: `domain` (with `wwwRedirect`), `waf` (when
+  `enabled` or a web ACL is given), `logging` (when `enabled`), `monitoring`
+  (when set and not `enabled: false`; a door gets no `monitoring` unless the
+  app sets it), `geoRestriction` (as `'allowlist'` / `'denylist'`), and
+  `skewProtection` (on by default, with `maxAge` resolved).
+
+The server origin needs no secret header: `origins.server.url` is a Function
+URL with IAM auth (reach it with origin access control, as `cf.origin` does).
+
+**What the door returns.**
+
+- `url` (required): the app's public address. It becomes the `HostingUrl`
+  output and `Hosting.url`, the backend's trusted origin
+  (`BLOCKS_PUBLIC_ORIGIN`), and an allowed CORS origin, so a trailing slash is
+  removed (a browser's `Origin` has none). When the door serves a custom
+  domain, return that domain. A missing or empty `url` fails synth with
+  `MissingFrontDoorUrlError`.
+- `originHandle`: how a door in front of this one reaches it. It is derived from
+  `url` unless given.
+- `publicBucket`: a public bucket the door serves from. The runtime
+  `config.json` is published there.
+- `onUpload({ uploads, buildId })`: called after the asset uploads are declared,
+  to declare resources that must run after them. What it declares under the
+  door's `scope` also runs after the runtime `config.json` upload that
+  `Hosting` adds later, so a `cf.invalidate` never caches the placeholder
+  config. (A resource created directly under the stack isn't ordered after
+  that later upload.)
+- `cutover`: the constructs that switch traffic to the new build (whatever
+  holds the build id or prefix, e.g. a proxy function whose environment names
+  `builds/<buildId>`). Each waits for every upload, the runtime config
+  included, so the previous build serves until the new one is whole.
+
+**The wiring check.** AWS Blocks checks one thing about a bring-your-own door:
+its routing, from what the `cf.*` helpers recorded.
+
+- If nothing reaches the static assets, synth fails with `ServeStaticAsset`.
+- If the app has an API and none of `origins.api.paths` were wired, synth fails
+  with `ProxySameOriginApi`.
+- If some API paths (for example a raw route) were left unwired, synth warns.
+- If the app has redirects, per-pattern headers or error pages and the door
+  wired none of them (`cf.redirects`, `cf.headers`, `cf.errorPages`), synth
+  warns (`FrontDoorRuleUnwired`).
+- If `cf.behaviors` and `cf.apiBehaviors` handed out more than the 24
+  behaviors a distribution allows besides its default, synth warns
+  (`FrontDoorBehaviorLimit`).
+
+It does not check features. If a door ignores `features.waf`, the app deploys
+without a WAF.
+
+**Redirects, headers and error pages.** `cf.redirects(scope, app.redirects)`
+and `cf.headers(scope, app.headers)` return CloudFront Function associations
+(viewer request and viewer response) that run the same matcher as the built-in
+CloudFront door, with the rules inline (a CloudFront Function holds at most
+10 KB, so synth fails above that). `cf.errorPages(app.errorPages, origins)`
+returns the distribution's `errorResponses` and the behaviors that serve the
+pages from the assets. Each returns an empty value when the app has none, so it
+can be spread unconditionally. `cf.behaviors` gives an image-optimization
+route a cache policy that honors the image function's `Cache-Control` (one per
+stack), and `cf.invalidate` grants `cloudfront:CreateInvalidation` on that
+distribution only.
+
+**Known limit.** The check sees only what the helpers recorded, so a door that
+wires correctly with raw CDK gets a false alarm. Declare hand-wired origins with
+`cf.recordWired(origins.assets)` and `cf.recordWired(origins.api)` (optionally
+with the paths you wired), hand-wired rules with `cf.recordWired(app.redirects)`
+(likewise `app.headers`, `app.errorPages`), or turn the check off with
+`frontDoor: { kind: 'custom', door, wiringCheck: false }`.
+
+**Testing a door.** Use `assertDoorConformance(door)` from
+`@aws-blocks/hosting/constructs` in the door's own tests. It builds the door
+against a sample SPA with an API and runs the same checks: the shape, a
+non-empty `url`, and the wiring.
+
+The built-in doors (`cloudFrontDoor`, `albDoor`, `apiGatewayDoor`,
+`s3WebsiteDoor`, `cloudFrontEdgeDoor`) are written the same way, and the pieces
+they share are exported for your own doors: `generateAlbAssetProxyCode` and
+`generateApiGwAssetProxyCode` (pass `app.redirects`, `app.headers` and the
+error pages to apply the app's rules; see `AssetProxyOptions`; set
+`environment: assetProxyEnvironment(origins.assets)` on the function and
+`origins.assets.bucket.grantRead(fn)`),
+`generateAlbApiProxyCode` (the ALB's same-origin API forwarder),
+`backendBaseUrl`, `coalesceRoutes`, `routeSpecificity`,
+`createSecurityHeadersPolicy`, and `ORIGIN_VERIFY_HEADER` /
+`CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST`.
+
+**A door that stacks CloudFront over its own ALB.** Lock the ALB to the
+distribution the same way the stacked door does: admit only CloudFront in the
+ALB's security group, and require a secret header that only the distribution
+sends.
+
+```ts
+import { OriginProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
+import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
+import { CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST, ORIGIN_VERIFY_HEADER } from '@aws-blocks/hosting/constructs';
+
+// In build(scope, input): `alb` is your ApplicationLoadBalancer, `target` its target group.
+// A random value (alphanumeric: an ALB header condition treats `*` and `?` as
+// wildcards), read by both sides through a dynamic reference.
+const secret = new Secret(scope, 'OriginVerify', {
+  generateSecretString: { passwordLength: 64, excludePunctuation: true, includeSpace: false },
+}).secretValue.unsafeUnwrap();
+const listener = alb.addListener('Http', {
+  port: 80,
+  open: false, // no 0.0.0.0/0 ingress
+  defaultAction: elbv2.ListenerAction.fixedResponse(403, { contentType: 'text/plain', messageBody: 'Forbidden' }),
+});
+listener.addTargetGroups('FromCloudFront', {
+  priority: 1,
+  conditions: [elbv2.ListenerCondition.httpHeader(ORIGIN_VERIFY_HEADER, [secret])],
+  targetGroups: [target],
+});
+const cloudFront = ec2.PrefixList.fromLookup(scope, 'CloudFront', { prefixListName: CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST });
+alb.connections.allowFrom(ec2.Peer.prefixList(cloudFront.prefixListId), ec2.Port.tcp(80));
+const origin = new HttpOrigin(alb.loadBalancerDnsName, {
+  protocolPolicy: OriginProtocolPolicy.HTTP_ONLY, // the listener above is HTTP :80 (HttpOrigin defaults to HTTPS)
+  customHeaders: { [ORIGIN_VERIFY_HEADER]: secret },
+});
+```
+
+`PrefixList.fromLookup` needs the stack's `env` (account and region); the
+built-in door looks the list up at deploy time instead. For an internal ALB,
+use `VpcOrigin.withApplicationLoadBalancer(alb)` and admit the VPC origin's
+`CloudFront-VPCOrigins-Service-SG` security group (see the CDK
+`aws-cloudfront-origins` documentation).
 
 ## Build retention & rollback
 
@@ -460,7 +1026,8 @@ new HostingConstruct(stack, 'Hosting', {
 ## Access logging
 
 CloudFront access logs are delivered to a dedicated, private S3 bucket. Two
-pipelines are supported via `logging.version`:
+pipelines are supported via `frontDoor.features.logging.version` (the top-level
+`logging` prop is its deprecated alias):
 
 | | `'v1'` (default) | `'v2'` |
 | --- | --- | --- |
@@ -477,12 +1044,16 @@ bucket and a partitioned, query-ready layout with no post-processing Lambda:
 ```ts
 new HostingConstruct(stack, 'Hosting', {
   manifest,
-  logging: {
-    enabled: true,
-    version: 'v2',
-    partitioning: 'hive',   // or 'date' (default). Athena/Glue-friendly.
-    format: 'parquet',      // or 'w3c' (default), 'json', 'plain'
-    retentionDays: 90,
+  frontDoor: {
+    features: {
+      logging: {
+        enabled: true,
+        version: 'v2',
+        partitioning: 'hive',   // or 'date' (default). Athena/Glue-friendly.
+        format: 'parquet',      // or 'w3c' (default), 'json', 'plain'
+        retentionDays: 90,
+      },
+    },
   },
 });
 ```
@@ -502,21 +1073,24 @@ new HostingConstruct(stack, 'Hosting', {
 
 ## SSR caching & cache-key credentials
 
-`cdn.ssrDefaultTtl` enables CloudFront edge caching of SSR responses that carry
+`frontDoor.features.ssrDefaultTtl` (CloudFront door; formerly
+`cdn.ssrDefaultTtl`) enables CloudFront edge caching of SSR responses that carry
 no explicit `Cache-Control` header. Those responses are then shared at the edge,
 and the SSR cache key does **not** include `Authorization` or session cookies by
 default — so one cached entry would answer requests regardless of their
-credentials. Set `cdn.cacheKeyCookies` (your session cookie name(s)) and/or
-`cdn.cacheKeyHeaders` (e.g. `'authorization'`) so cached responses are keyed per
+credentials. Set `cacheKeyCookies` (your session cookie name(s)) and/or
+`cacheKeyHeaders` (e.g. `'authorization'`) so cached responses are keyed per
 credential. Synth **fails closed**: if `ssrDefaultTtl` resolves to `> 0` and
 neither is set, synthesis throws.
 
 ```ts
 new HostingConstruct(stack, 'Hosting', {
   manifest,
-  cdn: {
-    ssrDefaultTtl: Duration.seconds(60),
-    cacheKeyCookies: ['session'], // your session cookie name(s)
+  frontDoor: {
+    features: {
+      ssrDefaultTtl: Duration.seconds(60),
+      cacheKeyCookies: ['session'], // your session cookie name(s)
+    },
   },
 });
 ```
@@ -543,11 +1117,13 @@ image source would not receive them).
 
 ## Custom domains
 
-Configure a custom domain through the `domain` prop on `HostingConstruct`
-(`HostingDomainConfig`). CloudFront only accepts ACM certificates in
-**us-east-1**, so every certificate, whether auto-provisioned or
-bring-your-own, must live in us-east-1. There are two paths, depending on where
-you manage DNS.
+Configure a custom domain through `frontDoor.features.domain`
+(`HostingDomainConfig`; the top-level `domain` prop is its deprecated alias).
+This section covers the CloudFront door; the ALB and API Gateway doors take a
+**regional** certificate instead (see [Front doors](#front-doors)). CloudFront
+only accepts ACM certificates in **us-east-1**, so every certificate, whether
+auto-provisioned or bring-your-own, must live in us-east-1. There are two
+paths, depending on where you manage DNS.
 
 ### Route 53 (automatic)
 
@@ -560,9 +1136,13 @@ records into the zone itself.
 ```ts
 new HostingConstruct(stack, 'Hosting', {
   manifest,
-  domain: {
-    domainName: 'app.example.com',
-    hostedZone: 'example.com', // a Route 53 zone you control
+  frontDoor: {
+    features: {
+      domain: {
+        domainName: 'app.example.com',
+        hostedZone: 'example.com', // a Route 53 zone you control
+      },
+    },
   },
 });
 ```
@@ -590,10 +1170,14 @@ provider.
 ```ts
 new HostingConstruct(stack, 'Hosting', {
   manifest,
-  domain: {
-    domainName: 'app.example.com',
-    // no hostedZone: you manage DNS externally
-    certificate: myPreValidatedCert, // ACM cert in us-east-1, pre-validated
+  frontDoor: {
+    features: {
+      domain: {
+        domainName: 'app.example.com',
+        // no hostedZone: you manage DNS externally
+        certificate: myPreValidatedCert, // ACM cert in us-east-1, pre-validated
+      },
+    },
   },
 });
 ```
@@ -615,7 +1199,7 @@ phases around the deploy:
 1. **Before deploy:** request an ACM certificate in **us-east-1** for your
    domain and validate it (add the ACM validation CNAME to your DNS, or use
    email validation). Wait until the certificate status is **Issued**.
-2. **Deploy:** deploy the stack with `domain: { domainName, certificate }`. The
+2. **Deploy:** deploy the stack with `frontDoor.features.domain: { domainName, certificate }`. The
    stack emits the `DistributionDomainName` output (for example
    `d1234abcd.cloudfront.net`).
 3. **After deploy:** in your DNS provider, create a CNAME from your domain
@@ -636,8 +1220,9 @@ unique when several hosting constructs share a stage) pinned to
 
 - creates its own encrypted SNS topic (the alarm action target),
 - wires the CloudFront 5xx rate alarm to that topic,
-- applies the same `monitoring.subscriptions` you pass to the hosting
-  construct, so you subscribe in one place and both regions are covered,
+- applies the same `frontDoor.features.monitoring.subscriptions` you pass to
+  the hosting construct (the top-level `monitoring` prop is its deprecated
+  alias), so you subscribe in one place and both regions are covered,
   and
 - emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
   who want the raw ARN can find it.
@@ -663,8 +1248,12 @@ import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 
 new HostingConstruct(this, 'Hosting', {
   // ...
-  monitoring: {
-    subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+  frontDoor: {
+    features: {
+      monitoring: {
+        subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+      },
+    },
   },
 });
 ```

@@ -16,6 +16,7 @@ import type { ApiFrontDoorTier } from '../common/index.js';
 import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
+	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
@@ -407,6 +408,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (see {@link publishPublicOrigin}). @internal */
+	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 
@@ -418,6 +421,16 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * Record that a `Hosting` door publishes this backend's browser-facing origin
+	 * (`BLOCKS_PUBLIC_ORIGIN`), so the managed `cloudfront` distribution doesn't
+	 * overwrite it. See {@link publishPublicOrigin}.
+	 * @internal Framework-only.
+	 */
+	publishPublicOrigin(): void {
+		publishPublicOrigin(this);
 	}
 
 	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
