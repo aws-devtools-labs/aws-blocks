@@ -1278,6 +1278,58 @@ const warnIfOpenNextOutOfRange = (projectDir: string): void => {
 };
 
 /**
+ * The `@opennextjs/aws` version the adapter builds with when the project
+ * doesn't declare one. It sits inside {@link VERIFIED_OPENNEXT_RANGE}, so an
+ * undeclared OpenNext never resolves to whatever `npx` would fetch as the
+ * newest (unverified) release. Of the verified versions it has the widest
+ * `next` peer range, so it accepts the most Next.js apps.
+ * @internal
+ */
+export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
+
+/**
+ * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares. Used to
+ * check the app's Next.js version when OpenNext isn't installed (so there's no
+ * installed `package.json` to read it from).
+ */
+const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
+
+/** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
+type InstalledOpenNext = { version: string; nextPeerRange?: string };
+
+const findInstalledOpenNext = (
+  projectDir: string,
+): InstalledOpenNext | undefined => {
+  const info = getPackageInfoSync('@opennextjs/aws', { paths: [projectDir] });
+  if (!info?.version) return undefined;
+  const peers = (info.packageJson as { peerDependencies?: Record<string, string> })
+    .peerDependencies;
+  return { version: info.version, nextPeerRange: peers?.next };
+};
+
+/**
+ * Warn when the app's Next.js version is outside the `next` peer range of the
+ * OpenNext that will build it. Package managers that skip peer checks (pnpm,
+ * `--legacy-peer-deps`) let such a pair install, and OpenNext then builds a
+ * combination it was never released against. Warn rather than fail: the pair
+ * may still work, and the fix (upgrade `next` within its major, or pick a
+ * different OpenNext) is the user's call.
+ */
+const warnIfNextOutsideOpenNextPeerRange = (
+  projectDir: string,
+  openNextVersion: string,
+  nextPeerRange: string | undefined,
+): void => {
+  const nextVersion = detectNextVersion(projectDir);
+  if (!nextVersion || !nextPeerRange || !semver.validRange(nextPeerRange)) return;
+  if (semver.satisfies(nextVersion, nextPeerRange)) return;
+  process.stderr.write(
+    `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextPeerRange}). ` +
+      'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
+  );
+};
+
+/**
  * Patch OpenNext's bundled `aws-lambda-streaming` wrapper for API Gateway
  * STREAM framing. Two changes to <projectDir>/.open-next/server-functions/
  * default/index.mjs:
@@ -1850,7 +1902,28 @@ const runNextBuild = (projectDir: string): void => {
  * We catch it and provide an actionable resolution message.
  */
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
-  const args = ['@opennextjs/aws', 'build'];
+  // Hosting declares `@opennextjs/aws` as an optional peer, so nothing
+  // installs it for the app. Without a local install, a bare
+  // `npx @opennextjs/aws` fetches the newest release — outside the verified
+  // range more often than not. Build with the verified fallback version
+  // instead, and say so.
+  const installed = findInstalledOpenNext(projectDir);
+  const openNextVersion = installed?.version ?? OPENNEXT_FALLBACK_VERSION;
+  if (!installed) {
+    process.stderr.write(
+      `⚠️  @opennextjs/aws is not installed in this project; building with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}, the version this adapter falls back to. ` +
+        `Declare it to control the version and build without downloading it: npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n`,
+    );
+  }
+  warnIfNextOutsideOpenNextPeerRange(
+    projectDir,
+    openNextVersion,
+    installed ? installed.nextPeerRange : OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
+  );
+
+  const args = installed
+    ? ['@opennextjs/aws', 'build']
+    : ['--yes', `@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`, 'build'];
   if (configPath) args.push('--config-path', configPath);
 
   // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
@@ -1911,22 +1984,18 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
   } catch (error) {
-    // Check if the error is because @opennextjs/aws is not installed
-    const errMsg = (error as Error).message || '';
-    if (
-      errMsg.includes('not found') ||
-      errMsg.includes('ERR_MODULE_NOT_FOUND') ||
-      errMsg.includes('Cannot find package')
-    ) {
+    // The child's output went straight to the terminal (`stdio: 'inherit'`),
+    // so the thrown error only carries the exit code — whether OpenNext was
+    // installed is the one thing we know for sure about the failure.
+    if (!installed) {
       throw new HostingError(
         'OpenNextNotFoundError',
         {
-          message:
-            '@opennextjs/aws is not installed. Next.js hosting requires OpenNext to build and deploy your app.',
+          message: `@opennextjs/aws is not installed, and the build with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION} failed. Next.js hosting requires OpenNext to build and deploy your app.`,
           resolution:
-            "Add @opennextjs/aws to your project's devDependencies:\n\n" +
-            '  npm install --save-dev @opennextjs/aws\n\n' +
-            'Then re-run your deployment.',
+            "Add @opennextjs/aws to your project's devDependencies (this also avoids downloading it during the build):\n\n" +
+            `  npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n\n` +
+            'Then re-run your deployment. If it still fails, check the build output above.',
         },
         error as Error,
       );

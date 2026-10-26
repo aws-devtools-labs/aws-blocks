@@ -20,7 +20,10 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  OPENNEXT_FALLBACK_VERSION,
+  VERIFIED_OPENNEXT_RANGE,
 } from './nextjs.js';
+import { HostingError } from '../hosting_error.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import { withComputeTarget } from './shared/compute_target.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -1859,7 +1862,10 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
    * `node_modules/@opennextjs/aws/package.json` at the requested
    * version so warnIfOpenNextOutOfRange's local-pkg probe finds it.
    */
-  const writeFixtureWithOpenNextVersion = (version: string): void => {
+  const writeFixtureWithOpenNextVersion = (
+    version: string,
+    nextPeerRange?: string,
+  ): void => {
     const openNextPkgDir = path.join(
       tmpDir,
       'node_modules',
@@ -1869,7 +1875,12 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
     fs.mkdirSync(openNextPkgDir, { recursive: true });
     fs.writeFileSync(
       path.join(openNextPkgDir, 'package.json'),
-      JSON.stringify({ name: '@opennextjs/aws', version, main: 'index.js' }),
+      JSON.stringify({
+        name: '@opennextjs/aws',
+        version,
+        main: 'index.js',
+        ...(nextPeerRange ? { peerDependencies: { next: nextPeerRange } } : {}),
+      }),
     );
     fs.writeFileSync(path.join(openNextPkgDir, 'index.js'), '');
     buildOutputCreator = () => {
@@ -2007,6 +2018,123 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       buildArgs[flagIdx + 1],
       'true',
       `the flag must be followed by its 'true' value or OpenNext ignores it; got: ${JSON.stringify(buildArgs)}`,
+    );
+  });
+
+  const writeNextVersion = (version: string): void => {
+    const nextPkgDir = path.join(tmpDir, 'node_modules', 'next');
+    fs.mkdirSync(nextPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextPkgDir, 'package.json'),
+      JSON.stringify({ name: 'next', version, main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(nextPkgDir, 'index.js'), '');
+  };
+
+  const openNextBuildArgs = (
+    syncMock: ReturnType<typeof mock.method>,
+  ): string[] | undefined =>
+    syncMock.mock.calls
+      .map((c) => c.arguments[1])
+      .find(
+        (a): a is string[] =>
+          Array.isArray(a) &&
+          a.some((t) => typeof t === 'string' && t.startsWith('@opennextjs/aws')),
+      );
+
+  void it('builds with the verified fallback version when @opennextjs/aws is not installed', () => {
+    // Without a local install, a bare `npx @opennextjs/aws` fetches the newest
+    // release, which is usually outside VERIFIED_OPENNEXT_RANGE.
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    fs.rmSync(path.join(tmpDir, 'node_modules', '@opennextjs'), {
+      recursive: true,
+      force: true,
+    });
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = openNextBuildArgs(syncMock);
+    assert.ok(buildArgs, 'expected an OpenNext build spawn');
+    assert.ok(
+      buildArgs.includes(`@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`),
+      `expected the pinned fallback package; got: ${JSON.stringify(buildArgs)}`,
+    );
+    assert.ok(
+      semver.satisfies(OPENNEXT_FALLBACK_VERSION, VERIFIED_OPENNEXT_RANGE),
+      'the fallback version must be inside the verified range',
+    );
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('@opennextjs/aws is not installed') &&
+          c.includes(`npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}`),
+      ),
+      `expected a not-installed warning naming the pin; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('runs the installed @opennextjs/aws unpinned when the project declares it', () => {
+    const syncMock = mock.method(spawn, 'sync', () => {
+      buildOutputCreator?.();
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    nextjsAdapter({ projectDir: tmpDir });
+    const buildArgs = openNextBuildArgs(syncMock);
+    assert.deepStrictEqual(buildArgs?.slice(0, 2), ['@opennextjs/aws', 'build']);
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('is not installed')),
+      `unexpected not-installed warning; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('throws OpenNextNotFoundError naming the pin when the fallback build fails', () => {
+    mock.method(spawn, 'sync', () => {
+      throw new Error('Command failed (exit code 1): npx');
+    });
+    assert.throws(() => nextjsAdapter({ projectDir: tmpDir }), (err: unknown) => {
+      assert.ok(err instanceof HostingError);
+      assert.strictEqual(err.name, 'OpenNextNotFoundError');
+      assert.ok(
+        err.resolution.includes(`@opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}`),
+        `resolution should name the pin; got: ${err.resolution}`,
+      );
+      return true;
+    });
+  });
+
+  void it('throws OpenNextBuildError (not NotFound) when an installed OpenNext fails', () => {
+    mock.method(spawn, 'sync', () => {
+      throw new Error('Command failed (exit code 1): npx');
+    });
+    writeFixtureWithOpenNextVersion('3.10.0');
+    assert.throws(() => nextjsAdapter({ projectDir: tmpDir }), {
+      name: 'OpenNextBuildError',
+    });
+  });
+
+  void it("warns when next is outside the installed OpenNext's next peer range", () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('15.5.7');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('next@15.5.7') &&
+          c.includes('@opennextjs/aws@4.0.3') &&
+          c.includes('>=15.5.18 <16 || >=16.2.6'),
+      ),
+      `expected a peer-range warning; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it("does NOT warn when next is inside OpenNext's next peer range", () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('16.2.6');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('outside the Next.js range')),
+      `unexpected peer-range warning; stderr was: ${stderrChunks.join('')}`,
     );
   });
 });

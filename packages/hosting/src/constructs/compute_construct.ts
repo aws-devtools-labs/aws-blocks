@@ -271,6 +271,25 @@ export class ComputeConstruct extends Construct {
         },
       });
     } else if (computeResource.type === 'edge') {
+      // `experimental.EdgeFunction` needs a concrete stack region to decide
+      // whether to hoist the function into a us-east-1 stack, and otherwise
+      // fails synth with a CDK error that names neither the route nor the fix.
+      // An app reaches this through a `runtime = 'edge'` route (or Edge
+      // middleware), so name that and the one-line fix.
+      if (Token.isUnresolved(Stack.of(this).region)) {
+        throw new HostingError('EdgeComputeRequiresRegionError', {
+          message:
+            `Edge compute '${props.name}' runs as Lambda@Edge, which needs the stack's region at synth time, ` +
+            'but the stack has no explicit region. Next.js routes with `runtime = \'edge\'` are built this way.',
+          resolution:
+            'Set the region on the stack that holds Hosting, for example:\n\n' +
+            '  BlocksStack.create(app, stackName, {\n' +
+            '    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },\n' +
+            '    // …\n' +
+            '  });\n\n' +
+            'Or move the route to the Node.js runtime (remove `runtime = \'edge\'`).',
+        });
+      }
       // Edge function — Lambda@Edge does not support env vars or Function URLs
       const hasManifestEnv =
         computeResource.environment &&
