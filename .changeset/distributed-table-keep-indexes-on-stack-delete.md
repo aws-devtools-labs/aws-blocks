@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-distributed-table": minor
+"@aws-blocks/blocks": minor
 ---
 
 fix(bb-distributed-table): keep a retained table's indexes when the table leaves the stack
@@ -8,4 +9,4 @@ Deleting a stack, or removing a DistributedTable from the app, used to drop ever
 
 A Delete whose table no longer exists (for example, deleted outside CloudFormation) now succeeds instead of leaving the stack in `DELETE_FAILED`.
 
-The package now depends on `@aws-sdk/client-cloudformation` at runtime (already a dependency of `@aws-blocks/core` at the same range, so installs do not change). On upgrade, every stack with a table that defines `indexes` gets a new code bundle for both GSI manager Lambdas and one read-only IAM statement on the GSI manager's role: `cloudformation:DescribeStacks` and `cloudformation:GetTemplate` on the stack itself. Tables, indexes and the GSI custom resource are not changed or re-run. The new behaviour applies once this version is deployed, so upgrade a stack first, then delete it or remove a table or its `indexes` in a later deploy.
+The package now depends on `@aws-sdk/client-cloudformation` at runtime (already a runtime dependency of `@aws-blocks/core`, so it is normally installed already). On upgrade, every stack with a table that defines `indexes` gets a new code bundle for both GSI manager Lambdas and one read-only IAM statement on the GSI manager's role: `cloudformation:DescribeStacks` and `cloudformation:GetTemplate` on the stack itself. Tables, indexes and the GSI custom resource are not changed or re-run. The new behaviour applies once this version is deployed, so upgrade a stack first, then delete it or remove a table or its `indexes` in a later deploy.
