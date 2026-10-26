@@ -158,8 +158,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 export const authApi = auth.createApi();
 
 // Multi-compute behind Hosting: `isolatedApi` runs on its own, smaller compute.
-// Through Hosting's distribution the call still lands on that compute, because
-// Hosting forwards /aws-blocks/api/* to the shared gateway, which routes it.
+// Through Hosting's front door (CloudFront, or the ALB leg) the call still lands
+// on that compute, because Hosting forwards /aws-blocks/api/* to the shared
+// gateway, which routes it.
 function lambdaIdentity() {
   return {
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,

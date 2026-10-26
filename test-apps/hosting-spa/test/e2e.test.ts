@@ -225,7 +225,7 @@ test.describe('Notes Manager — SPA Hosting', () => {
   test('12. A namespace on its own compute is served by it through Hosting', async ({ request }) => {
     test.skip(ENV === 'local', 'local dev runs every namespace in one process');
     // The browser path: same origin as the page, per-namespace path, Hosting's
-    // distribution → shared gateway → the namespace's compute.
+    // front door → shared gateway → the namespace's compute.
     const whereAmI = async (namespace: string) => {
       const resp = await request.post(`${hostingUrl}/aws-blocks/api/${namespace}`, {
         headers: { 'Content-Type': 'application/json' },
