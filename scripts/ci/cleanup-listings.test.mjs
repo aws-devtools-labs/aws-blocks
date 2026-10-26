@@ -222,8 +222,18 @@ describe('cleanup-stacks.yml listing failures', { skip: !GNU_DATE && 'needs GNU 
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.match(r.stdout, /^::warning::list-stacks failed, so no Amplify sandbox is swept this run: An error occurred \(AccessDenied\)/m);
 		assert.match(r.stdout, /^::warning::list-stacks failed, so the DELETE_FAILED Amplify sandboxes can't be counted: An error/m);
+		// A count it couldn't read prints as unknown, never as a reassuring 0.
+		assert.match(r.summary, /^- Still DELETE_FAILED: unknown$/m);
+		assert.doesNotMatch(r.stdout, /Amplify sandbox stack\(s\) still in DELETE_FAILED/);
 		assert.doesNotMatch(r.stdout, NO_ACCOUNT);
 		assert.equal(r.writes, '');
+	});
+
+	it('Amplify step: tallies the DELETE_FAILED sandboxes when the count can be read', () => {
+		const r = runStep('Find and delete stale Amplify sandbox stacks', { 'cloudformation.list-stacks.out': '3\n' });
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.summary, /^- Still DELETE_FAILED: 3$/m);
+		assert.match(r.stdout, /^::warning::3 Amplify sandbox stack\(s\) still in DELETE_FAILED after cleanup/m);
 	});
 
 	const CF = 'Cleanup orphaned CloudFront Response Headers Policies';

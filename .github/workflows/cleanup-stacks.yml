@@ -525,14 +525,15 @@ jobs:
           # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
           # DELETE_FAILED (commonly the managed DynamoDB table) surfaced as a warning
           # so the backlog can't grow silently and exhaust the AppSync API quota.
-          # A tally it can't read is a warning with the reason (the count shows 0).
+          # A tally it can't read is a warning with the reason and prints as
+          # unknown, not 0 (as in the e2e step).
           LIST_ERR=$(mktemp)
           if ! STILL_FAILED=$(aws cloudformation list-stacks \
             --stack-status-filter DELETE_FAILED \
             --query "length(StackSummaries[?starts_with(StackName, 'amplify-amplifygen2-') || starts_with(StackName, 'amplify-amplifyinteroptest-')])" \
             --output text 2>"$LIST_ERR"); then
             aws_annotate warning "$LIST_ERR" "list-stacks failed, so the DELETE_FAILED Amplify sandboxes can't be counted"
-            STILL_FAILED=0
+            STILL_FAILED=unknown
           fi
           rm -f "$LIST_ERR"
 
@@ -549,7 +550,7 @@ jobs:
           fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$STILL_FAILED" -gt 0 ]; then
+          if [ "$STILL_FAILED" != unknown ] && [ "$STILL_FAILED" -gt 0 ]; then
             echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
           fi
 
