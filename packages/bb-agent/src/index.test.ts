@@ -451,13 +451,15 @@ describe('conversation ownership on write paths', () => {
 		await ownerTurnAwaitingApproval(agent, convId);
 
 		await assert.rejects(
-			() => (agent as any).getPendingInterrupts(convId),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getPendingInterrupts(convId),
 			(err: any) => err.name === AgentErrors.InvalidUsage && /getPendingInterrupts\(conversationId, \{ userId \}\)/.test(err.message),
 		);
 		// A bare userId string (the positional form) is not an options object: it must
 		// neither return the owner's interrupts nor be mistaken for an empty result.
 		await assert.rejects(
-			() => (agent as any).getPendingInterrupts(convId, ownerId),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getPendingInterrupts(convId, ownerId),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 	});
@@ -479,17 +481,20 @@ describe('conversation ownership on write paths', () => {
 		const { agent } = approvalAgent('test-own-getconv-nouser');
 		const convId = await agent.createConversationId(ownerId);
 		await assert.rejects(
-			() => (agent as any).getConversation(convId),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 		// The old (id, { limit }) form must not be mistaken for a userId either.
 		await assert.rejects(
-			() => (agent as any).getConversation(convId, { limit: 5 }),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId, { limit: 5 }),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 		// Nor the positional (id, userId, { limit }) form.
 		await assert.rejects(
-			() => (agent as any).getConversation(convId, ownerId, { limit: 5 }),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId, ownerId, { limit: 5 }),
 			(err: any) => err.name === AgentErrors.InvalidUsage && /getConversation\(id, \{ userId, limit\? \}\)/.test(err.message),
 		);
 	});
@@ -583,11 +588,13 @@ describe('conversation ownership on write paths', () => {
 	test('getChannel() without a userId throws InvalidUsage when persistence is enabled', async () => {
 		const { agent } = approvalAgent('test-own-channel-nouser');
 		await assert.rejects(
-			() => (agent as any).getChannel('some-channel'),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getChannel('some-channel'),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 		await assert.rejects(
-			() => (agent as any).getChannel('some-channel', ownerId),
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getChannel('some-channel', ownerId),
 			(err: any) => err.name === AgentErrors.InvalidUsage,
 		);
 	});
