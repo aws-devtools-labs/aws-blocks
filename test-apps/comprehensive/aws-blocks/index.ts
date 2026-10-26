@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiError, ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiError, ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -1960,6 +1960,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
+  // Request errors: each statement is rejected by Postgres for something the
+  // caller did (a constraint, a foreign key, a row-level-security policy or a
+  // missing grant), and must reach the client as a named 4xx, not a 500.
+  async dbCheckViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
+  },
+
+  async dbNotNullViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
+  },
+
+  async dbForeignKeyViolation(id: string) {
+    await db.execute(
+      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
+    );
+  },
+
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
+  async dbRlsViolation(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
+  },
+
+  async dbMissingGrant(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
+  },
+
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
   // Runs a balance transfer entirely through Kysely's `.transaction()`. If the
   // adapter does not drive a real engine transaction, the debit and credit do not
@@ -2822,7 +2857,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { stdout: captured.stdout, stderr: captured.stderr };
   },
+
+  // ------------------------------------------------------------------------
+  // Multi-compute — which function served this call (see isolatedApi below)
+  // ------------------------------------------------------------------------
+
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
+
+// ============================================================================
+// Multi-compute — a namespace on its own compute
+//
+// `isolatedApi` runs on a separate serverless compute with less memory than the
+// default, so a deployed call proves the gateway routed it there: it reports a
+// different function and the compute's own memory size. The export name differs
+// from the constructor name ('isolated'), as with `auth.createApi()`, because
+// the gateway routes on the export name the client calls.
+// ============================================================================
+
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    pid: process.pid,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
 
 // Export auth state machine API
 export const authApi = auth.createApi();

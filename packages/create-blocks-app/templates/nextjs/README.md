@@ -25,7 +25,8 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/page.tsx` | Server Component — fetches on the server |
 | `src/app/client.tsx` | Client Component — calls the API from the browser |
 | `src/app/layout.tsx` | Root layout |
-| `src/app/error.tsx` | Error boundary |
+| `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
+| `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
 | `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
 
 ## What's Included

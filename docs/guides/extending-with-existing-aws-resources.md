@@ -515,6 +515,9 @@ accurate to what your BB actually implements rather than aspirational.
   Lambda bundlers de-duplicate.
 - Document the BB's contract (options, methods, mock semantics) in a
   `README.md` — community BBs without docs don't get adopted.
+- Call `assertNotMockInDeployedEnv('<your-bb-name>')` (from
+  `@aws-blocks/core/bb-utils`) at the top level of your mock (`default`) entry,
+  so a deploy bundled without `aws-runtime` fails closed like the first-party BBs.
 - Keep the export-conditions exact:
   ```json
   "exports": {
@@ -528,6 +531,67 @@ accurate to what your BB actually implements rather than aspirational.
   ```
   Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
   pick the right entry point.
+
+### Deploying to a compute target Blocks doesn't own
+
+Blocks' own deploy path (`npm run deploy` / `npm run sandbox`, and the
+Lambda, container, and AgentCore computes it provisions) bundles your backend
+with the `aws-runtime` export condition for you.
+
+If you deploy the backend yourself — your own esbuild/webpack build, a
+container image, or another serverless platform — you **must** configure that
+bundler to resolve the `aws-runtime` condition:
+
+```bash
+esbuild src/handler.ts --bundle --platform=node --conditions=aws-runtime ...
+```
+
+```js
+// esbuild build() options
+await build({
+  entryPoints: ['src/handler.ts'],
+  bundle: true,
+  platform: 'node',
+  // Keep `module`: passing custom conditions drops esbuild's implicit `module`
+  // condition, which would switch dependencies to their CJS builds.
+  conditions: ['aws-runtime', 'module'],
+});
+```
+
+```bash
+# Unbundled Node (e.g. a container running `node dist/server.js` with node_modules)
+node --conditions=aws-runtime dist/server.js
+# or
+NODE_OPTIONS=--conditions=aws-runtime node dist/server.js
+```
+
+```js
+// webpack
+module.exports = {
+  resolve: {
+    conditionNames: ['aws-runtime', 'node', 'import', 'module', 'default'],
+  },
+};
+```
+
+Without it, module resolution falls back to each Building Block's `default`
+export — the mock entry — and the bundle runs in-memory local-dev stubs instead
+of the real AWS implementations.
+
+Building Blocks fail closed on compute that Blocks configures: when a BB's mock
+entry is loaded in a deployed environment it throws instead of silently running
+the mock. Where that surfaces depends on the compute: on container and
+AgentCore computes the process fails at start, while on Lambda the backend is
+imported lazily on the first invocation (`createLambdaHandler`), so the deploy
+itself succeeds and every request then returns an error. A deployed environment is detected from the
+`BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which Blocks sets only
+on compute it configures, so the check works the same on Lambda, ECS/Fargate,
+and AgentCore — it is not Lambda-specific. Local dev and tests are unaffected.
+
+On compute Blocks doesn't configure, those variables are not set unless you set
+them yourself, so this check does not run there. In that case your bundler
+configuration — resolving the `aws-runtime` condition as shown above — is what
+keeps the mock entries out of your deployed artifact.
 
 **Found an issue with a first-party BB before publishing your own?** Consider
 opening a PR upstream against [`aws-blocks`](https://github.com/aws-devtools-labs/aws-blocks) — the team would
