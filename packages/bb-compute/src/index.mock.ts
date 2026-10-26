@@ -7,5 +7,13 @@
  * returns the inert concrete handle; compute assignment is transparent in dev.
  * This entry also backs the package's public `types`.
  */
+
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this MOCK entry is loaded in a deployed environment (the
+// artifact was bundled without the `aws-runtime` export condition). No-op
+// locally. See assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-compute');
+
 export { Compute } from './index.aws.js';
 export type { ComputeProps } from './types.js';

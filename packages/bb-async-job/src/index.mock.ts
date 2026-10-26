@@ -19,6 +19,12 @@ import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this MOCK entry is loaded in a deployed environment (the
+// artifact was bundled without the `aws-runtime` export condition). No-op
+// locally. See assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-async-job');
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {

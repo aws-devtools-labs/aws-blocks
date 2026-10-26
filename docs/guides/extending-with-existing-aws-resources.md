@@ -529,6 +529,46 @@ accurate to what your BB actually implements rather than aspirational.
   Blocks' build system relies on the `cdk` and `aws-runtime` conditions to
   pick the right entry point.
 
+### Deploying to a compute target Blocks doesn't own
+
+Blocks' own deploy path (`npm run deploy` / `npm run sandbox`, and the
+Lambda, container, and AgentCore computes it provisions) bundles your backend
+with the `aws-runtime` export condition for you.
+
+If you deploy the backend yourself — your own esbuild/webpack build, a
+container image, or another serverless platform — you **must** configure that
+bundler to resolve the `aws-runtime` condition:
+
+```bash
+esbuild src/handler.ts --bundle --platform=node --conditions=aws-runtime ...
+```
+
+```js
+// esbuild build() options
+await build({
+  entryPoints: ['src/handler.ts'],
+  bundle: true,
+  platform: 'node',
+  conditions: ['aws-runtime', 'node'],
+});
+```
+
+Without it, module resolution falls back to each Building Block's `default`
+export — the mock entry — and the bundle runs in-memory local-dev stubs instead
+of the real AWS implementations.
+
+Building Blocks fail closed on compute that Blocks configures: when a BB's mock
+entry is loaded in a deployed environment it throws at startup instead of
+silently running the mock. A deployed environment is detected from the
+`BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` variables, which Blocks sets only
+on compute it configures, so the check works the same on Lambda, ECS/Fargate,
+and AgentCore — it is not Lambda-specific. Local dev and tests are unaffected.
+
+On compute Blocks doesn't configure, those variables are not set unless you set
+them yourself, so this check does not run there. In that case your bundler
+configuration — resolving the `aws-runtime` condition as shown above — is what
+keeps the mock entries out of your deployed artifact.
+
 **Found an issue with a first-party BB before publishing your own?** Consider
 opening a PR upstream against [`aws-blocks`](https://github.com/aws-devtools-labs/aws-blocks) — the team would
 rather absorb a generally useful change than have N forks of the same idea.

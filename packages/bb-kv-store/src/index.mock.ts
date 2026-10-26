@@ -5,11 +5,16 @@ import { Scope, registerSdkIdentifiers, ApiError, blocksError } from '@aws-block
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this MOCK entry is loaded in a deployed environment (the
+// artifact was bundled without the `aws-runtime` export condition). No-op
+// locally. See assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-kv-store');
 
 // ── Public types ────────────────────────────────────────────────────────────
 

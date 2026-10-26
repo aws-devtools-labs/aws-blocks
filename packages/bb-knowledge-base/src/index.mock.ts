@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { join, relative, dirname, extname, resolve, sep } from 'node:path';
@@ -14,6 +14,11 @@ import { normalizeMaxResults } from './normalize.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this MOCK entry is loaded in a deployed environment (the
+// artifact was bundled without the `aws-runtime` export condition). No-op
+// locally. See assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-knowledge-base');
 
 export type {
 	KnowledgeBaseOptions,

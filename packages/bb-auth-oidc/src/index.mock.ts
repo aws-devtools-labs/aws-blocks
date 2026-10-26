@@ -6,8 +6,9 @@
  * Wires to an in-process stub IdP via `OidcClientEngine`.
  */
 
+import { randomBytes } from 'node:crypto';
 import { buildingBlockParent, getSdkIdentifiers, registerSdkIdentifiers, type ScopeParent } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
@@ -19,6 +20,11 @@ import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
 import { resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this MOCK entry is loaded in a deployed environment (the
+// artifact was bundled without the `aws-runtime` export condition). No-op
+// locally. See assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-auth-oidc');
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -39,8 +45,18 @@ export type {
 	StubUser,
 } from './types.js';
 
-/** Fixed cookie-signing secret for the mock runtime (deterministic for tests). */
-const MOCK_COOKIE_SECRET = 'blocks-mock-cookie-secret-do-not-use-in-prod';
+/**
+ * Cookie-signing secret for the mock runtime. Ephemeral and random per
+ * process: sign and verify both happen in the same local process, so the
+ * cookie round-trip is unaffected. It intentionally does not persist across
+ * restarts (sessions from a previous dev-server run are dropped) — the mock is
+ * local-dev only. It's held on `globalThis` (like `bb-realtime`'s local token
+ * secret) so duplicate copies of this module in one process agree on it.
+ */
+const MOCK_COOKIE_SECRET_KEY = Symbol.for('@aws-blocks/bb-auth-oidc.mockCookieSecret');
+const mockCookieSecretHolder = globalThis as unknown as Record<symbol, string | undefined>;
+mockCookieSecretHolder[MOCK_COOKIE_SECRET_KEY] ??= randomBytes(32).toString('hex');
+const MOCK_COOKIE_SECRET: string = mockCookieSecretHolder[MOCK_COOKIE_SECRET_KEY];
 
 /**
  * Credential resolver for the mock runtime's Cognito engine. `cognitoFederated`

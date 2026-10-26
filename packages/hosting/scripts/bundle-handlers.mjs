@@ -47,6 +47,9 @@ await Promise.all(
       outfile: h.outfile,
       bundle: true,
       platform: 'node',
+      // Resolve Building Block `aws-runtime` export conditions so the bundle
+      // picks the real AWS implementations, never the `default` (mock) entry.
+      conditions: ['aws-runtime', 'node'],
       // Match the Lambda runtime (DEFAULT_NODE_RUNTIME). Bump together.
       target: 'node24',
       format: 'esm',
