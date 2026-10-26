@@ -126,6 +126,10 @@ export const nextjsAdapter = (
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
 
+  // A preview build that was interrupted can leave next.config wrapped; put it
+  // back before any build reads it.
+  restorePinnedNextConfig(projectDir);
+
   if (!skipBuild) {
     // Pin Next's build id for the build, so a code-only re-deploy produces
     // byte-identical static assets and CDK skips their re-upload. Restored in
@@ -1165,6 +1169,35 @@ const isEsmProject = (projectDir: string): boolean => {
  * @param buildId the build ID to pin.
  * @returns a function that restores the original config, or `undefined` when nothing was wrapped.
  */
+/** The first-line marker of the wrapper {@link pinNextBuildId} writes. */
+const PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
+
+/**
+ * Put back a `next.config.*` left wrapped by {@link pinNextBuildId} when a
+ * build was interrupted before its restore ran (e.g. Ctrl-C while the build
+ * was blocked in a child process). A config counts as wrapped only when it
+ * carries the wrapper's marker and its `next.config.blocks-base.<ext>` is
+ * still there; anything else is left alone. Every Next.js build calls this
+ * first, so a later build never runs on a leftover wrapper.
+ *
+ * @param projectDir the Next.js project root.
+ * @returns whether a config was restored.
+ */
+export const restorePinnedNextConfig = (projectDir: string): boolean => {
+  let restored = false;
+  for (const ext of ['ts', 'mjs', 'cjs', 'js']) {
+    const configFile = path.join(projectDir, `next.config.${ext}`);
+    const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
+    if (!fs.existsSync(baseFile) || !fs.existsSync(configFile)) continue;
+    if (!fs.readFileSync(configFile, 'utf8').includes(PINNED_CONFIG_MARKER)) continue;
+    fs.rmSync(configFile, { force: true });
+    fs.renameSync(baseFile, configFile);
+    process.stderr.write(`ℹ️  Restored ${path.basename(configFile)}, left wrapped by an interrupted build.\n`);
+    restored = true;
+  }
+  return restored;
+};
+
 export const pinNextBuildId = (projectDir: string, buildId: string): (() => void) | undefined => {
   const configFile = ['ts', 'mjs', 'cjs', 'js']
     .map((ext) => path.join(projectDir, `next.config.${ext}`))
@@ -1183,14 +1216,15 @@ export const pinNextBuildId = (projectDir: string, buildId: string): (() => void
 
   const isCjs = ext === 'cjs' || (ext === 'js' && !isEsmProject(projectDir));
   const id = JSON.stringify(buildId);
-  // Extensionless relative specifier — Next's config loader resolves it for
-  // .ts/.mjs/.js/.cjs alike.
-  const spec = JSON.stringify('./next.config.blocks-base');
+  // Next transpiles `next.config.ts`, which resolves an extensionless
+  // specifier; it loads `.mjs` (and `.js` in an ESM project) with a native
+  // `import()`, and `require()` doesn't add `.cjs`, so those name the file.
+  const spec = JSON.stringify(ext === 'ts' ? './next.config.blocks-base' : `./next.config.blocks-base.${ext}`);
   // `// @ts-nocheck`: a `.ts` config in a project whose `next build`
   // type-checks would otherwise fail on the untyped `phase`/`ctx` params.
   const wrapper = isCjs
     ? `// @ts-nocheck
-// AWS Blocks: deterministic build ID (restored after the build).
+${PINNED_CONFIG_MARKER}
 const blocksBase = require(${spec});
 const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
 module.exports = async (phase, ctx) => {
@@ -1199,7 +1233,7 @@ module.exports = async (phase, ctx) => {
 };
 `
     : `// @ts-nocheck
-// AWS Blocks: deterministic build ID (restored after the build).
+${PINNED_CONFIG_MARKER}
 import blocksBase from ${spec};
 export default async function blocksPinnedBuildIdConfig(phase, ctx) {
   const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;

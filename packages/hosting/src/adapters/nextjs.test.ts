@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import type { SpawnSyncOptions } from 'node:child_process';
 import semver from 'semver';
 import { spawn } from './spawn.js';
@@ -21,6 +23,7 @@ import {
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
   pinNextBuildId,
+  restorePinnedNextConfig,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import { withComputeTarget } from './shared/compute_target.js';
@@ -2483,6 +2486,24 @@ void describe('nextjsAdapter — build profile (HTTP API door, preview trims)', 
     assert.doesNotThrow(() => withBuildProfile({ serverInvoke: 'http-api' }, () => nextjsAdapter({ projectDir: tmpDir })));
   });
 
+  void it('a production build first restores a next.config left wrapped by an interrupted preview build', () => {
+    process.env.HOSTING_LENIENT_PATCHES = '1';
+    const configFile = path.join(tmpDir, 'next.config.mjs');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    assert.ok(pinNextBuildId(tmpDir, 'fixed')); // the preview build was killed before restoring
+    let nextConfigDuringBuild: string | undefined;
+    mock.restoreAll();
+    mock.method(spawn, 'sync', () => {
+      nextConfigDuringBuild = fs.readFileSync(configFile, 'utf-8');
+      writeOutput();
+    });
+    nextjsAdapter({ projectDir: tmpDir }); // default profile: no pinned build id
+    assert.strictEqual(nextConfigDuringBuild, original, 'the build ran on the user config, not the wrapper');
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.mjs')));
+  });
+
   void it('`deterministicBuildId`: next.config is wrapped with generateBuildId during the build, then restored', () => {
     process.env.HOSTING_LENIENT_PATCHES = '1';
     const configFile = path.join(tmpDir, 'next.config.mjs');
@@ -2496,7 +2517,7 @@ void describe('nextjsAdapter — build profile (HTTP API door, preview trims)', 
     });
     withBuildProfile({ deterministicBuildId: 'preview' }, () => nextjsAdapter({ projectDir: tmpDir }));
     assert.match(nextConfigDuringBuild ?? '', /generateBuildId: cfg\.generateBuildId \?\? \(async \(\) => "preview"\)/);
-    assert.match(nextConfigDuringBuild ?? '', /import blocksBase from "\.\/next\.config\.blocks-base"/);
+    assert.match(nextConfigDuringBuild ?? '', /import blocksBase from "\.\/next\.config\.blocks-base\.mjs"/);
     assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original, 'restored after the build');
     assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.mjs')));
   });
@@ -2515,6 +2536,56 @@ void describe('pinNextBuildId', () => {
     assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
     fs.writeFileSync(path.join(tmpDir, 'next.config.js'), 'module.exports = { generateBuildId: async () => "mine" };');
     assert.strictEqual(pinNextBuildId(tmpDir, 'preview'), undefined);
+  });
+
+  // Next loads next.config.mjs (and next.config.js in an ESM project) with a
+  // native `import()`, which does not resolve an extensionless specifier.
+  for (const [file, pkg] of [
+    ['next.config.mjs', {}],
+    ['next.config.js', { type: 'module' }],
+  ] as const) {
+    void it(`the ${file} wrapper${'type' in pkg ? ' (ESM project)' : ''} loads with a native import()`, async () => {
+      fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify(pkg));
+      fs.writeFileSync(path.join(tmpDir, file), 'export default { reactStrictMode: true };\n');
+      const restore = pinNextBuildId(tmpDir, 'fixed');
+      assert.ok(restore);
+      const mod = await import(`${pathToFileURL(path.join(tmpDir, file)).href}?t=${Date.now()}`);
+      const cfg = await mod.default('phase-production-build', {});
+      assert.strictEqual(cfg.reactStrictMode, true);
+      assert.strictEqual(await cfg.generateBuildId(), 'fixed');
+      restore();
+    });
+  }
+
+  void it('the next.config.cjs wrapper loads with require()', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.cjs'), 'module.exports = { reactStrictMode: true };\n');
+    const restore = pinNextBuildId(tmpDir, 'fixed');
+    assert.ok(restore);
+    const cfg = await createRequire(path.join(tmpDir, 'x.js'))(path.join(tmpDir, 'next.config.cjs'))('phase', {});
+    assert.strictEqual(await cfg.generateBuildId(), 'fixed');
+    restore();
+  });
+
+  void it('restorePinnedNextConfig puts back a config left wrapped by an interrupted build', () => {
+    const configFile = path.join(tmpDir, 'next.config.ts');
+    const original = 'export default { reactStrictMode: true };\n';
+    fs.writeFileSync(configFile, original);
+    assert.ok(pinNextBuildId(tmpDir, 'fixed'));
+    // The build was killed: the restore never ran.
+    assert.notStrictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), true);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+    assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
+    // Nothing to restore the second time; a user's own config is never touched.
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
+  });
+
+  void it('restorePinnedNextConfig leaves a base file alone when the config is not our wrapper', () => {
+    fs.writeFileSync(path.join(tmpDir, 'next.config.ts'), 'export default {};\n');
+    fs.writeFileSync(path.join(tmpDir, 'next.config.blocks-base.ts'), 'export default { a: 1 };\n');
+    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
   });
 
   void it('writes a CommonJS wrapper for a CommonJS project', () => {
