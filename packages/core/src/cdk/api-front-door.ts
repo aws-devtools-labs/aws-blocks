@@ -135,8 +135,9 @@ export function claimApiFrontDoor(owner: Construct & ApiFrontDoorOwner, distribu
  * Record that `Hosting` published the origin browsers reach `/aws-blocks/*` at
  * (`BLOCKS_PUBLIC_ORIGIN`): its same-origin door. A managed `cloudfront`
  * distribution built anyway — for native clients, when the door doesn't claim
- * the API front-door role (an `http://` door) — then leaves that origin alone,
- * so the OIDC callback and the session cookie stay on the door the browser uses.
+ * the API front-door role (every door but the CloudFront default and the
+ * stacked edge) — then leaves that origin alone, so the OIDC callback and the
+ * session cookie stay on the door the browser uses.
  *
  * @param owner the `BlocksStack` or `BlocksBackend` whose API the door serves.
  * @internal Framework-only; `Hosting` calls it (via `BlocksStackApi.publishPublicOrigin`).
