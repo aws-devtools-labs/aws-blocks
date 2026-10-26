@@ -23,7 +23,7 @@ import type {
 } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { assertValidKey } from './validation.js';
+import { assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
 
 // Re-export public types
 import { FileBucketErrors } from './errors.js';
@@ -61,6 +61,8 @@ export type {
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	readonly bbName = BB_NAME;
 	private s3: S3Client;
+	/** Set when this bucket was declared with `objectLock` (presigned uploads can't satisfy its checksum requirement). */
+	private readonly objectLocked: boolean;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -69,6 +71,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
+		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
 		const bucketName = options?.bucket ? options.bucket.bucketName : this.fullId;
 		registerSdkIdentifiers(this.fullId, { bucketName });
 		this.s3 = new S3Client({
@@ -174,6 +177,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
 		assertValidKey(path);
+		this.assertPresignedUploadSupported();
 		return getSignedUrl(this.s3, new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: options?.contentType,
 		}), { expiresIn: options?.expiresIn ?? 3600 });
@@ -279,6 +283,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
 			}
 			throw e;
+		}
+	}
+
+	private assertPresignedUploadSupported(): void {
+		if (this.objectLocked) {
+			throw blocksError(FileBucketErrors.PresignedUploadUnsupported, presignedUploadUnsupportedMessage(this.fullId));
 		}
 	}
 

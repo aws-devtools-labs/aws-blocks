@@ -14,7 +14,7 @@ import {
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { validateBucketName } from './bucket-name.js';
-import { validateFileBucketOptions, assertValidKey } from './validation.js';
+import { validateFileBucketOptions, assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
@@ -79,6 +79,8 @@ function getDevBaseUrl(): string {
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	private dataDir: string;
 	private versioned: boolean;
+	/** Mirrors the AWS runtime: presigned uploads are rejected on an `objectLock` bucket. */
+	private readonly objectLocked: boolean;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -90,6 +92,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// deployed bucket name), not the `mock-` prefixed local name, to keep
 		// parity with the CDK path.
 		if (!options?.bucket) validateBucketName(this.fullId);
+		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
 		// Run the CDK's synth-time option guards locally too, via the shared
 		// validation.ts, so a local/unit run rejects exactly what `cdk synth`
 		// would. Gated on `!options?.bucket` alongside validateBucketName: the
@@ -293,6 +296,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
 		this.validateKey(path);
+		this.assertPresignedUploadSupported();
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -364,6 +368,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
 		this.validateKey(path);
+		this.assertPresignedUploadSupported();
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -502,6 +507,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	// ── Internal helpers ──────────────────────────────────────────────────
+
+	private assertPresignedUploadSupported(): void {
+		if (this.objectLocked) {
+			throw blocksError(FileBucketErrors.PresignedUploadUnsupported, presignedUploadUnsupportedMessage(this.fullId));
+		}
+	}
 
 	private validateKey(key: string): void {
 		// Portable, filesystem-independent key rules shared with the AWS runtime,

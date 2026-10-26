@@ -114,6 +114,12 @@ export interface FileBucketOptions {
 	 * rule (see {@link noncurrentVersionExpirationDays}) only removes a version
 	 * once its lock has expired.
 	 *
+	 * Presigned uploads are not supported: S3 requires a signed `Content-MD5` or
+	 * checksum header on every upload to an Object Lock bucket, which a URL
+	 * presigned before the file is known can't carry. `putUrl()` and
+	 * `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported`;
+	 * upload with `put()` (the SDK adds the checksum). Downloads are unaffected.
+	 *
 	 * Requirements, checked at synth:
 	 * - versioning must stay on (`versioned: false` is rejected);
 	 * - the bucket must be retained — `removalPolicy: 'destroy'` (including the
@@ -135,7 +141,8 @@ export interface FileBucketOptions {
 	 * });
 	 * ```
 	 *
-	 * The mock validates the option but does not enforce retention.
+	 * The mock validates the option and rejects presigned uploads, but does not
+	 * enforce retention.
 	 */
 	objectLock?: ObjectLockOptions;
 	/**

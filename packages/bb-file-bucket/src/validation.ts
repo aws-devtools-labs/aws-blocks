@@ -10,6 +10,18 @@ import type { CorsRule, FileBucketOptions } from './types.js';
  */
 export const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 
+/**
+ * Message for `FileBucketErrors.PresignedUploadUnsupported`. Shared so the mock
+ * and the AWS runtime word the rejection identically.
+ */
+export function presignedUploadUnsupportedMessage(fullId: string): string {
+	return (
+		`FileBucket "${fullId}" has objectLock, so presigned uploads (putUrl / createUploadHandle) are not supported: ` +
+		`S3 requires a signed Content-MD5 or checksum header on every upload to an Object Lock bucket, which a presigned ` +
+		`URL created before the file is known can't carry. Upload through the backend with put() instead.`
+	);
+}
+
 /** Upper bound for `objectLock.retentionDays` (100 years). */
 export const MAX_OBJECT_LOCK_RETENTION_DAYS = 36500;
 

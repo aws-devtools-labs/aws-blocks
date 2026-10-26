@@ -82,6 +82,7 @@ export const FileBucketErrors: {
     readonly FileNotFound: "NoSuchKey";
     readonly FileTooLarge: "EntityTooLarge";
     readonly VersionNotFound: "NoSuchVersion";
+    readonly PresignedUploadUnsupported: "PresignedUploadUnsupported";
 };
 
 // @public (undocumented)

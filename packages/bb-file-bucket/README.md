@@ -39,7 +39,7 @@ const bucket = new FileBucket(scope, id, options?)
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. See [Encryption with KMS](#encryption-with-kms). Ignored by the mock and browser runtimes. |
-| `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can only be set when the bucket is first created. See [Object Lock](#object-lock). Validated, but not enforced, by the mock. |
+| `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can only be set when the bucket is first created. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Validated, but not enforced, by the mock. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
@@ -107,6 +107,7 @@ if (!file) {
 | `FileBucketErrors.FileNotFound` | `NoSuchKey` | Surfaced by presigned-URL 404s etc. **Not** thrown by `get()`, which returns `null`. |
 | `FileBucketErrors.FileTooLarge` | `EntityTooLarge` | File exceeds size limits. |
 | `FileBucketErrors.VersionNotFound` | `NoSuchVersion` | Thrown by `restoreVersion()` when the target `versionId` cannot be resolved. |
+| `FileBucketErrors.PresignedUploadUnsupported` | `PresignedUploadUnsupported` | Thrown by `putUrl()` and `createUploadHandle()` on a bucket with `objectLock` — see [Object Lock](#object-lock). |
 
 ```typescript
 import { isBlocksError } from '@aws-blocks/core';
@@ -301,6 +302,8 @@ const auditLog = new FileBucket(scope, 'audit-log', {
 ```
 
 Every new version is locked for `retentionDays`. `delete(path)` still hides the file (S3 adds a delete marker), but permanently deleting a locked version with `delete(path, { versionId })` fails until the lock expires. In `'compliance'` mode nobody, including the account root user, can remove a locked version early; `'governance'` mode allows principals with `s3:BypassGovernanceRetention` to do so.
+
+**Upload through the backend.** S3 requires a signed `Content-MD5` or checksum header on every upload to an Object Lock bucket. A presigned URL is created before the file is known, so it can't carry one, and S3 rejects the upload. On these buckets `putUrl()` and `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported` (locally and on AWS) rather than return a URL that fails. `put()` works, because the SDK adds the checksum. Downloads (`getUrl()`, `getFileHandle()`) are unaffected.
 
 Object Lock can only be turned on when the bucket is first deployed, and can't be turned off. Locked objects also block teardown, so the bucket must be retained — pass `removalPolicy: 'retain'` when using Object Lock in a sandbox.
 
