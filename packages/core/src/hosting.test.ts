@@ -20,6 +20,8 @@ import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import {
   type ApiFrontDoorOwner,
   apiFrontDoorMarker,
@@ -540,6 +542,63 @@ describe('Hosting', () => {
   // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
   // the same stack, the API belongs on Hosting's distribution — the standalone
   // managed cloudfront distribution must stand down so there is exactly one.
+  // A namespace on a container compute: Hosting routes its exact path straight to
+  // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
+  // behavior that would otherwise match first.
+  describe('container API namespaces', () => {
+    function hostingWithDirectRoute(id: string, apiFrontDoorOwner?: Stack) {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, id);
+      const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+      const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+      const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        ...(apiFrontDoorOwner ? { claimApiFrontDoor: (url: string) => claimApiFrontDoor(apiFrontDoorOwner, url) } : {}),
+        _apiDirectRoutes: [
+          {
+            path: `${BLOCKS_RPC_PREFIX}/render`,
+            ingress: { kind: 'load-balancer', loadBalancer, port: 10_123, vpc, subnets, routePath: () => {} },
+          },
+        ],
+      };
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+      return Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string; Properties: any }>;
+    }
+
+    it('adds the container path before the gateway API behaviors, to a VPC origin', () => {
+      const resources = hostingWithDirectRoute('HostingDirectRoute');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      const config = dist.Properties.DistributionConfig;
+      const patterns: string[] = config.CacheBehaviors.map((b: { PathPattern: string }) => b.PathPattern);
+      const direct = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/render`);
+      assert.ok(direct !== -1, `behaviors: ${patterns.join(', ')}`);
+      assert.ok(direct < patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`), 'ahead of /aws-blocks/api/*');
+      assert.ok(direct < patterns.indexOf(BLOCKS_RPC_PREFIX), 'ahead of /aws-blocks/api');
+      const behavior = config.CacheBehaviors[direct];
+      const origin = config.Origins.find((o: { Id: string }) => o.Id === behavior.TargetOriginId);
+      assert.ok(origin.VpcOriginConfig, 'a VPC origin');
+      assert.strictEqual(behavior.FunctionAssociations?.[0]?.EventType, 'viewer-request');
+      const vpcOrigins = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::VpcOrigin');
+      assert.strictEqual(vpcOrigins.length, 1);
+      assert.strictEqual(vpcOrigins[0].Properties.VpcOriginEndpointConfig.HTTPPort, 10_123);
+    });
+
+    it('adds no VPC origin or function without container namespaces', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'HostingNoDirectRoute');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::CloudFront::VpcOrigin', 0);
+      // Hosting has functions of its own; none of them is the forwarded-host stamp.
+      const stamps = Object.values(template.findResources('AWS::CloudFront::Function')).filter((f) =>
+        String(f.Properties.FunctionCode).includes('x-blocks-forwarded-host'),
+      );
+      assert.strictEqual(stamps.length, 0);
+    });
+  });
+
   describe('cloudfront front door + Hosting claim', () => {
     it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API under cloudfront', () => {
       createSpaBuildOutput(tmpDir);
