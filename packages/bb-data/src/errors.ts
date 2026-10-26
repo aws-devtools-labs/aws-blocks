@@ -76,8 +76,10 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
  * fails the same way. The raw driver text, which names tables, columns and
  * constraints, is kept only as `cause` (server-side).
  *
- * - `42501` insufficient_privilege: a row-level-security `WITH CHECK` rejection
- *   or a missing grant for the role → 403 `PermissionDenied`
+ * - `42501` insufficient_privilege: the caller's statement hit a row-level-security
+ *   `WITH CHECK` rejection or a missing grant for the role → 403 `PermissionDenied`.
+ *   A refused `SET LOCAL ROLE` from `withRLS()` itself is a setup error, which
+ *   `setRLSContext()` re-tags as a 500 `QueryFailed`.
  * - `23514` check_violation → 400 `CheckViolation`
  * - `23502` not_null_violation → 400 `NotNullViolation`
  * - `23503` foreign_key_violation: the referenced row is missing, or rows still
@@ -144,7 +146,6 @@ const RE_TAG_MESSAGES: Record<string, string> = {
   [DatabaseErrors.TransactionFailed]: 'The database transaction failed',
   [DatabaseErrors.UniqueConstraintViolation]: 'The item violates a unique constraint',
   [DatabaseErrors.SerializationFailure]: 'The transaction failed due to a serialization conflict',
-  ...Object.fromEntries(Object.values(REQUEST_ERRORS).map(({ name, message }) => [name, message])),
 };
 
 /**
@@ -182,6 +183,10 @@ export function reTagged(name: string, cause: Error): Error {
  */
 export function wrapError(e: unknown): never {
   const error = e instanceof Error ? e : new Error(String(e));
+  // A request-error name keeps its 4xx status: re-tagging it as a plain Error
+  // would serialize as a 500 that carries a 4xx name.
+  const request = Object.entries(REQUEST_ERRORS).find(([, entry]) => entry.name === error.name);
+  if (request) throw requestError(request[0], error);
   const name = knownErrors.has(error.name) ? error.name : DatabaseErrors.QueryFailed;
   throw reTagged(name, error);
 }

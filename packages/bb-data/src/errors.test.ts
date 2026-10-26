@@ -28,12 +28,15 @@ test('DatabaseErrors has all expected keys', () => {
   assert.strictEqual(DatabaseErrors.ForeignKeyViolation, 'ForeignKeyViolationException');
 });
 
-test('wrapError keeps a request-error name with its stable message', () => {
+test('wrapError keeps a request-error name as the same 4xx ApiError the engines build', () => {
   const raw = Object.assign(new Error('permission denied for table projects'), { name: DatabaseErrors.PermissionDenied });
   assert.throws(
     () => wrapError(raw),
     (e: Error) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError, not a 500-shaped Error');
+      assert.strictEqual(e.status, 403);
       assert.strictEqual(e.name, DatabaseErrors.PermissionDenied);
+      assert.strictEqual(e.cause, raw);
       assert.ok(!e.message.includes('projects'), 'driver text must not reach the message');
       return true;
     },
