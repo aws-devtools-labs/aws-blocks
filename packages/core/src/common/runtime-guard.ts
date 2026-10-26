@@ -38,6 +38,13 @@
  *
  * Both variables must be non-empty; a partial configuration is not treated as
  * a deployed signal.
+ *
+ * Consequence to keep in mind: on deployed compute that Blocks does not
+ * configure (a customer-owned bundler, container image, or other platform that
+ * sets neither variable) this returns false and the guard is intentionally
+ * inert — it is a deliberate no-op, not a bug. There the `aws-runtime` bundler
+ * condition is the sole protection; see the "compute target Blocks doesn't own"
+ * guidance in `docs/guides/extending-with-existing-aws-resources.md`.
  */
 function isDeployedEnv(): boolean {
 	return Boolean(process.env.BLOCKS_CONFIG_BUCKET) && Boolean(process.env.BLOCKS_CONFIG_KEY);
