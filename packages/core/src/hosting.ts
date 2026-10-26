@@ -833,32 +833,51 @@ export interface CloudFrontOverRouterFrontDoor {
 const FIXED_BUILD_ID = 'fixed';
 
 /**
+ * Static files a framework rewrites on every build, with a fresh id or
+ * timestamp, even when nothing else changed: Nuxt's app manifest
+ * (`<buildAssetsDir>/builds/latest.json`, `builds/meta/<id>.json`) and
+ * SvelteKit's `_app/version.json`. They are left out of the content build id,
+ * so a server-only change keeps the id and can hotswap; they are still
+ * uploaded, overwriting the previous ones in place.
+ */
+const VOLATILE_STATIC_FILE = /(^|\/)(builds\/latest\.json|builds\/meta\/[^/]+\.json|_app\/version\.json)$/;
+
+/**
  * The deploy build id for `buildId: 'fixed'`: a hash of what the build
- * uploads (the static assets and the ISR cache seed). An unchanged build keeps
- * its id, so a re-deploy skips the upload and can hotswap; a changed build
- * gets a new `builds/<id>/` prefix, so a deleted file stops being served, the
- * ISR tag seed re-runs and the asset proxy's cached error pages are dropped.
+ * uploads (the static assets, the ISR cache seed and the custom error pages).
+ * An unchanged build keeps its id, so a re-deploy skips the upload and can
+ * hotswap; a changed build gets a new `builds/<id>/` prefix, so a deleted file
+ * stops being served, the ISR tag seed re-runs and the asset proxy's cached
+ * error pages are dropped. Files every build rewrites are left out (see
+ * {@link VOLATILE_STATIC_FILE}).
  *
  * @param manifest the adapter's manifest.
+ * @param errorPageFiles the app's custom error page files (`errorPages`).
  * @returns `fixed-` and 16 hex characters.
  */
-function contentBuildId(manifest: DeployManifest): string {
+function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly string[] = []): string {
   const hash = createHash('sha256');
-  const add = (root: string | undefined) => {
+  const addFile = (name: string, file: string) => hash.update(name).update('\0').update(readFileSync(file)).update('\0');
+  const add = (root: string | undefined, skip?: RegExp) => {
     if (!root || !existsSync(root)) return;
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
         const file = join(dir, entry.name);
+        const name = relative(root, file).split('\\').join('/');
         if (entry.isDirectory()) walk(file);
-        else if (entry.isFile()) hash.update(relative(root, file)).update('\0').update(readFileSync(file)).update('\0');
+        else if (entry.isFile() && !skip?.test(name)) addFile(name, file);
       }
     };
     hash.update(`${root.length}\0`);
     walk(root);
   };
-  add(manifest.staticAssets.directory);
+  add(manifest.staticAssets.directory, VOLATILE_STATIC_FILE);
   add(manifest.cache?.seedDirectory);
   add(manifest.cache?.initFunction?.bundle);
+  for (const file of errorPageFiles) {
+    hash.update('errorPage\0');
+    if (existsSync(file)) addFile(file, file);
+  }
   return `${FIXED_BUILD_ID}-${hash.digest('hex').slice(0, 16)}`;
 }
 
@@ -1119,7 +1138,10 @@ export class Hosting extends Construct {
     // re-deploy could skip the upload or hotswap. A throwaway environment
     // keys the build on its content instead (see `contentBuildId`).
     if (fixedBuildId) {
-      manifest.buildId = contentBuildId(manifest);
+      manifest.buildId = contentBuildId(
+        manifest,
+        [props.errorPages?.notFound, props.errorPages?.serverError].filter((f): f is string => !!f),
+      );
     } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }

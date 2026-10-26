@@ -167,6 +167,32 @@ describe('Hosting with HostingPresets.preview', () => {
     assert.notStrictEqual(prefixOf('ContentIdE'), first, 'an edited file changes the id');
   });
 
+  it("the fixed build id ignores a framework's per-build manifest files, and covers custom error pages", () => {
+    createSpaBuildOutput(tmpDir);
+    const notFound = path.join(tmpDir, 'my-404.html');
+    fs.writeFileSync(notFound, '<!DOCTYPE html><html><body>Not here</body></html>');
+    const prefixOf = (name: string) => {
+      const stack = newStack(name);
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed', errorPages: { notFound },
+      });
+      const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function', {
+        Properties: { Environment: { Variables: { ASSET_KEY_PREFIX: Match.anyValue() } } },
+      });
+      return Object.values(fns)[0].Properties.Environment.Variables.ASSET_KEY_PREFIX;
+    };
+    const first = prefixOf('VolatileA');
+    // Nuxt and SvelteKit rewrite these with a fresh id on every build.
+    fs.mkdirSync(path.join(tmpDir, 'dist', '_nuxt', 'builds', 'meta'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'dist', '_nuxt', 'builds', 'latest.json'), `{"id":"${Date.now()}"}`);
+    fs.writeFileSync(path.join(tmpDir, 'dist', '_nuxt', 'builds', 'meta', 'abc.json'), '{}');
+    fs.mkdirSync(path.join(tmpDir, 'dist', '_app'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'dist', '_app', 'version.json'), `{"version":"${Date.now()}"}`);
+    assert.strictEqual(prefixOf('VolatileB'), first, 'per-build manifest files keep the id');
+    fs.writeFileSync(notFound, '<!DOCTYPE html><html><body>Gone</body></html>');
+    assert.notStrictEqual(prefixOf('VolatileC'), first, 'an edited custom error page changes the id');
+  });
+
   it('uses a content-keyed fixed build id', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewBuildId');
