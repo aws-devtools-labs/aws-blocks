@@ -21,7 +21,7 @@ const secret = new Secret(scope, id, options?)
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `get(options?)` | `Promise<T \| null>` | Read the value. `null` when unset/missing. `options.version` selects `'current'` (default), `'previous'`, or a `SecretVersion` from `listVersions()`. |
-| `put(value)` | `Promise<void>` | Set or update the value at runtime. The prior value becomes the `'previous'` version. |
+| `put(value)` | `Promise<void>` | Set or update the value at runtime. **Only present when the secret was created with `allowRuntimeWrite: true`** — otherwise it is absent from the object (and the type). The prior value becomes the `'previous'` version. |
 | `listVersions()` | `Promise<SecretVersionInfo[]>` | List retained versions (metadata only, newest first — never values). |
 | `Secret.fromExisting(arn)` | `ExternalSecretRef` | Reference an existing Secrets Manager secret (static). Pass to `options.secret`. |
 
@@ -30,12 +30,31 @@ const secret = new Secret(scope, id, options?)
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
 | `name` | `string` | No | Explicit Secrets Manager secret name. When omitted, derived from the scope tree (unique per stack). Provide a well-known name when a team/CI pipeline sets or rotates the value out-of-band via the `aws` CLI. You own uniqueness across the account/region when set. Ignored for `fromExisting`. |
+| `allowRuntimeWrite` | `boolean` | No | **Defaults to `false`.** When `false`/omitted the secret is **read-only at runtime**: no `put()` method on the object, and the execution role gets read-only IAM (no `PutSecretValue`). Set `true` only when the app sets/rotates the value itself at runtime — then `put()` is present and write IAM is granted. Applies to every secret, including `fromExisting`. |
 | `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T`, treats the stored value as JSON, and validates on `get()`/`put()`. Omit for an opaque `string`. |
 | `secret` | `ExternalSecretRef` | No | Wrap an existing Secrets Manager secret from `Secret.fromExisting(arn)` instead of creating one. |
 | `generate` | `boolean` | No | When `true`, seed a random value on first create (for a signing/HMAC key that only needs to exist). Otherwise the secret starts empty and `get()` returns `null` until set. Don't combine with `schema`. |
 | `cacheTtlSeconds` | `number` | No | How long the runtime reuses a cached value before re-fetching. **Defaults to 300s (5 min)**, matching the AWS Secrets Manager agent — a bounded default so a long-running process can't serve a rotated value indefinitely. Raise it to cut fetches, lower it for fresher reads, or set `0` to disable caching. `put()` always clears the cache. Ignored by the mock. |
 | `removalPolicy` | `'destroy' \| 'retain'` | No | Override the stack-wide removal default for the created secret. Ignored by the mock and when wrapping an existing secret. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. Defaults to an error-level logger. |
+
+### Read-only by default (`allowRuntimeWrite`)
+
+A `Secret` is **read-only at runtime unless you opt in**. By default the instantiated object exposes only `get()` and `listVersions()` — there is no `put()` (a call is a compile error), and the deployed execution role is granted read-only IAM. This is least-privilege: most apps read a credential that is set out-of-band (console, `aws` CLI, or CI), so the running app never needs write access.
+
+```typescript
+// Read-only (default): no put(). Set the value out-of-band, read it with get().
+const stripeKey = new Secret(scope, 'stripe-api-key');
+const key = await stripeKey.get();
+// stripeKey.put('…')  ❌ compile error — put is absent
+
+// Writable: the app sets/rotates the value itself. put() is present; the role
+// is granted PutSecretValue.
+const token = new Secret(scope, 'self-rotating-token', { allowRuntimeWrite: true });
+await token.put('t-abc123');
+```
+
+This also applies to a secret wrapped via `fromExisting` — it is read-only unless you pass `allowRuntimeWrite: true`.
 
 ### Error handling
 
@@ -98,9 +117,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-Set the value once — via the settings console route, a deploy script, or the AWS CLI (see "Managing secret values"). At runtime you can also update it:
+Set the value once — via the settings console route, a deploy script, or the AWS CLI (see "Managing secret values"). If the app itself updates the value at runtime, create the secret with `allowRuntimeWrite: true` and call `put()`:
 
 ```typescript
+const stripeKey = new Secret(scope, 'stripe-api-key', { allowRuntimeWrite: true });
 await stripeKey.put('sk_live_...');
 ```
 
@@ -131,7 +151,7 @@ const legacy = new Secret(scope, 'legacy-key', {
 const value = await legacy.get();
 ```
 
-AWS Blocks will not create, seed, or delete the referenced secret — it only reads and writes its value and grants the app access to it.
+AWS Blocks will not create, seed, or delete the referenced secret — it only reads its value (and writes it when `allowRuntimeWrite: true`) and grants the app access.
 
 ## Managing secret values
 
@@ -213,7 +233,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 - **Value size limit:** 64 KB per secret value.
 - **Version history:** `listVersions()` returns the **labeled** versions — current + previous. Secrets Manager retains additional unlabeled versions internally (until >100, never removing any created in the last 24h), but the BB surfaces only current/previous; reach for the AWS SDK for deeper history.
 - **Encryption:** KMS at rest, using the default `aws/secretsmanager` key.
-- **IAM:** the construct grants the shared execution role `secretsmanager:GetSecretValue` + `PutSecretValue` scoped to the single secret (not a wildcard), plus the KMS grants Secrets Manager attaches.
+- **IAM:** the construct grants the shared execution role `secretsmanager:GetSecretValue` + `ListSecretVersionIds` scoped to the single secret (not a wildcard). `PutSecretValue` is granted **only** when `allowRuntimeWrite: true` — the default is read-only. KMS grants Secrets Manager attaches as needed.
 - **Deletion:** recoverable by default (30-day recovery window); `--force-delete-without-recovery` to delete immediately.
 - Removal policy follows the stack-wide `defaults` (production retains, sandbox destroys); override per-instance with `removalPolicy`. BB-created secrets are tagged `aws-blocks-stack=<stackName>` (join the settings resource group); `fromExisting` secrets are not tagged.
 

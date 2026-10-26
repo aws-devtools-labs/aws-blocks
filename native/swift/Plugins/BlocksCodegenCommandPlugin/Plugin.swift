@@ -8,6 +8,8 @@
 import PackagePlugin
 import Foundation
 
+let blocksCodegenConfigName = "blocks.codegen.json"
+
 /// A command plugin that generates typed Swift models and API methods
 /// from an OpenRPC spec file (`blocks.spec.json`).
 ///
@@ -58,9 +60,14 @@ struct BlocksCodegenCommandPlugin: CommandPlugin {
             print("   Spec: \(specFile.url.path(percentEncoded: false))")
             print("   Output: \(outputDir.path(percentEncoded: false))")
 
+            let configPath = specFile.url.deletingLastPathComponent()
+                .appendingPathComponent(blocksCodegenConfigName)
+            let hasConfig = FileManager.default.fileExists(atPath: configPath.path(percentEncoded: false))
+
             let process = Process()
             process.executableURL = generatorTool.url
             process.arguments = [specFile.url.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+                + (hasConfig ? [configPath.path(percentEncoded: false)] : [])
 
             let pipe = Pipe()
             process.standardOutput = pipe
@@ -109,9 +116,14 @@ extension BlocksCodegenCommandPlugin: XcodeCommandPlugin {
         print("   Spec: \(specPath.path(percentEncoded: false))")
         print("   Output: \(outputDir.path(percentEncoded: false))")
 
+        let configPath = specPath.deletingLastPathComponent()
+            .appendingPathComponent(blocksCodegenConfigName)
+        let hasConfig = FileManager.default.fileExists(atPath: configPath.path(percentEncoded: false))
+
         let process = Process()
         process.executableURL = generatorTool.url
         process.arguments = [specPath.path(percentEncoded: false), outputDir.path(percentEncoded: false)]
+            + (hasConfig ? [configPath.path(percentEncoded: false)] : [])
 
         let pipe = Pipe()
         process.standardOutput = pipe

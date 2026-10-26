@@ -6,7 +6,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
-import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -49,32 +49,42 @@ export async function destroy(options: DestroyOptions) {
     // [60s, 120s] backoff (the Telemetry E2E timeout this guards against). The
     // retry loop is for transient teardown blockers (bucket-blocked delete,
     // DeleteRestApi 429 throttle, ENI detach), never auth.
-    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot });
+    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot, accountDetails: false });
 
     const cdkEnv = {
       ...process.env,
       NODE_OPTIONS: '--conditions=cdk',
       ...getCdkTelemetryEnv('production'),
     };
-    const cdkArgs = [
-      'cdk', 'destroy',
-      '--force',
-      '--context', `projectRoot=${options.projectRoot}`,
-    ];
-
     // Reuse the sandbox path's shipped teardown-retry machinery: on a failed
     // destroy, empty the stacks' versioned S3 buckets (the autoDeleteObjects
     // Lambda never provisions on a failed CREATE, so the bucket blocks the
     // delete and the stack + its IAM roles leak) and back off before retrying.
     // The backoff also rides out a transient API Gateway control-plane throttle
     // (DeleteRestApi 429), which single-shot `cdk destroy` surfaced as a hard
-    // teardown failure with no recovery.
-    await runDestroyWithRetries({
-      runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
-      listStackNames: () => listProductionStackNames(options, cdkEnv),
-      emptyBuckets: emptySandboxBuckets,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      successLabel: 'Production stack',
-    });
+    // teardown failure with no recovery. A failure whose stack events show such
+    // a throttle gets a longer, jittered backoff (see runDestroyWithRetries).
+    await runDestroyWithRetries(productionDestroyDeps(options, cdkEnv));
   });
+}
+
+/**
+ * The {@link runDestroyWithRetries} dependencies the production `destroy`
+ * runs with. A separate function so a test can pin the wiring (throttle
+ * detection, bucket emptying) without spawning cdk.
+ */
+export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+  const cdkArgs = [
+    'cdk', 'destroy',
+    '--force',
+    '--context', `projectRoot=${options.projectRoot}`,
+  ];
+  return {
+    runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
+    listStackNames: () => listProductionStackNames(options, cdkEnv),
+    emptyBuckets: emptySandboxBuckets,
+    isThrottled: destroyWasThrottled,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    successLabel: 'Production stack',
+  };
 }

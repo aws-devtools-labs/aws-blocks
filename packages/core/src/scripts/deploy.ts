@@ -10,9 +10,10 @@ import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
-import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
-import { waitForLiveBuild, type InvalidationProbe } from './wait-live.js';
+import { waitForLiveBuild, type InvalidationProbe, type WaitForLiveResult } from './wait-live.js';
+import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -225,9 +226,10 @@ export async function deploy(options: DeployOptions) {
 
     process.env.BLOCKS_STAGE = 'production';
 
-    // Fail fast if AWS credentials are missing/expired, before generating the
-    // client and spending time in synth only to hit an opaque CDK credential error.
-    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot });
+    // Fail fast if AWS credentials are missing/expired, or the account and Region were
+    // never CDK-bootstrapped, before generating the client and spending time in synth
+    // only to hit an opaque CDK error.
+    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot, checkBootstrap: true });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
@@ -270,6 +272,11 @@ export async function deploy(options: DeployOptions) {
     // caller's timeout, has already surfaced where the frontend lives.
     let earlyHostingUrl: string | undefined;
 
+    // Framework resolves in the cdk synth child (where Hosting is built); it writes the
+    // value to this file so the parent can attach it to telemetry. Created immediately
+    // before the spawn, so a failure earlier in the command leaves nothing behind.
+    const frameworkSink = createFrameworkSink();
+
     try {
       await runStreaming(
         "npx",
@@ -283,7 +290,8 @@ export async function deploy(options: DeployOptions) {
           env: {
             ...process.env,
             NODE_OPTIONS: '--conditions=cdk',
-            ...getCdkTelemetryEnv('production')
+            ...getCdkTelemetryEnv('production'),
+            ...getFrameworkSinkEnv(frameworkSink),
           },
           onHostingUrl: (url) => {
             earlyHostingUrl = url;
@@ -306,9 +314,12 @@ export async function deploy(options: DeployOptions) {
       // even under `--ci`, and the entrypoint prints the error itself with
       // `console.error(error)`.
       console.log('\n❌ Deployment failed.');
+      registerFrameworkFromSink(frameworkSink);
       throw error;
     }
     
+    registerFrameworkFromSink(frameworkSink);
+
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
@@ -369,7 +380,7 @@ export async function deploy(options: DeployOptions) {
         );
       }
 
-      let result;
+      let result: WaitForLiveResult;
       try {
         result = await waitForLiveBuild({
           hostingUrl,

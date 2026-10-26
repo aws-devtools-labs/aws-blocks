@@ -18,7 +18,7 @@ AuthBasic provides simple username/password authentication built on KVStore and 
 ```
 AuthBasic (extends Scope, implements BlocksAuth)
     ├── KVStore (users) — stores UserRecord { hash, createdAt, unconfirmed? }
-    ├── KVStore (codes) — stores HMAC-hashed verification codes + expiry
+    ├── KVStore (codes) — HMAC-hashed verification codes + expiry, `revoked:<jti>` sign-out markers, and `lockout:<username>` sign-in throttle counters
     ├── AppSetting (jwt-secret) — SSM SecureString for JWT signing key
     └── Logger (optional) — error-level by default
 
@@ -92,10 +92,10 @@ This allows the Authenticator UI component to display errors without losing trac
 **Decision:** Session tokens are JWTs signed with HS256 using a secret stored in AppSetting (SSM SecureString in AWS, in-memory in mock). The secret is lazily fetched and cached per instance.
 
 **Rationale:**
-- **Stateless validation** — JWT tokens can be validated without a database round-trip (only need the secret, not a session table lookup).
+- **Mostly stateless validation** — a JWT is verified from the signing secret alone, with one small exception: sign-out revocation (below) adds a single KVStore read per authenticated request to check the token's `jti` against the revocation list. Tokens with no `jti` (issued before revocation shipped) skip that read and simply expire within `sessionDuration`.
 - **Shared secret** — AppSetting ensures all Lambda instances use the same signing key, so tokens are valid across cold starts.
 - **Security** — secret is stored in SSM SecureString (encrypted at rest); never exposed in code or environment variables.
-- **Trade-off** — cannot revoke individual sessions (JWT is valid until expiry). Acceptable for basic auth; if token revocation is needed, use AuthCognito.
+- **Revocable on sign-out** — `signOut` records the presented token's `jti` on a revocation list (the `codes` store, keyed `revoked:<jti>`), with an expiry equal to the token's own `exp` so the list self-trims. `getUserFromCookie` rejects a revoked `jti`, so a copied or replayed cookie no longer authenticates after sign-out. This trades pure in-memory validation for one KVStore read per request. `requireAuth` reports a revoked session as `SessionRevokedException` and an absent/aged-out one as `SessionExpiredException`, so a client can message "you signed out / your session was revoked" differently from "your token expired"; the session is resolved in a single pass that carries the reason, so classifying the failure costs no extra verify or read. The revocation-list read is an eventually-consistent DynamoDB `GetItem` (no `ConsistentRead`, the same as every other KVStore read), so revocation is near-immediate rather than instantaneous: immediately after `signOut` writes the marker, a token replayed against a different Lambda instance may still authenticate for the sub-second propagation window before the write is visible everywhere. For richer session management (refresh tokens, device management), use AuthCognito.
 
 ### D-AB-3: bcrypt for password hashing (cost factor 12)
 
@@ -115,7 +115,8 @@ This allows the Authenticator UI component to display errors without losing trac
 - **Security** — if the KVStore is compromised, codes cannot be extracted. The attacker would need both the stored HMAC and the JWT secret.
 - **Constant-time comparison** — `constantTimeEquals` from `@aws-blocks/core/bb-utils` prevents timing attacks during verification.
 - **10-minute TTL** — codes expire after 600 seconds, limiting the attack window.
-- **Non-enumerable** — 6-digit codes have 900,000 possible values. Combined with TTL, brute-force is impractical.
+- **Per-code attempt cap (atomic)** — a 6-digit code is only ~900,000 values (~19.8 bits), which is exhaustively guessable within the 10-minute window at any reasonable request rate, so the TTL alone does **not** make brute-force impractical. An always-on cap bounds guesses against a *single* code at `MAX_CODE_ATTEMPTS` (5). The counter (`attempts`) lives inside the code record, reaped with the code's own TTL (no separate key). Each attempt is **reserved before the guess is evaluated** via a compare-and-swap: `verifyCode` reads the row, then `put`s the incremented count guarded on the exact prior value (`ifValueEquals`). This holds the cap under concurrency — in a parallel burst (including across Lambda instances sharing one DynamoDB row) every request reads the same row, but only one CAS write per `attempts` value wins; the losers get `ConditionalCheckFailedException` and are rejected **without their guess being evaluated**, so they consume no budget and leak nothing. A plain read-modify-write would instead advance the counter once per *burst*, letting the slack scale with attacker parallelism — defeating the cap down to the bare TTL. The guard is the original serialized value, so the CAS write also cannot extend the window. The exhausted row is **not** deleted per guess: it stays at `attempts = MAX_CODE_ATTEMPTS` and self-reaps at the code TTL, closing the delete-then-stale-resurrect race a per-guess delete would open. The same generic `InvalidCodeException` is thrown on a wrong guess, a CAS loss, and an exhausted code, so no oracle reveals whether the cap was hit. A correct guess consumes the code with a conditional delete (guarded on the reserved value) so a concurrent fresh issuance is never clobbered.
+- **Issuance is unthrottled, so the cap bounds one code, not the whole attack.** `resetPassword` is unauthenticated and writes a fresh code (`attempts: 0`) on every call, so an attacker can loop "request reset → exhaust the cap"; the overall success bound is `cap × issuances ÷ keyspace`, and code length therefore still matters linearly. Each issuance is self-limiting in nuisance terms (it emails the user and replaces their in-flight code), but AuthBasic does not rate-limit issuance volume itself. That volumetric exposure belongs to the infrastructure layer — CloudFront WAF rate rules / API Gateway throttling in front of the API — exactly as D-AB-11 notes for the sign-in path; the per-code cap and the network layer are complementary.
 
 ### D-AB-5: Cookie attributes (HttpOnly; SameSite=Lax default, cross-domain opt-in)
 
@@ -168,9 +169,25 @@ This allows the Authenticator UI component to display errors without losing trac
 
 ### D-AB-10: Named error constants only for user-facing input errors
 
-**Decision:** User-input failures (`InvalidCredentials`, `UserAlreadyExists`, `InvalidCode`, `SessionExpired`, `InvalidPassword`) get named constants in `AuthBasicErrors`; configuration errors — such as calling `resetPassword` when `codeDelivery` was never configured — are thrown as a plain `ApiError` with no named constant.
+**Decision:** User-input and session failures a caller may recover from (`InvalidCredentials`, `UserAlreadyExists`, `InvalidCode`, `SessionExpired`, `SessionRevoked`, `SignOutIncomplete`, `InvalidPassword`, `AccountLocked`) get named constants in `AuthBasicErrors`; configuration errors — such as calling `resetPassword` when `codeDelivery` was never configured — are thrown as a plain `ApiError` with no named constant.
 
 **Rationale:** A named constant exists so callers can branch on it via `isBlocksError(e, AuthBasicErrors.X)`. That is worthwhile for user-input errors a caller may recover from, but not for a configuration mistake (using a feature that was not enabled), which is a build-time programming error to fix rather than a runtime condition to branch on.
+
+### D-AB-11: Opt-in per-username sign-in throttling (application-layer lockout)
+
+**Decision:** AuthBasic can lock an account after `maxAttempts` consecutive failed sign-ins, via the optional `lockout` policy (`maxAttempts`/`windowSeconds`/`lockoutSeconds`, defaults 5 / 900 / 900). Counting is **per-username**, stored in the shared `codes` store under `lockout:<username>` as `{ count, firstFailAt, lockedAt? }` with a TTL of the longer of the two windows. `lockedAt` is stamped when the count first reaches `maxAttempts` and is what the lockout window is measured from. The lock is enforced at the **top of `signIn`**, before the user record is read or the password compared. The policy is validated at construction (dev time) — a non-positive-integer `maxAttempts` or non-positive window throws. Throttling is **disabled unless `lockout` is passed** — default behavior is unchanged.
+
+**Rationale:**
+- **Credential-stuffing/brute-force parity with `AuthCognito`.** Cognito provides managed sign-in lockout; this closes the gap for AuthBasic (issue #766) so the two auth BBs offer comparable protection against password guessing.
+- **Per-username, not per-IP.** The username is the credential-stuffing target. IP-based counting risks locking out a whole shared NAT/corporate egress on one user's typos, and `BlocksContext` client-IP extraction is proxy-dependent. Cognito's own lockout is per-user; this matches it.
+- **Check before bcrypt.** Enforcing the lock before the `bcrypt.compare` sheds the (deliberately expensive) hash cost under an attack, and makes the lock decision independent of whether the password was right — no password-dependent timing signal.
+- **Lock window anchored at the trip, not the first failure.** Expiry is measured from `lockedAt` (the moment the count reached `maxAttempts`), not from the oldest failure. Anchoring on the first failure would let failures spaced across the counting window trip a lock that expires almost immediately — pathologically, when `windowSeconds == lockoutSeconds` (the default), the lock could be already-expired at the instant it tripped.
+- **Best-effort counter (eventually counted), not atomic.** `recordFailedSignIn` is a read-modify-write with no conditional/atomic guard (the KVStore exposes no atomic ADD). Highly concurrent failures for the same username — inherent to credential stuffing, and across many Lambda instances against shared DynamoDB — can interleave and lose an increment, so the lock may trip slightly later than `maxAttempts` implies. This is a bounded weakening (the window/lockout bounds cap the blast radius), never a safety hole, and is an accepted trade-off against the cost/complexity of a conditional-write retry loop on the hot sign-in path.
+- **Self-expiring, bounded storage.** Counters live in the same TTL-backed `codes` store as verification codes and revocation markers, so they self-reap and never grow unbounded. A failed throttle write is logged, never thrown — throttle bookkeeping must not turn a failed sign-in into a 5xx.
+- **Counting absent usernames, with a sign-up reset.** A failed sign-in for a username that does not exist still increments a counter, so the lockout response can't be used as a user-existence oracle (an unknown name and a known name behave identically). The cost is that an attacker who knows a not-yet-registered name can pre-trip its counter; to stop that griefing the counter from locking the legitimate owner out on their first sign-in, `signUp` clears the counter for the newly-registered username. The residual exposure is bounded and self-expiring regardless.
+- **429 `AccountLockedException`, generic message.** The error is branded (crosses the wire by name) with a generic message that reveals neither the username nor any SDK metadata. `retriable` is left `false` (a lockout requires waiting out the window, not an immediate retry — consistent with core's own "too-many-attempts lockouts" guidance).
+
+**Not** a replacement for infrastructure-layer rate limiting (CloudFront WAF, API Gateway throttling), which still belongs in front of the API for volumetric/DDoS protection. This is per-account credential-guess protection, complementary to the network layer.
 
 ## Infrastructure (CDK)
 
@@ -179,7 +196,7 @@ None directly — AuthBasic is a composite Building Block with no CDK construct.
 | Composed BB | Creates | Purpose |
 |-------------|---------|---------|
 | `KVStore(this, 'users')` | DynamoDB table (PAY_PER_REQUEST) | User records: username → `{ hash, createdAt, unconfirmed? }` |
-| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires }` |
+| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires, attempts }` |
 | `AppSetting(this, 'jwt-secret')` | SSM Parameter (SecureString) | JWT signing secret |
 
 All permissions (DynamoDB read/write, SSM GetParameter) are managed by the composed BBs via the standard Blocks grant mechanism. No additional IAM configuration is needed.
@@ -224,9 +241,12 @@ The mock behavior is identical to AWS behavior with the following environment di
 ```json
 {
   "hmac": "a1b2c3...",       // HMAC-SHA256 of "purpose:username:code" with JWT secret
-  "expires": 1700000000000   // Unix timestamp (ms) when code expires (10 min TTL)
+  "expires": 1700000000000,  // Unix timestamp (ms) when code expires (10 min TTL)
+  "attempts": 0              // failed-guess count, reserved via CAS; pinned at MAX_CODE_ATTEMPTS (5) once spent
 }
 ```
+
+Legacy code rows written before attempt-limiting have no `attempts` field and default to `0` on read.
 
 **Legacy user record handling:** If a raw value is stored (starts with a non-`{` character), it's treated as a bare bcrypt hash with epoch creation date. This supports migration from an earlier format.
 
@@ -235,9 +255,9 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | Secret regenerated on restart (mock) | Existing JWTs are invalidated when the dev server restarts | Intentional for local dev — sign in again after restart |
-| No DynamoDB TTL on codes (mock) | Expired codes remain in storage until explicitly checked | Code expiry is checked at verification time; stale entries are deleted on access |
-| No rate limiting on sign-in attempts | Brute-force attacks succeed locally | No mitigation — acceptable for local dev. Production should use CloudFront WAF or API Gateway throttling at the infrastructure level |
-| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | Not applicable in local dev (single instance). In AWS, JWT-based sessions are stateless — signOut only clears the client cookie |
+| No DynamoDB TTL reaper (mock) | Expired codes, revocation markers, and throttle counters remain in the in-memory store until read | Verification codes, `revoked:<jti>` markers, and `lockout:<username>` counters are all written with a TTL (`expiresAt`/`ttlSeconds`), so the AWS `codes` store (created with `ttl: true`) physically reaps them; reads filter expired entries on both layers regardless, so correctness never depends on the reaper |
+| Sign-in throttling is per-process (mock) | A lockout counter lives in the per-process in-memory store, so a multi-instance mock wouldn't share it | When `lockout` is enabled, counters live in the shared `codes` DynamoDB table, so the lock is enforced across every Lambda instance. When `lockout` is **not** set there is no application-layer limit at all — rely on CloudFront WAF or API Gateway throttling for volumetric protection |
+| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | In AWS the revocation list lives in the shared `codes` DynamoDB table, so sign-out revokes the token for every instance; the mock's in-memory store is per-process, so a multi-instance mock would not share it (not applicable in single-instance local dev) |
 | bcrypt timing may differ | Hashing speed varies between local machine and Lambda | No mitigation needed — timing differences don't affect correctness |
 | No email/SMS delivery infrastructure | Codes are delivered via callback (typically console.log in dev) | Intentional — codeDelivery is the integration point for real delivery in production |
 
@@ -246,7 +266,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Decision | Trade-off |
 |----------|-----------|
 | Composite BB (no own infrastructure) | Cannot tune storage independently, but avoids CDK complexity |
-| JWT sessions (stateless) | Cannot revoke individual sessions, but avoids session store lookups |
+| JWT sessions, revocable on sign-out | One KVStore read per authenticated request (to check the revocation list), rather than pure in-memory JWT validation |
 | bcrypt cost 12 | ~250ms per hash, but meets OWASP minimum |
 | Single-file implementation | Cannot have env-specific behavior, but keeps code simple |
 | codeDelivery as callback | No built-in email/SMS, but maximum flexibility |
@@ -262,9 +282,10 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Password storage | bcrypt with cost 12 (OWASP recommended minimum) |
 | Token theft (XSS) | HttpOnly cookies — not accessible via JavaScript |
 | Token theft (network) | Secure flag — only sent over HTTPS |
+| Token replay after sign-out | Revocation list keyed by `jti` — `signOut` records the token id (self-expiring at the token's `exp`), and every auth check rejects a revoked `jti`, so a copied/replayed cookie stops working at sign-out rather than at `exp` |
 | Timing attacks on code verification | `constantTimeEquals` for HMAC comparison |
 | User enumeration (resetPassword) | Silent success for non-existent users |
-| Code brute-force | 10-minute TTL + 900,000 possible values |
+| Code brute-force | `MAX_CODE_ATTEMPTS` (5) failed-guess cap, enforced atomically (each attempt reserved by a compare-and-swap, so parallel bursts can't bypass it), plus the 10-minute TTL (D-AB-4). The cap bounds guesses against a *single* code; issuance is unthrottled, so the overall bound is `cap × issuances ÷ keyspace` — rate-limit issuance volume at the infrastructure layer (WAF / API Gateway) |
 | Secret exposure | Stored in SSM SecureString (encrypted at rest) |
 | Cross-site request forgery | SameSite=Lax by default (CSRF-resistant); SameSite=None + Partitioned when crossDomain: true (CHIPS isolation) |
 | Unconfirmed user access | signIn rejects users with `unconfirmed: true` |

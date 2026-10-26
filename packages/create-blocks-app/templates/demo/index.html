@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>AWS Blocks Demo</title>
   <!-- First-paint tokens only. The authoritative token layer (incl. the
        .bb-* component classes) is @aws-blocks/auth-common's THEME_CSS,
@@ -30,8 +31,6 @@
     button:hover { border-color: var(--bb-color-accent, #0972d3); }
     input, select { padding: var(--bb-space-2, 8px); margin: 5px; border: 1px solid var(--bb-color-border, #ddd); border-radius: var(--bb-radius-sm, 4px); background: var(--bb-color-surface, #fff); color: var(--bb-color-text, #333); font-family: inherit; }
     .result { margin-top: 10px; padding: 10px; background: var(--bb-color-surface-alt, #f5f5f5); border-radius: var(--bb-radius-sm, 4px); }
-    .success { color: var(--bb-color-success, green); }
-    .error { color: var(--bb-color-danger, red); }
     #auth-status { font-weight: bold; margin-bottom: 10px; }
     .todo-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-bottom: 1px solid var(--bb-color-border, #eee); }
     .todo-item input[type="checkbox"] { cursor: pointer; }
@@ -79,7 +78,6 @@
   
   <div class="section">
     <h2>Cookie Test</h2>
-    <input type="text" id="cookieName" placeholder="Cookie name" value="session">
     <input type="text" id="cookieValue" placeholder="Cookie value" value="abc123">
     <button onclick="testSetCookie()">Set Cookie</button>
     <button onclick="testGetCookie()">Get Cookie</button>

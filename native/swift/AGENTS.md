@@ -35,6 +35,8 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Request envelope | `Sources/BlocksRuntime/BlocksRequest.swift` |
 | Untyped JSON value | `Sources/BlocksRuntime/JSONValue.swift` |
 | Keychain-backed cookies | `Sources/BlocksRuntime/KeychainCookieStore.swift` |
+| Cookie parsing, attribute matching, expiry and stored record | `Sources/BlocksRuntime/StoredCookie.swift` |
+| Cookie jar: store `Set-Cookie`, build `Cookie` header over a `CookieItemStore` | `Sources/BlocksRuntime/CookieJar.swift` |
 | Realtime WebSocket channel | `Sources/BlocksRuntime/Realtime/RealtimeChannel.swift` |
 | Realtime connection pool | `Sources/BlocksRuntime/Realtime/WebSocketSession.swift` |
 | File download handle | `Sources/BlocksRuntime/FileBucket/FileDownloadHandle.swift` |
@@ -60,6 +62,8 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Helpers / naming | `Tests/BlocksCodegenTests/HelpersTests.swift` |
 | Generator output | `Tests/BlocksCodegenTests/SwiftCodeGeneratorTests.swift` |
 | Entry-point naming and emission | `Tests/BlocksCodegenTests/BlocksEntryPointGeneratorTests.swift` |
+| Declared native binding resolution | `Tests/BlocksCodegenTests/DeclaredBindingParserTests.swift` |
+| Declared transferable emission | `Tests/BlocksCodegenTests/DeclaredTransferableBindingTests.swift` |
 | Golden files for the 27 shared fixtures | `Tests/BlocksCodegenTests/GoldenFileTests.swift` |
 | Hybrid-arm fixture spec | `../codegen-fixtures/18-hybrid-arm/spec.json` |
 | Runtime tests | `Tests/BlocksRuntimeTests/*` |

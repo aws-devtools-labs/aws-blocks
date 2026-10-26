@@ -8,6 +8,7 @@ Real-time todo app with React, authentication, per-user data isolation, and live
 npm run dev          # Start dev server + React frontend
 npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/aws-blocks/*`) from a single origin, so browser-navigation auth flows (e.g. OIDC redirects) work locally.
@@ -36,6 +37,7 @@ Open http://localhost:3000 after `npm run dev`. The dev server serves the React 
 | `npm run test:e2e` | Test API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run deploy` | Full production deploy |
 
 ## Stack naming

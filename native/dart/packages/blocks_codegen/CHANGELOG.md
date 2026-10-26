@@ -28,6 +28,10 @@
   carrying a dot. Two namespaces that differ only by punctuation, and a segment
   that is not an ASCII Dart identifier, are now errors rather than declarations
   the customer's compiler rejects.
+- Escape schema-controlled string values (field names, descriptions, patterns,
+  enum values, discriminator tags, method names, server URLs, defaults) when
+  emitting generated Dart source, so values containing special characters
+  produce well-formed code and round-trip verbatim.
 - Reject a declared native package named `blocks_runtime`, which would emit two
   directives for the one library every generated client already imports.
 - Reject a binding whose export resolves to a `dart:core` or `dart:async` type

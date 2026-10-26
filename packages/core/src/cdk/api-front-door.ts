@@ -31,6 +31,7 @@ import {
 	Distribution,
 	type IOrigin,
 	OriginRequestPolicy,
+	ResponseHeadersPolicy,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -82,6 +83,8 @@ export interface ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. */
 	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (`BLOCKS_PUBLIC_ORIGIN`). */
+	_publicOriginPublishedByHosting?: boolean;
 	/**
 	 * The resolved `apiFrontDoor` tier, recorded at construction — before the
 	 * backend module is imported — so a read from inside that module sees it.
@@ -126,6 +129,21 @@ export function httpOriginFromEndpoint(gatewayUrl: string): IOrigin {
 export function claimApiFrontDoor(owner: Construct & ApiFrontDoorOwner, distributionUrl: string): void {
 	owner._apiFrontDoorClaimedByHosting = true;
 	owner._apiFrontDoorResolvedUrl = distributionUrl;
+}
+
+/**
+ * Record that `Hosting` published the origin browsers reach `/aws-blocks/*` at
+ * (`BLOCKS_PUBLIC_ORIGIN`): its same-origin door. A managed `cloudfront`
+ * distribution built anyway — for native clients, when the door doesn't claim
+ * the API front-door role (every door but the CloudFront default and the
+ * stacked edge) — then leaves that origin alone, so the OIDC callback and the
+ * session cookie stay on the door the browser uses.
+ *
+ * @param owner the `BlocksStack` or `BlocksBackend` whose API the door serves.
+ * @internal Framework-only; `Hosting` calls it (via `BlocksStackApi.publishPublicOrigin`).
+ */
+export function publishPublicOrigin(owner: Construct & ApiFrontDoorOwner): void {
+	owner._publicOriginPublishedByHosting = true;
 }
 
 /**
@@ -213,6 +231,15 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		if (!this.gatewayUrl) return;
 
 		const origin = httpOriginFromEndpoint(this.gatewayUrl);
+		// Security headers for the API responses. Use the AWS-managed
+		// `SECURITY_HEADERS` policy (HSTS, X-Content-Type-Options, X-Frame-Options,
+		// X-XSS-Protection, Referrer-Policy): without it the API responses reach the
+		// viewer with no security headers. The managed policy consumes no account
+		// quota, so a cloudfront-tier app never fails a deploy against the 20-per-
+		// account ResponseHeadersPolicy limit, and it matches what the Hosting-
+		// fronted path ships by default. No CSP — the API subtree serves JSON and
+		// redirects, not documents, so a document CSP would add nothing here.
+		const securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
 		// Under the owner, not the stack: a `BlocksBackend` is a construct inside
 		// someone else's stack, and two of them in one stack would otherwise collide
 		// on this construct id.
@@ -222,7 +249,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 			// today, so a single default behavior routes RPC, auth, and raw routes
 			// alike. Per-path behaviors would only carry traffic once a namespace
 			// resolves to a distinct origin.
-			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS },
+			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy },
 		});
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
@@ -236,7 +263,11 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// the same way `Hosting` does, so absolute URLs the runtime builds (e.g.
 		// AuthOIDC's callback `redirect_uri`) point at this distribution and its
 		// cookies. Registered at synth, before the config JSON (a Lazy) resolves.
-		registerConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
+		// A `Hosting` door that serves `/aws-blocks/*` to browsers owns the origin
+		// (see `publishPublicOrigin`); this distribution then serves native clients only.
+		if (!this.owner._publicOriginPublishedByHosting) {
+			registerConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
+		}
 	}
 }
 

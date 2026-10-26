@@ -37,6 +37,9 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
+	SubscribeOptions,
+	DisconnectReason,
+	RealtimeChannelDescriptor,
 } from './types.js';
 import { BB_NAME } from './version.js';
 

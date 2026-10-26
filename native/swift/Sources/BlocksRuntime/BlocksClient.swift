@@ -52,6 +52,9 @@ public final class BlocksClient: Sendable {
     /// Shared across all BlocksClient instances.
     private static let cookieStore = KeychainCookieStore()
 
+    /// Applies cookie attributes over `cookieStore`.
+    private static let cookieJar = CookieJar(items: cookieStore)
+
     /// A `session` you pass stays yours; without one the client creates a session and invalidates it on close or release.
     public convenience init(
         url: String,
@@ -113,9 +116,16 @@ public final class BlocksClient: Sendable {
     /// Executes a JSON-RPC request and returns the raw JSON `Data` of the `result` field.
     /// The generated code is responsible for decoding this into typed models.
     ///
+    /// The request is POSTed to `{url}/{namespace}` (e.g. `…/aws-blocks/api/reports` for
+    /// `reports.build`), so a namespace that runs on its own compute is served by it.
+    ///
     /// Returns `nil` if the result is JSON `null`.
     public func execute(_ request: BlocksRequest) async throws -> Data? {
-        guard let requestURL = URL(string: url) else {
+        // Validate the base first: appending the namespace can turn an invalid base (e.g. "")
+        // into a relative URL that only fails later, as a transport error.
+        guard URL(string: url) != nil,
+              let requestURL = URL(string: BlocksClient.rpcURL(base: url, method: request.method))
+        else {
             throw RPCError(message: "Invalid URL: \(url)")
         }
 
@@ -124,15 +134,8 @@ public final class BlocksClient: Sendable {
         urlRequest.httpShouldHandleCookies = false
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // Attach stored cookies (filtered by host)
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(host)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { (String($0.key.dropFirst(hostPrefix.count)), $0.value) }
-
-        if !cookies.isEmpty {
-            let cookieHeader = cookies.map { "\($0.0)=\($0.1)" }.joined(separator: "; ")
+        // Attach stored cookies (filtered by host, path, `Secure` and expiry)
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
             urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
@@ -145,7 +148,7 @@ public final class BlocksClient: Sendable {
 
         // Process Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
         }
 
         // Parse response to check for errors (minimal parsing)
@@ -189,9 +192,24 @@ public final class BlocksClient: Sendable {
         }
     }
 
-    private var host: String {
-        URL(string: url)?.host ?? "unknown"
+    /// The URL a call to `method` is POSTed to: `{base}/{namespace}`, where the namespace is the
+    /// part of `method` before the first `.` — the path the TypeScript client uses, so the backend's
+    /// gateway can route each namespace to the compute that hosts it. The body still carries the
+    /// full `namespace.method`, which is what the server dispatches on. A `method` without a
+    /// namespace goes to `base` unchanged.
+    static func rpcURL(base: String, method: String) -> String {
+        guard let dot = method.firstIndex(of: "."), dot != method.startIndex else { return base }
+        let namespace = String(method[..<dot])
+        let segment = namespace.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? namespace
+        var trimmed = Substring(base)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return "\(trimmed)/\(segment)"
     }
+
+    /// Characters allowed in a single path segment: a path's characters, without its `/` separator.
+    private static let pathSegmentAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
 
     /// Base URL for raw routes — strips the RPC path suffix but keeps the stage prefix.
     /// Base URL for raw routes. Raw routes share the same origin and stage
@@ -227,21 +245,15 @@ public final class BlocksClient: Sendable {
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         // Attach stored cookies
-        let reqHost = requestURL.host ?? ""
-        let allCookies = BlocksClient.cookieStore.loadAll()
-        let hostPrefix = "\(reqHost)|"
-        let cookies = allCookies
-            .filter { $0.key.hasPrefix(hostPrefix) }
-            .map { "\(String($0.key.dropFirst(hostPrefix.count)))=\($0.value)" }
-        if !cookies.isEmpty {
-            urlRequest.setValue(cookies.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        if let cookieHeader = BlocksClient.cookieJar.cookieHeader(for: requestURL) {
+            urlRequest.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
         let (data, response) = try await gate.send(urlRequest)
 
         // Store Set-Cookie headers
         if let httpResponse = response as? HTTPURLResponse {
-            processCookies(from: httpResponse)
+            processCookies(from: httpResponse, requestURL: requestURL)
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -252,29 +264,16 @@ public final class BlocksClient: Sendable {
 
     // MARK: - Cookie Handling
 
-    private func processCookies(from response: HTTPURLResponse) {
+    private func processCookies(from response: HTTPURLResponse, requestURL: URL) {
         for (key, value) in response.allHeaderFields {
             guard "\(key)".caseInsensitiveCompare("Set-Cookie") == .orderedSame else { continue }
 
             let rawCookies = splitSetCookieHeader("\(value)")
 
+            // After a followed redirect, `response.url` is the URL the cookies came from.
+            let responseURL = response.url ?? requestURL
             for rawCookie in rawCookies {
-                let segments = rawCookie.split(separator: ";", maxSplits: 1)
-                guard let nameValuePart = segments.first else { continue }
-                guard let eqIdx = nameValuePart.firstIndex(of: "=") else { continue }
-
-                let name = String(nameValuePart[nameValuePart.startIndex ..< eqIdx])
-                    .trimmingCharacters(in: .whitespaces)
-                let cookieValue = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
-                    .trimmingCharacters(in: .whitespaces)
-
-                let cookieKey = "\(host)|\(name)"
-                let attrs = segments.count > 1 ? String(segments[1]).lowercased() : ""
-                if cookieValue.isEmpty || attrs.contains("max-age=0") {
-                    BlocksClient.cookieStore.remove(name: cookieKey)
-                } else {
-                    BlocksClient.cookieStore.set(name: cookieKey, value: cookieValue)
-                }
+                BlocksClient.cookieJar.save(setCookie: rawCookie, requestURL: responseURL)
             }
         }
     }
