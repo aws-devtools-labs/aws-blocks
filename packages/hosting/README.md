@@ -459,13 +459,17 @@ Some apps need the CloudFront door:
   only on the CloudFront door. Behind any other door synth fails with
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
-- A streaming server (Next.js through OpenNext, or Nitro with
-  `awsLambda.streaming: true`) answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. The ALB door, the
-  stacked door (its router is an ALB) and the HTTP API invoke the server
-  without streaming, so synth fails with
-  `StreamingServerNeedsStreamingDoorError` instead of deploying an app whose
-  pages never answer.
+- A streaming server handler answers only through a door that streams: the
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Behind the HTTP
+  API the Next.js and Nitro adapters build a buffered server instead (see
+  "The server behind the HTTP API"). The ALB door and the stacked door (its
+  router is an ALB) invoke the server without streaming, so with Next.js
+  through OpenNext, or Nitro with `awsLambda.streaming: true` on the
+  `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
+  instead of deploying an app whose pages never answer. Behind the HTTP API it
+  fails the same way only when the app forces a streaming build (a Nitro
+  `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
+  `open-next.config.ts` with a streaming wrapper).
 
 ### Settings per door kind
 
@@ -545,10 +549,12 @@ a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
 sent, so don't configure it to trust `x-forwarded-host` behind these doors.
 
 A door that invokes the server without streaming (the ALB, the stacked door's
-ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
-is the exception: its OpenNext build targets a streaming API Gateway REST
-integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
-that streams.
+ALB router, the API Gateway HTTP API) gets a server built in buffered mode.
+Behind the HTTP API that includes Next.js, which the adapter builds with
+OpenNext's buffered `aws-apigw-v2` handler. Behind the ALB and the stacked door,
+Next.js is the exception: its OpenNext build targets a streaming API Gateway
+REST integration, so serve it there through CloudFront, an API Gateway door, or
+a door that streams.
 
 Behind the ALB, the server's target group sends and expects multi-value
 headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
