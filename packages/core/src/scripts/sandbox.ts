@@ -49,6 +49,10 @@ export interface SandboxOptions {
    * `sandboxMode=true`; the app reads it to add `Hosting` with
    * `HostingPresets.preview`. A plain sandbox stays backend-only.
    *
+   * A preview sandbox is deploy-only (as with {@link SandboxOptions.deployOnly}):
+   * it deploys once and exits, with no `cdk watch` and no local dev server.
+   * Run it again to re-deploy.
+   *
    * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
    * applied straight to the Lambda functions in seconds, falling back to a
    * CloudFormation deploy (direct, no change set) for anything that can't be
@@ -173,19 +177,28 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
 
 /**
  * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
- * It synthesizes with the same context as the deploy, so a preview sandbox
- * keeps `previewMode=true` and a file change re-deploys the same shape (the
- * app adds `Hosting` only when it sees the signal).
+ * Only a plain sandbox watches: a preview sandbox is deploy-only (see
+ * {@link sandboxIsDeployOnly}).
  */
-export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
   return [
     "cdk", "watch",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
     "--app", `npm exec tsx -- -C cdk ${backendPath}`,
   ];
+}
+
+/**
+ * Whether the sandbox stops after its deploy (no `cdk watch`, no local dev
+ * server): with `deployOnly`, and always for a preview. A watch would
+ * re-deploy the hosted preview, with a full framework build, on every save.
+ *
+ * @internal
+ */
+export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pick<SandboxOptions, "deployOnly" | "preview">): boolean {
+  return deployOnly || preview;
 }
 
 /**
@@ -282,7 +295,8 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand, preview = false } = options;
+  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, devCommand, preview = false } = options;
+  const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
 
   // Load .env.local so CDK can read secret ARNs and other config.
