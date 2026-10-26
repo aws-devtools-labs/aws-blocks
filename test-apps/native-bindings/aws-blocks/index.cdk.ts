@@ -2,13 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Deploy scaffolding for the native-bindings test backend. Used two ways:
-//   1. Local developer sandbox (`npm run deploy`) — the Dart Flutter example
-//      and OIDC relay testing target the fixed-name `bb-test-native-bindings-dart`
-//      stack (the relay needs a real HTTPS callback).
+//   1. Local developer sandbox (`npm run deploy:sandbox`, or `npm run sandbox`
+//      for the watch loop) — the Dart Flutter example and OIDC relay testing
+//      target the fixed-name `bb-test-native-bindings-dart` stack (the relay
+//      needs a real HTTPS callback).
 //   2. CI (the `*-e2e-sandbox` jobs in native-sdk-e2e.yml, four sandbox deploys
-//      per run) — each deploys then tears down a per-run stack. They set
-//      BLOCKS_STACK_SUFFIX to a unique value so concurrent runs get isolated
-//      stacks and never collide with the developer sandbox.
+//      per run) — each runs `npm run deploy:sandbox`, then `npm run
+//      sandbox:destroy`, against a per-run stack. They set BLOCKS_STACK_SUFFIX
+//      to a unique value so concurrent runs get isolated stacks and never
+//      collide with the developer sandbox.
+// `npm run deploy` / `npm run destroy` are aliases for those two scripts. The
+// app always synths with the `sandboxMode` CDK context (the App default below),
+// which the app's stubIdp() OIDC providers require — so a direct `cdk synth`,
+// `cdk deploy` or `cdk destroy` of this app passes that check too.
 // Minimal variant of the comprehensive app's index.cdk.ts (no sandbox-id salt).
 
 import * as cdk from 'aws-cdk-lib';
@@ -18,9 +24,10 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Default the `sandboxMode` context to on, so `npm run deploy` (both uses above)
-// builds DistributedTable GSIs the way `npm run sandbox` does. Here that is the
-// `todos` table and the Realtime connections table: the GSI custom resource
+// Default the `sandboxMode` context to on. `npm run deploy:sandbox` (both uses
+// above) already passes it; the default also covers a direct `cdk` command, so
+// every path builds DistributedTable GSIs the way `npm run sandbox` does. Here
+// that is the `todos` table and the Realtime connections table: the GSI custom resource
 // recreates each table with all its indexes at once (about a minute) instead of
 // adding them one at a time and waiting for each to backfill (about 17 minutes
 // for `todos`). This stack is disposable (see `defaults` below); on the
@@ -62,6 +69,6 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 // Tag for the scheduled stack janitor (cleanup-stacks.yml). It only deletes
 // stacks tagged blocks:purpose=e2e-*, so without this a leaked per-run sandbox
-// (failed `npm run destroy`) matches the bb-test- prefix but is skipped and
+// (failed `npm run sandbox:destroy`) matches the bb-test- prefix but is skipped and
 // accumulates forever. Mirrors every other e2e test-app's index.cdk.ts.
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-native-bindings');

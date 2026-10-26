@@ -32,11 +32,11 @@ import {
 	publicApiUrl,
 	resolveApiFrontDoor,
 } from './api-front-door.js';
-import { finalizeConfigRegistry } from './config-registry.js';
+import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
@@ -58,6 +58,7 @@ export {
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
+export { isSandboxContext } from './stack-metadata.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -225,6 +226,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(stack) ? 'sandbox' : 'production';
+		registerConfig(stack, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {

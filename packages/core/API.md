@@ -166,12 +166,18 @@ export type ContainerSize = {
 export const DEFAULT_API_ERROR_NAME = "ApiError";
 
 // @public
+export type DeploymentType = 'local' | 'sandbox' | 'production';
+
+// @public
 export function dispatchJobToWorker(req: JobWorkerRequest, timeoutMs?: number): Promise<JobDispatchResult>;
 
 // Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
 //
 // @public
 export function getAllSdkIdentifiers(): ReadonlyMap<string, ResourceEntry>;
+
+// @public
+export function getCachedConfigValue(key: string): string | undefined;
 
 // @public
 export function getConfig(key: string): Promise<string>;
@@ -181,6 +187,9 @@ export function getConfigSync(key: string): string;
 
 // @public
 export function getContainerComputeId(): string | undefined;
+
+// @public
+export function getDeploymentType(): DeploymentType;
 
 // @public
 export function getRegisteredRoutes(): readonly RegisteredRoute[];

@@ -222,7 +222,7 @@ Sandbox deployments use a **drop-and-recreate** fast path that bypasses the sequ
 5. Wait for the table and all GSIs to become ACTIVE
 6. Restore all items via `BatchWriteItem`
 
-This is dramatically faster than sequential GSI creation (seconds vs. minutes/hours) but **destroys and recreates the table**. It is only used when `SandboxMode` is `true` (set by the CDK layer based on the `sandboxMode` context variable). The IAM policy for production deployments does not grant the permissions needed for this path, so it cannot execute in production even if `SandboxMode` were accidentally set.
+This is dramatically faster than sequential GSI creation (seconds vs. minutes/hours) but **destroys and recreates the table**. It is only used when `SandboxMode` is `true` (set by the CDK layer based on the `sandboxMode` context variable). The CDK layer reads that context via core's `isSandboxContext()`, so both the string `'true'` (`--context sandboxMode=true`) and a boolean `true` (`cdk.json` or `node.setContext`) select sandbox mode; previously only the string `'true'` did. The IAM policy for production deployments does not grant the permissions needed for this path, so it cannot execute in production even if `SandboxMode` were accidentally set.
 
 ⚠️ **Data loss risk in sandbox:** If the Lambda times out during step 1 (scan) on a very large table, or if the restore in step 6 fails partway through, data may be lost. This is acceptable for sandbox (ephemeral dev environments) but is why the fast path is never used in production.
 
