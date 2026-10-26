@@ -194,6 +194,11 @@ export interface CloudFrontHelpers {
    * OAC), or the API (an HTTPS origin at its stage path). Memoized per origin,
    * so every behavior shares one CloudFront origin. Records the origin as wired.
    *
+   * The assets origin may read and LIST the bucket (`s3:GetObject` and
+   * `s3:ListBucket`, granted to this distribution only, as on the built-in
+   * CloudFront door): S3 then answers a missing file with 404 rather than 403,
+   * so `cf.errorPages` serves the app's 404 page for it.
+   *
    * @param origin one of the objects in `input.origins` (or a route's `origin`).
    * @returns the CloudFront origin.
    */
@@ -253,10 +258,13 @@ export interface CloudFrontHelpers {
   headers(scope: Construct, headers: readonly DoorHeaderRule[]): FunctionAssociation[];
   /**
    * The app's custom error pages (`app.errorPages`): the distribution's
-   * `errorResponses` (404 → `404.html`; 500 → `500.html`, plus 502/503/504 for
-   * an app without a server — as on the built-in CloudFront door), and the
-   * behaviors that serve the pages from the static assets. Records the error
-   * pages (and the assets origin) as wired. Empty when the app has none.
+   * `errorResponses` (404 → the `notFound` page; 500 → the `serverError` page,
+   * plus 502/503/504 for an app without a server — as on the built-in
+   * CloudFront door), and the behaviors that serve the pages from the static
+   * assets. Each response points at the page's own `app.errorPages` key under
+   * the assets origin (e.g. `/404.html`, or `/_not_found.html` for AWS Blocks'
+   * default page). Records the error pages (and the assets origin) as wired.
+   * Empty when the app has none.
    *
    * @param errorPages the app's error pages (`input.app.errorPages`).
    * @param origins the input's origins (the pages are served from `origins.assets`).
@@ -386,7 +394,9 @@ export const ASSET_BEHAVIOR_OPTIONS: Omit<BehaviorOptions, 'origin'> = ASSET_BEH
 const buildOrigin = (origin: DoorOrigin | ApiOrigin): IOrigin => {
   switch (origin.kind) {
     case 'assets':
-      return assetsS3Origin(origin);
+      // Listable, as on the built-in doors: a missing file is S3's 404 (so the
+      // app's 404 page can answer it), not its 403.
+      return assetsS3Origin(origin, { listable: true });
     case 'server':
     case 'image':
       return FunctionUrlOrigin.withOriginAccessControl(origin.url);
