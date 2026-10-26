@@ -54,6 +54,7 @@ import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
 import { customErrorResponses } from './error_responses.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
@@ -101,16 +102,6 @@ const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 .c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
 <body><div class="c"><h1>Service Temporarily Unavailable</h1><p>We're working on it. Please try again in a few moments.</p></div></body></html>`;
 
-// Built-in default 404 page for multi-page static sites that ship no
-// 404.html of their own. Returned at HTTP 404 (not the SPA 200 fallback)
-// so crawlers and clients see a correct not-found status.
-const DEFAULT_NOT_FOUND_PAGE_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>404 — Page Not Found</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
-.c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
-<body><div class="c"><h1>404 — Page Not Found</h1><p>The page you're looking for doesn't exist.</p></div></body></html>`;
 
 // ---- Public types ----
 
@@ -404,13 +395,11 @@ export class CdnConstruct extends Construct {
     // are excluded (their miss correctly serves index.html at 200); SSR
     // sites already have SSR_ERROR_PAGE_HTML. Precedence:
     // user errorPages.notFound > framework errorPages[404] > this default.
-    const hasFrameworkNotFound = !!manifest.errorPages?.[404];
-    const hasUserNotFound = !!props.customErrorPages?.notFound;
-    const needsDefaultNotFound =
-      !hasCompute &&
-      !isSpaFallback &&
-      !hasFrameworkNotFound &&
-      !hasUserNotFound;
+    // The same decision every other door makes (see `default_not_found.ts`).
+    const needsDefaultNotFound = needsDefaultNotFoundPage(manifest, {
+      hasCompute: Boolean(hasCompute),
+      userNotFound: !!props.customErrorPages?.notFound,
+    });
     this.defaultNotFoundPageHtml = needsDefaultNotFound
       ? DEFAULT_NOT_FOUND_PAGE_HTML
       : undefined;

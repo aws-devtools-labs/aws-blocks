@@ -72,6 +72,7 @@ import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedPro
 import { cloudFrontDoor } from './cloudfront_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
 import type { DoorInput, FrontDoorResult } from './front_door.js';
 import {
   type FrontDoorKind,
@@ -2036,13 +2037,20 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 11-bis. Default 404 page (multi-page static only) ----
-    // Set by the CDN construct only for multi-page static sites
-    // (spaFallback === false) that shipped no 404.html and got no
-    // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
-    // → /builds/<id>/_not_found.html responses resolve from S3.
-    if (cdn?.defaultNotFoundPageHtml) {
+    // For multi-page static sites (spaFallback === false) that shipped no
+    // 404.html and got no user-supplied notFound page. Deploy it so the page
+    // every door serves for a miss resolves from S3: the CloudFront door's
+    // wired 403/404 → /builds/<id>/_not_found.html responses (decided by the
+    // CDN construct), and on every other door the asset proxy's (or a
+    // bring-your-own door's) `app.errorPages.notFound`.
+    const defaultNotFoundPageHtml = cdn
+      ? cdn.defaultNotFoundPageHtml
+      : this.servesDefaultNotFoundPage(manifest, props)
+        ? DEFAULT_NOT_FOUND_PAGE_HTML
+        : undefined;
+    if (defaultNotFoundPageHtml) {
       new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
-        sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
+        sources: [Source.data(NOT_FOUND_PAGE_KEY, defaultNotFoundPageHtml)],
         destinationBucket: this.bucket,
         destinationKeyPrefix: `builds/${buildId}/`,
         prune: false,
@@ -2517,6 +2525,20 @@ export class HostingConstruct extends Construct {
    * provisioned, and the feature props. Has no effect on the template unless a
    * door reads `origins.server.url` (created on first read).
    */
+  /**
+   * Whether this deploy serves AWS Blocks' default 404 page
+   * (`needsDefaultNotFoundPage`): a multi-page static site with no 404 page of
+   * its own. Not behind `'none'`: an S3 website answers a miss from its own
+   * error document, in its own bucket.
+   */
+  private servesDefaultNotFoundPage(manifest: DeployManifest, props: HostingConstructProps): boolean {
+    if (this.frontDoorKind === 'none') return false;
+    const hasCompute =
+      Object.values(manifest.compute ?? {}).some((c) => c.type !== 'edge') ||
+      manifest.routes.some((r) => r.target !== 'static' && r.target !== 's3');
+    return needsDefaultNotFoundPage(manifest, { hasCompute, userNotFound: !!props.errorPages?.notFound });
+  }
+
   private assembleDoorInput(
     plan: import('../plan/types.js').HostingPlan,
     manifest: DeployManifest,
@@ -2558,7 +2580,7 @@ export class HostingConstruct extends Construct {
       monitoring: resolved.features.monitoring,
       geoRestriction: resolved.features.geoRestriction,
       errorPages: props.errorPages,
-      frameworkErrorPages: frameworkErrorPagesOf(manifest),
+      frameworkErrorPages: frameworkErrorPagesOf(manifest, this.servesDefaultNotFoundPage(manifest, props)),
       skewProtection: resolved.features.skewProtection,
     });
   }
@@ -2713,16 +2735,23 @@ const assertServerReachableByDoor = (manifest: DeployManifest, capabilities: Doo
 
 /**
  * The error pages the framework build shipped (`manifest.errorPages`, e.g. a
- * SPA's `404.html`), as object keys under the build prefix. `DoorInput`
- * carries them as `app.errorPages` when the app sets none, so every door —
- * the CloudFront and stacked edges, the regional doors' asset proxies, a
- * bring-your-own door through `cf.errorPages` — serves the same page.
+ * SPA's `404.html`), as object keys under the build prefix — else, for a
+ * multi-page static site that shipped no 404 page, AWS Blocks' default one
+ * (`_not_found.html`, see `default_not_found.ts`). `DoorInput` carries them as
+ * `app.errorPages` when the app sets none, so every door — the CloudFront and
+ * stacked edges, the regional doors' asset proxies, a bring-your-own door
+ * through `cf.errorPages` — serves the same page.
  *
- * @returns the pages, or `undefined` when the build shipped none.
+ * @param manifest the deploy manifest.
+ * @param defaultNotFound whether the deploy serves the default 404 page (`needsDefaultNotFoundPage`).
+ * @returns the pages, or `undefined` when there are none.
  */
-const frameworkErrorPagesOf = (manifest: DeployManifest): { notFound?: string; serverError?: string } | undefined => {
+const frameworkErrorPagesOf = (
+  manifest: DeployManifest,
+  defaultNotFound = false,
+): { notFound?: string; serverError?: string } | undefined => {
   const key = (page: string | undefined) => page?.replace(/^\/+/, '') || undefined;
-  const notFound = key(manifest.errorPages?.[404]);
+  const notFound = key(manifest.errorPages?.[404]) ?? (defaultNotFound ? NOT_FOUND_PAGE_KEY : undefined);
   const serverError = key(manifest.errorPages?.[500]);
   if (!notFound && !serverError) return undefined;
   return { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) };

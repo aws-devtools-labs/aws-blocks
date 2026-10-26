@@ -579,7 +579,11 @@ semantics, using the same matching code:
 - header rules: every matching rule is added to a successful response (not to
   a redirect or an error, as at the CloudFront edge);
 - error pages: a missing static file answers with the 404 page (status 404),
-  an S3 failure with the 500 page (status 500).
+  an S3 failure with the 500 page (status 500). The 404 page is the app's
+  `errorPages.notFound`, else the framework build's, else, for a multi-page
+  static site that ships none (Astro `output: 'static'` without a 404 page),
+  AWS Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
+  An SPA keeps its `index.html` fallback.
 
 Responses the door sends straight to a function or the backend don't pass
 through those proxies: server-rendered (SSR) and image-optimization responses,
@@ -820,7 +824,9 @@ export const myAlbDoor = defineFrontDoor({
 - `app`: the app facts. `buildId`, `basePath`, `assetPrefix` (Next.js
   `assetPrefix`; only the Next.js adapter sets it), `spaFallback`, `routes`
   (most-specific first, each already joined to its origin object), `redirects`,
-  `headers` and `errorPages`.
+  `headers` and `errorPages` (the app's, else the framework build's, else, for
+  a multi-page static site with no 404 page, AWS Blocks' default
+  `_not_found.html`).
 - `origins`: what AWS Blocks provisioned.
   - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
     `builds/<buildId>/` prefix.
