@@ -8,11 +8,11 @@
   "description": "Persistent test infrastructure for AWS Blocks E2E tests (deploy once, do not tear down)",
   "scripts": {
     "build": "tsc --build",
-    "deploy": "npx cdk deploy --app 'npx tsx vpc-test-stack.ts'",
+    "deploy": "npx cdk deploy --all --app 'npx tsx vpc-test-app.ts'",
     "deploy:oidc": "npx cdk deploy --app 'npx tsx github-oidc-app.ts'",
-    "synth": "npx cdk synth --app 'npx tsx vpc-test-stack.ts'",
+    "synth": "npx cdk synth --app 'npx tsx vpc-test-app.ts'",
     "synth:oidc": "npx cdk synth --app 'npx tsx github-oidc-app.ts'",
-    "test": "node --import tsx --test github-oidc-stack.test.ts"
+    "test": "node --import tsx --test github-oidc-stack.test.ts vpc-test-stack.test.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.273.0",

@@ -435,6 +435,9 @@ jobs:
     # per service per VPC. Without this, two open PRs collide on the endpoints
     # (and the shared stack) and CloudFormation fails the second run. Queue
     # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    # e2e-compute-endpoints.yml also creates endpoints in this VPC, under its
+    # own group (blocks-test-vpc-endpoints-<n>) while this suite's tests are
+    # off; switch both jobs to one group when they create endpoints again.
     concurrency:
       group: blocks-test-vpc-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
@@ -493,18 +496,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
-    # Serialize this suite across PRs: it provisions private-DNS interface
-    # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
-    # from the VPC smoke job's BlocksTestVpc), and AWS permits only one per
-    # service per VPC — two concurrent runs of THIS job would collide. Queue
-    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
-    #
-    # This uses a group distinct from the VPC smoke job (blocks-test-vpc). The
-    # two suites don't collide across groups because they target *different*
-    # persistent VPCs, so they can run in parallel.
-    concurrency:
-      group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
-      cancel-in-progress: false
+    # No concurrency group: the app deploys with provisionEndpoints: false into
+    # BlocksComputeTestVpc, whose S3, DynamoDB, SQS and Logs endpoints are
+    # permanent (test-infra/vpc-test-stack.ts), so runs in the same account don't
+    # contend for the VPC's one private-DNS endpoint per service. The framework
+    # creating its own endpoints is covered by the app's template test (Unit
+    # Tests) and by e2e-compute-endpoints.yml.
     env:
       BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -538,8 +535,17 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # A no-op once the stacks are deployed. A branch from before the permanent
+      # endpoints has no BlocksComputeTestVpcEndpoints stack (and its app would
+      # add endpoints of its own, which the VPC can't take), so stop it here.
       - name: Ensure persistent compute test VPC
-        run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
+        run: |
+          if ! grep -q BlocksComputeTestVpcEndpoints test-infra/vpc-test-stack.ts ||
+            ! grep -q COMPUTE_SMOKE_PROVISION_ENDPOINTS test-apps/compute-smoke/aws-blocks/index.cdk.ts; then
+            echo "::error::This branch predates the permanent endpoints in the compute test VPC. Rebase it onto main (or merge main into it)."
+            exit 1
+          fi
+          cd test-infra && npx cdk deploy BlocksComputeTestVpc BlocksComputeTestVpcEndpoints --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
         run: |

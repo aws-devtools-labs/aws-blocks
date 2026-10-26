@@ -9,7 +9,12 @@
  * backs an AsyncJob; submitting drains through an owner-matched SQS poller the
  * container self-starts, and the handler reaches Blocks resources (KVStore +
  * FileBucket) from the container. A second job proves the per-handler wall-clock
- * limit is ENFORCED by hard-terminating the worker thread.
+ * limit is ENFORCED by hard-terminating the worker thread. The Lambda and the
+ * container must both resolve the SQS and Logs hostnames to private addresses,
+ * i.e. to the VPC's private-DNS interface endpoints, so their SQS and Logs
+ * calls use the endpoints and not the NAT gateway. (The S3 and DynamoDB gateway
+ * endpoints are route-table entries with no DNS trace; the template tests in
+ * this app and in test-infra check those.)
  *
  * Local mode can't exercise a real container, so it skips (like vpc-smoke) —
  * the deployed run is the meaningful proof.
@@ -52,6 +57,28 @@ const RESULT_POLL_INTERVAL_MS = 250;
 // picked up. That can take a few minutes on a cold service, so the budget is
 // deliberately generous (the CI job's own 60-min timeout is the real backstop).
 const RESULT_POLL_BUDGET_MS = 300_000;
+
+type EndpointAddresses = Record<string, string[]>;
+// RFC 1918. A private-DNS interface endpoint answers with its ENIs' addresses in
+// the VPC; without one, the hostname resolves to the service's public addresses.
+const PRIVATE_IPV4 = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/;
+
+function assertThroughEndpoints(where: string, addresses: EndpointAddresses | undefined): void {
+  assert.ok(addresses, `${where} reported no endpoint addresses`);
+  for (const service of ['sqs', 'logs']) {
+    const ips = addresses[service];
+    assert.ok(ips?.length, `${where} resolved no address for ${service}`);
+    for (const ip of ips) {
+      assert.ok(!ip.startsWith('error:'), `${where}: looking up ${service} failed (${ip})`);
+      assert.match(
+        ip,
+        PRIVATE_IPV4,
+        `${where}: ${service} resolves to ${ip}, a public address, so its calls skip the VPC endpoint. ` +
+          'Is the private-DNS interface endpoint missing from the VPC?',
+      );
+    }
+  }
+}
 
 async function pollForResult<T>(fetchOne: () => Promise<T | null>): Promise<T | null> {
   const deadline = Date.now() + RESULT_POLL_BUDGET_MS;
@@ -108,6 +135,11 @@ test('Compute Smoke Tests', async (t) => {
     }
   });
 
+  await t.test('Lambda - SQS and Logs resolve to the VPC interface endpoints', async () => {
+    const addresses = (await rpc('lambdaEndpointAddresses')) as EndpointAddresses;
+    assertThroughEndpoints('the API Lambda', addresses);
+  });
+
   await t.test('container job — successful dispatch, invocation, and Blocks-resource access', async () => {
     const testId = Date.now().toString(36);
     const key = `ctr-${testId}`;
@@ -116,14 +148,14 @@ test('Compute Smoke Tests', async (t) => {
     assert.ok(typeof submit.jobId === 'string' && submit.jobId.length > 0, 'submit returns a job id');
 
     // KVStore result proves the handler ran.
-    const result = (await pollForResult(
-      () => rpc('containerJobGetResult', key) as Promise<{ value: string; jobId: string; runtime: string } | null>,
-    )) as { value: string; jobId: string; runtime: string } | null;
+    type Result = { value: string; jobId: string; runtime: string; endpointAddresses?: EndpointAddresses };
+    const result = (await pollForResult(() => rpc('containerJobGetResult', key) as Promise<Result | null>)) as Result | null;
     assert.ok(result, 'container handler should have written the KVStore result');
     assert.strictEqual(result.value, 'hello-from-container');
     assert.strictEqual(result.jobId, submit.jobId);
     // The handler must have run ON the container (not Lambda).
     assert.strictEqual(result.runtime, 'container', 'handler ran on the container runtime');
+    assertThroughEndpoints('the container', result.endpointAddresses);
 
     // FileBucket artifact proves the container reached a SECOND Blocks resource.
     const artifact = (await pollForResult(

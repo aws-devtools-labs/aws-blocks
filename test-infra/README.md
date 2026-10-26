@@ -1,40 +1,131 @@
-# test-infra — Persistent Test VPCs
+# test-infra: Persistent Test VPCs
 
 This directory contains infrastructure that is deployed **once** and **not torn down** between test runs.
 
 ## Why?
 
-- VPC quota is 5 per region
-- VPC creation takes 2–3 minutes
-- VPC deletion can fail (Lambda ENIs linger 10–20 min)
-- Without a persistent VPC, CI hits quotas on concurrent runs
+- VPC creation takes 2-3 minutes
+- VPC deletion can fail (Lambda ENIs linger 10-20 min)
+- Each VPC counts against the region's VPC quota (20 in the E2E accounts)
 
 ## Stacks
 
-There are **two** persistent VPC stacks, one per smoke suite, so the two suites
-never contend for a single VPC's per-service private-DNS interface endpoints
-(AWS permits only one such endpoint per service per VPC). Keeping them separate
-lets the two CI lanes run in parallel.
+The app is `vpc-test-app.ts`; `vpc-test-stack.ts` builds the stacks and
+`vpc-test-stack.test.ts` checks them (`npm test`).
 
 | Stack | Consumed by | CI lane |
 |-------|-------------|---------|
-| `BlocksTestVpc` | `test-apps/vpc-smoke/` | E2E VPC Smoke (`blocks-test-vpc`) |
-| `BlocksComputeTestVpc` | `test-apps/compute-smoke/` | E2E Compute Smoke (`blocks-test-compute`) |
+| `BlocksTestVpc` | `test-apps/vpc-smoke/`, and `test-apps/compute-smoke/` in `e2e-compute-endpoints.yml` | E2E VPC Smoke (`blocks-test-vpc-<n>`) and E2E Compute Endpoints (`blocks-test-vpc-endpoints-<n>`) |
+| `BlocksComputeTestVpc` | `test-apps/compute-smoke/` | E2E Compute Smoke (no lock) |
+| `BlocksComputeTestVpcEndpoints` | permanent endpoints in `BlocksComputeTestVpc` | E2E Compute Smoke |
+
+AWS permits only one private-DNS interface endpoint per service per VPC, so two
+stacks that each create their own endpoints can't share a VPC at the same time.
+
+- `BlocksTestVpc` has **no** endpoints. The apps that use it deploy with
+  `provisionEndpoints: true`, so `finalizeVpc` creates the endpoints in the
+  app's own stack, exercising the real auto-detection path end-to-end. Only one
+  such app may run per account at a time. Today that is E2E Compute Endpoints
+  alone (its group `blocks-test-vpc-endpoints-<n>`): E2E VPC Smoke deploys
+  nothing into the VPC while its tests are off, so it keeps its own group
+  rather than wait behind an hour-long run. When VPC Smoke's tests create
+  endpoints again, put both jobs in one group. Both jobs deploy `BlocksTestVpc`
+  first (a no-op when unchanged); a PR that changes that stack can see one of
+  them fail with "UPDATE_IN_PROGRESS" and need a re-run.
+- `BlocksComputeTestVpc` has **permanent** S3 and DynamoDB gateway endpoints and
+  SQS and CloudWatch Logs interface endpoints (private DNS on), in the
+  `BlocksComputeTestVpcEndpoints` stack. compute-smoke deploys with
+  `provisionEndpoints: false`, so any number of Compute Smoke runs share the VPC
+  at once.
+
+The permanent endpoints are configured like the framework's: gateway endpoints
+on every subnet's route table, interface endpoints in the private subnets. One
+difference: the framework's endpoint security group admits 443 only from the
+app's Blocks compute security group; the permanent one admits 443 from the VPC
+CIDR, since it can't name a group each test stack creates and deletes. The
+framework's own endpoints and that narrower rule are checked by compute-smoke's
+template test (Unit Tests, every PR) and deployed for real by
+`.github/workflows/e2e-compute-endpoints.yml` (nightly, and on PRs that change
+VPC or compute code). If compute-smoke gains a Building Block that needs another
+endpoint, its template test fails until `COMPUTE_TEST_VPC_ENDPOINTS` in
+`vpc-test-stack.ts` lists it.
+
+The endpoints are in their own stack because CI deploys `BlocksComputeTestVpc`
+from each PR's checkout. `BlocksComputeTestVpc` exports the subnet and route
+table IDs the endpoints stack imports, so a branch from before the endpoints
+can't delete them: CloudFormation refuses to remove an export in use, and the
+branch's Compute Smoke fails at "Ensure persistent compute test VPC" until it is
+rebased onto main.
+
+### Changing the endpoints
+
+Compute Smoke runs share these stacks without a lock, and each run deploys them
+from its own checkout. A PR that changes them therefore changes them for every
+run in its E2E account while it is open, and runs from other branches put them
+back. Keep such changes additive (add an endpoint first; remove an old one only
+after every open PR has the addition), and expect "stack is in
+UPDATE_IN_PROGRESS" failures if two such runs overlap. Both stacks leave
+CDK's version metadata out of their templates, so a branch on another
+aws-cdk-lib version deploys the same templates (a no-op) unless that version
+changes what the VPC or endpoint constructs synthesize. A PR that changes only
+`test-infra/` selects no PR Checks E2E job, so put an `E2E: compute-smoke`
+trailer on its head commit to deploy the change once, in its own account, before
+it merges; after the merge, runs from main deploy it to all three accounts. The same export lock
+that stops old branches also stops the endpoints stack from dropping one of the
+VPC stack's exports in a single deploy: first keep the export with
+`Stack.exportValue` in `BlocksComputeTestVpc`, deploy, then remove it.
+
+### Leaked app stacks
+
+cleanup-stacks.yml does not sweep `bb-compute-smoke-*` stacks. One left behind
+by a run that could not tear down (for example `bb-compute-smoke-<id>-ep-<n>-<attempt>`
+from E2E Compute Endpoints in `BlocksTestVpc`, or one from a branch older than
+the permanent endpoints in `BlocksComputeTestVpc`) keeps its endpoints. In
+`BlocksTestVpc` every later run that creates endpoints fails; in
+`BlocksComputeTestVpc` the endpoints stack fails to deploy. The errors read
+"already has a route with destination-prefix-list-id" or "private-dns-enabled
+cannot be set".
+Delete the stack and its `-vpc-ref` sibling in that account.
+
+### Rolling back
+
+Merge the revert on main, then right away delete `BlocksComputeTestVpcEndpoints`
+in all three E2E accounts. Not the other way round: until the revert is on
+main, the next run's "Ensure persistent compute test VPC" recreates the stack.
+Between the two steps every main-based Compute Smoke run fails at that Ensure
+step with "Cannot delete export BlocksComputeTestVpc:... as it is in use by
+BlocksComputeTestVpcEndpoints" (CloudFormation rolls back, nothing leaks). To
+avoid that red window, disable the Compute Smoke job in the same revert and
+enable it again once the stack is gone everywhere. The next main-based run's
+Ensure step then drops the exports (or deploy `BlocksComputeTestVpc` from main
+by hand). Branches that contain the change still deploy their app without
+endpoints; once the stack is gone their private-DNS checks fail until they are
+rebased onto main.
 
 ## Usage
 
-### Deploy (one-time)
+### Deploy
+
+CI runs these on every run of the lane that needs them (a no-op when nothing
+changed). To deploy by hand, with credentials for the E2E account, in
+`us-east-1`:
 
 ```bash
 cd test-infra
 npm install
 npx cdk deploy BlocksTestVpc
-npx cdk deploy BlocksComputeTestVpc
-# or both at once:
+npx cdk deploy BlocksComputeTestVpc BlocksComputeTestVpcEndpoints
+# or all three at once:
 npx cdk deploy --all
 ```
 
-Each stack outputs its VPC ID. Set the `VPC_TEST_VPC_ID` environment variable
+Deploy `BlocksComputeTestVpcEndpoints` only when no stack in the account has its
+own endpoints in `BlocksComputeTestVpc` (for example a compute-smoke stack from
+a branch older than the permanent endpoints); otherwise its endpoints fail to
+create with "already has a route with destination-prefix-list-id" or
+"private-dns-enabled cannot be set".
+
+Each VPC stack outputs its VPC ID. Set the `VPC_TEST_VPC_ID` environment variable
 for the downstream test stack you're running:
 
 ```bash
@@ -60,31 +151,30 @@ cd test-apps/vpc-smoke
 VPC_TEST_VPC_ID=vpc-abc123 NODE_OPTIONS="--conditions=cdk" npx cdk deploy
 ```
 
+compute-smoke adds no endpoints unless `COMPUTE_SMOKE_PROVISION_ENDPOINTS=true`
+(set by `e2e-compute-endpoints.yml`, which points it at `BlocksTestVpc`).
+
 ## Resources Created
 
-Each stack is intentionally bare — a VPC and one NAT gateway, nothing else. It
-provisions **no** VPC endpoints and **no** Aurora cluster: each smoke-test app
-deploys with `provisionEndpoints: true` so `finalizeVpc` provisions the
-endpoints into the app's own (per-PR) stack, exercising the real auto-detection
-path end-to-end.
+| Resource | Stack | Purpose | Cost |
+|----------|-------|---------|------|
+| VPC (2 AZs) | each VPC stack | Network isolation for the smoke-test apps | none |
+| 1 NAT gateway | each VPC stack | Egress for private-with-egress subnets | ~$32/mo |
+| Public / private-with-egress / isolated subnets | each VPC stack | Cover every placement the app may select | none |
+| `VpcId` CfnOutput | each VPC stack | Consumed by the app stack via `VPC_TEST_VPC_ID` | none |
+| S3 + DynamoDB gateway endpoints | `BlocksComputeTestVpcEndpoints` | Routes on all six route tables | none |
+| SQS + CloudWatch Logs interface endpoints, one security group | `BlocksComputeTestVpcEndpoints` | One ENI per private subnet each, private DNS on | ~$29/mo per account (~$88/mo for the 3 E2E accounts) + $0.01/GB |
 
-| Resource (per stack) | Purpose | Cost |
-|----------------------|---------|------|
-| VPC (2 AZs) | Network isolation for the smoke-test app's Lambda | — |
-| 1 NAT gateway | Egress for private-with-egress subnets | ~$32/mo |
-| Public / private-with-egress / isolated subnets | Cover every placement the app may select | — |
-| `VpcId` CfnOutput | Consumed by the app stack via `VPC_TEST_VPC_ID` | — |
-
-Interface/gateway endpoints are **not** here — they are created per-run in each
-smoke app's stack.
-
-> **VPC quota note:** these two stacks consume 2 of the region's 5 VPCs. Account
-> for that before adding more persistent VPCs here.
+> **VPC quota note:** the two VPC stacks use 2 of the region's VPCs (quota 20
+> in the E2E accounts). Account for that before adding more persistent VPCs.
 
 ## Do NOT Delete
 
-Both stacks are tagged with `blocks:do-not-delete=true`. Deleting either will
-break the corresponding smoke tests in CI until redeployed.
+All three stacks are tagged with `blocks:do-not-delete=true`. Deleting a VPC
+stack breaks the corresponding smoke tests in CI until redeployed. Deleting
+`BlocksComputeTestVpcEndpoints` doesn't fail Compute Smoke's deploy, but its
+endpoint checks fail (SQS and Logs resolve to public addresses) until the next
+run's "Ensure persistent compute test VPC" step recreates it.
 
 # GitHub OIDC role for E2E (`github-oidc-stack.ts`)
 
