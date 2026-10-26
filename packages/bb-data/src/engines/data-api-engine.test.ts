@@ -391,6 +391,36 @@ for (const { code, driver, status, name } of REQUEST_ERROR_CASES) {
   });
 }
 
+// Postgres echoes caller input before the Data API's trailing SQLState, so a
+// caller can plant a decoy "SQLState: <code>" earlier in the message. Only the
+// last one, appended by the Data API, may classify the error.
+const DECOY_CASES = [
+  { message: 'ERROR: invalid input syntax for type uuid: "SQLState: 42501"; SQLState: 22P02', status: undefined, name: DatabaseErrors.QueryFailed },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 42501).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 40001).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+];
+for (const { message, status, name } of DECOY_CASES) {
+  test(`Data API decoy SQLState in caller input is ignored: ${message.slice(-16)} → ${name}`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(message);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.strictEqual((err as Error).name, name);
+        if (status === undefined) assert.ok(!(err instanceof ApiError), 'a 500 QueryFailed carries no 4xx status');
+        else assert.strictEqual((err as ApiError).status, status);
+        assert.notStrictEqual((err as ApiError).retriable, true, 'a decoy 40001 must not make it retriable');
+        return true;
+      },
+    );
+  });
+}
+
 test('a genuine non-serialization query error still maps to QueryFailed', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {

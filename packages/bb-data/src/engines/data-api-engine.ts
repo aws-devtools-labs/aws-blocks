@@ -80,8 +80,13 @@ export function fromField(field: Field): unknown {
   return null;
 }
 
-/** Regex to extract SQLState code from Data API error messages (e.g. "...; SQLState: 23505"). */
-const SQLSTATE_PATTERN = /SQLState:\s*([A-Z0-9]{5})/i;
+/**
+ * Regex to extract SQLState codes from Data API error messages (e.g. "...; SQLState: 23505").
+ * The Data API appends the real code at the end, while Postgres can echo caller
+ * input earlier in the message (a cast's input value, a check or foreign-key
+ * row's DETAIL), so only the last match is trusted.
+ */
+const SQLSTATE_PATTERN = /SQLState:\s*([A-Z0-9]{5})/gi;
 
 /**
  * Translate a Data API error to a DatabaseErrors name.
@@ -98,10 +103,9 @@ function translateError(e: unknown): never {
     const msg = e.message || '';
 
     // Prefer SQLState-based classification when available.
-    const stateMatch = msg.match(SQLSTATE_PATTERN);
+    const code = [...msg.matchAll(SQLSTATE_PATTERN)].at(-1)?.[1];
     let name: string;
-    if (stateMatch) {
-      const code = stateMatch[1];
+    if (code) {
       if (code === '40001') {
         // OCC conflict: surface as a retriable 409 (Conflict), not a generic
         // 500. Preserves the SerializationFailure name and keeps the original
