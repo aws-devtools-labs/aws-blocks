@@ -506,7 +506,10 @@ jobs:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
     env:
-      BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # `pr-`, not `compute-`: the stack name already starts `bb-compute-smoke-`,
+      # and the extra characters pushed the app's FileBucket name past S3's 63
+      # at four-digit PR numbers.
+      BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
