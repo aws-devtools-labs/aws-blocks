@@ -14,5 +14,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@sveltejs/kit": "^3.0.0"
   }
 }
