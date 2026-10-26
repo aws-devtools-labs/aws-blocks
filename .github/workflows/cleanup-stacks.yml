@@ -22,7 +22,7 @@ jobs:
   # is no publish leg any more: no E2E job has deployed to publish since #878,
   # and its role can't list REST APIs or IAM roles, so that leg could only fail
   # (or, before, pass while counting nothing). The stacks left there from
-  # before the move are cleaned up by hand, once.
+  # before the move are cleaned up by hand, tracked in #1036.
   legs:
     runs-on: ubuntu-latest
     outputs:
