@@ -144,7 +144,30 @@ describe('Hosting with HostingPresets.preview', () => {
     t.resourceCountIs('AWS::ApiGatewayV2::Api', 0);
   });
 
-  it('uses the fixed build id', () => {
+  it('keys the fixed build id on the content: unchanged keeps it, an edit or a deleted file changes it', () => {
+    createSpaBuildOutput(tmpDir);
+    const prefixOf = (name: string) => {
+      const stack = newStack(name);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
+      const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function', {
+        Properties: { Environment: { Variables: { ASSET_KEY_PREFIX: Match.anyValue() } } },
+      });
+      const prefixes = Object.values(fns).map((fn) => fn.Properties.Environment.Variables.ASSET_KEY_PREFIX);
+      assert.strictEqual(new Set(prefixes).size, 1);
+      return prefixes[0];
+    };
+    const first = prefixOf('ContentIdA');
+    assert.strictEqual(prefixOf('ContentIdB'), first, 'an unchanged build keeps its id');
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'old.txt'), 'old');
+    const withOld = prefixOf('ContentIdC');
+    assert.notStrictEqual(withOld, first, 'an added file changes the id');
+    fs.rmSync(path.join(tmpDir, 'dist', 'old.txt'));
+    assert.strictEqual(prefixOf('ContentIdD'), first, 'deleting the file changes it again (back to the old content)');
+    fs.writeFileSync(path.join(tmpDir, 'dist', 'index.html'), '<!DOCTYPE html><html><body>Changed</body></html>');
+    assert.notStrictEqual(prefixOf('ContentIdE'), first, 'an edited file changes the id');
+  });
+
+  it('uses a content-keyed fixed build id', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewBuildId');
     new Hosting(stack, 'Hosting', {
@@ -157,7 +180,7 @@ describe('Hosting with HostingPresets.preview', () => {
 
     const t = Template.fromStack(stack);
     t.hasResourceProperties('AWS::Lambda::Function', {
-      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
+      Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/fixed-[0-9a-f]{16}$') } },
     });
   });
 
@@ -514,7 +537,7 @@ describe('the trim settings on their own', () => {
     const stack = newStack('FixedAlb');
     new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed' });
     Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
-      Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/fixed' } },
+      Environment: { Variables: { ASSET_KEY_PREFIX: Match.stringLikeRegexp('^builds/fixed-[0-9a-f]{16}$') } },
     });
   });
 

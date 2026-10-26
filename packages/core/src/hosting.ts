@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
   detectFramework,
@@ -651,14 +652,22 @@ export interface HostingProps {
    * random build id: assets go to a new `builds/<id>/` prefix and the site
    * switches over atomically, so open pages keep loading their own build.
    *
-   * `'fixed'` reuses one build id (`fixed`) and overwrites the build in place:
-   * an unchanged build produces byte-identical assets and template (Next.js
-   * builds with a pinned `generateBuildId`), so a re-deploy skips the asset
-   * upload and a code-only change can be hotswapped
-   * (`startSandbox({ preview: true })`). There is no atomic switch-over, so
-   * use it only for throwaway environments. With nothing to switch, the
-   * door's asset proxy is not held back until the uploads finish:
+   * `'fixed'` keeps the build id stable while the build output is unchanged:
+   * the id is a hash of the uploaded content (the static assets and the ISR
+   * cache seed), and Next.js builds with a pinned `generateBuildId`. An
+   * unchanged build produces byte-identical assets and template, so a
+   * re-deploy skips the asset upload and a server-only change can be
+   * hotswapped (`startSandbox({ preview: true })`). A changed build gets a new
+   * `builds/<id>/` prefix, so deleted files stop being served and the ISR tag
+   * seed re-runs; Next.js's `_buildManifest.js` and `_ssgManifest.js`, whose
+   * URL no longer changes, are served with a revalidating Cache-Control.
+   *
+   * The door's asset proxy is not held back until the uploads finish:
    * CloudFormation creates it alongside them, which shortens a first deploy.
+   * During a deploy that changes the build, the proxy can briefly point at
+   * the new prefix before its files are uploaded (or still at the old one),
+   * so there is no atomic switch-over; use it only for throwaway
+   * environments.
    *
    * Not available behind a door with an edge cache (CloudFront, the stacked
    * door), which would keep serving the overwritten files; those fail synth
@@ -817,8 +826,41 @@ export interface CloudFrontOverRouterFrontDoor {
   features?: StackedDoorFeatures;
 }
 
-/** The build id every deploy with `buildId: 'fixed'` uses. */
+/**
+ * The framework build id pinned with `buildId: 'fixed'` (Next.js
+ * `generateBuildId`), so an unchanged build produces byte-identical assets.
+ */
 const FIXED_BUILD_ID = 'fixed';
+
+/**
+ * The deploy build id for `buildId: 'fixed'`: a hash of what the build
+ * uploads (the static assets and the ISR cache seed). An unchanged build keeps
+ * its id, so a re-deploy skips the upload and can hotswap; a changed build
+ * gets a new `builds/<id>/` prefix, so a deleted file stops being served, the
+ * ISR tag seed re-runs and the asset proxy's cached error pages are dropped.
+ *
+ * @param manifest the adapter's manifest.
+ * @returns `fixed-` and 16 hex characters.
+ */
+function contentBuildId(manifest: DeployManifest): string {
+  const hash = createHash('sha256');
+  const add = (root: string | undefined) => {
+    if (!root || !existsSync(root)) return;
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const file = join(dir, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile()) hash.update(relative(root, file)).update('\0').update(readFileSync(file)).update('\0');
+      }
+    };
+    hash.update(`${root.length}\0`);
+    walk(root);
+  };
+  add(manifest.staticAssets.directory);
+  add(manifest.cache?.seedDirectory);
+  add(manifest.cache?.initFunction?.bundle);
+  return `${FIXED_BUILD_ID}-${hash.digest('hex').slice(0, 16)}`;
+}
 
 // ─── Default build output directories per framework ──────────────
 
@@ -1074,10 +1116,10 @@ export class Hosting extends Construct {
     // `buildId: 'fixed'`: the per-deploy random id drives the atomic
     // `builds/<id>/` cutover a long-lived site needs, but it changes the asset
     // prefix, the function code and the API name on every deploy, so no
-    // re-deploy could skip the upload or hotswap. A throwaway environment is
-    // overwritten in place instead.
+    // re-deploy could skip the upload or hotswap. A throwaway environment
+    // keys the build on its content instead (see `contentBuildId`).
     if (fixedBuildId) {
-      manifest.buildId = FIXED_BUILD_ID;
+      manifest.buildId = contentBuildId(manifest);
     } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }

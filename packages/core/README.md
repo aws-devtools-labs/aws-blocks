@@ -447,7 +447,7 @@ new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, 
 | `imageOptimization` | `false` | No image function; the image endpoints serve the source image (a remote one is redirected only when its host is in the app's image allowlist, else 404) |
 | `incrementalRegeneration` | `false` | Next.js builds without the tag cache and revalidation queue; prerendered pages come from the build's snapshot |
 | `edgeRoutes` | `'regional'` | Next.js `runtime: 'edge'` routes run as regional Lambda functions, not Lambda@Edge |
-| `buildId` | `'fixed'` | One build id, overwritten in place, so re-deploys skip unchanged assets and can hotswap; with no switch-over to wait for, the door's asset proxy is created alongside the asset uploads |
+| `buildId` | `'fixed'` | A build id keyed on the build's content: an unchanged build keeps it, so a re-deploy skips the asset upload and can hotswap; a changed build gets a new prefix (deleted files stop being served). The door's asset proxy is created alongside the asset uploads, so there is no atomic switch-over |
 
 Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door (where `edgeRoutes` defaults to `'regional'`, since that door can't invoke Lambda@Edge), and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
 

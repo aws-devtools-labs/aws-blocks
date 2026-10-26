@@ -22,6 +22,7 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  nextStaticImmutablePaths,
   pinNextBuildId,
   restorePinnedNextConfig,
 } from './nextjs.js';
@@ -2644,5 +2645,29 @@ void describe('pinNextBuildId', () => {
     assert.match(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), /module\.exports = async/);
     restore();
     assert.strictEqual(fs.readFileSync(path.join(tmpDir, 'next.config.js'), 'utf-8'), 'module.exports = {};');
+  });
+});
+
+void describe('nextStaticImmutablePaths', () => {
+  let assetsDir: string;
+  beforeEach(() => {
+    assetsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'next-static-'));
+    const staticDir = path.join(assetsDir, '_next', 'static');
+    for (const dir of ['chunks', 'css', 'media', 'fixed']) fs.mkdirSync(path.join(staticDir, dir), { recursive: true });
+    fs.writeFileSync(path.join(staticDir, 'fixed', '_buildManifest.js'), '');
+    fs.writeFileSync(path.join(staticDir, 'fixed', '_ssgManifest.js'), '');
+  });
+  afterEach(() => fs.rmSync(assetsDir, { recursive: true, force: true }));
+
+  void it('keeps all of _next/static immutable without a pinned build id', () => {
+    assert.deepStrictEqual(nextStaticImmutablePaths(assetsDir, {}), ['_next/static/*']);
+  });
+
+  void it('leaves the build-id directory out with a pinned build id, so its manifests revalidate', () => {
+    assert.deepStrictEqual(nextStaticImmutablePaths(assetsDir, { deterministicBuildId: 'fixed' }), [
+      '_next/static/chunks/*',
+      '_next/static/css/*',
+      '_next/static/media/*',
+    ]);
   });
 });

@@ -2165,6 +2165,34 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
 };
 
 /**
+ * The `_next/static` paths that are safe to cache as immutable.
+ *
+ * Next.js content-hashes every file under `_next/static` except the build-id
+ * directory (`_next/static/<buildId>/_buildManifest.js`, `_ssgManifest.js`),
+ * whose URL is unique only while the build id is. With a pinned build id
+ * (`deterministicBuildId`) that URL stays the same across deploys, so a
+ * browser would keep the previous manifest and load the previous pages'
+ * chunks; the build-id directory is left out and gets the revalidating
+ * Cache-Control instead.
+ *
+ * @param assetsDir OpenNext's `assets` directory.
+ * @param profile the build profile; only `deterministicBuildId` matters.
+ */
+export const nextStaticImmutablePaths = (assetsDir: string, profile: BuildProfile): string[] => {
+  const staticDir = path.join(assetsDir, '_next', 'static');
+  if (!profile.deterministicBuildId || !fs.existsSync(staticDir)) return ['_next/static/*'];
+  const hashed = fs
+    .readdirSync(staticDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        !(entry.isDirectory() && fs.existsSync(path.join(staticDir, entry.name, '_buildManifest.js'))),
+    )
+    .map((entry) => (entry.isDirectory() ? `_next/static/${entry.name}/*` : `_next/static/${entry.name}`))
+    .sort();
+  return hashed;
+};
+
+/**
  * Translate OpenNext output structure into our framework-agnostic DeployManifest.
  */
 const translateOpenNextOutput = (
@@ -2181,7 +2209,7 @@ const translateOpenNextOutput = (
       // Next.js content-hashes everything under `_next/static`; HTML and
       // public/ live elsewhere in the assets dir and must NOT be marked
       // immutable (would brick clients on redeploy — see L3 PWA note).
-      immutablePaths: ['_next/static/*'],
+      immutablePaths: nextStaticImmutablePaths(path.join(openNextDir, 'assets'), profile),
     },
     routes: [],
   };

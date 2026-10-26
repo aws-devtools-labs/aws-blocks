@@ -550,9 +550,9 @@ export type HostingConstructProps = {
   skipImageOptimization?: boolean;
 
   /**
-   * Each deploy overwrites the build in place: the manifest's `buildId` is the
-   * same on every deploy (core `Hosting` `buildId: 'fixed'`,
-   * `HostingPresets.preview`), so the new files land under the same
+   * The manifest's `buildId` stays the same while the build is unchanged
+   * (core `Hosting` `buildId: 'fixed'` keys it on the build's content,
+   * `HostingPresets.preview`), so a re-deploy uploads under the
    * `builds/<buildId>/` prefix the door already serves.
    *
    * There is then no switch-over to a new build, so the door's
@@ -564,8 +564,9 @@ export type HostingConstructProps = {
    * function) off the end of a first deploy. A door's `onUpload` resources
    * still run after every upload.
    *
-   * Use it only for throwaway environments: while a deploy runs, the door
-   * serves a mix of the previous and the new files. The CloudFront door
+   * Use it only for throwaway environments: while a deploy that changes the
+   * build runs, the door can serve the new prefix before its files are
+   * uploaded. The CloudFront door
    * ignores it (its edge cache would keep serving the overwritten files; core
    * `Hosting` rejects `buildId: 'fixed'` behind it).
    * @default false
