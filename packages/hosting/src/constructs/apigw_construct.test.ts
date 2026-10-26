@@ -349,3 +349,47 @@ describe('apiGatewayDoor — free-form build', () => {
     assert.ok(buildApiGw(stack, streamPlan).url);
   });
 });
+
+describe('ApiGatewayConstruct — routes to another compute', () => {
+  const stack = new Stack(new App(), 'ComputeRoutes', { env: { account: '111111111111', region: 'us-west-2' } });
+  const fn = (id: string) =>
+    new LambdaFunction(stack, id, {
+      runtime: Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: Code.fromInline('exports.handler = async () => ({})'),
+    });
+  new ApiGatewayConstruct(stack, 'ApiGw', {
+    plan: {
+      origins: [
+        { id: 'blocks-s3', kind: 'static' },
+        { id: 'blocks-server', kind: 'server' },
+      ],
+      routes: { entries: [], redirects: [], headers: [] },
+      policies: { spaFallback: false, hasServer: true, skewEnabled: false },
+      release: { buildId: 'fixed' },
+    },
+    bucket: new Bucket(stack, 'Assets'),
+    computeFunctions: new Map([
+      ['default', fn('Server')],
+      ['edge1', fn('Edge1')],
+      ['edge2', fn('Edge2')],
+    ]),
+    serverComputeName: 'default',
+    computeRoutes: [
+      { pattern: '/api/edge/*/info', computeName: 'edge2' },
+      { pattern: '/api/edge/*', computeName: 'edge1' },
+    ],
+  });
+  const t = Template.fromStack(stack);
+  const routeKeys = Object.values(t.findResources('AWS::ApiGatewayV2::Route')).map((r) => String(r.Properties.RouteKey));
+
+  it('routes a trailing-wildcard pattern to its function', () => {
+    assert.ok(routeKeys.includes('ANY /api/edge/{proxy+}'), routeKeys.join(', '));
+  });
+
+  it('never emits an inner `*` as a literal route key, and warns that it is not expressible', () => {
+    assert.ok(!routeKeys.some((k) => k.includes('*')), routeKeys.join(', '));
+    const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('/api/edge/\\*/info'));
+    assert.equal(warnings.length, 1);
+  });
+});

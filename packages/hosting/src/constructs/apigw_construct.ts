@@ -232,8 +232,16 @@ export class ApiGatewayConstruct extends Construct {
     // Routes served by a compute other than the server go straight to it; the
     // route table lists them as server routes, so they are claimed first.
     const computeIntegrations = new Map<string, HttpLambdaIntegration>();
+    // Patterns with no route form (a wildcard inside a segment); reported once below.
+    const inexpressible: string[] = [];
     for (const r of props.computeRoutes ?? []) {
       const fn = compute.get(r.computeName);
+      // `/api/edge/*/info` has no HTTP API route form: report it rather than
+      // registering `*` as a literal path segment.
+      if (hasInnerWildcard(r.pattern)) {
+        if (fn) inexpressible.push(r.pattern);
+        continue;
+      }
       const path = globToProxyPath(r.pattern);
       if (!fn || path === null || seen.has(path) || backendPaths.has(path)) continue;
       let integration = computeIntegrations.get(r.computeName);
@@ -270,7 +278,6 @@ export class ApiGatewayConstruct extends Construct {
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
     }
-    const inexpressible: string[] = [];
     for (const entry of plan.routes.entries) {
       // A wildcard inside a segment (`/*.js`) has no route form: the default serves it.
       if (hasInnerWildcard(entry.pattern)) {
