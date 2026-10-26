@@ -6,6 +6,7 @@ import { join, resolve, dirname } from 'node:path';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
+import { runPredeployHooks } from './predeploy-hooks.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
@@ -286,6 +287,10 @@ async function runDeploy(options: DeployOptions) {
     // Apply external-database migrations to the production database before
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
+
+    // Pre-deploy hooks the installed blocks declare in their package.json
+    // (`aws-blocks.predeploy`), for example a deploy guard. A stop aborts here.
+    await runPredeployHooks({ stage: 'production', projectRoot: options.projectRoot });
     
     // Generate client code FIRST (before cdk deploy triggers the Vite build).
     // This also populates the BB registry for telemetry — from a child process,

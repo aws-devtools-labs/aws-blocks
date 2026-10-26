@@ -51,6 +51,13 @@ export {
 	type NativeDeclarationSource,
 } from './native-catalogs.js';
 export {
+	type DeployStage,
+	type PredeployContext,
+	type PredeployResult,
+	runPredeployHooks,
+	type SynthesizedStack,
+} from './predeploy-hooks.js';
+export {
 	type AwsIdentity,
 	type DeploymentCredentials,
 	describeDeploymentCredentials,

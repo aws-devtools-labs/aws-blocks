@@ -8,6 +8,7 @@ import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
+import { runPredeployHooks } from './predeploy-hooks.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
@@ -441,6 +442,14 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   // Apply external-database migrations to the sandbox database before
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   await applyExternalMigrations({ stage: 'sandbox' });
+
+  // Pre-deploy hooks the installed blocks declare in their package.json
+  // (`aws-blocks.predeploy`) for the sandbox stage. A stop aborts here.
+  await runPredeployHooks({
+    stage: 'sandbox',
+    projectRoot: process.cwd(),
+    app: `npm exec tsx -- -C cdk ${backendPath}`,
+  });
 
   // Generate client code targeting AWS (aws-runtime condition ensures
   // the backend registers aws-middleware, not mock-middleware) — before the
