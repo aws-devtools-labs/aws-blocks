@@ -505,6 +505,30 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     }
   });
 
+  it('answers 404 when the browser would land on another host (userinfo, backslash)', async () => {
+    // A redirect target is read by the browser with WHATWG URL rules, so the
+    // host is checked on the parsed URL, not on the raw text.
+    for (const url of [
+      'https://images.example.com:@evil.com/',
+      'https://images.example.com@evil.com/x.png',
+      'https://user:pass@images.example.com/x.png',
+      'https://evil.com\\.cdn.example.com/x.png',
+      'https://evil.com%5C.cdn.example.com/x.png',
+    ]) {
+      const res = await handler()(get('/_next/image', { url, w: '640' }));
+      assert.equal(res.statusCode, 404, url);
+      assert.equal(res.headers.location, undefined, url);
+    }
+    const ipx = await handler()(get('/_ipx/w_640/https:/evil.com%5C.cdn.example.com/b.jpg'));
+    assert.equal(ipx.statusCode, 404);
+  });
+
+  it('redirects to the parsed URL of an allowlisted source', async () => {
+    const res = await handler()(get('/_next/image', { url: 'https://IMAGES.example.com/a b.jpg', w: '640' }));
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.headers.location, 'https://images.example.com/a%20b.jpg');
+  });
+
   it('answers 404 for a missing or protocol-relative source', async () => {
     assert.equal((await handler()(get('/_next/image', { w: '640' }))).statusCode, 404);
     assert.equal((await handler()(get('/_next/image', { url: '//evil.example.net/x.png' }))).statusCode, 404);

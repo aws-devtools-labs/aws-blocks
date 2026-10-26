@@ -343,9 +343,14 @@ function blocksImageSource(requestUri, query) {
   } else {
     return null;
   }
-  if (/^https?:\\/\\//i.test(src)) {
-    var host = src.replace(/^https?:\\/\\//i, '').split(/[\\/?#:]/)[0];
-    return imageHostAllowed(host) ? { redirect: src } : { status: 404 };
+  if (/^https?:/i.test(src)) {
+    // The browser follows the redirect with WHATWG URL rules, so the host is
+    // checked on the parsed URL (userinfo and '\\' would otherwise point it at
+    // another host), and the redirect goes to that same parsed URL.
+    var url;
+    try { url = new URL(src); } catch (e) { return { status: 404 }; }
+    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return { status: 404 };
+    return imageHostAllowed(url.hostname) ? { redirect: url.href } : { status: 404 };
   }
   if (!src || src.indexOf('//') === 0) return { status: 404 };
   return { uri: src.charAt(0) === '/' ? src : '/' + src };
