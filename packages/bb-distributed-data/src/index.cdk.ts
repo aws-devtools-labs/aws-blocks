@@ -20,10 +20,11 @@ import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
 import { validateMigrations } from './validation.js';
+import { BB_NAME } from './version.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope, vpc: { requiresEgress: true } });
+    super(id, { parent: scope, bbName: BB_NAME, vpc: { requiresEgress: true } });
 
     const stack = cdk.Stack.of(this);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
@@ -142,6 +143,13 @@ export class DistributedDatabase extends BuildingBlockScope {
   getEngine(): never {
     return synthGuard('DistributedDatabase', 'getEngine');
   }
+
+  // Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+  query(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'query'); }
+  queryOne(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'queryOne'); }
+  execute(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'execute'); }
+  transaction(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'transaction'); }
+  simulateConflict(..._args: unknown[]): never { return synthGuard('DistributedDatabase', 'simulateConflict'); }
 }
 
 /** Hash all .sql files in a directory to detect changes. */
@@ -167,4 +175,4 @@ function readMigrationsDir(dir: string): Record<string, string> {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
-export type { DistributedDatabaseOptions } from './types.js';
+export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';

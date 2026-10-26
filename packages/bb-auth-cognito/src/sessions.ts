@@ -226,10 +226,12 @@ export class SessionStore {
 	 * lifetime, keeping the record's ceiling aligned with the session cookie's
 	 * `Max-Age`. Authorization itself is still decided by token revalidation on
 	 * every request — this only bounds retention.
+	 * Positive values also enable DynamoDB TTL on the backing table; omitted or
+	 * non-positive values leave table TTL disabled.
 	 */
 	constructor(scope: ScopeParent, id = 'sessions', ttlSeconds?: number) {
-		this.kv = new KVStore<SessionRecord>(scope, id);
 		this.ttlSeconds = ttlSeconds !== undefined && ttlSeconds > 0 ? ttlSeconds : undefined;
+		this.kv = new KVStore<SessionRecord>(scope, id, { ttl: this.ttlSeconds !== undefined });
 	}
 
 	/**

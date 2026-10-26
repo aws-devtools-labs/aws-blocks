@@ -3,15 +3,68 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { isBlocksError } from '@aws-blocks/core';
+import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
-const InvalidCredentials = 'InvalidCredentialsException';
-const UserAlreadyExists = 'UserAlreadyExistsException';
-const SessionExpired = 'SessionExpiredException';
-const InvalidPassword = 'InvalidPasswordException';
-const InvalidCode = 'InvalidCodeException';
+/** Resolve the API origin from the sandbox config (same source the client uses). */
+function getBaseUrl(): string {
+  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+  const apiUrl: string = config.apiUrl;
+  return apiUrl.replace(/\/aws-blocks\/api$/, '');
+}
+
+/**
+ * One raw JSON-RPC call with an optional MANUAL `Cookie` header, returning the
+ * result and any `Set-Cookie` headers. Bypasses the shared cookie jar so a
+ * captured session cookie can be replayed verbatim (the auth-cookie-attrs
+ * technique), which is what proves revocation against the real backing store.
+ */
+async function rpcRaw(
+  baseUrl: string,
+  method: string,
+  args: unknown[],
+  cookie?: string,
+): Promise<{ result: unknown; setCookies: string[] }> {
+  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
+  });
+  const body = await resp.json();
+  assert.ok(!body.error, `RPC ${method} failed: ${JSON.stringify(body.error)}`);
+  return { result: body.result, setCookies: resp.headers.getSetCookie?.() ?? [] };
+}
+
+/**
+ * Like `rpcRaw`, but for a call expected to FAIL: returns the JSON-RPC error
+ * object (`{ code, message, data }`) instead of asserting it is absent. The
+ * serialized `data.name` is how a branded `ApiError`'s name crosses the wire.
+ */
+async function rpcRawExpectError(
+  baseUrl: string,
+  method: string,
+  args: unknown[],
+  cookie?: string,
+): Promise<{ code: number; message: string; data?: { name?: string } }> {
+  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
+  });
+  const body = await resp.json();
+  assert.ok(body.error, `RPC ${method} was expected to fail but succeeded: ${JSON.stringify(body.result)}`);
+  return body.error;
+}
+
+/** The `name=value` of the AuthBasic session cookie, ready to send back as a Cookie header. */
+function sessionCookieHeader(setCookies: string[]): string | null {
+  const found = setCookies.find((c) => c.startsWith('auth_'));
+  if (!found) return null;
+  return found.split(';')[0]; // name=value, drop attributes
+}
 
 function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -38,7 +91,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
 
@@ -68,7 +121,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmSignUp(username, '000000');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
 
@@ -80,7 +133,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(username, 'password456');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, UserAlreadyExists), `Expected ${UserAlreadyExists}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.UserAlreadyExists), `Expected ${AuthBasicErrors.UserAlreadyExists}, got ${e}`);
         }
       });
 
@@ -90,7 +143,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignUp(uniqueUser(), 'short');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidPassword), `Expected ${AuthBasicErrors.InvalidPassword}, got ${e}`);
         }
       });
     });
@@ -122,7 +175,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'wrongpassword');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
 
@@ -132,7 +185,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn('no-such-user-ever', 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials), `Expected ${InvalidCredentials}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials), `Expected ${AuthBasicErrors.InvalidCredentials}, got ${e}`);
         }
       });
     });
@@ -205,7 +258,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authRequired();
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, SessionExpired), `Expected ${SessionExpired}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.SessionExpired), `Expected ${AuthBasicErrors.SessionExpired}, got ${e}`);
         }
       });
 
@@ -213,6 +266,92 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         await api.authSignOut();
         assert.strictEqual(await api.authGetCurrentUser(), null);
+      });
+    });
+
+    // ── Server-side revocation on sign-out (#766) ────────────────────────
+    // The shared `api` client auto-manages one cookie jar, so it cannot hold a
+    // cookie across a sign-out that clears it. These tests drive raw JSON-RPC
+    // with a MANUAL Cookie header (the same bypass auth-cookie-attrs uses) to
+    // capture a session cookie, sign out WITH it, then REPLAY it — proving the
+    // revocation marker is written to and read from the real backing store
+    // (DynamoDB under sandbox/production, the mock locally), not just the mock.
+
+    describe('session revocation on sign-out', () => {
+      test('a cookie captured before sign-out is rejected when replayed after', async () => {
+        const baseUrl = getBaseUrl();
+        const username = uniqueUser();
+
+        // Confirm the user through the normal client first (needs the code poll).
+        const api = getApi();
+        await api.authSignUp(username, 'password123');
+        const code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code!.code);
+
+        // Sign in over raw RPC and capture the Set-Cookie (jar-bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        const cookie = sessionCookieHeader(signIn.setCookies);
+        assert.ok(cookie, 'authSignIn issued a session cookie');
+
+        // The captured cookie authenticates before sign-out.
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before sign-out');
+
+        // Sign out carrying the captured cookie — this revokes its jti.
+        await rpcRaw(baseUrl, 'authSignOut', [], cookie);
+
+        // Replaying the exact same cookie now fails: the token is unexpired and
+        // signature-valid, but its jti is on the revocation list.
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed cookie is rejected after sign-out');
+
+        // The revoked session must surface as SessionRevokedException (not
+        // SessionExpiredException) THROUGH the JSON-RPC serializer — not just
+        // in-process. A requireAuth-gated call with the replayed cookie carries
+        // the branded name across the wire in error.data.name (AGENTS.md asks
+        // for an e2e when serialization changes).
+        const err = await rpcRawExpectError(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(err.code, 401, 'requireAuth rejects the revoked cookie with 401');
+        assert.strictEqual(
+          err.data?.name,
+          AuthBasicErrors.SessionRevoked,
+          'the revoked session surfaces as SessionRevokedException over the wire',
+        );
+      });
+    });
+
+    // ── Sign-in throttling / lockout (#766) ──────────────────────────────
+
+    describe('sign-in throttling', () => {
+      test('locks out after too many failed attempts — AccountLockedException over the wire', async () => {
+        const baseUrl = getBaseUrl();
+        const username = uniqueUser();
+
+        // The throttle pool confirms immediately (no codeDelivery).
+        await rpcRaw(baseUrl, 'authThrottleSignUp', [username, 'password123']);
+
+        // maxAttempts is 2 on this pool: two wrong-password attempts are plain
+        // InvalidCredentials…
+        for (let i = 0; i < 2; i++) {
+          const err = await rpcRawExpectError(baseUrl, 'authThrottleSignIn', [username, 'wrong-pass']);
+          assert.strictEqual(
+            err.data?.name,
+            AuthBasicErrors.InvalidCredentials,
+            `attempt ${i + 1} is a credential failure, not yet locked`,
+          );
+        }
+
+        // …then the account is locked: even the CORRECT password is rejected
+        // with AccountLockedException (429) THROUGH the JSON-RPC serializer.
+        const locked = await rpcRawExpectError(baseUrl, 'authThrottleSignIn', [username, 'password123']);
+        assert.strictEqual(locked.code, 429, 'locked sign-in rejects with 429');
+        assert.strictEqual(
+          locked.data?.name,
+          AuthBasicErrors.AccountLocked,
+          'the lockout surfaces as AccountLockedException over the wire',
+        );
+        // The message must not leak the username or any SDK metadata.
+        assert.doesNotMatch(locked.message, new RegExp(username, 'i'), 'lockout message does not echo the username');
       });
     });
 
@@ -247,7 +386,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authSignIn(username, 'password123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCredentials));
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCredentials));
         }
 
         // New password should work
@@ -268,7 +407,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmResetPassword(username, '000000', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
 
@@ -283,7 +422,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmResetPassword(username, '123456', 'newpass123');
           assert.fail('Expected error');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
       });
     });

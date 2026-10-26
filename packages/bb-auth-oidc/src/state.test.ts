@@ -33,6 +33,27 @@ describe('state envelope', () => {
 		assert.strictEqual(encodeState(withUndefined, SECRET), encodeState(withoutFields, SECRET));
 	});
 
+	// Pins the wire format the native SDKs decode. The expected value was
+	// produced by the original hand-written base64url helpers; the body
+	// contains `-` and `_` and needs padding, so a switch to standard base64
+	// or a padding change fails here.
+	const KNOWN_PAYLOAD: StatePayloadV1 = {
+		v: 1,
+		csrf: 'known-answer-csrf-value-100',
+		relay: 'myapp://auth',
+		app: 'redirect=/café?x=~&y=☃',
+	};
+	const KNOWN_STATE =
+		'eyJ2IjoxLCJjc3JmIjoia25vd24tYW5zd2VyLWNzcmYtdmFsdWUtMTAwIiwicmVsYXkiOiJteWFwcDovL2F1dGgiLCJhcHAiOiJyZWRpcmVjdD0vY2Fmw6k_eD1-Jnk94piDIn0.ocjEjeXY-WMrpqTO-fEXqAptbf30Shljtht_yjhksJ8';
+
+	test('encodes a known payload to the pinned wire format', () => {
+		assert.strictEqual(encodeState(KNOWN_PAYLOAD, SECRET), KNOWN_STATE);
+	});
+
+	test('decodes a pinned state envelope', () => {
+		assert.deepStrictEqual(decodeState(KNOWN_STATE, SECRET), { ok: true, payload: KNOWN_PAYLOAD });
+	});
+
 	test('tampered body returns signature failure', () => {
 		const encoded = encodeState({ v: 1, csrf: 'csrf-val' }, SECRET);
 		const [body, sig] = encoded.split('.');

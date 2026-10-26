@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Construct } from 'constructs';
-import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
@@ -10,15 +10,16 @@ import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
 import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BB_NAME } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
-export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
+export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PartitionKeyCondition, SortKeyCondition, KeyCondition, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 
 export class DistributedTable<T = any> extends BuildingBlockScope {
 	private table: ITable;
@@ -48,7 +49,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, public options: any) {
-		super(id, { parent: scope, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] } });
 
 		const config = options;
 
@@ -125,49 +126,17 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 					`or 'locked') — falling back to the stack defaults.`,
 			);
 		}
-		// `encryption` accepts two string literals or an ExternalKmsKeyRef
-		// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
-		// Anything else is a typo — warn rather than silently using the default.
-		const isKmsKeyRef = typeof config.encryption === 'object'
-			&& config.encryption !== null
-			&& config.encryption.__brand === 'ExternalKmsKeyRef';
-		if (
-			config.encryption !== undefined
-			&& config.encryption !== 'aws-managed'
-			&& config.encryption !== 'customer-managed'
-			&& !isKmsKeyRef
-		) {
-			Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-distributed-table:UnknownEncryption',
-				`Unrecognized encryption '${String(config.encryption)}' (expected 'aws-managed', ` +
-					`'customer-managed', or DistributedTable.fromKmsKey(arn)) — falling back to 'aws-managed'.`,
-			);
-		}
 
-		// PITR is one knob (`boolean | { retentionDays }`) resolved from the
-		// per-block option, else the stack-wide `defaults.pointInTimeRecovery`
-		// (#302 follow-up) — production on, sandbox off. The object form both
-		// enables PITR and pins the window, so "days set but PITR off" can't be
-		// expressed. `retentionDays` must be 1–35; warn and drop back to the
-		// 35-day default on an out-of-range value rather than failing the deploy.
-		const pitrSetting = config.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
-		let pitrEnabled: boolean;
-		let pitrDays: number | undefined;
-		if (typeof pitrSetting === 'object' && pitrSetting !== null) {
-			pitrEnabled = true;
-			pitrDays = pitrSetting.retentionDays;
-			if (!Number.isInteger(pitrDays) || (pitrDays as number) < 1 || (pitrDays as number) > 35) {
-				Annotations.of(this).addWarningV2(
-					'@aws-blocks/bb-distributed-table:InvalidPitrDays',
-					`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
-						`falling back to the 35-day default.`,
-				);
-				pitrDays = undefined;
-			}
-		} else {
-			pitrEnabled = pitrSetting === true;
-			pitrDays = undefined;
-		}
+		// PITR + encryption are shared with bb-kv-store; resolve them through the
+		// one helper in @aws-blocks/core/cdk/internal so the two blocks (the only
+		// Blocks-provisioned DynamoDB tables) can't drift. `config` is typed `any`
+		// here, so the helper's runtime guards — not the type system — validate the
+		// encryption / pointInTimeRecovery fields at this call site.
+		const protection = resolveDynamoDbProtection(this, config, this.defaults, {
+			warningPrefix: '@aws-blocks/bb-distributed-table',
+			fromKmsKeyHint: 'DistributedTable.fromKmsKey',
+		});
+
 		// Resolve durability into the two CDK properties. The `protection` option
 		// is the richer per-block override (#282): when set it fully determines
 		// removal policy + deletion protection, and — being one knob — the
@@ -184,19 +153,6 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			removalPolicy = this.defaults.removalPolicy;
 			deletionProtection = this.defaults.deletionProtection;
 		}
-		// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
-		// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
-		// Otherwise the AWS-managed `aws/dynamodb` key.
-		let encryptionKey: IKey | undefined;
-		let encryption: TableEncryption;
-		if (isKmsKeyRef) {
-			encryption = TableEncryption.CUSTOMER_MANAGED;
-			encryptionKey = Key.fromKeyArn(this, 'encryption-key', config.encryption.keyArn);
-		} else if (config.encryption === 'customer-managed') {
-			encryption = TableEncryption.CUSTOMER_MANAGED;
-		} else {
-			encryption = TableEncryption.AWS_MANAGED;
-		}
 
 		this.table = new Table(this, 'table', {
 			tableName,
@@ -210,35 +166,20 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			} : undefined,
 			billingMode: BillingMode.PAY_PER_REQUEST,
 			timeToLiveAttribute: config.ttl || undefined,
-			// PITR spec is only emitted when enabled — leaving it undefined keeps
-			// the CloudFormation template clean for sandboxes / opt-outs.
-			// recoveryPeriodInDays is only set when the caller narrows it (an
-			// omitted value keeps DynamoDB's 35-day default without emitting it).
-			pointInTimeRecoverySpecification: pitrEnabled
-				? {
-					pointInTimeRecoveryEnabled: true,
-					...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
-				}
-				: undefined,
+			pointInTimeRecoverySpecification: protection.pointInTimeRecoverySpecification,
 			// Resolved above from `protection` (per-block override) or the
 			// stack-wide `defaults` (#302) — supersedes main's placeholder that
 			// read `this.defaults` directly.
 			deletionProtection,
 			removalPolicy,
-			encryption,
+			encryption: protection.encryption,
 			// Only set when bringing an existing CMK; `CUSTOMER_MANAGED` without a
 			// key lets CDK provision a dedicated one.
-			encryptionKey,
+			encryptionKey: protection.encryptionKey,
 		});
 
-		// An auto-created CMK (`CUSTOMER_MANAGED` with no imported key) defaults
-		// to `RemovalPolicy.RETAIN`, so a table marked DESTROY would tear down but
-		// leave its dedicated key behind as an orphaned, billed, rotating key.
-		// Align the minted key's removal policy with the table's resolved policy
-		// so the key is never less durable than the table — it's only destroyed
-		// when the table is (sandbox DESTROY → DESTROY; production RETAIN stays
-		// RETAIN). An imported key (`encryptionKey` set via `fromKmsKey`) is owned
-		// by the caller and left untouched.
+		// Align an auto-created CMK's removal policy with the table's so the key
+		// is never less durable than the table it encrypts.
 		//
 		// Tradeoff when PITR is on (production + `protection: 'disposable'`, or
 		// sandbox + `pointInTimeRecovery: true`): CloudFormation keeps DynamoDB's
@@ -248,9 +189,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		// restored once the 30-day KMS window elapses. This is intentional — a
 		// `disposable` table opts out of durable backups by definition — and
 		// mirrors `bb-kv-store`. See DESIGN.md D-DT-11.
-		if (encryption === TableEncryption.CUSTOMER_MANAGED && !encryptionKey) {
-			this.table.encryptionKey?.applyRemovalPolicy(removalPolicy);
-		}
+		protection.applyKeyRemovalPolicy(this.table, removalPolicy);
 
 		this.table.grantReadWriteData(this.executionRole);
 

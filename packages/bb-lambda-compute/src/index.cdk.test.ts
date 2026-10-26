@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
@@ -85,7 +85,7 @@ describe('LambdaCompute', () => {
 			compute.fn,
 			'apiHandler() returns the function the shared gateway integrates',
 		);
-		assert.ok(compute instanceof Compute, 'LambdaCompute should be a Compute');
+		assert.ok(compute instanceof ComputeBase, 'LambdaCompute should be a ComputeBase');
 
 		const template = Template.fromStack(stack);
 		// The compute itself provisions NO gateway — HTTP ingress is the stack's

@@ -26,6 +26,7 @@ export const EXCLUDED = new Set([
 	'create-blocks-app',
 	'create-block',
 	'bb-lambda-compute',
+	'bb-container-compute',
 	// Preview block the umbrella does not depend on or re-export yet. Remove when
 	// @aws-blocks/blocks switches its Database export to bb-database.
 	'bb-database',

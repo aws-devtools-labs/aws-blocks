@@ -10,7 +10,7 @@ import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
@@ -948,7 +948,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Request handler ────────────────────────────────────────────────────
   function isApiRequest(method: string, pathname: string): boolean {
-    if (pathname === BLOCKS_RPC_PREFIX || pathname.startsWith(BLOCKS_RPC_PREFIX + '/')) return true;
+    if (isRpcPath(pathname)) return true;
     if (matchRoute(method, pathname)) return true;
     return false;
   }
@@ -1445,7 +1445,7 @@ function handleApiRequest(
   method: string,
   apis: Map<string, any>,
 ): void {
-  if (method === 'POST' && url.pathname === BLOCKS_RPC_PREFIX) {
+  if (method === 'POST' && isRpcPath(url.pathname)) {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', async () => {
@@ -1466,7 +1466,8 @@ function handleApiRequest(
         }
         console.log('[rpc-in]', inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog);
       }
-      const parsed = parseRpcRequest(body);
+      // Same path/body namespace check as the Lambda handler (see parseRpcRequest).
+      const parsed = parseRpcRequest(body, { pathname: url.pathname });
 
       if (!parsed.ok) {
         if (!process.env.BLOCKS_DEV_QUIET) console.log('[rpc-out parse-error]', parsed.response);
@@ -1648,7 +1649,7 @@ function handleApiRequest(
   // a browser, which sends a GET, or trying a REST-style URL) with no feedback.
   // Reply with a small JSON hint pointing at the one supported shape. When the
   // path was right but the method wasn't, say so explicitly.
-  const wrongMethodOnApi = url.pathname === BLOCKS_RPC_PREFIX;
+  const wrongMethodOnApi = isRpcPath(url.pathname);
   const message = wrongMethodOnApi
     ? `The AWS Blocks JSON-RPC API expects POST, not ${method}.`
     : 'Not found. The AWS Blocks JSON-RPC API is served at POST /aws-blocks/api.';
@@ -1656,7 +1657,8 @@ function handleApiRequest(
   res.end(
     JSON.stringify({
       error: message,
-      expected: { method: 'POST', path: BLOCKS_RPC_PREFIX },
+      // On an RPC path, echo the path the caller hit (e.g. `/aws-blocks/api/{namespace}`).
+      expected: { method: 'POST', path: wrongMethodOnApi ? url.pathname : BLOCKS_RPC_PREFIX },
     }),
   );
 }

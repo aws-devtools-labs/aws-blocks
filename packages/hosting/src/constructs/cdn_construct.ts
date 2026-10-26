@@ -4,21 +4,21 @@ import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
-  BehaviorOptions,
+  type BehaviorOptions,
   CacheCookieBehavior,
   CacheHeaderBehavior,
   CachePolicy,
   CacheQueryStringBehavior,
   Function as CloudFrontFunction,
   Distribution,
-  ErrorResponse,
+  type ErrorResponse,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
   GeoRestriction,
   HttpVersion,
-  IOrigin,
-  IResponseHeadersPolicy,
+  type IOrigin,
+  type IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
   OriginRequestCookieBehavior,
@@ -34,16 +34,16 @@ import {
   HttpOrigin,
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { IBucket } from 'aws-cdk-lib/aws-s3';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
-  IFunction,
-  IFunctionUrl,
-  IVersion,
+  type IFunction,
+  type IFunctionUrl,
+  type IVersion,
 } from 'aws-cdk-lib/aws-lambda';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import {
   EndpointType,
   LambdaIntegration,
@@ -52,9 +52,9 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
-import { SkewProtectionConfig } from './skew_protection.js';
+import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
@@ -66,6 +66,12 @@ import {
   routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
+import type { WebFunctionConstruct } from './web_function_construct.js';
+import {
+  type AccessLogFormat,
+  type AccessLogPartitioning,
+  wireStandardLoggingV2,
+} from './access_logging.js';
 import {
   AwsCustomResource,
   AwsCustomResourcePolicy,
@@ -134,6 +140,12 @@ export type CdnConstructProps = {
    * provisioned instances actually serve request traffic.
    */
   computeAliases?: Map<string, IFunction>;
+  /**
+   * Map of compute name → Lambda Web Function (`compute.type:
+   * 'web-function'`). A Web Function SSR compute is reached directly through
+   * its endpoint with CloudFront OAC — no API Gateway.
+   */
+  computeWebFunctions?: Map<string, WebFunctionConstruct>;
   /** WAFv2 WebACL to associate with the distribution. */
   webAcl?: CfnWebACL;
   /** ACM certificate for custom domain TLS. */
@@ -147,6 +159,23 @@ export type CdnConstructProps = {
   wwwRedirect?: 'toApex' | 'toWww' | 'none';
   /** S3 bucket for CloudFront access logging. */
   accessLogBucket?: IBucket;
+  /**
+   * CloudFront logging pipeline. `'v1'` (default) enables legacy standard
+   * logging inline on the distribution (`enableLogging`/`logBucket`); `'v2'`
+   * provisions the standard-logging-v2 delivery pipeline instead (see
+   * {@link wireStandardLoggingV2}). Only takes effect when
+   * {@link accessLogBucket} is set.
+   * @default 'v1'
+   */
+  accessLogVersion?: 'v1' | 'v2';
+  /** (v2 only) S3 key layout for delivered logs. @default 'date' */
+  accessLogPartitioning?: AccessLogPartitioning;
+  /** (v2 only) Delivered log record format. @default 'w3c' */
+  accessLogFormat?: AccessLogFormat;
+  /**
+   * (v2 only) Skip the us-east-1 delivery-source Region check. @default false
+   */
+  skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
   /** Geo-restriction configuration. */
@@ -227,6 +256,16 @@ export class CdnConstruct extends Construct {
   readonly invalidationId?: string;
 
   /**
+   * The security-headers / CSP {@link IResponseHeadersPolicy} applied to the
+   * static, SSR and image cache behaviors. Exposed so a construct that adds
+   * more behaviors to this same distribution later — notably the API/auth
+   * proxy behaviors `core.Hosting` attaches when it fronts the backend — can
+   * attach the identical policy instead of leaving those responses without
+   * security headers.
+   */
+  readonly securityHeadersPolicy: IResponseHeadersPolicy;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -254,6 +293,10 @@ export class CdnConstruct extends Construct {
 
     const { manifest, bucket } = props;
 
+    // Expose the policy so additional behaviors added to this distribution by
+    // other constructs (e.g. the API/auth proxy behaviors) can reuse it.
+    this.securityHeadersPolicy = props.securityHeadersPolicy;
+
     if (!manifest.buildId) {
       throw new HostingError('MissingBuildIdError', {
         message: 'Deploy manifest must include a buildId.',
@@ -277,6 +320,7 @@ export class CdnConstruct extends Construct {
     );
     const hasCompute =
       (props.computeFunctionUrls && props.computeFunctionUrls.size > 0) ||
+      (props.computeWebFunctions && props.computeWebFunctions.size > 0) ||
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
@@ -398,12 +442,14 @@ export class CdnConstruct extends Construct {
     // wrapper (REST API sends v1; most adapters default to v2). Image-opt
     // and other GET-only compute stay on OAC + FURL.
     const computeOrigins = new Map<string, IOrigin>();
-    const ssrComputeName: 'default' | 'server' | undefined =
-      props.computeFunctions?.has('default')
-        ? 'default'
-        : props.computeFunctions?.has('server')
-          ? 'server'
-          : undefined;
+    const hasSsr = (name: 'default' | 'server'): boolean =>
+      Boolean(props.computeFunctions?.has(name) || props.computeWebFunctions?.has(name));
+    const ssrComputeName: 'default' | 'server' | undefined = hasSsr('default')
+      ? 'default'
+      : hasSsr('server')
+        ? 'server'
+        : undefined;
+    const ssrWebFunction = ssrComputeName ? props.computeWebFunctions?.get(ssrComputeName) : undefined;
 
     // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
     // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
@@ -422,18 +468,10 @@ export class CdnConstruct extends Construct {
       .update('origin-verify-v1')
       .digest('hex');
 
-    if (ssrComputeName && props.computeFunctions) {
-      // Target the warm `live` alias when provisioned concurrency is set;
-      // otherwise the unqualified function ($LATEST). Without this, the
-      // REST integration always hit $LATEST and provisioned instances on
-      // the alias sat idle.
-      const ssrFn =
-        props.computeAliases?.get(ssrComputeName) ??
-        props.computeFunctions.get(ssrComputeName)!;
-
-      // REGIONAL: CloudFront is already in front; edge-optimized would
-      // double-proxy and cap streaming idle timeout at 30s.
-      restApi = new RestApi(this, 'SsrRestApi', {
+    // REGIONAL: CloudFront is already in front; edge-optimized would
+    // double-proxy and cap streaming idle timeout at 30s.
+    const createOriginRestApi = (): RestApi =>
+      new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
         // No per-stack CloudWatch role / AWS::ApiGateway::Account. The stage
@@ -477,6 +515,22 @@ export class CdnConstruct extends Construct {
           ],
         }),
       });
+
+    if (ssrWebFunction && ssrComputeName) {
+      // Web Function SSR: CloudFront signs every origin request with the
+      // function's OAC (IamAuth endpoint); the resource policy granting this
+      // distribution is attached once the distribution exists (below).
+      computeOrigins.set(ssrComputeName, ssrWebFunction.createOrigin());
+    } else if (ssrComputeName && props.computeFunctions?.has(ssrComputeName)) {
+      // Target the warm `live` alias when provisioned concurrency is set;
+      // otherwise the unqualified function ($LATEST). Without this, the
+      // REST integration always hit $LATEST and provisioned instances on
+      // the alias sat idle.
+      const ssrFn =
+        props.computeAliases?.get(ssrComputeName) ??
+        props.computeFunctions.get(ssrComputeName)!;
+
+      restApi = createOriginRestApi();
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
         responseTransferMode: ResponseTransferMode.STREAM,
@@ -532,6 +586,12 @@ export class CdnConstruct extends Construct {
     // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
     const ipxBaseUrl = manifest.imageOptimization?.baseURL;
     const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && ssrWebFunction && !restApi) {
+      // Web Function SSR needs no API Gateway, but the IPX Lambda still does
+      // (see above) — give it a REST API of its own.
+      restApi = createOriginRestApi();
+      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+    }
     if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
       // IPX is configured but there's no SSR compute (hence no shared RestApi)
       // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
@@ -1321,7 +1381,10 @@ export class CdnConstruct extends Construct {
         : props.webAcl
           ? { webAclId: props.webAcl.attrArn }
           : {}),
-      ...(props.accessLogBucket
+      // v1 (legacy) logging is enabled inline on the distribution. v2 logging
+      // is provisioned separately via the delivery pipeline after the
+      // distribution exists (see below), so it must NOT set enableLogging here.
+      ...(props.accessLogBucket && props.accessLogVersion !== 'v2'
         ? { enableLogging: true, logBucket: props.accessLogBucket }
         : {}),
       ...(props.geoRestriction
@@ -1334,6 +1397,30 @@ export class CdnConstruct extends Construct {
         : {}),
       errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
     });
+
+    // ---- Standard logging v2 (opt-in) ----
+    // v1 logging was enabled inline above. For v2, provision the CloudWatch
+    // Logs vended-logs delivery pipeline (DeliverySource → DeliveryDestination
+    // → Delivery + bucket policy) against the now-created distribution. The
+    // log bucket is provisioned with BUCKET_OWNER_ENFORCED by the storage
+    // construct when v2 is selected, so no ACLs are involved.
+    if (props.accessLogBucket && props.accessLogVersion === 'v2') {
+      const distributionArn = Stack.of(this).formatArn({
+        service: 'cloudfront',
+        region: '',
+        account,
+        resource: 'distribution',
+        resourceName: this.distribution.distributionId,
+      });
+      wireStandardLoggingV2(this, {
+        distributionArn,
+        distributionId: this.distribution.distributionId,
+        logBucket: props.accessLogBucket,
+        partitioning: props.accessLogPartitioning,
+        format: props.accessLogFormat,
+        skipRegionValidation: props.skipLoggingRegionValidation,
+      });
+    }
 
     // ---- OAC: S3 bucket policy ----
     // GetObject for serving assets, plus ListBucket so S3 returns a real
@@ -1417,6 +1504,14 @@ export class CdnConstruct extends Construct {
           sourceArn: `arn:aws:cloudfront::${account}:distribution/${this.distribution.distributionId}`,
         });
       }
+    }
+
+    // ---- Web Function invoke grant ----
+    // The endpoint is IamAuth: only principals its resource policy allows can
+    // invoke it. Grant exactly this distribution (aws:SourceArn), which signs
+    // origin requests with the function's OAC.
+    if (ssrWebFunction) {
+      ssrWebFunction.allowCloudFrontInvoke(this.distribution.distributionId);
     }
 
     // ---- Distribution URL ----

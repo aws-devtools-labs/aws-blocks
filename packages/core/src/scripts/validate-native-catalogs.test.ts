@@ -903,3 +903,149 @@ describe('rule 6 — malformed metadata', () => {
 		assert.ok(errors.length >= 5, `expected several errors, got ${errors.length}`);
 	});
 });
+
+describe('rule 7 — values a generator interpolates into generated source', () => {
+	function pkgWith(dart: Record<string, string>): NativeDeclarationSource {
+		return source({
+			packages: [
+				{
+					identity: 'example-iot-native',
+					platforms: { dart: { package: { name: 'example_iot_native', library: 'x.dart', ...dart } } },
+				},
+			],
+		});
+	}
+
+	it('rejects a dart package name that is not a pub package name', () => {
+		for (const name of ['My-Package', ' example_iot ', 'example-iot', '0example', 'Example']) {
+			const errors = errorsFrom([
+				source({
+					packages: [
+						{
+							identity: 'example-iot-native',
+							platforms: { dart: { package: { name, library: 'x.dart' } } },
+						},
+					],
+				}),
+			]);
+			assert.deepStrictEqual(paths(errors), [
+				'x-blocks-native-packages.packages["example-iot-native"].platforms.dart.package.name',
+			]);
+			assert.match(errors[0].message, /to be a pub package name/);
+		}
+	});
+
+	it('rejects a dart library that is not a .dart path inside lib/', () => {
+		for (const library of ['lib/x.dart', 'X.dart', '../../../etc/passwd.dart', 'x.txt', 'x', '/x.dart']) {
+			const errors = errorsFrom([
+				source({
+					packages: [
+						{
+							identity: 'example-iot-native',
+							platforms: {
+								dart: { package: { name: 'example_iot_native', library } },
+							},
+						},
+					],
+				}),
+			]);
+			assert.deepStrictEqual(paths(errors), [
+				'x-blocks-native-packages.packages["example-iot-native"].platforms.dart.package.library',
+			]);
+			assert.match(errors[0].message, /inside lib\//);
+		}
+	});
+
+	it('accepts the dart library forms a package may legitimately publish', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([pkgWith({ library: 'lib/x.dart' })])), []);
+		for (const library of ['example_iot_native.dart', 'src/public_api.dart', 'api.g.dart']) {
+			const errors = errorsFrom([
+				source({
+					packages: [
+						{
+							identity: 'example-iot-native',
+							platforms: {
+								dart: { package: { name: 'example_iot_native', library } },
+							},
+						},
+					],
+				}),
+			]);
+			assert.deepStrictEqual(paths(errors), []);
+		}
+	});
+
+	it('rejects an export that cannot name a public type', () => {
+		for (const exported of [
+			'device link',
+			'0device',
+			' deviceLink ',
+			'device$link',
+			'_deviceLink',
+			'device--link',
+		]) {
+			const errors = errorsFrom([source({ bindings: [binding({ export: exported })] })]);
+			assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].export']);
+			assert.match(errors[0].message, /delimited run of alphanumeric segments/);
+		}
+	});
+
+	it('accepts the export forms a generator can upper-camel-case', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([source({ bindings: [binding({ export: 'device link' })] })])), []);
+		for (const exported of ['deviceLink', 'DeviceLink', 'device_link', 'device-link', 'device.link', 'Link2']) {
+			const errors = errorsFrom([source({ bindings: [binding({ export: exported })] })]);
+			assert.deepStrictEqual(paths(errors), []);
+		}
+	});
+
+	it('rejects a dart package name the generated client already imports', () => {
+		const errors = errorsFrom([
+			source({
+				packages: [
+					{
+						identity: 'example-iot-native',
+						platforms: { dart: { package: { name: 'blocks_runtime', library: 'x.dart' } } },
+					},
+				],
+			}),
+		]);
+
+		assert.deepStrictEqual(paths(errors), [
+			'x-blocks-native-packages.packages["example-iot-native"].platforms.dart.package.name',
+		]);
+		assert.match(errors[0].message, /name a package other than "blocks_runtime"/);
+	});
+
+	it('constrains only the platforms that declare a grammar', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([pkgWith({ name: 'My-Package' })])), []);
+		const errors = errorsFrom([
+			source({
+				packages: [
+					{
+						identity: 'example-iot-native',
+						platforms: {
+							swift: {
+								package: {
+									identity: 'Example-IOT',
+									product: 'X.Y',
+									module: 'Example_IOT',
+								},
+							},
+							android: {
+								package: {
+									group: 'com.Example',
+									artifact: 'iot-native',
+									kotlinPackage: 'com.Example.iot',
+								},
+							},
+						},
+					},
+				],
+			}),
+		]);
+		assert.deepStrictEqual(paths(errors), []);
+	});
+});

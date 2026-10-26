@@ -6,12 +6,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.example.screens.AuthScreen
 import com.aws.blocks.example.screens.FileScreen
@@ -19,14 +21,24 @@ import com.aws.blocks.example.screens.KvStoreScreen
 import com.aws.blocks.example.screens.RealtimeScreen
 import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
-import blocks.testapp.Api
-import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import blocks.testapp.api
+import blocks.testapp.authApi
+import blocks.testapp.invoke
 
 @Composable
 fun App() {
-    val auth = remember { AuthApi() }
-    val api = remember { Api() }
+    // Every RPC call below runs on the HTTP client this owns. The zero-argument form reaches the
+    // server the spec declares, so switching backends is a regeneration rather than an edit here.
+    // It is remembered because the DisposableEffect closes the engine it owns, and `api` because
+    // the screens take it as a parameter and a new instance on each recomposition would defeat
+    // skipping.
+    val blocks = remember { Blocks() }
+    val api = remember { blocks.api }
+    DisposableEffect(blocks) {
+        onDispose { blocks.close() }
+    }
+    val auth = blocks.authApi
     var selectedTab by remember { mutableStateOf(Tab.Auth) }
 
     // The client keeps sign-in state in memory, so it is owned here rather than by the Auth

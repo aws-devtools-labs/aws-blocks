@@ -77,6 +77,12 @@ jobs:
       - name: Run codegen unit tests
         run: ./gradlew :codegen:test
 
+      # The plugin module owns the Gradle task and extension that carry codegen's inputs;
+      # :codegen:test does not reach them. `check` adds validatePlugins, the only gate that
+      # fails on a task input missing its annotation.
+      - name: Run plugin checks
+        run: ./gradlew :plugin:check
+
   ios-test:
     name: Build & Test (runtime, iOS)
     runs-on: macos-15

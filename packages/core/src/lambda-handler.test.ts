@@ -287,6 +287,68 @@ describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
   });
 });
 
+// ── per-namespace RPC path dispatch ──────────────────────────────────────────
+
+describe('createLambdaHandler — per-namespace RPC path dispatch', () => {
+  it('dispatches a call sent to /aws-blocks/api/{namespace}', async () => {
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({
+        async generate(id: string) { return { id, done: true }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'reports.generate', params: ['r1'], id: 1 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { id: 'r1', done: true });
+  });
+
+  it('still dispatches a call sent to the bare /aws-blocks/api using the body prefix (back-compat)', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) { return { msg }; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hi'], id: 7 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.deepStrictEqual(body.result, { msg: 'hi' });
+  });
+
+  it('rejects a path namespace that does not match the body prefix', async () => {
+    // The path addresses `reports` but the body calls `api.generate`. Neither is
+    // silently preferred: dispatching either one would run code the caller didn't
+    // address on one side, so the request is an Invalid Request.
+    let called = false;
+    const backend = {
+      reports: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-reports'; } }),
+      api: (_ctx: BlocksContext) => ({ async generate() { called = true; return 'from-api'; } }),
+    };
+
+    const result = await invoke(backend, makeEvent({
+      path: '/aws-blocks/api/reports',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.generate', params: [], id: 2 }),
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.error?.data?.name, 'InvalidRequest');
+    assert.match(body.error?.message, /path addresses namespace "reports" but the method is in namespace "api"/);
+    assert.strictEqual(body.id, 2);
+    assert.strictEqual(called, false, 'neither namespace is dispatched');
+  });
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — RawRoute body handling', () => {

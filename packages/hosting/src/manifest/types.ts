@@ -224,6 +224,15 @@ export type ComputeResource = {
   /** Server entry point (for type: 'http-server') */
   entrypoint?: string;
 
+  /**
+   * Bundle-relative Node.js module that starts the HTTP server (for type:
+   * 'http-server'), e.g. `server/entry.mjs`. Used by Lambda Web Functions
+   * compute, which imports the server directly instead of exec'ing
+   * `entrypoint` (a shell wrapper for the Lambda Web Adapter). Falls back to
+   * `entrypoint` when that is already a `.js`/`.mjs`/`.cjs` module.
+   */
+  serverEntry?: string;
+
   /** Port for http-server type */
   port?: number;
 

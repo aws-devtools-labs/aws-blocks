@@ -291,13 +291,19 @@ test('CDK: an unrecognized encryption value warns at synth', () => {
   const options: KVStoreOptions<unknown> = {};
   Object.assign(options, { encryption: 'kms' });
   new KVStore(parent, 'sessions', options);
-  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('Unrecognized encryption.*ack: @aws-blocks/bb-kv-store:UnknownEncryption'),
+  );
 });
 
 test('CDK: an out-of-range retentionDays warns at synth', () => {
   const { stack, parent } = setup();
   new KVStore(parent, 'sessions', { pointInTimeRecovery: { retentionDays: 60 } });
-  Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+  Annotations.fromStack(stack).hasWarning(
+    '*',
+    Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-blocks/bb-kv-store:InvalidPitrDays'),
+  );
 });
 
 test('CDK: durability options passed alongside fromExisting warn at synth', () => {

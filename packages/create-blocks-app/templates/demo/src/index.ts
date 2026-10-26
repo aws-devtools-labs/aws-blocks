@@ -1,6 +1,8 @@
 // Direct import from backend - types available in IDE, Proxy injected at runtime
 import { api, authApi } from 'aws-blocks';
-import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
+import { Authenticator, onAuthChange, injectTheme, StatusMessage, type StatusMessageHandle } from '@aws-blocks/blocks/ui';
+
+injectTheme();
 
 // For coding agents: Leave this comment in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
@@ -8,6 +10,23 @@ import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 /** Escape user-controlled strings before interpolating into innerHTML */
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+const statusHandles = new WeakMap<HTMLElement, StatusMessageHandle>();
+
+function showMessage(el: HTMLElement, text: string, kind: 'success' | 'error' | 'idle') {
+  const existing = statusHandles.get(el);
+  if (existing) {
+    existing.set(kind, text);
+    return;
+  }
+  const handle = StatusMessage({ kind, text });
+  statusHandles.set(el, handle);
+  el.replaceChildren(handle.element);
+}
+
+function showError(el: HTMLElement, text: string) {
+  showMessage(el, text, 'error');
 }
 
 let currentUser: { username: string } | null = null;
@@ -19,7 +38,7 @@ async function refreshTodos() {
   const errorDiv = document.getElementById('todo-error');
   if (!todoList) return;
   
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   if (!currentUser) {
     todoList.innerHTML = '<p>Please sign in to view todos</p>';
@@ -51,7 +70,7 @@ async function refreshTodos() {
       </div>
     `).join('');
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
   }
 }
 
@@ -63,14 +82,14 @@ async function refreshTodos() {
   const title = input.value.trim();
   if (!title) return;
   
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   try {
     await api.createTodo(title, parseInt(prioritySelect.value));
     input.value = '';
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
   }
 };
 
@@ -83,13 +102,13 @@ async function refreshTodos() {
 // Toggle todo completion
 (window as any).toggleTodo = async (todoId: string, completed: boolean) => {
   const errorDiv = document.getElementById('todo-error');
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   try {
     await api.updateTodo(todoId, { completed });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
     await refreshTodos();
   }
 };
@@ -97,13 +116,13 @@ async function refreshTodos() {
 // Change priority
 (window as any).changePriority = async (todoId: string, priority: number) => {
   const errorDiv = document.getElementById('todo-error');
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   try {
     await api.updateTodo(todoId, { priority });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
     await refreshTodos();
   }
 };
@@ -111,7 +130,7 @@ async function refreshTodos() {
 // Update title
 (window as any).updateTitle = async (todoId: string, title: string) => {
   const errorDiv = document.getElementById('todo-error');
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   const trimmedTitle = title.trim();
   if (!trimmedTitle) {
@@ -123,7 +142,7 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { title: trimmedTitle });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
     await refreshTodos();
   }
 };
@@ -131,13 +150,13 @@ async function refreshTodos() {
 // Delete todo
 (window as any).deleteTodo = async (todoId: string) => {
   const errorDiv = document.getElementById('todo-error');
-  if (errorDiv) errorDiv.innerHTML = '';
+  if (errorDiv) showMessage(errorDiv, '', 'idle');
   
   try {
     await api.deleteTodo(todoId);
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
+    if (errorDiv) showError(errorDiv, error.message);
   }
 };
 
@@ -146,6 +165,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const authContainer = document.getElementById('auth-container');
   if (authContainer) {
     authContainer.appendChild(Authenticator(authApi));
+  }
+
+  for (const id of ['todo-error', 'cookie-result', 'kv-result']) {
+    const el = document.getElementById(id);
+    if (el) showMessage(el, '', 'idle');
   }
 
   // React to auth changes (same window + cross-tab)
@@ -161,73 +185,81 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Cookie test functions
 (window as any).testSetCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
   const value = (document.getElementById('cookieValue') as HTMLInputElement).value;
-  
-  await api.setCookie(name, value);
-  document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Set cookie ${escapeHtml(name)} = ${escapeHtml(value)}</span>`;
+  const out = document.getElementById('cookie-result')!;
+
+  await api.setCookie(value);
+  showMessage(out, `✓ Set cookie = ${value}`, 'success');
 };
 
 (window as any).testGetCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
-  
-  const value = await api.getCookie(name);
-  document.getElementById('cookie-result')!.innerHTML = 
-    value ? `<span class="success">✓ Got cookie: ${escapeHtml(value)}</span>` 
-          : `<span class="error">✗ Cookie not found</span>`;
+  const value = await api.getCookie();
+  const out = document.getElementById('cookie-result')!;
+  if (value) showMessage(out, `✓ Got cookie: ${value}`, 'success');
+  else showMessage(out, '∅ Cookie not found', 'idle');
 };
 
 (window as any).testDeleteCookie = async () => {
-  const name = (document.getElementById('cookieName') as HTMLInputElement).value;
-  
-  await api.deleteCookie(name);
-  document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Deleted cookie ${escapeHtml(name)}</span>`;
+  await api.deleteCookie();
+  const out = document.getElementById('cookie-result')!;
+  showMessage(out, '✓ Deleted cookie', 'success');
 };
 
-// KV Store test functions
+// KV Store test functions (requireAuth-gated: sign in first)
 (window as any).testSetValue = async () => {
   const key = (document.getElementById('key') as HTMLInputElement).value;
   const value = (document.getElementById('value') as HTMLInputElement).value;
-  
-  const result = await api.setValue(key, value);
-  
-  document.getElementById('kv-result')!.innerHTML = 
-    `<span class="success">✓ Set ${escapeHtml(key)} = ${escapeHtml(value)}</span>`;
+  const out = document.getElementById('kv-result')!;
+
+  try {
+    await api.setValue(key, value);
+    showMessage(out, `✓ Set ${key} = ${value}`, 'success');
+  } catch (error: any) {
+    showError(out, error.message);
+  }
 };
 
 (window as any).testGetValue = async () => {
   const key = (document.getElementById('key') as HTMLInputElement).value;
-  
-  const value = await api.getValue(key);
-  
-  document.getElementById('kv-result')!.innerHTML = 
-    value ? `<span class="success">✓ Got value: ${escapeHtml(value)}</span>` 
-          : `<span class="error">✗ Key not found</span>`;
+  const out = document.getElementById('kv-result')!;
+
+  try {
+    const value = await api.getValue(key);
+    if (value) showMessage(out, `✓ Got value: ${value}`, 'success');
+    else showMessage(out, '∅ Key not found', 'idle');
+  } catch (error: any) {
+    showError(out, error.message);
+  }
 };
 
 (window as any).runAllTests = async () => {
   const results: string[] = [];
-  
+
+  // KV methods are requireAuth-gated: signed out, they reject with 401.
   try {
     await api.setValue('test1', 'value1');
     const val = await api.getValue('test1');
     results.push(val === 'value1' ? '✓ KV Store works' : '✗ KV Store failed');
-    
-    await api.setCookie('testCookie', 'testValue');
-    const cookie = await api.getCookie('testCookie');
-    results.push(cookie === 'testValue' ? '✓ Cookie set/get works' : '✗ Cookie failed');
-    
-    await api.deleteCookie('testCookie');
-    const deleted = await api.getCookie('testCookie');
-    results.push(!deleted ? '✓ Cookie delete works' : '✗ Cookie delete failed');
-
-    document.getElementById('test-results')!.innerHTML = results.join('<br>');
   } catch (error: any) {
-    document.getElementById('test-results')!.innerHTML = 
-      `<span class="error">✗ Tests failed: ${escapeHtml(error.message)}</span>`;
+    results.push(error.status === 401
+      ? '– KV Store skipped: sign in to run the KV test'
+      : `✗ KV Store failed: ${escapeHtml(error.message)}`);
   }
+
+  // The cookie round-trip is public, so it runs whether or not you're signed in.
+  try {
+    await api.setCookie('testValue');
+    const cookie = await api.getCookie();
+    results.push(cookie === 'testValue' ? '✓ Cookie set/get works' : '✗ Cookie failed');
+
+    await api.deleteCookie();
+    const deleted = await api.getCookie();
+    results.push(!deleted ? '✓ Cookie delete works' : '✗ Cookie delete failed');
+  } catch (error: any) {
+    results.push(`✗ Cookie test failed: ${escapeHtml(error.message)}`);
+  }
+
+  document.getElementById('test-results')!.innerHTML = results.join('<br>');
 };
 
 console.log('AWS Blocks Demo loaded - using direct backend imports with Proxy');

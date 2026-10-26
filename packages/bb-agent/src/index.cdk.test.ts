@@ -165,3 +165,36 @@ test('CDK: multiple agents add the identical shared-role grants ONCE, not per-ag
 	const invokeGrants = json.split('bedrock-agentcore:InvokeAgentRuntime').length - 1;
 	assert.strictEqual(invokeGrants, 1, `InvokeAgentRuntime should be granted once, found ${invokeGrants}`);
 });
+
+test('CDK: a deployed model guardrail grants bedrock:ApplyGuardrail on that guardrail only', async () => {
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'guarded', {
+		systemPrompt: 'You are a test agent.',
+		agentcoreAssetPath: ASSET_DIR,
+		model: {
+			deployed: [
+				{ provider: 'bedrock', modelId: 'm1', guardrail: { identifier: 'gr-abc123', version: '1' } },
+				{ provider: 'bedrock', modelId: 'm2', guardrail: { identifier: 'arn:aws:bedrock:us-west-2:111122223333:guardrail/gr-other', version: '3' } },
+			],
+		},
+	});
+	const statements = Object.values(Template.fromStack(stack).findResources('AWS::IAM::Policy'))
+		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>)
+		.filter((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]).includes('bedrock:ApplyGuardrail'));
+	assert.strictEqual(statements.length, 1, `expected one ApplyGuardrail statement, got ${JSON.stringify(statements)}`);
+	const resources = JSON.stringify(statements[0].Resource);
+	assert.ok(resources.includes(':guardrail/gr-abc123'), `id-form guardrail is expanded to an ARN: ${resources}`);
+	assert.ok(resources.includes('arn:aws:bedrock:us-west-2:111122223333:guardrail/gr-other'), `ARN-form guardrail is used as-is: ${resources}`);
+	assert.ok(!resources.includes('guardrail/*'), 'never a wildcard guardrail grant');
+});
+
+test('CDK: no guardrail configured means no ApplyGuardrail grant', async () => {
+	const json = JSON.stringify((await synth()).toJSON());
+	assert.ok(!json.includes('bedrock:ApplyGuardrail'));
+});

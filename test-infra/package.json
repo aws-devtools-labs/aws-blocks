@@ -9,15 +9,17 @@
   "scripts": {
     "build": "tsc --build",
     "deploy": "npx cdk deploy --app 'npx tsx vpc-test-stack.ts'",
+    "deploy:oidc": "npx cdk deploy --app 'npx tsx github-oidc-app.ts'",
     "synth": "npx cdk synth --app 'npx tsx vpc-test-stack.ts'",
-    "test": "echo \"no tests for infra stack\""
+    "synth:oidc": "npx cdk synth --app 'npx tsx github-oidc-app.ts'",
+    "test": "node --import tsx --test github-oidc-stack.test.ts"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0"
+    "aws-cdk-lib": "^2.273.0",
+    "constructs": "^10.8.1"
   },
   "devDependencies": {
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0"
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }

@@ -5,7 +5,13 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
-import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
+import {
+  detectFramework,
+  type FrameworkAdapterFn,
+  getAdapter,
+  normalizeBasePath,
+  withComputeTarget,
+} from '@aws-blocks/hosting/adapters';
 import {
   generateBuildId,
   HostingConstruct,
@@ -13,13 +19,17 @@ import {
   type HostingDomainConfig,
   type HostingWafConfig,
   type SkewProtectionConfig,
+  type WebFunctionConstruct,
+  type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
+import type { AddBehaviorOptions } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
 import { registerConfig } from './cdk/config-registry.js';
-import { getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
+import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
+import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
@@ -34,6 +44,7 @@ import {
   wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import { writeFrameworkSink } from './telemetry/framework-sink.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -53,6 +64,30 @@ import { getRegisteredRoutes } from './raw-route.js';
  * ```
  */
 export type ComputeConfig = {
+  /**
+   * Where the SSR server runs. Default: `'lambda'`.
+   *
+   * - `'lambda'` — a Lambda function behind API Gateway. Available in every Region.
+   * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+   *   Node.js server runs directly on Lambda behind CloudFront (origin access
+   *   control, no API Gateway). One execution environment serves many
+   *   concurrent requests and is billed for active CPU — fewer cold starts and
+   *   lower cost for I/O-bound SSR. Works with Astro, SvelteKit, Nuxt/Nitro and
+   *   Next.js — the adapters build an HTTP server automatically (Nitro
+   *   `node-server` preset, OpenNext `node` wrapper) — in a Region where Web
+   *   Functions are available (us-east-1, us-east-2, us-west-2,
+   *   ap-northeast-1, eu-west-1). Runs on Node.js 24 / Arm64 with 2 GB per
+   *   environment, so `memorySize` and `reservedConcurrency` don't apply —
+   *   tune with {@link ComputeConfig.webFunction}.
+   *
+   * @example
+   * ```ts
+   * compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } }
+   * ```
+   */
+  type?: 'lambda' | 'web-function';
+  /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+  webFunction?: WebFunctionOptions;
   /** Lambda memory size in MB. Default: 512. */
   memorySize?: number;
   /**
@@ -502,6 +537,13 @@ export class Hosting extends Construct {
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
   public readonly ssrFunction?: cdk.aws_lambda.Function;
+  /**
+   * The SSR server on AWS Lambda Web Functions — set instead of
+   * {@link ssrFunction} when `compute.type` is `'web-function'`. Use its
+   * `grantPrincipal` / `addToRolePolicy` to give the server access to AWS
+   * resources.
+   */
+  public readonly ssrWebFunction?: WebFunctionConstruct;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
   public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
   /**
@@ -555,11 +597,21 @@ export class Hosting extends Construct {
    */
   constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
+    // Stack/stage children before Hosting builds anything, so the fronted
+    // backend's role coverage also reaches the singletons and helper stacks it
+    // adds (step 12).
+    const childrenBefore = snapshotForHosting(this);
 
     const root = resolve(props.root);
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
+
+    // Framework resolves here in the synth subprocess; hand it to the parent
+    // orchestrator (which emits telemetry) through the sink file it named. Runs before
+    // the build and output-dir checks below, which can abort synth, so a failed deploy
+    // still reports the framework it was deploying.
+    writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
     if (props.buildCommand) {
@@ -612,7 +664,10 @@ export class Hosting extends Construct {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
-    const manifest: DeployManifest = adapter(root);
+    // Adapters build for the selected compute: Web Functions need a plain
+    // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
+    // Arm64 native modules (Astro's sharp).
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
     if (!manifest.buildId) {
@@ -796,8 +851,11 @@ export class Hosting extends Construct {
 
     const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
 
-    for (const [, fn] of hosting.computeFunctions) {
-      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
+    const envTargets = [
+      ...[...hosting.computeFunctions.values()].filter(canAddEnv), // Lambda@Edge: no env var support
+      ...hosting.computeWebFunctions.values(),
+    ];
+    for (const fn of envTargets) {
       if (props.api) {
         fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
       }
@@ -905,6 +963,7 @@ export class Hosting extends Construct {
     this.distribution = hosting.distribution;
     this.url = hosting.distributionUrl;
     this.ssrFunction = primaryFunction;
+    this.ssrWebFunction = [...hosting.computeWebFunctions.values()][0];
     this.buildCacheBucket = hosting.buildCacheBucket;
     this.monitoring = hosting.monitoring;
 
@@ -944,6 +1003,18 @@ export class Hosting extends Construct {
         description: 'S3 bucket for framework build caches',
       });
     }
+
+    // ── 12. Role coverage ────────────────────────────────────────
+    // Count every role Hosting created as one of the fronted backend's Blocks
+    // roles — including those in the separate us-east-1 stacks (Lambda@Edge,
+    // CloudFront monitoring) and the cross-region reference providers, which no
+    // aspect on this stack reaches — so the backend's permissions boundary and
+    // IAM report cover them (see cdk/blocks-roles.ts).
+    const boundaryOwner = isBlocksBackendRoot(props.api) ? props.api : findBackendRoot(this);
+    // Duck-typed (`edgeArn`) rather than `instanceof`, which fails across
+    // duplicate aws-cdk-lib copies (hosting's vs core's).
+    const edgeFunctions = [...hosting.computeFunctions.values()].filter((fn) => 'edgeArn' in fn);
+    coverHosting(this, boundaryOwner, childrenBefore, edgeFunctions);
   }
 
   /**
@@ -990,8 +1061,18 @@ export class Hosting extends Construct {
     // `originPath` (see httpOriginFromEndpoint).
     const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    // Attach the same security-headers / CSP policy the distribution's static,
+    // SSR and image behaviors carry. Without it the API and auth responses go
+    // to the viewer with no security headers, while the static root has them —
+    // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
+    // behaviors.
+    const apiBehaviorOptions: AddBehaviorOptions = {
+      ...API_BEHAVIOR_OPTIONS,
+      responseHeadersPolicy: hosting.securityHeadersPolicy,
+    };
+
+    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
+    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -1000,7 +1081,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -1031,7 +1112,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, API_BEHAVIOR_OPTIONS);
+      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, apiBehaviorOptions);
     }
   }
 }
