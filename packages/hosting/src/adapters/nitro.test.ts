@@ -242,6 +242,20 @@ void describe('nitroAdapter — IPX provisioning', () => {
     assert.strictEqual(ipxRoute?.pattern, '/img/*', 'the custom endpoint stays in the route table');
   });
 
+  void it('`skipImageOptimization` records @nuxt/image domains for the remote-image allowlist', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ image: { domains: ['images.example.com'] } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined);
+    assert.deepStrictEqual(manifest.imageRemoteSources, { domains: ['images.example.com'] });
+  });
+
   void it('`skipImageOptimization` without @nuxt/image emits no image route', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });

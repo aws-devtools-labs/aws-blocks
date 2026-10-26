@@ -279,6 +279,28 @@ describe('Hosting with HostingPresets.preview', () => {
     });
   });
 
+  it("the allowlist an adapter records with no image function (imageRemoteSources) reaches the asset proxy", () => {
+    const seen: { profile?: BuildProfile } = {};
+    const fixture = ssrFixture(tmpDir, seen);
+    const stack = newStack('PreviewRemoteSources');
+    new Hosting(stack, 'Hosting', {
+      ...HostingPresets.preview,
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: (dir) => {
+        const manifest = fixture(dir);
+        // What the Nitro and Astro adapters emit under skipImageOptimization.
+        delete manifest.imageOptimization;
+        manifest.imageRemoteSources = { domains: ['images.example.com'], remotePatterns: [{ hostname: '**.cdn.example.com' }] };
+        return manifest;
+      },
+    });
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Code: { ZipFile: Match.stringLikeRegexp('IMAGE_REMOTE_HOSTS = \\["images\\.example\\.com","\\*\\*\\.cdn\\.example\\.com"\\]') },
+    });
+  });
+
   it('`imageOptimization: true` after the spread keeps the image function', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewKeepImage');

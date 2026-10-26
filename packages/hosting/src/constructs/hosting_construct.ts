@@ -2790,7 +2790,8 @@ const imagePathEndpoints = (manifest: DeployManifest): string[] =>
 
 /**
  * The remote image hosts the app allows its image optimizer to fetch: the
- * manifest's `imageOptimization.domains` and `remotePatterns` hostnames.
+ * manifest's `imageOptimization.domains` and `remotePatterns` hostnames, or,
+ * with no image function, its `imageRemoteSources`.
  *
  * @param manifest the deploy manifest.
  * @returns the hosts (may carry a `*.` / `**.` wildcard prefix).
@@ -2798,6 +2799,8 @@ const imagePathEndpoints = (manifest: DeployManifest): string[] =>
 const imageRemoteHosts = (manifest: DeployManifest): string[] => [
   ...(manifest.imageOptimization?.domains ?? []),
   ...(manifest.imageOptimization?.remotePatterns ?? []).map((p) => p.hostname),
+  ...(manifest.imageRemoteSources?.domains ?? []),
+  ...(manifest.imageRemoteSources?.remotePatterns ?? []).map((p) => p.hostname),
 ];
 
 

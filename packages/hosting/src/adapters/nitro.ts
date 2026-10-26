@@ -400,8 +400,9 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // value so the CloudFront cache behavior + Lambda strip match (and,
   // without an image function, so the door's fallback matches it).
   const ipxBaseURL = imageOptBundle || imageEndpointWithoutFunction ? findIpxBaseURL(projectDir) : undefined;
-  // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda.
-  const imageDomains = imageOptBundle ? findNuxtImageDomains(projectDir) : [];
+  // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda,
+  // or, with no image function, for the door's image fallback.
+  const imageDomains = imageOptBundle || imageEndpointWithoutFunction ? findNuxtImageDomains(projectDir) : [];
 
   // Merge route rules from the user's nuxt.config.ts (visible in
   // nitro.json on some Nitro versions) with the rules Nitro itself
@@ -1345,6 +1346,12 @@ const buildManifest = (input: {
 
   // Image optimization Lambda — separate compute so sharp's native
   // binary doesn't bloat the SSR Lambda zip.
+  // No image function: keep the allowlist so the door's image fallback can
+  // redirect an allowlisted remote source.
+  if (imageEndpointWithoutFunction && imageDomains && imageDomains.length > 0) {
+    manifest.imageRemoteSources = { domains: imageDomains };
+  }
+
   if (imageOptBundle) {
     manifest.imageOptimization = {
       bundle: imageOptBundle,

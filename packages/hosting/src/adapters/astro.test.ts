@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import semver from 'semver';
 import { spawn } from './spawn.js';
+import { withBuildProfile } from './shared/build_profile.js';
 import {
   astroAdapter,
   astroUsesSharpService,
@@ -348,5 +349,38 @@ void describe('astroAdapter — pure-SSR build with empty dist/client (regressio
       Object.keys(manifest.compute).length > 0,
       'a pure-SSR manifest has a compute (SSR) target',
     );
+  });
+});
+
+void describe('astroAdapter — remote image allowlist with no image function', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'astro-adapter-allowlist-'));
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'astro'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'node_modules', 'astro', 'package.json'), JSON.stringify({ name: 'astro', version: '5.0.0' }));
+    fs.writeFileSync(
+      path.join(tmp, 'astro.config.mjs'),
+      "export default { output: 'server', image: { domains: ['images.example.com'], remotePatterns: [{ protocol: 'https', hostname: '**.cdn.example.com' }] } };\n",
+    );
+    const serverDir = path.join(tmp, 'dist', 'server');
+    fs.mkdirSync(serverDir, { recursive: true });
+    fs.writeFileSync(path.join(serverDir, 'entry.mjs'), 'export const handler = () => {};');
+    fs.mkdirSync(path.join(tmp, 'dist', 'client'), { recursive: true });
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('records image.domains and remotePatterns hostnames under skipImageOptimization', () => {
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () => astroAdapter({ projectDir: tmp, skipBuild: true }));
+    assert.deepStrictEqual(manifest.imageRemoteSources, {
+      domains: ['images.example.com'],
+      remotePatterns: [{ protocol: 'https', hostname: '**.cdn.example.com' }],
+    });
+  });
+
+  it('records nothing for a build that keeps its image service', () => {
+    const manifest = astroAdapter({ projectDir: tmp, skipBuild: true });
+    assert.strictEqual(manifest.imageRemoteSources, undefined);
   });
 });
