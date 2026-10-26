@@ -431,3 +431,212 @@ test('CDK: explicit-origin CORS with a mutating method is allowed', () => {
     }),
   );
 });
+
+// ── Encryption at rest ──────────────────────────────────────────────────────
+
+const KEY_ARN = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234';
+
+function dataBucket(template: Template): Record<string, any> {
+  const buckets = template.findResources('AWS::S3::Bucket', {
+    Properties: { BucketName: Match.stringLikeRegexp('uploads') },
+  });
+  const [only] = Object.values(buckets);
+  assert.ok(only, 'expected the data bucket');
+  return only.Properties;
+}
+
+test('CDK: default encryption stays SSE-S3 with no KMS key', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  assert.deepStrictEqual(dataBucket(template).BucketEncryption, {
+    ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+  });
+  template.resourceCountIs('AWS::KMS::Key', 0);
+});
+
+test("CDK: encryption 'customer-managed' mints a rotating CMK and uses SSE-KMS with a Bucket Key", () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { encryption: 'customer-managed' });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::KMS::Key', 1);
+  template.hasResourceProperties('AWS::KMS::Key', { EnableKeyRotation: true });
+  const [rule] = dataBucket(template).BucketEncryption.ServerSideEncryptionConfiguration;
+  assert.strictEqual(rule.ServerSideEncryptionByDefault.SSEAlgorithm, 'aws:kms');
+  assert.ok(rule.ServerSideEncryptionByDefault.KMSMasterKeyID, 'bucket points at the minted key');
+  assert.strictEqual(rule.BucketKeyEnabled, true);
+});
+
+test("CDK: the 'customer-managed' key follows the bucket's removal policy (sandbox DESTROY, production RETAIN)", () => {
+  for (const [defaults, policy] of [[BlocksPresets.sandbox, 'Delete'], [BlocksPresets.production, 'Retain']] as const) {
+    const { stack, parent } = setup(defaults);
+    new FileBucket(parent, 'uploads', { encryption: 'customer-managed' });
+    Template.fromStack(stack).hasResource('AWS::KMS::Key', { DeletionPolicy: policy, UpdateReplacePolicy: policy });
+  }
+});
+
+test('CDK: encryption FileBucket.fromKmsKey(arn) uses that key and mints none', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { encryption: FileBucket.fromKmsKey(KEY_ARN) });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::KMS::Key', 0);
+  const [rule] = dataBucket(template).BucketEncryption.ServerSideEncryptionConfiguration;
+  assert.deepStrictEqual(rule.ServerSideEncryptionByDefault, { SSEAlgorithm: 'aws:kms', KMSMasterKeyID: KEY_ARN });
+  assert.strictEqual(rule.BucketKeyEnabled, true);
+});
+
+test('CDK: SSE-KMS grants the runtime role encrypt/decrypt on the key', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { encryption: FileBucket.fromKmsKey(KEY_ARN) });
+  Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith(['kms:Decrypt', 'kms:GenerateDataKey*']),
+          Resource: KEY_ARN,
+        }),
+      ]),
+    },
+  });
+});
+
+test('CDK: the access-log bucket stays SSE-S3 when the data bucket uses SSE-KMS', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { encryption: 'customer-managed', accessLogging: true });
+  const template = Template.fromStack(stack);
+  const logBuckets = Object.values(template.findResources('AWS::S3::Bucket')).filter(
+    (b: any) => b.Properties.BucketName === undefined,
+  );
+  assert.strictEqual(logBuckets.length, 1);
+  assert.deepStrictEqual((logBuckets[0] as any).Properties.BucketEncryption, {
+    ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+  });
+});
+
+test('CDK: an unrecognized encryption value warns and falls back to SSE-S3', () => {
+  const { stack, parent } = setup();
+  // Deliberately invalid input (a typo a JS caller could pass).
+  new FileBucket(parent, 'uploads', { encryption: 'kms' as unknown as 'aws-managed' });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::KMS::Key', 0);
+  const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+  assert.strictEqual(warnings.length, 1);
+});
+
+test('CDK: fromExisting ignores encryption (no key minted for a wrapped bucket)', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { bucket: FileBucket.fromExisting('existing'), encryption: 'customer-managed' });
+  Template.fromStack(stack).resourceCountIs('AWS::KMS::Key', 0);
+});
+
+// ── Object Lock ─────────────────────────────────────────────────────────────
+
+test('CDK: objectLock enables Object Lock with the default retention (governance)', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { objectLock: { mode: 'governance', retentionDays: 30 } });
+  const props = dataBucket(Template.fromStack(stack));
+  assert.strictEqual(props.ObjectLockEnabled, true);
+  assert.deepStrictEqual(props.ObjectLockConfiguration, {
+    ObjectLockEnabled: 'Enabled',
+    Rule: { DefaultRetention: { Mode: 'GOVERNANCE', Days: 30 } },
+  });
+  assert.deepStrictEqual(props.VersioningConfiguration, { Status: 'Enabled' });
+});
+
+test('CDK: objectLock compliance mode maps to COMPLIANCE', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { objectLock: { mode: 'compliance', retentionDays: 365 } });
+  assert.deepStrictEqual(dataBucket(Template.fromStack(stack)).ObjectLockConfiguration.Rule, {
+    DefaultRetention: { Mode: 'COMPLIANCE', Days: 365 },
+  });
+});
+
+test('CDK: no objectLock leaves Object Lock off', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  const props = dataBucket(Template.fromStack(stack));
+  assert.strictEqual(props.ObjectLockEnabled, undefined);
+  assert.strictEqual(props.ObjectLockConfiguration, undefined);
+});
+
+test('CDK: objectLock with versioned:false throws at synth', () => {
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { versioned: false, objectLock: { mode: 'governance', retentionDays: 30 } }),
+    (err: Error) => /objectLock requires versioning/.test(err.message),
+  );
+});
+
+test('CDK: objectLock under the sandbox preset (DESTROY) throws at synth', () => {
+  const { parent } = setup(BlocksPresets.sandbox);
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { objectLock: { mode: 'governance', retentionDays: 30 } }),
+    (err: Error) => /objectLock can't be combined with a 'destroy' removal policy/.test(err.message)
+      && /removalPolicy: 'retain'/.test(err.message),
+  );
+});
+
+test("CDK: objectLock with an explicit removalPolicy 'destroy' throws at synth", () => {
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { removalPolicy: 'destroy', objectLock: { mode: 'governance', retentionDays: 30 } }),
+    /objectLock can't be combined with a 'destroy' removal policy/,
+  );
+});
+
+test("CDK: objectLock in a sandbox works with removalPolicy 'retain' (no auto-delete)", () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
+  new FileBucket(parent, 'uploads', { removalPolicy: 'retain', objectLock: { mode: 'governance', retentionDays: 1 } });
+  const template = Template.fromStack(stack);
+  assert.strictEqual(dataBucket(template).ObjectLockEnabled, true);
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
+});
+
+test('CDK: invalid objectLock retentionDays / mode throw at synth', () => {
+  for (const retentionDays of [0, -1, 1.5, 36501]) {
+    const { parent } = setup();
+    assert.throws(
+      () => new FileBucket(parent, 'uploads', { objectLock: { mode: 'governance', retentionDays } }),
+      /objectLock\.retentionDays must be an integer between 1 and 36500/,
+    );
+  }
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { objectLock: { mode: 'legal-hold' as unknown as 'governance', retentionDays: 1 } }),
+    /objectLock\.mode must be 'governance' or 'compliance'/,
+  );
+});
+
+// ── storageAccessLogging default ────────────────────────────────────────────
+
+function logBucketCount(stack: cdk.Stack): number {
+  return Object.values(Template.fromStack(stack).findResources('AWS::S3::Bucket')).filter(
+    (b: any) => b.Properties.BucketName === undefined,
+  ).length;
+}
+
+test('CDK: defaults.storageAccessLogging true enables S3 access logs while API accessLogging stays off', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.production, storageAccessLogging: true });
+  new FileBucket(parent, 'uploads');
+  assert.strictEqual(logBucketCount(stack), 1);
+});
+
+test('CDK: defaults.storageAccessLogging false wins over accessLogging true', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.production, accessLogging: true, storageAccessLogging: false });
+  new FileBucket(parent, 'uploads');
+  assert.strictEqual(logBucketCount(stack), 0);
+});
+
+test('CDK: per-block accessLogging wins over defaults.storageAccessLogging', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.production, storageAccessLogging: true });
+  new FileBucket(parent, 'uploads', { accessLogging: false });
+  assert.strictEqual(logBucketCount(stack), 0);
+});
+
+test('CDK: both presets leave storageAccessLogging unset, so behavior is unchanged', () => {
+  assert.ok(!('storageAccessLogging' in BlocksPresets.production));
+  assert.ok(!('storageAccessLogging' in BlocksPresets.sandbox));
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  assert.strictEqual(logBucketCount(stack), 0);
+});

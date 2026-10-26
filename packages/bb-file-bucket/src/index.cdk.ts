@@ -3,11 +3,13 @@
 
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
+import { resolveKmsEncryption } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucketOptions, CorsRule, ExternalBucketRef } from './types.js';
+import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 import { BB_NAME } from './version.js';
@@ -15,7 +17,7 @@ import { BB_NAME } from './version.js';
 export { FileBucketErrors } from './errors.js';
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -40,6 +42,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	static fromExisting(bucketName: string): ExternalBucketRef {
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option so several buckets (or tables) can share one key.
+	 * Mirrors the same factory exposed by the runtime build so the same code
+	 * works in both contexts.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
@@ -81,6 +93,40 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// paths reject exactly the same option combinations (mock↔CDK parity).
 		validateFileBucketOptions(this.fullId, options);
 
+		// Object Lock can't coexist with a DESTROY bucket: locked versions can't
+		// be emptied (the auto-delete handler would fail on them), so the stack
+		// teardown would fail. This depends on the resolved removal policy, a
+		// CDK-only concept, so it lives here rather than in the shared validator.
+		if (options?.objectLock && destroy) {
+			throw new Error(
+				`FileBucket "${this.fullId}": objectLock can't be combined with a 'destroy' removal policy ` +
+				`(locked objects can't be deleted, so the stack teardown would fail). ` +
+				`Pass removalPolicy: 'retain' on this FileBucket — required in a sandbox, whose preset destroys buckets by default.`,
+			);
+		}
+
+		// Encryption at rest: SSE-S3 by default; SSE-KMS with a dedicated or an
+		// imported CMK on request. The `encryption` values (and the warning on an
+		// unrecognized one) are shared with the DynamoDB-backed blocks.
+		const encryptionChoice = resolveKmsEncryption(this, options?.encryption, {
+			warningPrefix: BB_NAME,
+			fromKmsKeyHint: 'FileBucket.fromKmsKey',
+		});
+		// `'customer-managed'` mints a dedicated key here (rather than letting
+		// `s3.Bucket` create one) so rotation is always on and the key shares the
+		// bucket's removal policy: a DESTROY bucket doesn't orphan a billed,
+		// rotating key, and a RETAIN bucket never outlives its key.
+		const encryptionKey: kms.IKey | undefined =
+			encryptionChoice.kind === 'imported'
+				? encryptionChoice.key
+				: encryptionChoice.kind === 'customer-managed'
+					? new kms.Key(this, 'key', {
+						description: `FileBucket ${this.fullId} encryption key`,
+						enableKeyRotation: true,
+						removalPolicy,
+					})
+					: undefined;
+
 		// Versioning stays on by default (secure default): a posture-driven
 		// `versioned` default would require a new `BlocksDefaults` field in
 		// core, which is out of scope for this change, so we keep the
@@ -91,10 +137,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// Opt-in server access logging: provision a dedicated, locked-down log
 		// bucket and expire its logs after the framework retention. Kept
 		// separate from the data bucket so log delivery can't loop back on it.
-		// Resolves from the stack `defaults.accessLogging` when no per-block
-		// option is given, so a production-postured stack opts every FileBucket
-		// in without a per-block flag.
-		const accessLogging = options?.accessLogging ?? this.defaults.accessLogging;
+		// Resolves from the stack `defaults.storageAccessLogging` (then the
+		// shared `defaults.accessLogging`) when no per-block option is given, so
+		// a stack opts every FileBucket in without a per-block flag.
+		const accessLogging =
+			options?.accessLogging ?? this.defaults.storageAccessLogging ?? this.defaults.accessLogging;
 		let serverAccessLogsBucket: s3.Bucket | undefined;
 		if (accessLogging) {
 			// The access-log lifecycle expiry derives from the framework-wide
@@ -111,6 +158,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 					: [{ id: 'expire-access-logs', expiration: Duration.days(logRetention) }];
 			serverAccessLogsBucket = new s3.Bucket(this, 'access-logs', {
 				blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+				// Always SSE-S3, even when the data bucket uses SSE-KMS: S3 server
+				// access logging can't deliver to an SSE-KMS target bucket.
 				encryption: s3.BucketEncryption.S3_MANAGED,
 				enforceSSL: true,
 				removalPolicy,
@@ -146,7 +195,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.bucket = new s3.Bucket(this, 'bucket', {
 			bucketName: this.fullId,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-			encryption: s3.BucketEncryption.S3_MANAGED,
+			// SSE-KMS buckets enable S3 Bucket Keys, which cut per-request KMS
+			// calls (and their cost) by reusing a bucket-level data key.
+			...(encryptionKey
+				? { encryption: s3.BucketEncryption.KMS, encryptionKey, bucketKeyEnabled: true }
+				: { encryption: s3.BucketEncryption.S3_MANAGED }),
+			objectLockDefaultRetention: options?.objectLock
+				? (options.objectLock.mode === 'compliance'
+					? s3.ObjectLockRetention.compliance(Duration.days(options.objectLock.retentionDays))
+					: s3.ObjectLockRetention.governance(Duration.days(options.objectLock.retentionDays)))
+				: undefined,
 			// All FileBucket traffic (SDK calls + presigned URLs) is HTTPS, so
 			// enforce TLS to close the in-transit exposure gap unconditionally.
 			enforceSSL: true,
@@ -165,6 +223,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			lifecycleRules: lifecycleRules.length > 0 ? lifecycleRules : undefined,
 		});
 
+		// Also grants the runtime role encrypt/decrypt on the bucket's KMS key
+		// (dedicated or imported) when it uses SSE-KMS.
 		this.bucket.grantReadWrite(this.executionRole);
 	}
 

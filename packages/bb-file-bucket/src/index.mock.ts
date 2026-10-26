@@ -17,14 +17,14 @@ import { validateBucketName } from './bucket-name.js';
 import { validateFileBucketOptions, assertValidKey } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef,
+	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
 
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -488,6 +488,17 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	static fromExisting(bucketName: string): ExternalBucketRef {
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option. Encryption is applied at deploy time; the
+	 * mock ignores it.
+	 *
+	 * @param keyArn - The ARN of the existing KMS key.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	// ── Internal helpers ──────────────────────────────────────────────────

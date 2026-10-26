@@ -36,6 +36,14 @@ export interface ExternalBucketRef {
 }
 
 // @public
+export interface ExternalKmsKeyRef {
+    // (undocumented)
+    readonly __brand: 'ExternalKmsKeyRef';
+    // (undocumented)
+    readonly keyArn: string;
+}
+
+// @public
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: O);
     // (undocumented)
@@ -48,6 +56,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
     deleteBatch(paths: string[]): Promise<void>;
     // (undocumented)
     static fromExisting(bucketName: string): ExternalBucketRef;
+    static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
     // (undocumented)
     get(path: string, options?: GetOptionsFor<O>): Promise<FileContent | null>;
     // (undocumented)
@@ -80,9 +89,11 @@ export interface FileBucketOptions {
     accessLogging?: boolean;
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
     noncurrentVersionExpirationDays?: number;
+    objectLock?: ObjectLockOptions;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }
@@ -164,6 +175,12 @@ export interface LifecycleRule {
     expirationDays?: number;
     prefix?: string;
     transitionToIaDays?: number;
+}
+
+// @public
+export interface ObjectLockOptions {
+    mode: 'governance' | 'compliance';
+    retentionDays: number;
 }
 
 // @public (undocumented)

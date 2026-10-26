@@ -10,6 +10,9 @@ import type { CorsRule, FileBucketOptions } from './types.js';
  */
 export const DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS = 90;
 
+/** Upper bound for `objectLock.retentionDays` (100 years). */
+export const MAX_OBJECT_LOCK_RETENTION_DAYS = 36500;
+
 /** CORS methods that mutate state; a wildcard origin must never allow these. */
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
@@ -92,7 +95,7 @@ export function assertValidKey(key: string): void {
  * would reject (mock↔CDK parity — see bb-app-setting's validation.ts for the
  * same pattern).
  *
- * These are the two guards previously duplicated verbatim in `index.cdk.ts` and
+ * The CORS and noncurrent-expiration guards were previously duplicated verbatim in `index.cdk.ts` and
  * `index.mock.ts`; extracting them keeps a single source of truth. Both checks
  * depend only on the option shape (not on an async value/schema), so they are
  * safe to run synchronously in both constructors.
@@ -134,6 +137,31 @@ export function validateFileBucketOptions(fullId: string, options?: FileBucketOp
 			throw new Error(
 				`FileBucket "${fullId}": noncurrentVersionExpirationDays must be a positive integer (got ${days}). ` +
 				`Omit it to use the default of ${DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS} days.`,
+			);
+		}
+	}
+
+	// Object Lock locks object VERSIONS, so S3 requires versioning on the
+	// bucket. Reject the contradiction instead of silently re-enabling
+	// versioning (which would also flip the version-aware method typings).
+	const objectLock = options?.objectLock;
+	if (objectLock !== undefined) {
+		if (options?.versioned === false) {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock requires versioning, but versioned is false. ` +
+				`Remove versioned: false (versioning is on by default) or remove objectLock.`,
+			);
+		}
+		if (objectLock.mode !== 'governance' && objectLock.mode !== 'compliance') {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock.mode must be 'governance' or 'compliance' (got ${String(objectLock.mode)}).`,
+			);
+		}
+		const days = objectLock.retentionDays;
+		if (!Number.isInteger(days) || days <= 0 || days > MAX_OBJECT_LOCK_RETENTION_DAYS) {
+			throw new Error(
+				`FileBucket "${fullId}": objectLock.retentionDays must be an integer between 1 and ` +
+				`${MAX_OBJECT_LOCK_RETENTION_DAYS} (got ${days}).`,
 			);
 		}
 	}

@@ -17,7 +17,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef,
+	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
@@ -30,7 +30,7 @@ import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -284,5 +284,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	static fromExisting(bucketName: string): ExternalBucketRef {
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option. Encryption is applied at deploy time; the
+	 * runtime only needs the reference to keep code shared with the CDK build.
+	 *
+	 * @param keyArn - The ARN of the existing KMS key.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 }
