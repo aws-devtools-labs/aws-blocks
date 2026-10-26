@@ -46,7 +46,7 @@ const agent = new Agent(scope, id, config)
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
 | `getPendingInterrupts(conversationId, { userId })` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
-| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents still take `{ userId }` but don't use it (their channels are not user-scoped). |
+| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents ignore the `userId` (their channels are not user-scoped), but pass the session's `userId` anyway, not a placeholder. |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -79,7 +79,7 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
 
-These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`). `listConversations(userId)` returns only the conversations a user owns:
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -411,7 +411,7 @@ try {
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
 | `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
-| `AgentErrors.InvalidUsage` | `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key (with persistence enabled). |
+| `AgentErrors.InvalidUsage` | With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key. |
 
 ### Streaming Mode
 
