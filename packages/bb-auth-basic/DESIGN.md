@@ -115,7 +115,8 @@ This allows the Authenticator UI component to display errors without losing trac
 - **Security** — if the KVStore is compromised, codes cannot be extracted. The attacker would need both the stored HMAC and the JWT secret.
 - **Constant-time comparison** — `constantTimeEquals` from `@aws-blocks/core/bb-utils` prevents timing attacks during verification.
 - **10-minute TTL** — codes expire after 600 seconds, limiting the attack window.
-- **Non-enumerable** — 6-digit codes have 900,000 possible values. Combined with TTL, brute-force is impractical.
+- **Per-code attempt cap (atomic)** — a 6-digit code is only ~900,000 values (~19.8 bits), which is exhaustively guessable within the 10-minute window at any reasonable request rate, so the TTL alone does **not** make brute-force impractical. An always-on cap bounds guesses against a *single* code at `MAX_CODE_ATTEMPTS` (5). The counter (`attempts`) lives inside the code record, reaped with the code's own TTL (no separate key). Each attempt is **reserved before the guess is evaluated** via a compare-and-swap: `verifyCode` reads the row, then `put`s the incremented count guarded on the exact prior value (`ifValueEquals`). This holds the cap under concurrency — in a parallel burst (including across Lambda instances sharing one DynamoDB row) every request reads the same row, but only one CAS write per `attempts` value wins; the losers get `ConditionalCheckFailedException` and are rejected **without their guess being evaluated**, so they consume no budget and leak nothing. A plain read-modify-write would instead advance the counter once per *burst*, letting the slack scale with attacker parallelism — defeating the cap down to the bare TTL. The guard is the original serialized value, so the CAS write also cannot extend the window. The exhausted row is **not** deleted per guess: it stays at `attempts = MAX_CODE_ATTEMPTS` and self-reaps at the code TTL, closing the delete-then-stale-resurrect race a per-guess delete would open. The same generic `InvalidCodeException` is thrown on a wrong guess, a CAS loss, and an exhausted code, so no oracle reveals whether the cap was hit. A correct guess consumes the code with a conditional delete (guarded on the reserved value) so a concurrent fresh issuance is never clobbered.
+- **Issuance is unthrottled, so the cap bounds one code, not the whole attack.** `resetPassword` is unauthenticated and writes a fresh code (`attempts: 0`) on every call, so an attacker can loop "request reset → exhaust the cap"; the overall success bound is `cap × issuances ÷ keyspace`, and code length therefore still matters linearly. Each issuance is self-limiting in nuisance terms (it emails the user and replaces their in-flight code), but AuthBasic does not rate-limit issuance volume itself. That volumetric exposure belongs to the infrastructure layer — CloudFront WAF rate rules / API Gateway throttling in front of the API — exactly as D-AB-11 notes for the sign-in path; the per-code cap and the network layer are complementary.
 
 ### D-AB-5: Cookie attributes (HttpOnly; SameSite=Lax default, cross-domain opt-in)
 
@@ -195,7 +196,7 @@ None directly — AuthBasic is a composite Building Block with no CDK construct.
 | Composed BB | Creates | Purpose |
 |-------------|---------|---------|
 | `KVStore(this, 'users')` | DynamoDB table (PAY_PER_REQUEST) | User records: username → `{ hash, createdAt, unconfirmed? }` |
-| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires }` |
+| `KVStore(this, 'codes')` | DynamoDB table (PAY_PER_REQUEST) | Verification codes: `purpose:username` → `{ hmac, expires, attempts }` |
 | `AppSetting(this, 'jwt-secret')` | SSM Parameter (SecureString) | JWT signing secret |
 
 All permissions (DynamoDB read/write, SSM GetParameter) are managed by the composed BBs via the standard Blocks grant mechanism. No additional IAM configuration is needed.
@@ -240,9 +241,12 @@ The mock behavior is identical to AWS behavior with the following environment di
 ```json
 {
   "hmac": "a1b2c3...",       // HMAC-SHA256 of "purpose:username:code" with JWT secret
-  "expires": 1700000000000   // Unix timestamp (ms) when code expires (10 min TTL)
+  "expires": 1700000000000,  // Unix timestamp (ms) when code expires (10 min TTL)
+  "attempts": 0              // failed-guess count, reserved via CAS; pinned at MAX_CODE_ATTEMPTS (5) once spent
 }
 ```
+
+Legacy code rows written before attempt-limiting have no `attempts` field and default to `0` on read.
 
 **Legacy user record handling:** If a raw value is stored (starts with a non-`{` character), it's treated as a bare bcrypt hash with epoch creation date. This supports migration from an earlier format.
 
@@ -281,7 +285,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Token replay after sign-out | Revocation list keyed by `jti` — `signOut` records the token id (self-expiring at the token's `exp`), and every auth check rejects a revoked `jti`, so a copied/replayed cookie stops working at sign-out rather than at `exp` |
 | Timing attacks on code verification | `constantTimeEquals` for HMAC comparison |
 | User enumeration (resetPassword) | Silent success for non-existent users |
-| Code brute-force | 10-minute TTL + 900,000 possible values |
+| Code brute-force | `MAX_CODE_ATTEMPTS` (5) failed-guess cap, enforced atomically (each attempt reserved by a compare-and-swap, so parallel bursts can't bypass it), plus the 10-minute TTL (D-AB-4). The cap bounds guesses against a *single* code; issuance is unthrottled, so the overall bound is `cap × issuances ÷ keyspace` — rate-limit issuance volume at the infrastructure layer (WAF / API Gateway) |
 | Secret exposure | Stored in SSM SecureString (encrypted at rest) |
 | Cross-site request forgery | SameSite=Lax by default (CSRF-resistant); SameSite=None + Partitioned when crossDomain: true (CHIPS isolation) |
 | Unconfirmed user access | signIn rejects users with `unconfirmed: true` |
