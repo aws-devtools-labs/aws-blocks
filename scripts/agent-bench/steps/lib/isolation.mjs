@@ -101,7 +101,8 @@ export function isolationAvailable() {
  * The recursive grants run as root: from the second agent phase on (step 3 after step 2), the
  * workspace holds files the agent user created, and only a file's owner or root may set its ACL.
  * -P keeps that root walk from following a symlink the agent planted out of the workspace, so the
- * root itself is passed as its real path (-P also skips a symlink argument).
+ * root itself is passed as its real path (-P also skips a symlink argument). -P is checked per path,
+ * not per fd, so the caller must reap every agent-user process first (enterAgentPhase does).
  * @param {string} root
  * @returns {boolean} true only if the workspace grants succeeded
  */
@@ -435,11 +436,17 @@ function sleepMs(ms) {
  */
 export function reapAgentProcesses() {
 	if (!isolationAvailable()) return true;
+	// kill(-1) from an agent-user shell signals every process that user may signal in one kernel pass
+	// a concurrent fork can't slip past, while pkill reads /proc first, so a fork-and-exit chain can
+	// outrun it. It also reaches setuid children (real uid = agent), which pkill -u (effective uid) misses.
+	const killAll = asAgent([], [BIN.bash, '-c', 'kill -KILL -1']);
 	for (let i = 0; i < 20; i++) {
+		spawnSync(killAll.file, killAll.args, { stdio: 'ignore', timeout: 5000 });
 		spawnSync(BIN.sudo, ['-n', BIN.pkill, '-KILL', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
 		// After the kill, so no surviving process can re-add a crontab that cron would run later.
 		spawnSync(BIN.sudo, ['-n', BIN.crontab, '-r', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
-		if (spawnSync(BIN.pgrep, ['-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1) return true;
+		const none = (flag) => spawnSync(BIN.pgrep, [flag, BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1;
+		if (none('-u') && none('-U')) return true;
 		sleepMs(250);
 	}
 	return false;
@@ -454,6 +461,9 @@ export function reapAgentProcesses() {
  * @returns {{isolated: boolean, error?: undefined} | {isolated: false, error: string}}
  */
 export function enterAgentPhase(root, options = {}) {
+	// Reap before the grant: its root walk goes by path, so a live agent-user process could swap a
+	// workspace dir for a symlink mid-walk and redirect it outside the workspace.
+	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
 	if (!isolationAvailable() || !prepareWorkspaceIsolation(root)) {
 		if (bareShellAllowed()) return { isolated: false };
 		return {
@@ -461,7 +471,6 @@ export function enterAgentPhase(root, options = {}) {
 			error: `isolation unavailable: no passwordless sudo+runuser for ${BENCH_AGENT_USER} or the workspace ACL grant failed`,
 		};
 	}
-	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
 	const execProblems = lockDownExecPaths(trustedExecPaths(process.env, [root, ...(options.agentDirs ?? [])]));
 	if (execProblems.length) {
 		return { isolated: false, error: `trusted executable paths are writable by ${BENCH_AGENT_USER}: ${execProblems.slice(0, 5).join('; ')}` };

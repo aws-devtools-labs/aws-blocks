@@ -63,6 +63,10 @@ function asAgent(script) {
 	return spawnSync('/usr/bin/sudo', ['-n', '/usr/sbin/runuser', '-u', BENCH_AGENT_USER, '--', '/bin/bash', '-c', script], { encoding: 'utf-8' });
 }
 
+function sleepMs(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 // A child process env for a CI job whose agent user is missing (isolation can't be entered).
 function ciEnvWithoutAgentUser(extra = {}) {
 	return {
@@ -222,6 +226,22 @@ describe('the agent-user boundary on a real host', () => {
 		assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER, '-f', marker]).status, 0, 'escapee should be running');
 		assert.equal(reapAgentProcesses(), true);
 		assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
+	});
+
+	// enterAgentPhase reaps before its root ACL walk, which a live agent process could redirect with a
+	// symlink swap (acl walks by path), so the reap must not lose a process that keeps changing pid.
+	it('reap: kills a fork-and-exit chain and nothing comes back', needsBoundary, () => {
+		try {
+			const started = asAgent(`setsid nohup bash -c 'r() { r & exit; }; r' </dev/null >/dev/null 2>&1 &`);
+			assert.equal(started.status, 0, started.stderr);
+			sleepMs(200);
+			assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 0, 'the chain should be running');
+			assert.equal(reapAgentProcesses(), true);
+			sleepMs(500);
+			assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
+		} finally {
+			reapAgentProcesses();
+		}
 	});
 
 	it('enterAgentPhase grants the workspace and verifies the boundary', needsBoundary, () => {
