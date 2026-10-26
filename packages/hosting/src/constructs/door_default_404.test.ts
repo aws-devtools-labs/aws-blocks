@@ -25,6 +25,7 @@ import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { cf } from './cf_helpers.js';
+import { customErrorResponses } from './error_responses.js';
 import { type DoorInput, defineFrontDoor } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
 
@@ -69,6 +70,13 @@ describe('the default 404 page behind every front door', () => {
   /** Whether the default page is uploaded to the build prefix. */
   const uploadsDefaultPage = (t: Template): boolean =>
     Object.keys(t.findResources('Custom::CDKBucketDeployment')).some((id) => id.includes('DefaultNotFoundPageDeployment'));
+  /** Every distribution's error responses, as [status, page path]. */
+  const errorResponsePaths = (t: Template): Array<[number, unknown]> =>
+    Object.values(t.findResources('AWS::CloudFront::Distribution')).flatMap((d) =>
+      ((d.Properties.DistributionConfig.CustomErrorResponses ?? []) as Array<{ ErrorCode: number; ResponsePagePath: unknown }>).map(
+        (r): [number, unknown] => [r.ErrorCode, r.ResponsePagePath],
+      ),
+    );
   /** The inline asset-proxy source (the function that carries the app's rules). */
   const assetProxySource = (t: Template): string => {
     const fn = Object.values(t.findResources('AWS::Lambda::Function')).find((f) =>
@@ -110,6 +118,26 @@ describe('the default 404 page behind every front door', () => {
     const { t } = synth(mpa(), { kind: 'custom', door });
     assert.deepEqual(seen.input?.app.errorPages, { notFound: NOT_FOUND_PAGE_KEY });
     assert.ok(uploadsDefaultPage(t));
+    // `cf.errorPages` serves the page at its own key (the default page is not `404.html`).
+    assert.deepEqual(errorResponsePaths(t), [[404, `/${NOT_FOUND_PAGE_KEY}`]]);
+  });
+
+  it("the stacked door's router uploads the default page and hands it to the edge", () => {
+    const { t, hosting } = synth(mpa(), { kind: 'stackedRouter' });
+    assert.ok(uploadsDefaultPage(t));
+    assert.deepEqual(hosting.doorInput.app.errorPages, { notFound: NOT_FOUND_PAGE_KEY });
+  });
+
+  it('error pages are served at their own keys behind the edge (stacked) and cf.errorPages', () => {
+    const pages = { notFound: NOT_FOUND_PAGE_KEY, serverError: 'errors/500.html' };
+    const paths = customErrorResponses(pages, { pathPrefix: '/builds/b1', hasCompute: false, pageKeys: true }).map((r) => [
+      r.httpStatus,
+      r.responsePagePath,
+    ]);
+    assert.deepEqual(paths[0], [404, `/builds/b1/${NOT_FOUND_PAGE_KEY}`]);
+    assert.deepEqual(paths[1], [500, '/builds/b1/errors/500.html']);
+    // The built-in CloudFront door uploads the app's files as 404.html / 500.html.
+    assert.equal(customErrorResponses({ notFound: '/abs/my-404.html' }, { pathPrefix: '/builds/b1', hasCompute: false })[0]?.responsePagePath, '/builds/b1/404.html');
   });
 
   it('the CloudFront door still uploads it (unchanged)', () => {

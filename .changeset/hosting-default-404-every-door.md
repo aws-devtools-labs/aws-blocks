@@ -13,7 +13,10 @@ A multi-page static site that ships no 404 page of its own and sets no
 `Not Found`. A bring-your-own door receives it as `DoorInput.app.errorPages.notFound`
 (`_not_found.html`), so `cf.errorPages` wires it too. The precedence is the same
 on every door: the app's `errorPages.notFound`, then the framework's
-`errorPages[404]`, then the default. An SPA keeps its `index.html` fallback, a
+`errorPages[404]`, then the default. The stacked door's edge and
+`cf.errorPages` now serve an error page at its own key (the default
+`_not_found.html`, or a framework page under any name) instead of always
+pointing at `404.html` / `500.html`. An SPA keeps its `index.html` fallback, a
 site with a server keeps its own 404, and the `'none'` door keeps its S3
 website error document. The CloudFront door's template is unchanged.
 
