@@ -179,6 +179,36 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every HTML template declares a UTF-8 charset', () => {
+    // Without it, a host that sends `Content-Type: text/html` with no charset
+    // (S3, most static servers) makes the browser decode the page as
+    // windows-1252, so any non-ASCII text in the HTML or a classic script
+    // renders as mojibake. Browsers only honour the tag in the first 1024 bytes.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const htmlPath = join(templatesDir, entry.name, 'index.html');
+      if (!existsSync(htmlPath)) continue;
+      const head = readFileSync(htmlPath, 'utf-8').slice(0, 1024);
+      if (!/<head>\s*<meta charset="utf-8"\s*\/?>/i.test(head)) {
+        problems.push(`${entry.name}: index.html should open <head> with <meta charset="utf-8">`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it('nextjs template wraps each page section in its own error boundary', () => {
+    // error.tsx covers the whole route: without per-section boundaries, one
+    // failing Server Component replaces the page, client components included.
+    const pageDir = join(__dirname, '..', 'templates', 'nextjs', 'src', 'app');
+    assert.ok(existsSync(join(pageDir, 'section-boundary.tsx')), 'section-boundary.tsx is missing');
+    const sections = readFileSync(join(pageDir, 'page.tsx'), 'utf-8').match(/<section[\s\S]*?<\/section>/g) ?? [];
+    assert.ok(sections.length > 0, 'page.tsx has no <section> elements');
+    const unwrapped = sections.filter((section) => !section.includes('<SectionBoundary>'));
+    assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
+  });
+
   it('every template sandbox script forwards --deploy-only to startSandbox and exits', () => {
     // Run each template's real aws-blocks/scripts/sandbox.ts against a stubbed
     // `@aws-blocks/blocks/scripts` that records the options it receives. The

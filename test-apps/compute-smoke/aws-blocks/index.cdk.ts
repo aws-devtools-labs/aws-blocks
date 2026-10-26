@@ -43,7 +43,7 @@ if (!FRONT_DOORS.includes(apiFrontDoor)) {
 // scheduled CI cleanup's sweep (cleanup-stacks.yml) and the CI role's E2E
 // prefixes. Keep the name short: resource names derive from it, and in sandbox
 // mode the FileBucket's must fit S3's 63 characters with a CI suffix like
-// `compute-1234-12` (61).
+// `pr-1234-12` (56).
 const leg = { apigateway: 'gw', cloudfront: 'cf' }[apiFrontDoor];
 const stackName = sandboxMode
   ? `bb-test-compute-${id}-${leg}${suffix ? `-${suffix}` : ''}`
