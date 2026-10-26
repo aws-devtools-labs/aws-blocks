@@ -442,7 +442,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
             await api.authConfirmResetPassword(username, '000000', 'newpass123');
             assert.fail(`Expected rejection on wrong guess #${i + 1}`);
           } catch (e) {
-            assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+            assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
           }
         }
 
@@ -452,7 +452,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
           await api.authConfirmResetPassword(username, realCode, 'newpass123');
           assert.fail('Expected the invalidated code to be rejected');
         } catch (e) {
-          assert.ok(isBlocksError(e, InvalidCode), `Expected ${InvalidCode}, got ${e}`);
+          assert.ok(isBlocksError(e, AuthBasicErrors.InvalidCode), `Expected ${AuthBasicErrors.InvalidCode}, got ${e}`);
         }
         const user = await api.authSignIn(username, 'password123');
         assert.strictEqual(user.username, username);
