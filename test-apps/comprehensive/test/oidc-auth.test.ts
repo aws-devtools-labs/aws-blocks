@@ -100,6 +100,19 @@ async function signInVia(
 
 export function oidcAuthTests(getApi: () => typeof apiType) {
 
+  // Several suites below drive the stub IdP: they assert the
+  // /aws-blocks/auth/idp/<provider>/* routes (authorize, discovery, JWKS) or follow the
+  // stub authorize redirect / auto-approve. The stub IdP only exists in local + sandbox:
+  // bb-auth-oidc's synth guard rejects stub providers (kind: 'stub') outside sandbox mode,
+  // so the e2e-production stack uses non-stub placeholder providers (google()/customOidc())
+  // that never mount those stub routes. Skip the stub-driving suites in production; the
+  // provider-agnostic suites (providers, unauthenticated, createApi state machine, callback
+  // errors, no-session) still run there against the placeholders and give real coverage.
+  // Env-gating idiom mirrors auth-cognito-sandbox.test.ts.
+  const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+  const runStubFlow = ENV !== 'production';
+  const skipStubFlow = !runStubFlow && 'stub IdP is not deployed in production (comprehensive uses non-stub placeholder providers there per the bb-auth-oidc stub guard)';
+
   describe('AuthOIDC', () => {
 
     describe('providers', () => {
@@ -134,7 +147,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('sign-in flow', () => {
+    describe('sign-in flow', { skip: skipStubFlow }, () => {
       test('getSignInUrl returns a valid authorize URL for google', async () => {
         const api = getApi();
         const { url } = await api.oidcGetSignInUrl('google');
@@ -278,7 +291,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('onSignIn hook', () => {
+    describe('onSignIn hook', { skip: skipStubFlow }, () => {
       test('onSignIn fires on successful sign-in', async () => {
         const baseUrl = getBaseUrl();
         const api = getApi();
@@ -372,7 +385,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('userId format', () => {
+    describe('userId format', { skip: skipStubFlow }, () => {
       test('userId is ${iss}:${sub}', async () => {
         const baseUrl = getBaseUrl();
 
@@ -448,7 +461,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('signOut', () => {
+    describe('signOut', { skip: skipStubFlow }, () => {
       test('signOut clears session and returns 204', async () => {
         const baseUrl = getBaseUrl();
 
@@ -483,7 +496,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('stub IdP routes', () => {
+    describe('stub IdP routes', { skip: skipStubFlow }, () => {
       test('discovery endpoint returns valid OIDC configuration', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/.well-known/openid-configuration`);
@@ -519,7 +532,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('onSignIn profile upsert', () => {
+    describe('onSignIn profile upsert', { skip: skipStubFlow }, () => {
       test('sign-in flow works and onSignIn upserts profile', async () => {
         const baseUrl = getBaseUrl();
         const api = getApi();
@@ -640,7 +653,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('client-initiated PKCE', () => {
+    describe('client-initiated PKCE', { skip: skipStubFlow }, () => {
       test('GET /aws-blocks/auth/authorize-params/:provider returns public params', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(`${baseUrl}/aws-blocks/auth/authorize-params/google`);
@@ -773,7 +786,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('bearer-token auth (native clients)', () => {
+    describe('bearer-token auth (native clients)', { skip: skipStubFlow }, () => {
       // These tests exercise the native-client path on the second instance
       // (`oidc-auth-extras`), which enables `allowBearerAuth: true`. The flow:
       //   1. Client does PKCE exchange → /aws-blocks/auth/extras/exchange returns
@@ -877,7 +890,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('relay flow (native clients)', () => {
+    describe('relay flow (native clients)', { skip: skipStubFlow }, () => {
       // These tests exercise the full relay round-trip against the third
       // AuthOIDC instance (`oidc-auth-relay`), which has:
       //   - allowedRelayOrigins: [relayOrigin('testapp://auth')]
