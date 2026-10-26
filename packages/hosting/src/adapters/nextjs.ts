@@ -20,6 +20,7 @@ import semver from 'semver';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
 import { targetCompute } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
   FRAMEWORK_COMPUTE_RUNTIME,
   FRAMEWORK_EDGE_COMPUTE_RUNTIME,
@@ -1663,7 +1664,10 @@ export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
  * Best-effort + idempotent: skips when the image fn dir is absent (image
  * optimization disabled) or a linux sharp is already present; warns (not fatal)
  * if the install fails, since the crash-level bug is already fixed and the app
- * still serves originals.
+ * still serves originals. "Already present" means a linux-x64 sharp within
+ * {@link SHARP_VERSION_RANGE}: a bundled sharp below that floor is vulnerable
+ * (GHSA-wq5f-xc86-pv6w) and an arm64-only one can't load, so both are
+ * reinstalled.
  * @internal
  */
 export const installLinuxSharpForImageOptimizer = (
@@ -1672,16 +1676,8 @@ export const installLinuxSharpForImageOptimizer = (
   const imgDir = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(imgDir)) return; // image optimization disabled
 
-  // Already has a linux sharp binary? (idempotent — avoid reinstalling.)
-  const linuxSharp = fg.sync(
-    'node_modules/@img/sharp-linux*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  const linuxSharpLegacy = fg.sync(
-    'node_modules/sharp/**/linux-x64*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  if (linuxSharp.length > 0 || linuxSharpLegacy.length > 0) return;
+  // Already has a patched linux-x64 sharp? (idempotent — avoid reinstalling.)
+  if (hasPatchedLinuxSharp(imgDir, 'x64')) return;
 
   // Pin a MODERN sharp (>=0.33). The `--os/--cpu/--libc` cross-install flags
   // (which fetch the `@img/sharp-linux-x64` prebuilt) only exist on sharp
@@ -1689,8 +1685,8 @@ export const installLinuxSharpForImageOptimizer = (
   // sits in `node_modules/sharp/build/Release/*.node` and is NOT replaced by
   // those flags (0.32 used `prebuild-install`/SHARP_* env, not npm os/cpu) —
   // so reinstalling `^0.32` would leave the darwin binary in place and the
-  // optimizer would keep serving unoptimized originals. Force 0.34.x.
-  const SHARP_RANGE = '^0.34.0';
+  // optimizer would keep serving unoptimized originals. Force the shared
+  // patched range (see SHARP_VERSION_RANGE for the security floor).
   const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
   // Remove the wrong-platform / old bundled sharp so the reinstall is clean and
   // the fresh linux binary is unambiguously what loads at runtime.
@@ -1701,7 +1697,7 @@ export const installLinuxSharpForImageOptimizer = (
       /* best-effort — npm install below still overwrites */
     }
   }
-  const sharpVersion = SHARP_RANGE;
+  const sharpVersion = SHARP_VERSION_RANGE;
 
   // Minimal package.json so `npm install` only pulls sharp (+ its platform
   // optionalDependencies), not the whole app tree.
@@ -1856,6 +1852,33 @@ const runNextBuild = (projectDir: string): void => {
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   const args = ['@opennextjs/aws', 'build'];
   if (configPath) args.push('--config-path', configPath);
+
+  // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
+  // the Next.js team's 2-year support window: `checkNextVersionSupport` prints
+  // `Next.js version X is not supported by the Next.js team` and calls
+  // `process.exit(1)` unless `--dangerously-use-unsupported-next-version` is
+  // set. That window is a wall-clock deadline, so a deploy that worked
+  // yesterday starts hard-failing the day the major expires — with no change
+  // on the user's side. We'd rather let the deploy proceed (the app still runs
+  // fine; the policy is about upstream security patches) than break it on a
+  // date.
+  //
+  // We pass the flag UNCONDITIONALLY rather than mirror OpenNext's release-date
+  // table and decide ourselves (which we'd have to keep in sync). It is inert
+  // on a supported version — OpenNext only reads the flag inside its
+  // `if (!isSupported)` branch, so a supported build ignores it entirely — and
+  // on an unsupported version it downgrades OpenNext's `exit(1)` to a
+  // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
+  // own `isNextVersionSupported` stays the single source of truth for the
+  // supported/unsupported decision, and its warning is the one the user sees.
+  //
+  // The explicit `'true'` value is REQUIRED, not cosmetic: OpenNext's CLI
+  // `parseArgs` only records a `--flag` when a following non-`-` token exists
+  // (otherwise it stores `undefined`), and `build()` then applies the override
+  // only when the value `!== undefined`. A bare trailing `--flag` would parse
+  // as `undefined` and the override would silently NOT apply, so the value
+  // token is what makes it take effect.
+  args.push('--dangerously-use-unsupported-next-version', 'true');
 
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,

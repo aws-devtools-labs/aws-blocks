@@ -110,6 +110,14 @@ export type ComputeConstructProps = {
    * Merged with (and overrides) the manifest's compute resource environment.
    */
   environment?: Record<string, string>;
+  /**
+   * How the front door invokes this function. `'buffered'` builds an
+   * `http-server` function's Lambda Web Adapter in buffered mode (and any
+   * Function URL as `BUFFERED`), for a door that invokes it without streaming
+   * (an ALB target, an API Gateway HTTP API integration). Default:
+   * `'streaming'` (the adapter's `response_stream` mode).
+   */
+  responseMode?: 'streaming' | 'buffered';
 };
 
 // ---- Construct ----
@@ -254,7 +262,9 @@ export class ComputeConstruct extends Construct {
         ],
         environment: {
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/bootstrap',
-          AWS_LWA_INVOKE_MODE: 'response_stream',
+          // A streaming invoke expects the response-stream framing; a plain
+          // invoke (ALB, HTTP API) needs the whole response, so buffer then.
+          AWS_LWA_INVOKE_MODE: props.responseMode === 'buffered' ? 'buffered' : 'response_stream',
           PORT: String(port),
           ...computeResource.environment,
           ...props.environment,
@@ -328,7 +338,7 @@ export class ComputeConstruct extends Construct {
     // Function URL — skipped for edge (unsupported) or SSR (REST API instead).
     if (computeResource.type !== 'edge' && !props.skipFunctionUrl) {
       const invokeMode =
-        computeResource.streaming !== false
+        computeResource.streaming !== false && props.responseMode !== 'buffered'
           ? InvokeMode.RESPONSE_STREAM
           : InvokeMode.BUFFERED;
 

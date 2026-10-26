@@ -14,7 +14,7 @@ import {
 	BlocksBackend as CoreBlocksBackend,
 	BlocksStack as CoreBlocksStack,
 } from '@aws-blocks/core/cdk';
-import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import type { ComputeBase, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import type { Construct } from 'constructs';
 
 // The umbrella is the one package that depends on both core and a concrete
@@ -30,7 +30,7 @@ import type { Construct } from 'constructs';
 // is the CDK `LambdaCompute` that extends `Compute`. The cast bridges that
 // condition-vs-value gap; it is not a public-API cast.
 const lambdaDefaultComputeFactory: DefaultComputeFactory = (root) =>
-	new LambdaCompute(root as never, 'DefaultCompute') as unknown as Compute;
+	new LambdaCompute(root as never, 'DefaultCompute') as unknown as ComputeBase;
 
 /**
  * `BlocksStack` with the Lambda default compute wired in. Same API and instance
@@ -54,21 +54,27 @@ export const BlocksBackend = {
 };
 export type BlocksBackend = CoreBlocksBackend;
 
-export type { AuthAction, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type { AuthAction, AuthActionInput, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
 export type {
 	AgentConfig,
 	AgentResult,
 	AgentStreamChunk,
+	AgentTool,
+	DefaultToolContext,
 	ModelConfig,
 	StreamOptions,
 	TokenUsage,
 	ToolCallRecord,
 	ToolDefinition,
+	ToolFactory,
+	ToolHandlerArgs,
+	ToolsConfig,
 } from '@aws-blocks/bb-agent';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
@@ -79,6 +85,16 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 // Building Blocks (CDK versions)
 export {
 	AuthBasic,
@@ -88,15 +104,29 @@ export {
 	type PasswordPolicy,
 } from '@aws-blocks/bb-auth-basic';
 export type {
+	AdminAction,
+	AdminActionGate,
+	AdminCreateInit,
+	AdminDisabled,
+	AdminGetterOf,
+	AdminGrants,
+	AdminOptions,
+	AdminSurface,
+	AdminUser,
+	AdminUserFilter,
 	AuthCognitoOptions,
 	AuthFlowType,
 	CodeDeliveryDetails,
+	CodeDeliveryFn,
 	CognitoUser,
 	ConfirmSignInOptions,
 	DeviceRecord,
 	ExternalUserPoolRef,
+	GroupAdmin,
+	LifecycleAdmin,
 	MFAPreference,
 	ResetPasswordResult,
+	SetPasswordOptions,
 	SignInNextStep,
 	SignInOptions,
 	SignInResult,
@@ -190,6 +220,12 @@ export type {
 	MetricUnit,
 } from '@aws-blocks/bb-metrics';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+export type {
+	DisconnectReason,
+	RealtimeChannel,
+	RealtimeSubscription,
+	SubscribeOptions,
+} from '@aws-blocks/bb-realtime';
 export { Realtime } from '@aws-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
 export { Secret, SecretErrors } from '@aws-blocks/bb-secret';

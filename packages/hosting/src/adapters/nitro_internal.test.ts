@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import semver from 'semver';
 import {
   VERIFIED_NITRO_RANGE,
   extractJsonObjectAfter,
@@ -129,6 +130,23 @@ void describe('patchNitroHandlerForApiGateway', () => {
       fs.readFileSync(b, 'utf-8'),
       /\|\| event\.requestContext\?\.httpMethod/,
     );
+  });
+
+  void it('falls back to the top-level event.httpMethod (an ALB Lambda-target event)', () => {
+    // An ALB event carries its method at the top level; neither
+    // `requestContext.http.method` (payload 2.0) nor
+    // `requestContext.httpMethod` (REST) is set.
+    const bundle = path.join(tmp, 'chunks', 'nitro', 'nitro.mjs');
+    writeFile(bundle, `const method = ${METHOD_PATTERN} || "get";\n`);
+    patchNitroHandlerForApiGateway(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    const method = new Function('event', `${out.replace('const method =', 'return')}`);
+    assert.strictEqual(method({ httpMethod: 'POST', requestContext: { elb: {} } }), 'POST');
+    assert.strictEqual(method({ requestContext: { httpMethod: 'PUT' } }), 'PUT');
+    assert.strictEqual(method({ requestContext: { http: { method: 'PATCH' } } }), 'PATCH');
+    // Idempotent with the extra fallback too.
+    patchNitroHandlerForApiGateway(tmp);
+    assert.strictEqual(fs.readFileSync(bundle, 'utf-8'), out);
   });
 
   void it('is idempotent — running twice does not double-patch', () => {
@@ -447,6 +465,22 @@ void describe('IPX_LAMBDA_HANDLER_SOURCE — remote fetch never follows redirect
   it('pins ipx to an exact version so the fetch semantics cannot float at deploy time', () => {
     const pkg = JSON.parse(IPX_LAMBDA_PACKAGE_JSON) as { dependencies: Record<string, string> };
     assert.match(pkg.dependencies.ipx, /^\d+\.\d+\.\d+$/, `ipx must be pinned exactly, got ${pkg.dependencies.ipx}`);
+  });
+
+  // GHSA-wq5f-xc86-pv6w: every sharp below 0.35.5 bundles a librsvg with a
+  // use-after-free that can lead to RCE on glibc Linux (the Lambda runtime).
+  it('pins sharp above GHSA-wq5f-xc86-pv6w, including the copy ipx itself depends on', () => {
+    const pkg = JSON.parse(IPX_LAMBDA_PACKAGE_JSON) as {
+      dependencies: Record<string, string>;
+      overrides?: Record<string, string>;
+    };
+    assert.ok(
+      semver.subset(pkg.dependencies.sharp, '>=0.35.5'),
+      `sharp range ${pkg.dependencies.sharp} admits versions below 0.35.5`,
+    );
+    // ipx@3.1.1 declares `sharp: ^0.34.3`; without an override npm nests a
+    // vulnerable copy under ipx/node_modules and ipx loads that one.
+    assert.strictEqual(pkg.overrides?.sharp, '$sharp');
   });
 });
 

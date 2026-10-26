@@ -364,6 +364,14 @@ void describe('nitroAdapter — IPX baseURL plumbing', () => {
     mock.restoreAll();
   });
 
+  void it("passes the app's base path to the IPX Lambda (the regional doors route the full path to it)", () => {
+    writeMinimalNitroOutput(tmpDir, { baseURL: '/myapp/' });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.ok(manifest.imageOptimization);
+    assert.deepStrictEqual(manifest.imageOptimization.environment, { IPX_APP_BASE_URL: '/myapp' });
+  });
+
   void it('respects user-configured runtimeConfig.ipx.baseURL', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, {

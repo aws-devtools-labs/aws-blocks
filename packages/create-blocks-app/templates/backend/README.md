@@ -26,6 +26,7 @@ The Blocks package handles infrastructure, backend logic, APIs, storage, authent
 npm run typecheck   # Check TypeScript types (run after code changes)
 npm run dev         # Local dev server (long-running - use background job)
 npm run sandbox     # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack
@@ -38,6 +39,7 @@ npm run destroy          # Tear down the production stack
 |---------|---------|---------|
 | `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001` |
 | `npm run sandbox` | Deployed to AWS, `cdk watch --hotswap` keeps it in sync | Deployed API Gateway URL |
+| `npm run sandbox:deploy` | Deployed to AWS once, then exits (no watch); for scripts and CI | Deployed API Gateway URL |
 | `npm run deploy` | Deployed to AWS | Deployed API Gateway URL |
 
 ### RPC endpoint (local dev)
