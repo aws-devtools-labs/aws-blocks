@@ -93,6 +93,7 @@ export {
 export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
 export {
 	type BlocksStackApi,
+	type CloudFrontOverRouterFrontDoor,
 	type ComputeConfig,
 	type FrameworkType,
 	Hosting,

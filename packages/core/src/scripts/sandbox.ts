@@ -44,6 +44,16 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+/**
+ * How the sandbox spawns the local dev server. It runs under `shell: true`, so
+ * the whole command goes to the shell as one string with no separate args:
+ * Node 24 emits DEP0190 whenever a non-empty args array is combined with
+ * `shell: true`, because the args are only concatenated, never escaped.
+ */
+export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
+  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+}
+
 export interface SandboxDeployArgsOptions {
   /** Directory CDK writes stack outputs to (relative to the project root). */
   outDir: string;
@@ -187,13 +197,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   process.env.BLOCKS_STAGE = 'sandbox';
 
-  // Fail fast if AWS credentials are missing/expired, before spending ~10s in
-  // synth only to hit an opaque CDK credential error. Unlike deploy(), startSandbox
-  // isn't wrapped in trackCommand, so emit the FAIL event manually (mirroring the
-  // CDK-deploy failure path below) before rethrowing — otherwise a no-creds abort
-  // sends no telemetry.
+  // Fail fast if AWS credentials are missing/expired, or the account and Region were
+  // never CDK-bootstrapped, before spending ~10s in synth only to hit an opaque CDK
+  // error. Unlike deploy(), startSandbox isn't wrapped in trackCommand, so emit the
+  // FAIL event manually (mirroring the CDK-deploy failure path below) before
+  // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -353,10 +363,9 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(`[CDK Watch] ${data.toString().trim()}`);
   });
 
-  const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
-  const [cmd, ...args] = devServerCmd.split(' ');
-  
-  const devServer = spawnCommand(cmd, args, {
+  const devServerSpawn = buildDevServerSpawn(devCommand);
+
+  const devServer = spawnCommand(devServerSpawn.command, devServerSpawn.args, {
     stdio: "inherit",
     shell: true,
     // Own process group on POSIX so cleanup can signal the whole dev-server

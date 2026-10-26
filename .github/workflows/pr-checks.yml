@@ -728,6 +728,13 @@ jobs:
           - framework: spa
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
+          # The same SPA suite behind the regional ALB door (HOSTING_FRONT_DOOR),
+          # then a redeploy of the kept sandbox. The other built-in doors are
+          # covered by template tests and run as follow-up lanes.
+          - framework: spa-alb
+            app-dir: test-apps/hosting-spa
+            script: test:e2e:hosting-spa
+            front-door: alb
           - framework: nextjs
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
@@ -760,8 +767,9 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
-      # Web Function jobs keep the sandbox after the suite for the redeploy check.
-      BLOCKS_SANDBOX_KEEP: ${{ matrix.compute-type == 'web-function' && '1' || '' }}
+      HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
+      # Web Function and front-door jobs keep the sandbox after the suite for the redeploy check.
+      BLOCKS_SANDBOX_KEEP: ${{ (matrix.compute-type == 'web-function' || matrix.front-door) && '1' || '' }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - name: Check the E2E trailer
@@ -806,6 +814,10 @@ jobs:
       - name: Redeploy with a new Web Function revision
         if: matrix.compute-type == 'web-function'
         run: npx tsx scripts/ci/web-function-redeploy.ts ${{ matrix.app-dir }}
+
+      - name: Redeploy behind the ${{ matrix.front-door }} front door
+        if: matrix.front-door
+        run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
 
       - name: Cleanup sandbox
         if: always()
