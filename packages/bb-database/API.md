@@ -5,30 +5,11 @@
 ```ts
 
 import { ChildLogger } from '@aws-blocks/bb-logger';
-import { createKyselyAdapter } from '@aws-blocks/data-common';
-import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
 import { sql } from '@aws-blocks/data-common';
 import { SqlQuery } from '@aws-blocks/data-common';
-import { Transaction } from '@aws-blocks/data-common';
-
-// @public
-export interface Bindings {
-    clusters: {
-        [fullId: string]: ClusterBinding;
-    };
-    databases: {
-        [fullId: string]: DatabaseBinding;
-    };
-}
-
-// @public
-export interface ClusterBinding {
-    resource?: string;
-    // (undocumented)
-    type: ClusterType;
-}
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // @public
 export interface ClusterRef {
@@ -39,34 +20,26 @@ export interface ClusterRef {
 // @public
 export type ClusterType = 'distributed';
 
-export { createKyselyAdapter }
-
 // @public
 export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
     constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+    // (undocumented)
     readonly cluster: ClusterRef;
+    // (undocumented)
     execute(query: SqlQuery): Promise<{
         rowCount: number;
     }>;
     // @internal
-    getEngine(): Promise<DatabaseEngine>;
-    // @internal
     protected log: ChildLogger;
-    readonly migrationsPath: string | undefined;
-    query<T>(query: SqlQuery): Promise<T[]>;
-    queryOne<T>(query: SqlQuery): Promise<T | null>;
-    readonly schemaName: string;
-    simulateConflict(): void;
-    transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
-}
-
-// @public
-export interface DatabaseBinding {
-    cluster: string;
-    resource?: string;
     // (undocumented)
-    type: ClusterType;
+    query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]>;
+    // (undocumented)
+    queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null>;
+    // (undocumented)
+    readonly schemaName: string;
+    // (undocumented)
+    transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T>;
 }
 
 // @public
@@ -79,8 +52,6 @@ export interface DatabaseBlockOptions {
 // @public
 export class DatabaseCluster extends Scope {
     constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions);
-    // @internal
-    engineFor(schemaName: string): DatabaseEngine;
     readonly type: ClusterType;
 }
 
@@ -101,6 +72,7 @@ export const DatabaseErrors: {
     readonly UniqueConstraintViolation: "UniqueConstraintViolationException";
     readonly SerializationFailure: "SerializationFailureException";
     readonly TransactionRowLimitExceeded: "TransactionRowLimitExceededException";
+    readonly ResultValidationFailed: "ResultValidationFailedException";
 };
 
 // @public
@@ -120,23 +92,6 @@ export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
 }
 
 // @public
-export interface FilePlan {
-    // (undocumented)
-    file: string;
-    foreignKeys: string[];
-    // (undocumented)
-    steps: PlanStep[];
-}
-
-// @public
-export interface MigrationPlan {
-    // (undocumented)
-    files: FilePlan[];
-    // (undocumented)
-    target: ClusterType;
-}
-
-// @public
 export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)
     cluster?: undefined;
@@ -144,18 +99,22 @@ export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
 }
 
 // @public
-export interface PlanStep {
-    kind: 'statement' | 'validate-constraint' | 'wait-job';
-    note?: string;
-    sql: string;
-    transactional: boolean;
+export interface QueryOptions<T> {
+    schema?: StandardSchemaV1<unknown, T>;
 }
 
 export { sql }
 
 export { SqlQuery }
 
-export { Transaction }
+// @public
+export interface Transaction {
+    execute(query: SqlQuery): Promise<{
+        rowCount: number;
+    }>;
+    query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]>;
+    queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null>;
+}
 
 // @public
 export interface TransactionOptions {

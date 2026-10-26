@@ -22,12 +22,6 @@ export class Database {
 	transaction(): never {
 		return serverOnly('Database.transaction()');
 	}
-	simulateConflict(): never {
-		return serverOnly('Database.simulateConflict()');
-	}
-	getEngine(): never {
-		return serverOnly('Database.getEngine()');
-	}
 }
 
 export class DatabaseCluster {
@@ -38,27 +32,17 @@ export function sql(): never {
 	return serverOnly('sql');
 }
 
-export function createKyselyAdapter(): never {
-	return serverOnly('createKyselyAdapter()');
-}
-
 export { DatabaseErrors } from './errors.js';
 export type {
-	Bindings,
-	ClusterBinding,
 	ClusterRef,
 	ClusterType,
-	DatabaseBinding,
 	DatabaseBlockOptions,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedClusterOptions,
 	DistributedDatabaseOptions,
-	FilePlan,
-	MigrationPlan,
 	OwnedDatabaseOptions,
-	PlanStep,
 	QueryOptions,
 	Transaction,
 	TransactionOptions,

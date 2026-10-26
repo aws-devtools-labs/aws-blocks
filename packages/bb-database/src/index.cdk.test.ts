@@ -211,7 +211,6 @@ describe('Database (CDK)', () => {
 		const { parent } = setup();
 		const db = new Database(parent, 'db');
 		assert.throws(() => db.query(), /Database\.query/);
-		assert.throws(() => db.simulateConflict(), /Database\.simulateConflict/);
 	});
 
 	test('duplicate short ids and shared schemas are rejected at synth', () => {

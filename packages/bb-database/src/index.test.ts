@@ -14,8 +14,10 @@ import { after, afterEach, beforeEach, describe, test } from 'node:test';
 import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
-import { createKyselyAdapter, Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
+import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
+import { internalAccess } from './internal.js';
 import { _resetDatabaseRegistry } from './registry.js';
+import { simulateConflict } from './testing.js';
 
 const DATA_DIR = join(process.cwd(), '.bb-data');
 let counter = 0;
@@ -198,7 +200,7 @@ describe('Database (owned distributed cluster)', () => {
 	test('simulateConflict makes the next commit a retriable 409; retryOnConflict re-runs the callback', async () => {
 		const db = new Database(app(), 'db');
 		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
-		db.simulateConflict();
+		simulateConflict(db);
 		await assert.rejects(
 			db.transaction(async (tx) => {
 				await tx.execute(sql`INSERT INTO t VALUES (${'x'})`);
@@ -211,7 +213,7 @@ describe('Database (owned distributed cluster)', () => {
 		);
 		assert.strictEqual(await db.queryOne(sql`SELECT * FROM t WHERE id = ${'x'}`), null, 'rolled back');
 
-		db.simulateConflict();
+		simulateConflict(db);
 		let attempts = 0;
 		await db.transaction(
 			async (tx) => {
@@ -355,15 +357,6 @@ describe('Database (owned distributed cluster)', () => {
 			/001_rls\.sql: at_unsupported_row_level_security/,
 		);
 	});
-
-	test('Kysely adapter runs against the same engine', async () => {
-		const db = new Database(app(), 'db');
-		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER);' });
-		const kysely = createKyselyAdapter<{ t: { id: string; n: number } }>(db);
-		await kysely.insertInto('t').values({ id: 'k', n: 7 }).execute();
-		const row = await kysely.selectFrom('t').select(['id', 'n']).where('id', '=', 'k').executeTakeFirst();
-		assert.deepStrictEqual(row, { id: 'k', n: 7 });
-	});
 });
 
 describe('DatabaseCluster (shared distributed)', () => {
@@ -474,7 +467,7 @@ describe('construction-time rules', () => {
 			/migrationsPath '\.\/nope\/missing' does not exist/,
 		);
 		const db = new Database(scope, 'b');
-		assert.strictEqual(db.migrationsPath, undefined);
+		assert.strictEqual(internalAccess(db, 'test').migrationsPath, undefined);
 	});
 
 	test('the default migrations directory is ./aws-blocks/migrations/{id}', async () => {
@@ -482,7 +475,7 @@ describe('construction-time rules', () => {
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(join(dir, '001.sql'), 'CREATE TABLE inv (id TEXT PRIMARY KEY);');
 		const db = new Database(app(), 'inv');
-		assert.strictEqual(db.migrationsPath, dir);
+		assert.strictEqual(internalAccess(db, 'test').migrationsPath, dir);
 		assert.deepStrictEqual(await db.query(sql`SELECT * FROM inv`), []);
 	});
 });
@@ -495,7 +488,7 @@ async function withMigrations(db: Database, files: Record<string, string>): Prom
 	const { buildMigrationPlan } = await import('./migrations/plan.js');
 	const { loadMigrationFiles, runMigrationPlan } = await import('./migrations/runner.js');
 	const { MockEngine } = await import('./engines/mock-engine.js');
-	const engine = (await db.getEngine()) as InstanceType<typeof MockEngine>;
+	const engine = (await internalAccess(db, 'withMigrations').engine()) as InstanceType<typeof MockEngine>;
 	const plan = buildMigrationPlan(loadMigrationFiles(dir));
 	await engine.withDdl(() => runMigrationPlan(engine, plan, { schemaName: db.schemaName, log: () => {} }));
 }

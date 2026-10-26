@@ -7,24 +7,18 @@ export type { SqlQuery } from '@aws-blocks/data-common';
  * them in one file is what makes the conditional-export parity test trivially
  * true for everything but the two classes.
  */
-export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
+export { sql } from '@aws-blocks/data-common';
 export { DatabaseErrors } from './errors.js';
 export type {
-	Bindings,
-	ClusterBinding,
 	ClusterRef,
 	ClusterType,
-	DatabaseBinding,
 	DatabaseBlockOptions,
 	DatabaseClusterLike,
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	DistributedClusterOptions,
 	DistributedDatabaseOptions,
-	FilePlan,
-	MigrationPlan,
 	OwnedDatabaseOptions,
-	PlanStep,
 	QueryOptions,
 	Transaction,
 	TransactionOptions,

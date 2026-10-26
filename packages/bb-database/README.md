@@ -71,7 +71,6 @@ const cluster = new DatabaseCluster(scope, id, { type: 'distributed', removalPol
 | `queryOne(sql, options?)` | `Promise<T \| null>` | Run a query and return the first row, or `null` when nothing matches. Same `options.schema`. |
 | `execute(sql)` | `Promise<{ rowCount: number }>` | Run an `INSERT`, `UPDATE`, or `DELETE` and return the rows affected. |
 | `transaction(fn, options?)` | `Promise<T>` | Run `fn(tx)` in one transaction; `tx` has the three methods above. Commits when `fn` resolves, rolls back when it throws. See [Transactions](#transactions). |
-| `simulateConflict()` | `void` | Local mode only: make the next commit fail with `SerializationFailure`. Throws in the Lambda runtime. |
 | `db.cluster` | `{ kind, id }` | Which cluster the block runs on: `id` is `'default'` when owned, otherwise the `DatabaseCluster`'s full id. |
 | `db.schemaName` | `string` | The schema this block's tables live in. |
 
@@ -209,7 +208,7 @@ await shop.transaction(async (tx) => {
 }, { retryOnConflict: true });
 ```
 
-`shop.simulateConflict()` makes the next commit fail with `SerializationFailure` in local mode, so a test can cover the retry without a deployed cluster.
+For tests, `simulateConflict(shop)` from `@aws-blocks/bb-database/testing` makes the next commit fail with `SerializationFailure` in local mode, so a test can cover the retry without a deployed cluster. It throws in the Lambda runtime, where a conflict comes from the cluster itself.
 
 ## Errors
 
@@ -251,7 +250,7 @@ A `distributed` cluster adds DSQL's checks locally. Every statement a handler is
 | Data | `.bb-data/{fullId}/` | `.bb-data/{clusterFullId}/` |
 | Migrations | Before the block's first query | Same, per block, into its schema |
 
-PGlite has one session, so local work on a cluster runs one statement or transaction at a time. Bugs that need two requests to overlap do not reproduce locally; `simulateConflict()` covers the retry path.
+PGlite has one session, so local work on a cluster runs one statement or transaction at a time. Bugs that need two requests to overlap do not reproduce locally; `simulateConflict()` from `@aws-blocks/bb-database/testing` covers the retry path.
 
 ## The binding rule
 
@@ -274,20 +273,6 @@ The guard runs before `cdk deploy` in production, as a pre-deploy hook that `npm
 3. Check row counts on both sides.
 4. Switch your handlers to the new block and deploy.
 5. Remove the old block and deploy. Its data stays until you drop the schema or the cluster.
-
-## Kysely query builder
-
-```ts
-import { createKyselyAdapter } from '@aws-blocks/bb-database';
-
-interface Schema {
-  customers: { id: string; email: string };
-}
-const kysely = createKyselyAdapter<Schema>(shop);
-const customers = await kysely.selectFrom('customers').selectAll().where('email', 'like', '%@example.com').execute();
-```
-
-The adapter connects on its first query, so creating it at module scope is safe during synth.
 
 ## CLI
 

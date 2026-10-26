@@ -12,7 +12,6 @@
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID } from './constants.js';
 import { configError } from './errors.js';
@@ -76,7 +75,7 @@ export class DatabaseCluster extends BuildingBlockScope {
 export class Database extends BuildingBlockScope {
 	readonly cluster: ClusterRef;
 	readonly schemaName: string;
-	readonly migrationsPath: string | undefined;
+	private readonly migrationsPath: string | undefined;
 
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
@@ -137,13 +136,6 @@ export class Database extends BuildingBlockScope {
 	}
 	transaction(..._a: unknown[]): never {
 		return synthGuard('Database', 'transaction');
-	}
-	simulateConflict(..._a: unknown[]): never {
-		return synthGuard('Database', 'simulateConflict');
-	}
-	/** Runtime-only: this build defines infrastructure and has no engine. */
-	getEngine(): Promise<DatabaseEngine> {
-		return synthGuard('Database', 'getEngine');
 	}
 }
 

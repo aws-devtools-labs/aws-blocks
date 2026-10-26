@@ -20,6 +20,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
+import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
 
 
@@ -1693,11 +1694,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
-  // Local mode only: simulateConflict() throws in the Lambda runtime, so the
-  // handler reports that nothing was simulated and the test skips.
+  // Local mode only: simulateConflict() (from the testing entry) throws in the
+  // Lambda runtime, so the handler reports that nothing was simulated and the test skips.
   async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
     try {
-      dbx.simulateConflict();
+      simulateConflict(dbx);
     } catch {
       return { simulated: false, attempts: 0 };
     }
@@ -1760,14 +1761,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       sql`SELECT count(*)::int AS n FROM dbx_items WHERE id LIKE ${`${prefix}%`}`,
     );
     return { error, kept: kept?.n ?? 0 };
-  },
-
-  async dbxKyselySelect(minValue: number) {
-    interface KyselySchema {
-      dbx_items: { id: string; name: string; value: number; category: string };
-    }
-    const kysely = createKyselyAdapter<KyselySchema>(dbx);
-    return kysely.selectFrom('dbx_items').select(['id', 'name', 'value']).where('value', '>=', minValue).execute();
   },
 
   // Shared distributed cluster: two blocks, two schemas, one table name.

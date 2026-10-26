@@ -14,6 +14,7 @@ import { DEFAULT_CLUSTER_ID, ENV_VAR_PREFIX, sanitizeDbRoleName, toEnvName } fro
 import { DatabaseCore } from './database-core.js';
 import { DsqlEngine } from './engines/dsql-engine.js';
 import { configError } from './errors.js';
+import { registerInternalAccess } from './internal.js';
 import { registerSchema, registerUniqueId } from './registry.js';
 import type {
 	ClusterRef,
@@ -57,7 +58,7 @@ export class Database extends Scope {
 	readonly cluster: ClusterRef;
 	readonly schemaName: string;
 	/** Migrations run at deploy time; the path is not resolved in the Lambda. */
-	readonly migrationsPath: string | undefined = undefined;
+	private readonly migrationsPath: string | undefined = undefined;
 
 	private readonly core: DatabaseCore;
 	/** @internal Logger for internal operations. Defaults to error level. */
@@ -101,6 +102,13 @@ export class Database extends Scope {
 		};
 
 		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
+		registerInternalAccess(this, {
+			engine: () => this.core.getEngine(),
+			simulateConflict: () => {
+				throw configError('simulateConflict() is only available in local mode (the mock entry point).');
+			},
+			migrationsPath: undefined,
+		});
 	}
 
 	query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]> {
@@ -117,16 +125,6 @@ export class Database extends Scope {
 
 	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		return this.core.transaction(fn, options);
-	}
-
-	/** Local mode only. In the Lambda runtime a conflict comes from the cluster itself. */
-	simulateConflict(): void {
-		throw configError('simulateConflict() is only available in local mode (the mock entry point).');
-	}
-
-	/** @internal The underlying engine. Used by `createKyselyAdapter()`. */
-	getEngine(): Promise<DatabaseEngine> {
-		return this.core.getEngine();
 	}
 }
 

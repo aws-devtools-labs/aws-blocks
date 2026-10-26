@@ -15,8 +15,6 @@ type Expect<T extends true> = T;
 type Info = Awaited<ReturnType<typeof apiType.dbxInfo>>;
 type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], 'distributed'>>;
 type _DbxaKind = Expect<Equal<Info['dbxa']['cluster']['kind'], 'distributed'>>;
-type KyselyRow = Awaited<ReturnType<typeof apiType.dbxKyselySelect>>[number];
-type _KyselyRow = Expect<Equal<KyselyRow, { id: string; name: string; value: number }>>;
 // A result schema, not a type argument, is what types these two: the inferred
 // type must be the schema's output, and `id` must be a number on both environments.
 type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
@@ -144,15 +142,6 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const result = await getApi().dbxRowLimit();
       assert.strictEqual(result.error, DatabaseErrors.TransactionRowLimitExceeded);
       assert.strictEqual(result.kept, 0, 'the transaction was rolled back');
-    });
-
-    test('dbx - Kysely typed select', async () => {
-      const api = getApi();
-      const id = `x-k-${Date.now().toString(36)}`;
-      await api.dbxInsert(id, 'kysely', 77);
-      const rows = await api.dbxKyselySelect(77);
-      assert.ok(rows.some((r) => r.id === id && r.value === 77));
-      await api.dbxDelete(id);
     });
 
     test('shared cluster - two blocks with the same table name do not see each other', async () => {

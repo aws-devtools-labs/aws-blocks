@@ -130,7 +130,7 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | DSQL feature gaps | Rejected by `dsql-lint` before PGlite | Rejected by DSQL (`42501`, reported as `QueryFailed`) |
 | `ASYNC` DDL | Runs synchronously | Asynchronous job followed by a poll |
 | 3,000-row and 10 MiB transaction limits | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
-| `simulateConflict()` | Available | Throws |
+| `simulateConflict()` (`@aws-blocks/bb-database/testing`) | Available | Throws |
 | `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `dsql-engine.ts` installs a parser that matches PGlite |
 | An `ApiError` or branded Blocks error thrown inside `transaction()` | Passes through unchanged after the rollback | Same |
 
@@ -158,6 +158,7 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | Resolution of the `cluster` option | `src/cluster-ref.ts` (shared by all entry points) |
 | Queries, transactions and retries | `src/database-core.ts`, `src/transaction.ts` |
 | Result schema validation | `src/result-schema.ts` |
+| Test helpers and the internal access channel | `src/testing.ts`, `src/internal.ts` |
 | DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Local engine and schema switching | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
 | DSQL compatibility checks and the migration rewriter | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |

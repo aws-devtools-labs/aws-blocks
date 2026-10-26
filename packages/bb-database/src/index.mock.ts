@@ -21,6 +21,7 @@ import { DatabaseCore } from './database-core.js';
 import { MockEngine } from './engines/mock-engine.js';
 import { sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
+import { registerInternalAccess } from './internal.js';
 import { buildMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
 import { registerSchema, registerUniqueId } from './registry.js';
@@ -73,9 +74,9 @@ export class DatabaseCluster extends Scope {
  *
  * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
  * transaction limits applied when the cluster is `distributed`. Migrations in
- * `./aws-blocks/migrations/{id}` run on first use. `simulateConflict()` makes
- * the next commit fail with `SerializationFailure` so retry logic can be tested
- * without a deployed cluster.
+ * `./aws-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
+ * `@aws-blocks/bb-database/testing` makes the next commit fail with
+ * `SerializationFailure` so retry logic can be tested without a deployed cluster.
  *
  * @example
  * import { Database, sql } from '@aws-blocks/bb-database';
@@ -88,7 +89,7 @@ export class Database extends Scope {
 	/** The schema this block's tables live in. */
 	readonly schemaName: string;
 	/** The resolved migrations directory, or `undefined` when the block has none. */
-	readonly migrationsPath: string | undefined;
+	private readonly migrationsPath: string | undefined;
 
 	private readonly core: DatabaseCore;
 	private mock: MockEngine | null = null;
@@ -141,6 +142,14 @@ export class Database extends Scope {
 		};
 
 		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
+		registerInternalAccess(this, {
+			engine: () => this.core.getEngine(),
+			simulateConflict: () => {
+				if (this.mock) this.mock.simulateConflict();
+				else this.pendingConflict = true;
+			},
+			migrationsPath: this.migrationsPath,
+		});
 		// An owned cluster is named after its block; a shared one after the DatabaseCluster.
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id,
@@ -219,21 +228,6 @@ export class Database extends Scope {
 	 */
 	transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
 		return this.core.transaction(fn, options);
-	}
-
-	/**
-	 * Test helper (local mode only): make the next commit raise
-	 * `SerializationFailure`, so retry logic can be exercised without a deployed
-	 * DSQL cluster.
-	 */
-	simulateConflict(): void {
-		if (this.mock) this.mock.simulateConflict();
-		else this.pendingConflict = true;
-	}
-
-	/** @internal The underlying engine. Used by `createKyselyAdapter()`. */
-	getEngine(): Promise<DatabaseEngine> {
-		return this.core.getEngine();
 	}
 }
 
