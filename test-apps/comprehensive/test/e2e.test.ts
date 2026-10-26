@@ -7,7 +7,7 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
@@ -38,6 +38,7 @@ import { cliClientTests } from './cli-client.test.js';
 import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
+import { multiComputeTests } from './multi-compute.test.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +46,7 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
+let isolatedApi: typeof isolatedApiType;
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -133,6 +135,7 @@ test.before(async () => {
   // Import API after config is written
   const module = await import('aws-blocks');
   api = module.api;
+  isolatedApi = module.isolatedApi;
   
   await waitForServer();
   console.log('✅ Server ready\n');
@@ -280,6 +283,9 @@ knowledgeBaseTests(() => api);
 
 // Logging BB tests (separate file)
 loggingTests(() => api);
+
+// Multi-compute
+multiComputeTests(() => api, () => isolatedApi);
 
 // EmailClient tests (separate file)
 emailClientTests(() => api);

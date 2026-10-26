@@ -135,6 +135,7 @@ When `codeDelivery` is provided:
 - **Password reset** is available as a state machine action. The code is delivered via the callback. The user enters the code + new password to complete the reset.
 - Verification codes are 6-digit numeric strings, valid for 10 minutes.
 - Codes are HMAC-hashed before storage — never stored in plain text.
+- Each code allows at most 5 failed guesses (signup confirmation and password reset alike); after the 5th wrong guess the code is invalidated and the user must request a new one. This is always on — a 6-digit code is brute-forceable within its 10-minute window without it — and independent of the opt-in sign-in [lockout](#sign-in-throttling).
 
 When `codeDelivery` is **not** provided:
 - Signup is immediate (no confirmation step).

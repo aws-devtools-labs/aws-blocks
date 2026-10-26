@@ -36,13 +36,40 @@ env:
   NODE_OPTIONS: '--test-reporter=spec'
 
 jobs:
+  # Picks the E2E jobs to run. By default that is every E2E job when the PR
+  # changes packages/ or test-apps/, and none otherwise. An E2E trailer on the
+  # PR's head commit overrides it, so a PR that only changes CI (this workflow,
+  # .github/actions/) or one E2E suite can run just the jobs it affects:
+  #
+  #   git commit --trailer 'E2E: all'               every E2E job
+  #   git commit --trailer 'E2E: sandbox, hosting'  only these (job ids without the e2e- prefix)
+  #
+  # Only the head commit counts: a later commit without the trailer goes back
+  # to the default. Each PR uses a fixed E2E account from the pool (PR number
+  # mod the pool size, see .github/actions/e2e-slot), so parallel PRs spread across it.
+  #
+  # A job the changes call for is never skipped: if the trailer leaves it out,
+  # or names an unknown job, it fails in its first step instead. E2E Sandbox
+  # and E2E Production are required checks, and GitHub counts a skipped job as
+  # passing, so a skip would let the trailer merge a PR past E2E. Push a
+  # commit without the trailer before merging.
+  #
+  # The logic lives in scripts/ci/e2e-selection.sh, tested by
+  # scripts/ci/e2e-selection.test.mjs (in Local Build and Checks).
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
       # E2E account for this PR (see .github/actions/e2e-slot).
       e2e-index: ${{ steps.e2e-slot.outputs.index }}
-      source-changed: ${{ steps.check.outputs.source-changed }}
+      # JSON array of the E2E jobs to run, e.g. ["sandbox","hosting"]
+      e2e: ${{ steps.check.outputs.e2e }}
+      # JSON array of the E2E jobs the changes call for but the trailer left
+      # out. Each fails in its first step.
+      e2e-blocked: ${{ steps.check.outputs.blocked }}
+      # e2e + e2e-blocked: the E2E jobs that start. Each E2E job's `if:` checks
+      # this one, so a blocked job can't be skipped by checking only `e2e`.
+      e2e-run: ${{ steps.check.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,12 +78,9 @@ jobs:
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
       - id: check
-        run: |
-          if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "source-changed=false" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          E2E_ACCOUNT: ${{ steps.e2e-slot.outputs.account }}
+        run: scripts/ci/e2e-selection.sh origin/main
 
   blocks-integrity:
     name: Blocks Package Integrity
@@ -171,8 +195,13 @@ jobs:
       - name: Build
         run: npm run build
 
-  build-and-test-local:
-    name: Build, Unit Tests, E2E Local
+  # The parts of the required "Build, Unit Tests, E2E Local" check run as
+  # parallel jobs: local-build (build, checks including check:api, the
+  # dist-registry artifact), local-unit and local-e2e. Each installs and
+  # builds on its own.
+  # build-and-test-local below passes only when all of them succeeded.
+  local-build:
+    name: Local Build and Checks
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -207,6 +236,11 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      # Every BB with an aws-runtime export (and the create-block template) must
+      # call assertNotMockInDeployedEnv at the top of its mock entry.
+      - name: Check runtime mock-guard coverage
+        run: npm run check:runtime-guard
+
       # The guard decides whether unattributed traffic can ship, so it is unit-tested
       # first. A regression shows up here instead of as a wrong verdict below.
       - name: Test the client user-agent guard
@@ -214,6 +248,15 @@ jobs:
 
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
+
+      # Decides which E2E jobs run, and which a PR can't skip by leaving them
+      # out of its E2E trailer.
+      - name: Test the E2E job selection
+        run: node --test scripts/ci/e2e-selection.test.mjs
+
+      # Deletes the stacks a cancelled or crashed E2E job leaves behind.
+      - name: Test the E2E teardown
+        run: node --test scripts/ci/e2e-teardown.test.mjs
 
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
@@ -226,29 +269,9 @@ jobs:
       - name: Check API backward compatibility
         run: npm run check:api
 
-      - name: Unit Tests
-        env:
-          # The real-CDK stream-routing probe in packages/core guards the issue #222
-          # root cause (`--ci` is what moves CloudFormation progress off stderr).
-          # Require it here so a runner that cannot resolve the CDK CLI fails
-          # instead of skipping, and have it drop a marker file the next step
-          # checks — a probe that stops running must not read as green.
-          BLOCKS_REQUIRE_CDK_PROBE: '1'
-          BLOCKS_CDK_PROBE_MARKER: ${{ runner.temp }}/cdk-routing-probe.marker
-        run: npm run test:unit
-
-      - name: Verify the real-CDK stream-routing probe ran
-        run: |
-          set -euo pipefail
-          marker='${{ runner.temp }}/cdk-routing-probe.marker'
-          if [ ! -s "$marker" ]; then
-            echo "::error::the real-CDK --ci stream-routing probe did not run (no marker at $marker). It is the only test that verifies the CDK CLI still routes deploy logs to stdout under --ci and keeps failures on stderr (issue #222); a silent skip is a regression."
-            exit 1
-          fi
-          cat "$marker"
-
-      - name: E2E Test Local
-        run: npm run test:e2e:local
+      # Tests the splitter the local-unit jobs use.
+      - name: Test the unit test sharding
+        run: node --test scripts/ci/unit-test-shard.test.mjs
 
       - name: Pack for local registry
         run: npm run publish:local
@@ -260,13 +283,163 @@ jobs:
           path: dist-registry/
           retention-days: 1
 
-  e2e-templates:
-    name: E2E Templates
-    needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+  # The unit tests of every workspace, split by scripts/ci/unit-test-shard.mjs
+  # so each workspace runs in exactly one shard. The shard count is the matrix
+  # length, so the matrix has no other axis (unit-test-shard.test.mjs checks).
+  local-unit:
+    name: Local Unit Tests (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # Let every shard finish, so a run reports all failing workspaces.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit Tests
+        env:
+          # The real-CDK stream-routing probe in packages/core guards the issue #222
+          # root cause (`--ci` is what moves CloudFormation progress off stderr).
+          # Require it here so a runner that cannot resolve the CDK CLI fails
+          # instead of skipping, and have it drop a marker file the next step
+          # checks — a probe that stops running must not read as green.
+          BLOCKS_REQUIRE_CDK_PROBE: '1'
+          BLOCKS_CDK_PROBE_MARKER: ${{ runner.temp }}/cdk-routing-probe.marker
+          # Fail, rather than skip, the core runtime-guard e2e test when the built
+          # BB it imports cannot be resolved, so a rename cannot drop it silently.
+          BLOCKS_REQUIRE_RUNTIME_GUARD_E2E: '1'
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        # npm run test:unit is npm run test --workspaces; this runs the same
+        # script in this shard's workspaces.
+        run: |
+          set -euo pipefail
+          workspaces=$(node scripts/ci/unit-test-shard.mjs "$SHARD" "$SHARDS")
+          echo "Shard $SHARD of $SHARDS runs:"
+          echo "$workspaces"
+          args=()
+          while IFS= read -r ws; do args+=(-w "$ws"); done <<<"$workspaces"
+          npm run test "${args[@]}"
+
+      - name: Verify the real-CDK stream-routing probe ran
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+          # The probe is in @aws-blocks/core, which runs in one shard only. A
+          # tree where no shard runs it fails here instead of passing.
+          owner=0
+          for i in $(seq 1 "$SHARDS"); do
+            workspaces=$(node scripts/ci/unit-test-shard.mjs "$i" "$SHARDS")
+            if grep -qx '@aws-blocks/core' <<<"$workspaces"; then owner=$i; fi
+          done
+          if [ "$owner" = 0 ]; then
+            echo "::error::no unit test shard runs @aws-blocks/core, so the real-CDK stream-routing probe would not run."
+            exit 1
+          fi
+          if [ "$owner" != "$SHARD" ]; then
+            echo "@aws-blocks/core runs in shard $owner; that shard checks the probe."
+            exit 0
+          fi
+          marker='${{ runner.temp }}/cdk-routing-probe.marker'
+          if [ ! -s "$marker" ]; then
+            echo "::error::the real-CDK --ci stream-routing probe did not run (no marker at $marker). It is the only test that verifies the CDK CLI still routes deploy logs to stdout under --ci and keeps failures on stderr (issue #222); a silent skip is a regression."
+            exit 1
+          fi
+          cat "$marker"
+
+  local-e2e:
+    name: Local E2E
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: E2E Test Local
+        run: npm run test:e2e:local
+
+  # Required check. Passes only when every local-* part succeeded: a failed,
+  # cancelled or skipped part fails it, and it runs even then so it never
+  # reports as skipped (GitHub counts a skipped required check as passing).
+  # Keep always(), not !cancelled(): a cancelled run then fails this check
+  # instead of skipping it. Jobs that need it wait for all the parts.
+  build-and-test-local:
+    name: Build, Unit Tests, E2E Local
+    needs: [local-build, local-unit, local-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that every part succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for part in local-build local-unit local-e2e; do
+            result=$(jq -r --arg part "$part" '.[$part].result // "missing"' <<<"$NEEDS")
+            echo "$part: $result"
+            if [ "$result" != success ]; then failed=1; fi
+          done
+          if [ "$failed" != 0 ]; then
+            echo "::error::Every part of Build, Unit Tests, E2E Local must succeed."
+            exit 1
+          fi
+
+  e2e-templates:
+    name: E2E Templates
+    needs: [build-and-test-local, detect-changes]
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -302,10 +475,16 @@ jobs:
   e2e-templates-windows:
     name: E2E Templates (Windows)
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'templates-windows')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -338,7 +517,7 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Sandbox
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -346,6 +525,12 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'sandbox')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -373,13 +558,35 @@ jobs:
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
 
+      # The suite destroys its stack in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes.
+      # Delete what this checkout deployed: skipped when nothing was synthesized,
+      # one ListStacks call when the suite cleaned up. Fresh credentials, since
+      # the first session can expire before a long or timed-out job gets here.
+      # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
+      # steps get 3 minutes together.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/comprehensive
+
   e2e-sandbox-vpc:
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox-vpc') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -395,6 +602,12 @@ jobs:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'sandbox-vpc')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -431,12 +644,18 @@ jobs:
         run: npm run test:e2e:sandbox:vpc
 
   e2e-compute-smoke:
-    name: E2E Compute Smoke
+    # The compute suite: one app (test-apps/compute-smoke) with a scenario module
+    # per compute kind and workload — container AsyncJobs, an API namespace on
+    # its own serverless compute — deployed once per leg. The legs vary the API
+    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
+    # its compute type. The `apigateway` front door is covered without a VPC by
+    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -452,9 +671,28 @@ jobs:
     concurrency:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      # Every leg provisions the same endpoints into the one compute test VPC, so
+      # legs run one after another. The concurrency group is not a queue: it holds
+      # one running and one pending job, and a newer pending job (another PR on
+      # this account) cancels the pending one.
+      max-parallel: 1
+      matrix:
+        front-door: [cloudfront]
     env:
-      BLOCKS_STACK_SUFFIX: compute-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
+      # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
+      # the app's FileBucket name past S3's 63 at four-digit PR numbers.
+      BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -483,6 +721,7 @@ jobs:
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
+        id: vpc-id
         run: |
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
@@ -490,13 +729,26 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
+      # The test tears its stack down itself and fails the run if it can't. This
+      # retries after a failed, cancelled or timed-out run, which would otherwise
+      # leave the stack (its distribution and its endpoints in the shared VPC)
+      # behind. Nothing is deployed before the VPC ID is exported.
+      - name: Destroy stack (if left behind)
+        if: (failure() || cancelled()) && steps.vpc-id.outcome == 'success'
+        working-directory: test-apps/compute-smoke
+        run: |
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || {
+            echo "::error::Could not destroy the compute suite's stack; the scheduled stack cleanup will retry."
+            exit 1
+          }
+
   e2e-production:
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'production') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: e2e
@@ -504,6 +756,12 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'production')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -531,13 +789,35 @@ jobs:
       - name: E2E Test Production
         run: npm run test:e2e:production
 
+      # The suite destroys its stack in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes.
+      # Delete what this checkout deployed: skipped when nothing was synthesized,
+      # one ListStacks call when the suite cleaned up. Fresh credentials, since
+      # the first session can expire before a long or timed-out job gets here.
+      # GitHub force-stops a cancelled job 5 minutes after the cancel, so the two
+      # steps get 3 minutes together.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/comprehensive/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/comprehensive
+
   e2e-supabase:
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E Supabase
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'supabase') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: e2e
@@ -552,6 +832,12 @@ jobs:
       group: e2e-supabase
       cancel-in-progress: false
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'supabase')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -616,7 +902,7 @@ jobs:
     name: E2E Hosting (${{ matrix.framework }})
     timeout-minutes: 60
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'hosting') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: e2e
     strategy:
@@ -626,6 +912,13 @@ jobs:
           - framework: spa
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
+          # The same SPA suite behind the regional ALB door (HOSTING_FRONT_DOOR),
+          # then a redeploy of the kept sandbox. The other built-in doors are
+          # covered by template tests and run as follow-up lanes.
+          - framework: spa-alb
+            app-dir: test-apps/hosting-spa
+            script: test:e2e:hosting-spa
+            front-door: alb
           - framework: nextjs
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
@@ -658,10 +951,17 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
-      # Web Function jobs keep the sandbox after the suite for the redeploy check.
-      BLOCKS_SANDBOX_KEEP: ${{ matrix.compute-type == 'web-function' && '1' || '' }}
+      HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
+      # Web Function and front-door jobs keep the sandbox after the suite for the redeploy check.
+      BLOCKS_SANDBOX_KEEP: ${{ (matrix.compute-type == 'web-function' || matrix.front-door) && '1' || '' }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'hosting')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -699,6 +999,10 @@ jobs:
         if: matrix.compute-type == 'web-function'
         run: npx tsx scripts/ci/web-function-redeploy.ts ${{ matrix.app-dir }}
 
+      - name: Redeploy behind the ${{ matrix.front-door }} front door
+        if: matrix.front-door
+        run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
+
       - name: Cleanup sandbox
         if: always()
         run: |
@@ -708,7 +1012,7 @@ jobs:
   e2e-telemetry:
     name: Telemetry E2E
     needs: [build-and-test-local, detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'telemetry') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -718,6 +1022,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: telemetry-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'telemetry')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -755,17 +1065,23 @@ jobs:
           npx tsx aws-blocks/scripts/destroy.ts || true
 
   # Gate job — matches the branch protection required check name.
-  # Skipped E2E jobs (no source changes) are treated as passing.
+  # Skipped E2E jobs (not selected by detect-changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
+    needs: [detect-changes, blocks-integrity, release-install-check, build-and-test-local, e2e-templates, e2e-templates-windows, e2e-sandbox, e2e-sandbox-vpc, e2e-compute-smoke, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
+          # A failed detect-changes skips every E2E job, which would otherwise pass below.
+          if [[ "${{ needs.detect-changes.result }}" != "success" ]]; then
+            echo "detect-changes failed"
+            exit 1
+          fi
+
           if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
             echo "blocks-integrity failed"
             exit 1
@@ -781,7 +1097,7 @@ jobs:
             exit 1
           fi
 
-          # E2E jobs must either succeed or be skipped (no source changes)
+          # E2E jobs must either succeed or be skipped (not selected)
           if [[ "${{ needs.e2e-templates.result }}" != "success" && "${{ needs.e2e-templates.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-templates-windows.result }}" != "success" && "${{ needs.e2e-templates-windows.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-sandbox.result }}" != "success" && "${{ needs.e2e-sandbox.result }}" != "skipped" ]] ||

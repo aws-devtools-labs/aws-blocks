@@ -17,7 +17,7 @@ export {
 	secret,
 	type ValueKind,
 } from '@aws-blocks/hosting';
-export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export { type ApiHandler, ApiNamespace, type ApiNamespaceOptions, type BlocksContext } from './api.js';
 export {
 	type ComputeOptions,
 	type ComputeType,
@@ -93,6 +93,7 @@ export {
 export { ApiError, blocksError, brandBlocksError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError, isWireSafeError } from './errors.js';
 export {
 	type BlocksStackApi,
+	type CloudFrontOverRouterFrontDoor,
 	type ComputeConfig,
 	type FrameworkType,
 	Hosting,

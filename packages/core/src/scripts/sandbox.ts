@@ -44,6 +44,16 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+/**
+ * How the sandbox spawns the local dev server. It runs under `shell: true`, so
+ * the whole command goes to the shell as one string with no separate args:
+ * Node 24 emits DEP0190 whenever a non-empty args array is combined with
+ * `shell: true`, because the args are only concatenated, never escaped.
+ */
+export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
+  return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+}
+
 export interface SandboxDeployArgsOptions {
   /** Directory CDK writes stack outputs to (relative to the project root). */
   outDir: string;
@@ -187,13 +197,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   process.env.BLOCKS_STAGE = 'sandbox';
 
-  // Fail fast if AWS credentials are missing/expired, before spending ~10s in
-  // synth only to hit an opaque CDK credential error. Unlike deploy(), startSandbox
-  // isn't wrapped in trackCommand, so emit the FAIL event manually (mirroring the
-  // CDK-deploy failure path below) before rethrowing — otherwise a no-creds abort
-  // sends no telemetry.
+  // Fail fast if AWS credentials are missing/expired, or the account and Region were
+  // never CDK-bootstrapped, before spending ~10s in synth only to hit an opaque CDK
+  // error. Unlike deploy(), startSandbox isn't wrapped in trackCommand, so emit the
+  // FAIL event manually (mirroring the CDK-deploy failure path below) before
+  // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -353,10 +363,9 @@ export async function startSandbox(options: SandboxOptions) {
     console.error(`[CDK Watch] ${data.toString().trim()}`);
   });
 
-  const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
-  const [cmd, ...args] = devServerCmd.split(' ');
-  
-  const devServer = spawnCommand(cmd, args, {
+  const devServerSpawn = buildDevServerSpawn(devCommand);
+
+  const devServer = spawnCommand(devServerSpawn.command, devServerSpawn.args, {
     stdio: "inherit",
     shell: true,
     // Own process group on POSIX so cleanup can signal the whole dev-server
@@ -617,6 +626,128 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
 	}
 }
 
+/**
+ * Whether a CloudFormation resource status reason says an AWS API throttled
+ * the call, e.g. `Too Many Requests (Service: ApiGateway, Status Code: 429)`
+ * (DeleteRestApi is limited to one request every 30s per account),
+ * `Rate exceeded (... Error Code: Throttling)`, EC2 `RequestLimitExceeded` or
+ * S3 `SlowDown`. Case-sensitive and matched on the services' error-token
+ * shapes, so a resource name that merely contains "throttling" does not match.
+ */
+export function isThrottleReason(reason: string | undefined): boolean {
+	return /\bToo Many Requests\b|\bStatus Code: 429\b|\bTooManyRequestsException\b|\bThrottlingException\b|\bError Code: Throttling\b|\bRate [Ee]xceeded\b|\bRequestLimitExceeded\b|\bError Code: SlowDown\b|\bRequest was throttled\b/.test(
+		reason ?? '',
+	);
+}
+
+/** Clock skew allowed between this machine and CloudFormation event timestamps. */
+const EVENT_CLOCK_SKEW_MS = 60_000;
+/** DescribeStackEvents pages read per stack before giving up on finding this attempt's start. */
+const MAX_EVENT_PAGES = 30;
+
+/**
+ * Whether the delete attempt that began at `sinceMs` failed because AWS
+ * throttled a resource delete in any of `stackNames`. Reads each stack's
+ * events newest-first back to this attempt's own stack-level
+ * `DELETE_IN_PROGRESS` and counts a throttle only if that start event is found
+ * and is no older than `sinceMs` (less clock skew) nor than `notBeforeMs`
+ * (the previous attempt's failure, when there was one), so a throttle left
+ * over from an earlier attempt is not counted. Stack-level events (the stack's
+ * "failed to delete: [ids]" summary, nested stacks) are never read as a
+ * throttle. A stack that no longer exists is skipped; any other error (or
+ * every stack missing, e.g. stacks in another Region) is thrown after checking
+ * the remaining stacks, so the caller can warn and fall back to the ordinary
+ * retry schedule.
+ */
+export async function stackDeleteThrottled(
+	cfn: CloudFormationClient,
+	stackNames: string[],
+	sinceMs: number,
+	notBeforeMs?: number,
+): Promise<boolean> {
+	const { DescribeStackEventsCommand } = await import('@aws-sdk/client-cloudformation');
+	const oldest = Math.max(sinceMs - EVENT_CLOCK_SKEW_MS, notBeforeMs ?? Number.NEGATIVE_INFINITY);
+	let firstError: unknown;
+	let missing = 0;
+	for (const stackName of stackNames) {
+		try {
+			let nextToken: string | undefined;
+			let sawThrottle = false;
+			scan: for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+				const res = await cfn.send(new DescribeStackEventsCommand({ StackName: stackName, NextToken: nextToken }));
+				for (const ev of res.StackEvents ?? []) {
+					if (ev.Timestamp && ev.Timestamp.getTime() < oldest) break scan;
+					if (ev.ResourceType === 'AWS::CloudFormation::Stack') {
+						if (ev.LogicalResourceId === stackName && ev.ResourceStatus === 'DELETE_IN_PROGRESS') {
+							if (sawThrottle) return true;
+							break scan;
+						}
+						continue;
+					}
+					if (ev.ResourceStatus === 'DELETE_FAILED' && isThrottleReason(ev.ResourceStatusReason)) sawThrottle = true;
+				}
+				nextToken = res.NextToken;
+				if (!nextToken) break;
+			}
+		} catch (e) {
+			if (/does not exist/i.test((e as Error).message ?? '')) missing++;
+			else firstError ??= e;
+		}
+	}
+	if (firstError !== undefined) throw firstError;
+	if (stackNames.length > 0 && missing === stackNames.length) {
+		throw new Error(`none of the stacks (${stackNames.join(', ')}) were found (already deleted, never deployed, or in another Region)`);
+	}
+	return false;
+}
+
+/**
+ * {@link stackDeleteThrottled} with a default-Region CloudFormation client:
+ * the real `isThrottled` for both destroy paths (`destroySandbox` here and the
+ * production `destroy` in `./destroy.ts`).
+ */
+export async function destroyWasThrottled(
+	stackNames: string[],
+	sinceMs: number,
+	notBeforeMs?: number,
+): Promise<boolean> {
+	if (stackNames.length === 0) return false;
+	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+	return stackDeleteThrottled(new CloudFormationClient({}), stackNames, sinceMs, notBeforeMs);
+}
+
+/** Backoff for a destroy that failed on an AWS API throttle. */
+export interface ThrottleBackoff {
+	/** First backoff step, before jitter. Default: 1min. */
+	baseMs?: number;
+	/** Ceiling for one backoff step, before jitter. Default: 5min. */
+	maxDelayMs?: number;
+	/**
+	 * No further throttle retry is scheduled once its wait would end more than
+	 * this long after the first failure (the retry attempt itself runs after
+	 * that). Default: 20min.
+	 */
+	budgetMs?: number;
+}
+
+const THROTTLE_BACKOFF_DEFAULTS: Required<ThrottleBackoff> = {
+	baseMs: 60_000,
+	maxDelayMs: 300_000,
+	budgetMs: 20 * 60_000,
+};
+
+/**
+ * The wait before throttle retry number `retry` (0-based): exponential
+ * (`baseMs * 2^retry`, capped at `maxDelayMs`) with equal jitter, i.e. a
+ * random point in `[step/2, step]`. The jitter spreads parallel destroys in
+ * one account apart, so they stop retrying DeleteRestApi in lockstep.
+ */
+export function throttleBackoffDelay(retry: number, backoff: ThrottleBackoff, random: () => number): number {
+	const { baseMs, maxDelayMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...backoff };
+	const step = Math.min(maxDelayMs, baseMs * 2 ** retry);
+	return Math.round(step / 2 + random() * (step / 2));
+}
+
 /** Injectable dependencies for {@link runDestroyWithRetries} — real ones in
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
@@ -633,6 +764,21 @@ export interface DestroyRetryDeps {
 	retryDelays?: number[];
 	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
 	successLabel?: string;
+	/**
+	 * Whether the attempt that started at `attemptStartedAt` (epoch ms) failed
+	 * on an AWS API throttle (e.g. DeleteRestApi 429); `previousFailureAt` is
+	 * when the previous attempt failed (events up to then belong to it, not to
+	 * this attempt), undefined on the first attempt. A throttled failure is
+	 * retried with {@link throttleBackoff} instead of `retryDelays`; a rejection
+	 * is logged and treated as "not throttled". Default: never throttled.
+	 */
+	isThrottled?: (stackNames: string[], attemptStartedAt: number, previousFailureAt?: number) => Promise<boolean>;
+	/** Backoff for throttled failures. Default: randomized waits of up to 1min, 2min, 4min, then 5min, within 20min of the first failure. */
+	throttleBackoff?: ThrottleBackoff;
+	/** Jitter source in [0, 1). Default: `Math.random`. */
+	random?: () => number;
+	/** Clock (epoch ms). Default: `Date.now`. */
+	now?: () => number;
 }
 
 /**
@@ -646,30 +792,92 @@ export interface DestroyRetryDeps {
  * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
  * retries a transient teardown blocker. Factored out with injectable deps so
  * this behavior is unit-testable.
+ *
+ * A failure that `isThrottled` attributes to an AWS API throttle (typically
+ * API Gateway's DeleteRestApi quota of one request every 30s per account, hit
+ * when several stacks in one account tear down at once) is retried longer:
+ * jittered exponential backoff ({@link throttleBackoffDelay}) until
+ * `throttleBackoff.budgetMs` after the first failure is spent. Every other
+ * failure keeps the `retryDelays` schedule: at most `retryDelays.length`
+ * ordinary retries per call, whatever throttled retries came between them,
+ * and none once a throttle backoff has used up the budget. A failure counts as
+ * throttled when any resource delete in that attempt was throttled, so another
+ * resource that failed for a different reason in the same attempt gets the
+ * throttle schedule too: it is retried later, not hidden, and still fails the
+ * call once the budget is spent. With 5-minute attempts a call can run for
+ * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
 	const label = deps.successLabel ?? 'Sandbox';
+	const now = deps.now ?? Date.now;
+	const random = deps.random ?? Math.random;
+	const isThrottled = deps.isThrottled ?? (async () => false);
+	const { budgetMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...deps.throttleBackoff };
 	let stackNames: string[] | undefined;
+	let firstFailureAt: number | undefined;
+	let lastFailureAt: number | undefined;
+	let throttleRetries = 0;
+	let ordinaryRetries = 0;
 	for (let attempt = 0; ; attempt++) {
+		const attemptStartedAt = now();
 		try {
 			deps.runDestroy();
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
-			if (attempt < retryDelays.length) {
-				if (stackNames === undefined) stackNames = deps.listStackNames();
-				if (stackNames.length > 0) {
-					console.log('\n🧹 Emptying versioned S3 buckets before retry...');
-					await deps.emptyBuckets(stackNames);
-				}
-				const delaySec = retryDelays[attempt] / 1000;
-				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
-				await deps.sleep(retryDelays[attempt]);
-			} else {
+			const previousFailureAt = lastFailureAt;
+			lastFailureAt = now();
+			firstFailureAt ??= lastFailureAt;
+			if (stackNames === undefined) stackNames = deps.listStackNames();
+			let throttled = false;
+			try {
+				throttled = await isThrottled(stackNames, attemptStartedAt, previousFailureAt);
+			} catch (e) {
+				console.warn(
+					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
+				);
+			}
+			let delayMs: number | undefined;
+			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
+			if (throttled) {
+				const next = throttleBackoffDelay(throttleRetries, deps.throttleBackoff ?? {}, random);
+				if (now() - firstFailureAt + next <= budgetMs) delayMs = next;
+			} else if (ordinaryRetries < retryDelays.length && !throttleBudgetSpent) {
+				delayMs = retryDelays[ordinaryRetries];
+			}
+			if (delayMs === undefined) {
 				console.error('\n❌ Destroy failed after retries.');
+				if (throttled) {
+					console.error(
+						'   The last attempt was throttled by AWS (for example, API Gateway allows one REST API ' +
+							'delete every 30s per account). Wait a few minutes and run destroy again; if it fails ' +
+							'again, check the stack events for other errors.',
+					);
+				} else if (ordinaryRetries < retryDelays.length) {
+					console.error(
+						'   Earlier attempts were throttled by AWS and used up the retry time. Check the stack ' +
+							'events for this failure, then run destroy again.',
+					);
+				}
 				throw error;
 			}
+			if (stackNames.length > 0) {
+				console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+				await deps.emptyBuckets(stackNames);
+			}
+			const delaySec = Math.round(delayMs / 1000);
+			if (throttled) {
+				throttleRetries++;
+				console.log(
+					`\n⏳ Stack deletion was throttled by AWS (API rate limit). Retrying in ${delaySec}s ` +
+						`(throttle retry ${throttleRetries}; backing off for up to ${Math.round(budgetMs / 60_000)} min)...`,
+				);
+			} else {
+				ordinaryRetries++;
+				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+			}
+			await deps.sleep(delayMs);
 		}
 	}
 }
@@ -682,27 +890,37 @@ export async function destroySandbox(backendPath: string) {
     // credential error is deterministic and retrying only burns the backoff.
     // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
     // teardown blockers, not auth.
-    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd() });
+    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd(), accountDetails: false });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {
       if (e.code !== 'ENOENT') throw e;
     }
 
-    const cdkArgs = [
-      "exec", "cdk", "--", "destroy",
-      "--force",
-      "--context", "sandboxMode=true",
-      // Single-quote backendPath: CDK re-runs the --app string through a shell,
-      // so an unquoted path containing a space would split.
-      "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
-    ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
-    await runDestroyWithRetries({
-      runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
-      listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
-      emptyBuckets: emptySandboxBuckets,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    });
+    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv));
   });
+}
+
+/**
+ * The {@link runDestroyWithRetries} dependencies `destroySandbox` runs with.
+ * A separate function so a test can pin the wiring (throttle detection, bucket
+ * emptying) without spawning cdk.
+ */
+export function sandboxDestroyDeps(backendPath: string, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+  const cdkArgs = [
+    "exec", "cdk", "--", "destroy",
+    "--force",
+    "--context", "sandboxMode=true",
+    // Single-quote backendPath: CDK re-runs the --app string through a shell,
+    // so an unquoted path containing a space would split.
+    "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+  ];
+  return {
+    runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+    listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
+    emptyBuckets: emptySandboxBuckets,
+    isThrottled: destroyWasThrottled,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  };
 }
