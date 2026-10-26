@@ -3,14 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Replays the E2E Hosting matrix's REST API deletes through API Gateway's
-// delete quota, to check or re-derive each leg's `teardown-at` in
-// .github/workflows/pr-checks.yml.
+// delete quota, to check how long they wait on each other or to evaluate a
+// per-leg `teardown-at` schedule. .github/workflows/pr-checks.yml sets no
+// `teardown-at` today (a leg's missing value counts as 0, no wait): fixed
+// delays went stale as the suites changed.
 //
 //   node scripts/ci/hosting-teardown-replay.mjs [--search[=budget]] [--holdout]
 //     [--schedule=JSON] [runId ...]
 //
 // Inputs, read with the gh CLI for each PR Checks run (latest attempt;
-// default: RUNS below, the runs the current values were searched on):
+// default: RUNS below, the runs the earlier values were searched on):
 // - each E2E Hosting job's start (jobs API `started_at`);
 // - from its log, for the last deploy (a Playwright retry deploys again):
 //   the start of the destroy after it (the last "Destroying sandbox" line
