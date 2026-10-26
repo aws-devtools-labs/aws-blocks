@@ -54,17 +54,19 @@ import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { customErrorResponses } from './error_responses.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
-  buildKvsEntries,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
 import type { WebFunctionConstruct } from './web_function_construct.js';
 import {
@@ -178,9 +180,9 @@ export type CdnConstructProps = {
   skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
-  /** Geo-restriction configuration. */
+  /** Geo-restriction configuration (`'allowlist'` / `'denylist'`, or the legacy `'whitelist'` / `'blacklist'`). */
   geoRestriction?: {
-    type: 'whitelist' | 'blacklist';
+    type: 'allowlist' | 'denylist' | 'whitelist' | 'blacklist';
     countries: string[];
   };
   /** Custom error page HTML. */
@@ -256,6 +258,16 @@ export class CdnConstruct extends Construct {
   readonly invalidationId?: string;
 
   /**
+   * The security-headers / CSP {@link IResponseHeadersPolicy} applied to the
+   * static, SSR and image cache behaviors. Exposed so a construct that adds
+   * more behaviors to this same distribution later — notably the API/auth
+   * proxy behaviors `core.Hosting` attaches when it fronts the backend — can
+   * attach the identical policy instead of leaving those responses without
+   * security headers.
+   */
+  readonly securityHeadersPolicy: IResponseHeadersPolicy;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -282,6 +294,10 @@ export class CdnConstruct extends Construct {
     super(scope, id);
 
     const { manifest, bucket } = props;
+
+    // Expose the policy so additional behaviors added to this distribution by
+    // other constructs (e.g. the API/auth proxy behaviors) can reuse it.
+    this.securityHeadersPolicy = props.securityHeadersPolicy;
 
     if (!manifest.buildId) {
       throw new HostingError('MissingBuildIdError', {
@@ -948,7 +964,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    const kvsEntries = buildKvsEntries({
+    // Build the service-agnostic HostingPlan (origins + route table +
+    // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
+    // single source of routing truth every front-door adapter shares; CloudFront
+    // is one renderer of it.
+    const plan = buildHostingPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -956,6 +976,8 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+    });
+    const kvsEntries = renderKvsEntries(plan, {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
@@ -1320,28 +1342,10 @@ export class CdnConstruct extends Construct {
     ];
 
     // ---- Custom error pages (user-provided) ----
-    if (props.customErrorPages?.notFound) {
-      errorResponses.push({
-        httpStatus: 404,
-        responseHttpStatus: 404,
-        responsePagePath: `/builds/${buildId}/404.html`,
-        ttl: Duration.seconds(0),
-      });
-    }
-    if (props.customErrorPages?.serverError) {
-      // For compute (SSR) stacks, the default 502/503/504 error pages are
-      // already wired above; only add 500 with the custom page.
-      // For static/SPA stacks, add all server error statuses.
-      const serverErrorStatuses = hasCompute ? [500] : [500, 502, 503, 504];
-      for (const status of serverErrorStatuses) {
-        errorResponses.push({
-          httpStatus: status,
-          responseHttpStatus: status,
-          responsePagePath: `/builds/${buildId}/500.html`,
-          ttl: Duration.seconds(10),
-        });
-      }
-    }
+    // Shared with `cf.errorPages` (a bring-your-own door): see error_responses.ts.
+    // For compute (SSR) stacks, the default 502/503/504 error pages are
+    // already wired above; only 500 gets the custom page.
+    errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
 
 
     // ---- Distribution ----
@@ -1376,7 +1380,7 @@ export class CdnConstruct extends Construct {
       ...(props.geoRestriction
         ? {
             geoRestriction:
-              props.geoRestriction.type === 'whitelist'
+              props.geoRestriction.type === 'whitelist' || props.geoRestriction.type === 'allowlist'
                 ? GeoRestriction.allowlist(...props.geoRestriction.countries)
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }

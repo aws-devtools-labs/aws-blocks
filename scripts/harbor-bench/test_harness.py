@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from accounting import summarize
+from pins import PRICE_CACHE_READ, PRICE_CACHE_WRITE, PRICE_INPUT, PRICE_OUTPUT
 from provenance import stored_in_blocks, verify
 from public_result import collect
 from report import difference, eligible_pair, render
@@ -14,10 +15,18 @@ from report import difference, eligible_pair, render
 MODEL = 'global.anthropic.claude-opus-5-5'
 
 
-def stream(values, session='session-a', turns=3, duplicate=False):
-    assistant = {'type': 'assistant', 'message': {'id': 'message-1', 'content': [
-        {'type': 'tool_use', 'id': 'tool-1', 'name': 'Bash', 'input': {'command': 'private-string'}}]}}
-    events = [assistant, assistant] if duplicate else [assistant]
+def stream(values, session='session-a', turns=3, duplicate=False, calls=None):
+    """`values` are cumulative (input, cache read, cache write, output, cost); `calls` are per-call
+    (input, cache write, cache read) of this invocation, by default one call with all of `values`."""
+    events = []
+    for index, (uncached, write, read) in enumerate(calls or [(values[0], values[2], values[1])], 1):
+        assistant = {'type': 'assistant', 'message': {'id': f'message-{index}', 'content': [], 'usage': {
+            'input_tokens': uncached, 'cache_creation_input_tokens': write, 'cache_read_input_tokens': read,
+            'output_tokens': 1}}}
+        if index == 1:
+            assistant['message']['content'].append(
+                {'type': 'tool_use', 'id': 'tool-1', 'name': 'Bash', 'input': {'command': 'private-string'}})
+        events += [assistant, assistant] if duplicate else [assistant]
     events.append({'type': 'system', 'subtype': 'init', 'model': MODEL})
     events.append({'type': 'result', 'session_id': session, 'is_error': False,
                    'subtype': 'success', 'num_turns': turns, 'total_cost_usd': values[4],
@@ -30,8 +39,10 @@ class AccountingTests(unittest.TestCase):
     def test_cumulative_three_phase_deltas_and_invocation_turns(self):
         previous = None
         metrics = []
-        for values, turns in [([10, 20, 30, 40, 1.0], 5), ([15, 40, 35, 50, 1.5], 2), ([20, 70, 40, 65, 2.0], 3)]:
-            previous = summarize(stream(values, turns=turns, duplicate=True), previous)
+        for values, turns, calls in [([10, 20, 30, 40, 1.0], 5, [(10, 30, 20)]),
+                                     ([15, 40, 35, 50, 1.5], 2, [(5, 5, 20)]),
+                                     ([20, 70, 40, 65, 2.0], 3, [(5, 5, 30)])]:
+            previous = summarize(stream(values, turns=turns, duplicate=True, calls=calls), previous)
             metrics.append(previous)
         self.assertEqual([m['turns'] for m in metrics], [5, 2, 3])
         self.assertEqual([m['usage']['input_tokens'] for m in metrics], [10, 5, 5])
@@ -50,6 +61,47 @@ class AccountingTests(unittest.TestCase):
         bad = summarize(stream([5, 20, 30, 40, 1.0]), first)
         self.assertIsNone(bad['usage']['input_tokens'])
         self.assertIn('nonmonotonic_input_tokens', bad['accounting_errors'])
+
+    def test_input_processed_and_cache_neutral_cost(self):
+        # Phase 1: a 2,002-token prefix, then 1,000 more; phase 2 continues the session with 503 more.
+        own = summarize(stream([4, 2000, 3000, 500, 0.0], calls=[(2, 2000, 0), (2, 1000, 2000)]))
+        self.assertEqual(own['usage']['input_processed_tokens'], 5004)
+        growth = 2002 + 1000
+        expected = growth * PRICE_CACHE_WRITE + (5004 - growth) * PRICE_CACHE_READ + 500 * PRICE_OUTPUT
+        self.assertAlmostEqual(own['usage']['cache_neutral_cost_usd'], expected, places=12)
+        self.assertEqual(own['context_end'], 3002)
+        self.assertEqual(own['accounting_errors'], [])
+        # The same work with the prefix served from another session's cache: list price falls, the
+        # cache-neutral cost does not.
+        shared = summarize(stream([4, 4000, 1000, 500, 0.0], calls=[(2, 0, 2000), (2, 1000, 2000)]))
+        self.assertEqual(shared['usage']['input_processed_tokens'], 5004)
+        self.assertAlmostEqual(shared['usage']['cache_neutral_cost_usd'], expected, places=12)
+        second = summarize(stream([7, 5002, 3500, 800, 0.0], calls=[(3, 500, 3002)]), own)
+        self.assertEqual(second['usage']['input_processed_tokens'], 3505)
+        self.assertAlmostEqual(second['usage']['cache_neutral_cost_usd'],
+                               503 * PRICE_CACHE_WRITE + 3002 * PRICE_CACHE_READ + 300 * PRICE_OUTPUT, places=12)
+
+    def test_missing_call_usage_leaves_cache_neutral_cost_unavailable(self):
+        first = summarize(stream([4, 2000, 3000, 500, 0.0], calls=[(2, 2000, 0), (2, 1000, 2000)]))
+        no_usage = stream([4, 2000, 3000, 500, 0.0]).replace('"usage"', '"other"')
+        for metrics in (summarize(no_usage),
+                        # Per-call usage that does not add up to the counted input misses calls.
+                        summarize(stream([4, 2000, 3000, 500, 0.0], calls=[(2, 2000, 0)])),
+                        # Without the previous phase's context, growth is unknown.
+                        summarize(stream([7, 5002, 3500, 800, 0.0], calls=[(3, 500, 3002)]),
+                                  summarize('', first))):
+            self.assertIsNone(metrics['usage']['cache_neutral_cost_usd'])
+            self.assertIsNone(metrics['context_end'])
+            self.assertIn('unavailable_cache_neutral_cost_usd', metrics['accounting_errors'])
+        self.assertEqual(summarize(no_usage)['usage']['input_processed_tokens'], 5004)
+        missing = summarize('', first)['usage']
+        self.assertIsNone(missing['input_processed_tokens'])
+        self.assertIsNone(missing['cache_neutral_cost_usd'])
+
+    def test_price_pins_reproduce_claude_code_list_price(self):
+        # Usage and total_cost_usd of one recorded create phase of the pinned model and CLI.
+        listed = 22 * PRICE_INPUT + 36446 * PRICE_CACHE_WRITE + 270268 * PRICE_CACHE_READ + 4850 * PRICE_OUTPUT
+        self.assertAlmostEqual(listed, 0.3333716, places=10)
 
 
 class ProvenanceTests(unittest.TestCase):
@@ -172,12 +224,12 @@ class ReportTests(unittest.TestCase):
             for path in (root / 'public').iterdir():
                 self.assertNotIn('private-string', path.read_text())
             for arm in ('baseline', 'candidate'):
-                directory = root / f'harbor-result-{arm}'
+                directory = root / f'harbor-result-{arm}-1'
                 directory.mkdir()
                 (directory / 'result.json').write_text(json.dumps(result))
             self.assertIn('A/A infrastructure demonstration', render(root))
             failed = dict(result, status='failed', harbor_exit_code=1, same_session=False)
-            (root / 'harbor-result-candidate/result.json').write_text(json.dumps(failed))
+            (root / 'harbor-result-candidate-1/result.json').write_text(json.dumps(failed))
             self.assertIn('| **total** | passed | failed | no |', render(root))
             # Without the .bb-data check the phase is not a pass, whatever else succeeded.
             verification = trial / 'steps/labels/verifier/verification.json'
@@ -201,7 +253,7 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(candidate['same_session'])
             self.assertEqual(candidate['status'], 'failed')
             self.assertEqual([p['status'] for p in candidate['phases']], ['passed', 'failed', 'not_run'])
-            (root / 'harbor-result-candidate/result.json').write_text(json.dumps(candidate))
+            (root / 'harbor-result-candidate-1/result.json').write_text(json.dumps(candidate))
             report = render(root)
             self.assertIn('| create | passed, skill: skill_tool | passed, skill: skill_tool | yes (n=1) |', report)
             self.assertIn('| due-dates | passed, skill: skill_tool | failed, skill: skill_tool | no |', report)
