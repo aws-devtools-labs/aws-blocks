@@ -40,6 +40,7 @@ import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfron
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
+import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
@@ -196,6 +197,13 @@ export interface BlocksStackApi {
    * @internal Framework-only.
    */
   readonly publicApiUrl?: string;
+  /**
+   * The API paths served by a container compute, which this distribution routes
+   * straight to the container's load balancer. Set on `BlocksStack`/`BlocksBackend`
+   * once `create()` resolves.
+   * @internal Framework-only.
+   */
+  readonly _apiDirectRoutes?: readonly ApiDirectRoute[];
 }
 
 /**
@@ -1476,6 +1484,11 @@ export class Hosting extends Construct {
       ...API_BEHAVIOR_OPTIONS,
       responseHeadersPolicy: hosting.securityHeadersPolicy,
     };
+
+    // A namespace on a container compute skips the gateway: its exact path goes
+    // straight to the container's load balancer. Added before `/aws-blocks/api/*`,
+    // which would otherwise match first.
+    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions);
 
     distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
     distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);

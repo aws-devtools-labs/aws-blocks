@@ -143,7 +143,10 @@ export interface ApiNamespaceOptions {
    * The compute keeps at least one task running (`scaling.minInstances: 0` fails
    * synth). Moving a namespace that already serves traffic onto a container: during
    * that deploy, its calls can get 503s until the new tasks are healthy.
-   * `RawRoute`s always run on the default compute.
+   * On the `apiFrontDoor: 'cloudfront'` tier, the CloudFront distribution that
+   * fronts the API (the managed one, or `Hosting`'s default CloudFront door) routes
+   * the namespace's path straight to that load balancer instead, so a call can run
+   * up to 60 seconds. `RawRoute`s always run on the default compute.
    *
    * Typed structurally — anything whose `resolve()` yields a compute, which is
    * what a `Compute` block is — so this entry carries no CDK types.

@@ -39,6 +39,7 @@ import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
 import type { ApiFrontDoorTier } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import { type ApiDirectRoute, addDirectApiBehaviors } from './api-direct-routes.js';
 import {
 	API_FRONT_DOOR_MARKER_HEADER,
 	apiFrontDoorMarkerValue,
@@ -103,6 +104,12 @@ export interface ApiFrontDoorOwner {
 	_apiWaf?: ResolvedApiWaf;
 	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header (see {@link apiFrontDoorMarker}). */
 	_apiFrontDoorMarked?: boolean;
+	/**
+	 * The API paths a CloudFront front door routes straight to a container's load
+	 * balancer, recorded when the shared gateway is built (see
+	 * `addDirectApiBehaviors`).
+	 */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 }
 
 /**
@@ -293,18 +300,21 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// Under the owner, not the stack: a `BlocksBackend` is a construct inside
 		// someone else's stack, and two of them in one stack would otherwise collide
 		// on this construct id.
+		const behaviorOptions = { ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy };
 		const distribution = new Distribution(this.owner, FRONT_DOOR_ID, {
 			comment: `Blocks API front door for ${stack.stackName}`,
-			// One catch-all behavior: every API path resolves to the shared gateway
-			// today, so a single default behavior routes RPC, auth, and raw routes
-			// alike. Per-path behaviors would only carry traffic once a namespace
-			// resolves to a distinct origin.
-			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy },
+			// One catch-all behavior to the shared gateway routes RPC, auth, and raw
+			// routes alike — every namespace on a Lambda compute included, since the
+			// gateway fans those out itself.
+			defaultBehavior: { origin, ...behaviorOptions },
 			// The `cloudfront` tier's WAF sits on the distribution, where it sees the
 			// real client IP (a REGIONAL ACL behind CloudFront would rate-limit per
-			// edge location instead).
+			// edge location instead). It covers the direct container routes too.
 			webAclId: waf ? webAclArnForDistribution(this.owner, waf) : undefined,
 		});
+		// A namespace on a container compute skips the gateway: its exact path goes
+		// straight to the container's load balancer.
+		addDirectApiBehaviors(distribution, this.owner._apiDirectRoutes ?? [], behaviorOptions);
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
 		// output) resolve to the CloudFront URL. No separate CloudFront-domain

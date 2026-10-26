@@ -665,6 +665,95 @@ describe('ApiNamespace on a container compute', () => {
 	});
 });
 
+// Under `cloudfront`, the distribution routes a container namespace's exact path
+// straight to the container's load balancer (a VPC origin); everything else still
+// reaches the gateway.
+describe('ApiNamespace on a container compute — cloudfront tier', () => {
+	type Resource = { Type: string; Properties: Record<string, any> };
+	type Resources = Record<string, Resource>;
+	const ofType = (resources: Resources, type: string) =>
+		Object.entries(resources).filter(([, r]) => r.Type === type);
+
+	const synth = async (id: string, apiFrontDoor?: 'cloudfront') => {
+		const stack = await BlocksStack.create(new cdk.App(), id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerBackendPath,
+			defaults: BlocksPresets.production,
+			...(apiFrontDoor ? { apiFrontDoor } : {}),
+		});
+		return Template.fromStack(stack).toJSON().Resources as Resources;
+	};
+
+	let resources: Resources;
+	before(async () => {
+		resources = await synth('ContainerApiCloudFront', 'cloudfront');
+	});
+
+	test('the namespace paths go to one VPC origin on the shared listener', () => {
+		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
+		const config = dist.Properties.DistributionConfig;
+		const behaviors = config.CacheBehaviors as Array<Record<string, any>>;
+		assert.deepStrictEqual(behaviors.map((b) => b.PathPattern).sort(), ['/aws-blocks/api/preview', '/aws-blocks/api/render']);
+		assert.strictEqual(new Set(behaviors.map((b) => b.TargetOriginId)).size, 1, 'both containers share one origin');
+		const origin = config.Origins.find((o: Record<string, any>) => o.Id === behaviors[0].TargetOriginId);
+		assert.ok(origin.VpcOriginConfig, 'a VPC origin');
+		assert.strictEqual(origin.VpcOriginConfig.OriginReadTimeout, 60);
+		const defaultOrigin = config.Origins.find((o: Record<string, any>) => o.Id === config.DefaultCacheBehavior.TargetOriginId);
+		assert.ok(defaultOrigin.CustomOriginConfig, 'the default behavior still reaches the gateway');
+
+		const [lbId] = ofType(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer')[0];
+		const [, listener] = ofType(resources, 'AWS::ElasticLoadBalancingV2::Listener')[0];
+		const vpcOrigins = ofType(resources, 'AWS::CloudFront::VpcOrigin');
+		assert.strictEqual(vpcOrigins.length, 1, 'one VPC origin for the backend, not one per container');
+		const endpoint = vpcOrigins[0][1].Properties.VpcOriginEndpointConfig;
+		assert.deepStrictEqual(endpoint.Arn, { Ref: lbId });
+		assert.strictEqual(endpoint.HTTPPort, listener.Properties.Port);
+		assert.strictEqual(endpoint.HTTPPort, 10_000);
+		assert.strictEqual(endpoint.OriginProtocolPolicy, 'http-only');
+	});
+
+	test('a viewer-request function stamps the viewer host and drops any stage', () => {
+		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
+		const [behavior] = dist.Properties.DistributionConfig.CacheBehaviors;
+		const functions = ofType(resources, 'AWS::CloudFront::Function');
+		assert.strictEqual(functions.length, 1);
+		assert.deepStrictEqual(behavior.FunctionAssociations, [
+			{ EventType: 'viewer-request', FunctionARN: { 'Fn::GetAtt': [functions[0][0], 'FunctionARN'] } },
+		]);
+		const code: string = functions[0][1].Properties.FunctionCode;
+		assert.match(code, /request\.headers\['x-blocks-forwarded-host'\] = \{ value: request\.headers\.host\.value \}/);
+		assert.match(code, /delete request\.headers\['x-blocks-forwarded-stage'\]/);
+	});
+
+	test('the load balancer admits CloudFront’s origin-facing prefix list on the listener range', () => {
+		const [, lb] = ofType(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer')[0];
+		const lbSg = lb.Properties.SecurityGroups[0]['Fn::GetAtt'][0];
+		const fromPrefixList = ofType(resources, 'AWS::EC2::SecurityGroupIngress')
+			.map(([, r]) => r.Properties)
+			.filter((r) => r.GroupId?.['Fn::GetAtt']?.[0] === lbSg && r.SourcePrefixListId);
+		assert.strictEqual(fromPrefixList.length, 1, 'one rule for every listener');
+		assert.strictEqual(fromPrefixList[0].FromPort, 10_000);
+		assert.strictEqual(fromPrefixList[0].ToPort, 10_999);
+		const [lookupId, lookup] = ofType(resources, 'Custom::AWS')[0];
+		assert.deepStrictEqual(fromPrefixList[0].SourcePrefixListId, { 'Fn::GetAtt': [lookupId, 'PrefixLists.0.PrefixListId'] });
+		assert.match(JSON.stringify(lookup.Properties.Update), /DescribeManagedPrefixLists.*com\.amazonaws\.global\.cloudfront\.origin-facing/);
+	});
+
+	test('the gateway keeps its VPC link route too', () => {
+		const methods = ofType(resources, 'AWS::ApiGateway::Method').filter(
+			([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK',
+		);
+		assert.strictEqual(methods.length, 2, 'render and preview');
+	});
+
+	test('the apigateway tier adds no CloudFront pieces', async () => {
+		const gateway = await synth('ContainerApiGatewayTier');
+		for (const type of ['AWS::CloudFront::Distribution', 'AWS::CloudFront::VpcOrigin', 'AWS::CloudFront::Function', 'Custom::AWS']) {
+			assert.strictEqual(ofType(gateway, type).length, 0, type);
+		}
+	});
+});
+
 // Compile-time only (never called): `ApiNamespaceOptions.compute` takes a
 // serverless or a container `Compute`.
 function _apiNamespaceComputeTypeChecks(scope: InstanceType<typeof Scope>) {
