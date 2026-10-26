@@ -21,6 +21,35 @@ export function cookieSecretEnvVar(fullId: string): string {
 }
 
 /**
+ * Env-var name the AWS runtime reads to learn whether this instance was deployed
+ * in sandbox mode.
+ *
+ * Sandbox vs production is known only at CDK synth (the `sandboxMode` context
+ * key, which `npm run sandbox` sets); the deployed Lambda has no CDK context. The
+ * CDK layer writes this flag with `registerConfig`, and the runtime reads it to
+ * refuse a stub IdP outside sandbox. Shared for the same reason as
+ * {@link cookieSecretEnvVar}: both sides must derive a byte-identical name.
+ *
+ * @param fullId - The fully-qualified scope ID (e.g. `"myApp-auth"`)
+ * @returns Environment variable name like `BLOCKS_AUTH_OIDC_SANDBOX_MYAPP_AUTH`
+ */
+export function sandboxFlagEnvVar(fullId: string): string {
+	return `BLOCKS_AUTH_OIDC_SANDBOX_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+}
+
+/**
+ * The error a stub IdP provider gets outside sandbox mode, shared by the synth
+ * guard (`index.cdk.ts`) and the runtime guard (`index.aws.ts`).
+ */
+export function stubOutsideSandboxMessage(providerName: string): string {
+	return (
+		`AuthOIDC: stubIdp() provider '${providerName}' can only run locally or in a sandbox (npm run sandbox). ` +
+		'The stub IdP signs in any identity without a credential, so it must not reach a production deployment. ' +
+		'Use a real provider (google(), github(), customOidc(), cognitoFederated()) for this deployment.'
+	);
+}
+
+/**
  * Env-var name prefix for the Cognito-federated provider's deployed settings.
  *
  * Shared with the CDK synth path for the same reason as `cookieSecretEnvVar`:

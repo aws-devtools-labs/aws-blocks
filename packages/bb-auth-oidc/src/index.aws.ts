@@ -25,7 +25,7 @@ import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
-import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl, sandboxFlagEnvVar, stubOutsideSandboxMessage } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
@@ -158,8 +158,15 @@ export class AuthOIDC<
 		});
 		mountAuthRoutes(this);
 
+		// Defense in depth for the synth guard in index.cdk.ts: in a deployed
+		// Lambda, mount stub IdP routes only when the CDK layer recorded a sandbox
+		// deploy. Outside Lambda (client codegen imports this module) there is
+		// nothing to mount against, so the check is skipped.
+		const isDeployed = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+		const isSandbox = process.env[sandboxFlagEnvVar(this.fullId)] === 'true';
 		for (const provider of options.providers) {
 			if (provider.kind === 'stub') {
+				if (isDeployed && !isSandbox) throw new Error(stubOutsideSandboxMessage(provider.name));
 				mountStubIdpRoutes(this, provider);
 			}
 		}

@@ -206,7 +206,7 @@ Sessions outlive the IdP's ID token — users won't get kicked out every hour. T
 - `github({ clientId, clientSecret, scopes? })` — OAuth 2.0 (no ID token; userinfo fetched + mapped automatically).
 - `customOidc({ name, issuerUrl, clientId, clientSecret, scopes?, attributeMapping? })` — any OIDC issuer (Okta, Auth0, Cognito User Pools, Entra).
 - `customOauth2({ name, authUrl, tokenUrl, userInfoUrl, clientId, clientSecret, scopes, mapClaims })` — bare OAuth 2.0 with a customer-supplied claim mapper.
-- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. See [Local development](#local-development).
+- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. **Local and sandbox only:** `cdk synth` fails if a stub provider is configured outside sandbox mode (`npm run sandbox`). See [Local development](#local-development).
 
 ### Pointing at an existing Cognito User Pool
 
@@ -261,9 +261,11 @@ You can mix the two freely; the code is the source of truth in every environment
 ```typescript
 providers: [
 	google({ clientId, clientSecret }),  // real Google everywhere, incl. local
-	stubIdp({ name: 'corporate' }),       // AWS Blocks stub everywhere
+	stubIdp({ name: 'corporate' }),       // AWS Blocks stub, local and sandbox only
 ]
 ```
+
+The stub signs in any identity without a credential, so it never reaches production: `cdk synth` throws when a `stubIdp()` provider is configured outside sandbox mode (`npm run sandbox` sets the `sandboxMode` context; `npm run deploy` doesn't), and a deployed Lambda without the sandbox flag refuses to mount the stub routes. Choose providers by environment when one app runs everywhere, for example `providers: isSandbox ? [stubIdp({ name: 'corporate' })] : [customOidc({ name: 'corporate', ... })]`. Its authorization codes are signed with a key generated per process, so a code is redeemable only by the process that issued it.
 
 #### The login screen and `onAuthorize`
 

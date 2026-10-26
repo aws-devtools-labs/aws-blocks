@@ -377,3 +377,24 @@ removal in `_exchangeCallback`: the pending PKCE entry is consumed *before* the
 network round-trip, so a late duplicate in a fresh page load (after the in-flight
 guard is gone) finds no pending entry and resolves `null` rather than replaying the
 code.
+
+### D13 — Stub IdP is local and sandbox only, enforced at synth and at runtime
+
+The stub signs in any identity without a credential, so it must never serve a
+production deployment. Two independent checks enforce that:
+
+- **Synth.** The CDK construct throws when a provider has `kind === 'stub'` and
+  the `sandboxMode` CDK context isn't `true`. `npm run sandbox` sets that context
+  and `npm run deploy` doesn't. It is the same signal `addBlocksStackMetadata`
+  uses for the `blocks:deployment-type` tag.
+- **Runtime.** CDK context doesn't exist in the Lambda, so the construct writes
+  the sandbox bit to runtime config (`BLOCKS_AUTH_OIDC_SANDBOX_<FULLID>`, via
+  `registerConfig`). In a deployed Lambda (`AWS_LAMBDA_FUNCTION_NAME` set), the
+  AWS runtime entry refuses to mount stub routes unless that flag is `true`.
+  This catches an artifact built without the synth check. Outside Lambda (client
+  codegen imports the module) there is nothing to mount, so the check is skipped.
+
+The stub's authorization codes are HMAC-signed with a 32-byte key from
+`randomBytes`, generated per process like its RS256 keypairs, and checked with
+`timingSafeEqual`. No key ships in the package, so a code can't be forged from
+the published source.

@@ -23,7 +23,7 @@
  * variable or use the test helpers exported alongside the class.
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPair, exportJWK, SignJWT, type JWK } from 'jose';
@@ -552,11 +552,12 @@ export async function handleRevoke(providerName: string, ctx: BlocksContext): Pr
 }
 
 /**
- * Fixed HMAC secret for signing authorization codes. This is NOT a security
- * boundary — the stub IdP is a test double. The secret just ensures codes
- * can't be forged by test code that doesn't know it.
+ * HMAC key for signing authorization codes, generated per process from a CSPRNG
+ * (like the RS256 keypairs above, which are also per process). A code is only
+ * redeemable by the process that issued it, and no published constant can be
+ * used to forge one.
  */
-const STUB_CODE_SECRET = 'blocks-stub-idp-code-signing-secret-not-for-production';
+const STUB_CODE_SECRET = randomBytes(32);
 
 /** Encode a PendingAuth payload into a self-contained HMAC-signed code. */
 function stubCodeEncode(payload: object): string {
@@ -573,7 +574,9 @@ function stubCodeDecode(code: string): PendingAuth | null {
 		const body = code.slice(0, dotIdx);
 		const mac = code.slice(dotIdx + 1);
 		const expected = createHmac('sha256', STUB_CODE_SECRET).update(body).digest('base64url');
-		if (mac !== expected) return null;
+		const macBytes = Buffer.from(mac);
+		const expectedBytes = Buffer.from(expected);
+		if (macBytes.length !== expectedBytes.length || !timingSafeEqual(macBytes, expectedBytes)) return null;
 		const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
 		if (payload.exp <= Math.floor(Date.now() / 1000)) return null;
 		return {

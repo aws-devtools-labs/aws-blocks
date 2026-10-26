@@ -52,7 +52,7 @@ import {
 	DEFAULT_SIGNOUT_PATH,
 	signInRoutePathFor,
 } from './auth-oidc.js';
-import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar, sandboxFlagEnvVar, stubOutsideSandboxMessage } from './utils.js';
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -107,6 +107,20 @@ export class AuthOIDC<
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;
+
+		// A stub IdP signs in any identity without a credential, so it may only be
+		// deployed in sandbox mode. `npm run sandbox` sets the `sandboxMode` context
+		// (the same signal `addBlocksStackMetadata` uses for the deployment-type
+		// tag); `npm run deploy` doesn't. The flag is also written to runtime config
+		// so the AWS runtime can refuse a stub provider in an artifact built without
+		// this check.
+		const sandboxContext = this.node.tryGetContext('sandboxMode');
+		const isSandbox = sandboxContext === 'true' || sandboxContext === true;
+		const stubProvider = options.providers.find((p) => p.kind === 'stub');
+		if (stubProvider && !isSandbox) {
+			throw new Error(stubOutsideSandboxMessage(stubProvider.name));
+		}
+		registerConfig(this, sandboxFlagEnvVar(this.fullId), String(isSandbox));
 
 		// No route declarations here: every auth route lives under the reserved
 		// `/aws-blocks/auth` subtree, which `core`'s Hosting proxies to API

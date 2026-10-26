@@ -24,8 +24,8 @@ import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { buildingBlockParent, Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
-import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
-import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
+import { AuthOIDC, cognitoFederated, google, stubIdp } from './index.cdk.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar, sandboxFlagEnvVar } from './utils.js';
 import type { AppSettingLike } from './providers.js';
 
 class StubBlocksStack extends cdk.Stack {
@@ -290,4 +290,47 @@ test('CDK: signInRoutePath() works during synth and follows callbackPath', () =>
 		callbackPath: '/aws-blocks/auth/real/callback',
 	});
 	assert.strictEqual(custom.signInRoutePath('my provider'), '/aws-blocks/auth/real/signin/my%20provider');
+});
+
+// --- stub IdP is sandbox-only ---------------------------------------------
+// A stub IdP signs in any identity without a credential, so synth must refuse
+// it unless `npm run sandbox` set the `sandboxMode` context.
+
+function setupWithContext(context: Record<string, unknown>): { stack: StubBlocksStack; parent: Scope } {
+	const app = new cdk.App({ context });
+	const stack = new StubBlocksStack(app, 'TestStack');
+	return { stack, parent: new Scope('app') };
+}
+
+function sandboxFlag(stack: cdk.Stack): unknown {
+	const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as { entries: Map<string, unknown> };
+	return registry.entries.get(sandboxFlagEnvVar('TestStack-app-auth'));
+}
+
+test('synth rejects a stub IdP provider outside sandbox mode', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AuthOIDC(parent, 'auth', { providers: [google({ clientId: 'id', clientSecret: 'secret' }), stubIdp({ name: 'corporate' })] }),
+		/stubIdp\(\) provider 'corporate' can only run locally or in a sandbox/,
+	);
+});
+
+test('synth rejects a stub IdP when sandboxMode is anything but true', () => {
+	const { parent } = setupWithContext({ sandboxMode: 'false' });
+	assert.throws(() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }), /can only run locally or in a sandbox/);
+});
+
+test('synth allows a stub IdP in sandbox mode and records the sandbox flag for the runtime', () => {
+	for (const sandboxMode of ['true', true]) {
+		const { stack, parent } = setupWithContext({ sandboxMode });
+		assert.doesNotThrow(() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }));
+		assert.match(JSON.stringify(sandboxFlag(stack)), /"true"|^true$/);
+		delete (globalThis as any).CURRENT_BLOCKS_STACK;
+	}
+});
+
+test('a production deploy with only real providers synthesizes and records sandbox=false', () => {
+	const { stack, parent } = setup();
+	assert.doesNotThrow(() => new AuthOIDC(parent, 'auth', { providers: [google({ clientId: 'id', clientSecret: 'secret' })] }));
+	assert.match(JSON.stringify(sandboxFlag(stack)), /"false"|^false$/);
 });

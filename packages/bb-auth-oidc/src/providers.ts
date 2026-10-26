@@ -147,6 +147,11 @@ export interface StubIdpOpts<N extends string = string> {
  *
  * Composable: you can mix real and stub providers in the same instance.
  *
+ * Local and sandbox only: the stub signs in any identity without a credential,
+ * so `cdk synth` fails when a stub provider is configured outside sandbox mode
+ * (`npm run sandbox`), and a deployed production Lambda refuses to mount it.
+ * Production deployments use real providers, as in the second example below.
+ *
  * @example
  * ```typescript
  * import { AuthOIDC, stubIdp } from '@aws-blocks/blocks';
