@@ -22,7 +22,14 @@ Hand a `Compute` to a workload that supports it:
 
 ```ts
 new AsyncJob(scope, 'reports', { compute: worker, timeoutSeconds: 1800, handler });
+
+export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* methods */ }), { compute: api });
 ```
+
+| Workload | Option | Compute types |
+| --- | --- | --- |
+| `AsyncJob` | `compute` | `serverless`, `container` |
+| `ApiNamespace` | `compute` (4th argument) | `serverless` |
 
 ## Compute types
 
@@ -62,6 +69,43 @@ type is a compile error.
   `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
   [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
 
+## API namespaces
+
+Every `ApiNamespace` runs on the app's default compute unless you pass one:
+
+```ts
+const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 4096 });
+
+export const reports = new ApiNamespace(scope, 'reports', (context) => ({
+  async build(month: string) {
+    // …
+  },
+}), { compute: reportsCompute });
+```
+
+- **Clients don't change.** `reports.build('2026-10')` still calls
+  `POST /aws-blocks/api/reports` — from the TypeScript client and from the
+  Swift, Kotlin and Dart clients alike — and the stack's shared API gateway
+  routes that path to the namespace's compute. It works the same on every
+  `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. A call
+  to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
+  client released before per-namespace paths — still runs on the default
+  compute.
+- **The gateway's limits still apply.** An API call is capped at ~29 seconds
+  whatever the compute's `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
+- **It's placement, not isolation.** Every compute runs the same backend bundle
+  under the app's one execution role, so a separate compute is not a security
+  boundary.
+- **Routing follows the export name** — the name your frontend imports
+  (`export const reports = …` → `reports`), not the second `ApiNamespace`
+  argument.
+- **Share a compute** across namespaces and `AsyncJob`s by passing the same
+  `Compute` to each; they then run in the same function.
+- **Only `serverless` computes serve API namespaces** today; passing a
+  `container` compute is a type error.
+- **Everything else stays on the default compute:** namespaces without a
+  `compute`, `RawRoute`s, and the auth routes.
+
 ## Local development
 
 Compute assignment is transparent in local dev — handlers run in-process
@@ -72,5 +116,6 @@ infrastructure (size, scaling) have no effect in the mock.
 
 Assign a `Compute` when a workload needs a runtime other than the app default
 (serverless) — most commonly a long-running or high-memory background job that a
-container can serve but a serverless function cannot. Omit `compute` and the
-workload uses the app default.
+container can serve but a serverless function cannot, or an API namespace that
+needs more memory (and CPU) or its own scaling separate from the rest of the API.
+Omit `compute` and the workload uses the app default.
