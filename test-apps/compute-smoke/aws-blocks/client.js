@@ -9,9 +9,11 @@ import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks
 import '@aws-blocks/bb-file-bucket/middleware';
 
 export const api = __BLOCKS_ApiNamespaceClient__('api');
+export const containerApi = __BLOCKS_ApiNamespaceClient__('containerApi');
 export const reports = __BLOCKS_ApiNamespaceClient__('reports');
 
 export const generateClient = (config) => ({
     api: __BLOCKS_ApiNamespaceClient__('api', config),
+    containerApi: __BLOCKS_ApiNamespaceClient__('containerApi', config),
     reports: __BLOCKS_ApiNamespaceClient__('reports', config),
 });

@@ -10,6 +10,7 @@
  * way `comprehensive`'s e2e.test.ts does:
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
  * - api-namespace-compute.test.ts — an API namespace on its own serverless compute
+ * - container-api.test.ts — an API namespace on a container compute
  *
  * A new scenario is a new module registered below; a module that only applies
  * to some front doors skips the others.
@@ -25,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { apiNamespaceComputeTests } from './api-namespace-compute.test.js';
+import { containerApiTests } from './container-api.test.js';
 import { containerJobTests } from './container-jobs.test.js';
 import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from './context.js';
 
@@ -110,5 +112,6 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
   });
 
   apiNamespaceComputeTests(ctx);
+  containerApiTests(ctx);
   containerJobTests(ctx);
 });
