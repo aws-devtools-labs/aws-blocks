@@ -29,7 +29,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* met
 | Workload | Option | Compute types |
 | --- | --- | --- |
 | `AsyncJob` | `compute` | `serverless`, `container` |
-| `ApiNamespace` | `compute` (4th argument) | `serverless` |
+| `ApiNamespace` | `compute` (4th argument) | `serverless`, `container` |
 
 ## Compute types
 
@@ -100,9 +100,20 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.
 - **Share a compute** across namespaces and `AsyncJob`s by passing the same
-  `Compute` to each; they then run in the same function.
-- **Only `serverless` computes serve API namespaces** today; passing a
-  `container` compute is a type error.
+  `Compute` to each; they then run in the same function (or the same
+  container tasks).
+- **A `container` compute serves its namespaces from its long-running tasks** —
+  no cold starts, CPU and memory sized for the workload:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ /* methods */ }), { compute: renderCompute });
+  ```
+
+  The gateway reaches the tasks through an internal Application Load Balancer
+  the compute provisions in the app's VPC (with a VPC link), so the same
+  ~29-second cap applies. One load balancer (and one listener) is shared by
+  every container in the backend that hosts a namespace.
 - **Everything else stays on the default compute:** namespaces without a
   `compute`, `RawRoute`s, and the auth routes.
 

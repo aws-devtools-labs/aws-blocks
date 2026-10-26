@@ -42,6 +42,55 @@ self-starts the SQS pollers for the event handlers assigned to it.
   Blocks VPC when none was provided. Tasks are placed in the
   `private-with-egress` tier.
 
+## API traffic
+
+A container compute that hosts an `ApiNamespace` serves it over HTTP: the
+container parent runs core's `serveHttp` (via `runContainer({ backend })`) —
+the same transport-neutral dispatch as the Lambda handler — on port **8080**,
+with readiness on port **8081** (503 while draining).
+
+- **Provisioned on demand.** The shared API gateway calls `apiIngress()` for a
+  compute only when a namespace is routed to it (after the backend import,
+  before `finalize()`), and the ingress is created then. A container that only
+  runs jobs gets no load balancer, listener or target group.
+- **One internal ALB per backend**, in the compute subnets, shared by every
+  container that serves API traffic, with **one listener for all their API
+  namespaces** on port 10000. Each namespace gets an exact-path rule
+  (`/aws-blocks/api/{name}` → its compute's target group) with a priority derived
+  from the path, so it is stable across deploys whatever namespaces come and go;
+  any other path gets a 404 from the load balancer. The gateway's VPC link
+  integration targets the load balancer's ARN on that port, and a CloudFront
+  front door needs one VPC origin per backend (25 per account by default), not
+  one per compute.
+- **Only namespace paths reach a container; `RawRoute`s run on the default
+  compute.** A namespace path is exact (`/aws-blocks/api/{name}`), so each one
+  gets its own gateway resource, listener rule and, behind CloudFront, cache
+  behavior. `RawRoute` paths can be patterns (`/files/{id}`, `/files/*`): the
+  gateway serves them through its catch-all resources, which integrate the
+  default compute.
+- **Reserved ports.** `10001–10999` is kept for listeners a single compute will
+  own — e.g. one for a container's `RawRoute`s, forwarding everything to the
+  compute so the container's own route matching decides. The whole
+  `10000–10999` range is one security group rule per source, which matters
+  because CloudFront's prefix list weighs ~55 rules.
+- **Target group** on task port 8080, health-checked on 8081. A stopping task
+  is deregistered first (30 s delay for in-flight requests), then gets SIGTERM
+  and drains for up to 25 s within ECS's 30 s stop timeout.
+- **Security groups.** The tasks get a group of their own that admits only the
+  load balancer on 8080/8081; the shared compute group (also used by in-VPC
+  Lambdas and VPC endpoints) stays closed to inbound traffic. The load balancer
+  admits only the gateway's VPC link, on the listener port range. The service is
+  registered with its target group at the CloudFormation level, because the L2
+  route would open the load balancer to every group on the service.
+- **Request URL.** A request reaches the task as the load balancer's hop — the
+  integration URI's host, plain `http`, no stage — whereas the Lambda handler
+  gets the client's `Host` and the stage in its API Gateway event. So the
+  gateway stamps its public host and stage (`x-blocks-forwarded-host` /
+  `x-blocks-forwarded-stage`, from its request context, overwriting any client
+  value), and the container builds `ctx.request.url` from them: the same URL
+  the Lambda handler reports.
+- **Limits.** API calls keep the gateway's ~29-second integration timeout.
+
 ## Autoscaling
 
 `finalize()` (called once per compute by `create()` after the backend import)

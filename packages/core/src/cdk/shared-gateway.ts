@@ -9,6 +9,7 @@ import { API_NAMESPACE_COMPUTE, API_NAMESPACE_EXPLICIT_COMPUTE } from '../api.js
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
+import { addLoadBalancerMethod } from './api-vpc-link.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 
@@ -44,8 +45,9 @@ export interface SharedGatewayProps {
 	/**
 	 * Each non-default compute that hosts API namespaces, mapped to the export
 	 * names routed to it (see {@link resolveNamespaceRoutes}). The gateway builds
-	 * one Lambda integration per compute and a literal `/aws-blocks/api/{name}`
-	 * resource per name. Namespaces on the {@link defaultCompute} need no entry —
+	 * a literal `/aws-blocks/api/{name}` resource per name, integrated with the
+	 * compute's ingress (`apiIngress()`): one Lambda integration per function
+	 * compute, or a VPC link HTTP integration per name for a load-balanced one. Namespaces on the {@link defaultCompute} need no entry —
 	 * the catch-all resources already reach it. Omitted ⇒ no fan-out.
 	 */
 	readonly namespaceRoutes?: ReadonlyMap<ComputeBase, readonly string[]>;
@@ -208,23 +210,14 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
-	// Fan out: route each non-default compute's namespaces to its own function.
+	// Fan out: route each non-default compute's namespaces to its own ingress.
 	for (const [compute, exportNames] of namespaceRoutes) {
-		const handler = compute.apiHandler();
-		if (!handler) {
+		const ingress = compute.apiIngress();
+		if (!ingress) {
 			throw new Error(
 				`Compute '${compute.node.id}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic.`,
 			);
 		}
-		// One integration per compute, reused across all of its namespace resources.
-		// API-scoped invoke permission: one Lambda::Permission per function for this
-		// API, instead of CDK's default two per method (stage + test-invoke), so the
-		// function's resource policy stays flat however many namespaces it hosts.
-		// Safe because the only routes integrating this function are the ones below.
-		const integration = new apigateway.LambdaIntegration(handler, {
-			scopePermissionToMethod: false,
-			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
-		});
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(
@@ -232,6 +225,31 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
 				);
 			}
+		}
+		if (ingress.kind === 'load-balancer') {
+			// A container's HTTP server behind its internal load balancer, reached
+			// through the backend's VPC link. The integration URI carries the path,
+			// so each namespace gets its own.
+			for (const name of exportNames) {
+				addLoadBalancerMethod(
+					apiResource.addResource(name),
+					ingress,
+					`${BLOCKS_RPC_PREFIX}/${name}`,
+					cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+				);
+			}
+			continue;
+		}
+		// One integration per compute, reused across all of its namespace resources.
+		// API-scoped invoke permission: one Lambda::Permission per function for this
+		// API, instead of CDK's default two per method (stage + test-invoke), so the
+		// function's resource policy stays flat however many namespaces it hosts.
+		// Safe because the only routes integrating this function are the ones below.
+		const integration = new apigateway.LambdaIntegration(ingress.fn, {
+			scopePermissionToMethod: false,
+			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+		});
+		for (const name of exportNames) {
 			apiResource.addResource(name).addMethod('ANY', integration);
 		}
 	}

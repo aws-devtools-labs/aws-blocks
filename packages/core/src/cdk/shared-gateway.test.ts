@@ -16,11 +16,13 @@ import { before, describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { API_NAMESPACE_COMPUTE, ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
-import { ComputeBase } from './compute/compute.js';
+import { type ComputeApiIngress, ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import { Scope } from './index.js';
 import { createSharedGateway, resolveNamespaceRoutes } from './shared-gateway.js';
@@ -567,5 +569,122 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ApiGateway::Account', 0);
 		template.hasResourceProperties('AWS::ApiGateway::Stage', { AccessLogSetting: Match.absent() });
+	});
+});
+
+// ── Load-balanced computes (containers) ─────────────────────────────────────
+
+/** A compute whose HTTP server sits behind a listener on a shared internal ALB. */
+class StubLoadBalancedCompute extends StubCompute {
+	constructor(
+		scope: Construct,
+		id: string,
+		private readonly ingress: ComputeApiIngress,
+	) {
+		super(scope, id, undefined as never, false);
+	}
+	override apiIngress(): ComputeApiIngress {
+		return this.ingress;
+	}
+}
+
+describe('createSharedGateway — load-balanced computes', () => {
+	function loadBalanced() {
+		const { stack, compute } = setup('LoadBalancedStack');
+		const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+		const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+		const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+		const routed: Record<string, string[]> = { render: [], batch: [] };
+		const ingress = (compute: string): ComputeApiIngress => ({
+			kind: 'load-balancer',
+			loadBalancer,
+			port: 10_000,
+			vpc,
+			subnets,
+			routePath: (path) => routed[compute].push(path),
+		});
+		const render = new StubLoadBalancedCompute(stack, 'Render', ingress('render'));
+		const batch = new StubLoadBalancedCompute(stack, 'Batch', ingress('batch'));
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+			namespaceRoutes: new Map<ComputeBase, string[]>([
+				[render, ['render', 'preview']],
+				[batch, ['batch']],
+			]),
+		});
+		const template = Template.fromStack(stack);
+		return { template, routed, resources: template.toJSON().Resources as Record<string, { Type: string; Properties: any }> };
+	}
+
+	test('one VPC link for the backend, however many computes and namespaces', () => {
+		loadBalanced().template.resourceCountIs('AWS::ApiGatewayV2::VpcLink', 1);
+	});
+
+	test('routes each namespace path on its compute’s load balancer', () => {
+		assert.deepStrictEqual(loadBalanced().routed, {
+			render: ['/aws-blocks/api/render', '/aws-blocks/api/preview'],
+			batch: ['/aws-blocks/api/batch'],
+		});
+	});
+
+	test('each namespace proxies to the listener port at its own path', () => {
+		const { resources } = loadBalanced();
+		const pathPart = (id: string) => resources[id]?.Properties.PathPart;
+		const byPath = Object.fromEntries(
+			Object.values(resources)
+				.filter((r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.Integration?.ConnectionType === 'VPC_LINK')
+				.map((m) => [pathPart(m.Properties.ResourceId.Ref), JSON.stringify(m.Properties.Integration.Uri)]),
+		);
+		assert.deepStrictEqual(Object.keys(byPath).sort(), ['batch', 'preview', 'render']);
+		assert.match(byPath.render, /:10000\/aws-blocks\/api\/render"/);
+		assert.match(byPath.preview, /:10000\/aws-blocks\/api\/preview"/);
+		assert.match(byPath.batch, /:10000\/aws-blocks\/api\/batch"/);
+	});
+
+	test('each VPC link integration carries the 29s integration timeout', () => {
+		const { resources } = loadBalanced();
+		const timeouts = Object.values(resources)
+			.filter((r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.Integration?.ConnectionType === 'VPC_LINK')
+			.map((m) => m.Properties.Integration.TimeoutInMillis);
+		assert.deepStrictEqual(timeouts, [29_000, 29_000, 29_000]);
+	});
+
+	test('the load balancer admits the VPC link on the listener port range, in one rule', () => {
+		const { resources } = loadBalanced();
+		const rules = Object.values(resources)
+			.filter((r) => r.Type === 'AWS::EC2::SecurityGroupIngress')
+			.map((r) => [r.Properties.FromPort, r.Properties.ToPort]);
+		assert.deepStrictEqual(rules, [[10_000, 10_999]]);
+	});
+
+	test('a function compute keeps its Lambda integration alongside', () => {
+		const { stack, compute } = setup('MixedStack');
+		const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+		const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+		const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+		const reports = new StubCompute(stack, 'Reports', makeFn(stack, 'ReportsFn'));
+		const render = new StubLoadBalancedCompute(stack, 'Render', {
+			kind: 'load-balancer',
+			loadBalancer,
+			port: 10_000,
+			vpc,
+			subnets,
+			routePath: () => {},
+		});
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+			namespaceRoutes: new Map<ComputeBase, string[]>([
+				[reports, ['reports']],
+				[render, ['render']],
+			]),
+		});
+		const methods = Object.values(Template.fromStack(stack).toJSON().Resources as Record<string, any>).filter(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.HttpMethod === 'ANY' && r.Properties.Integration,
+		);
+		const types = methods.map((m) => m.Properties.Integration.Type);
+		assert.ok(types.includes('AWS_PROXY'), 'Lambda proxy for the function compute');
+		assert.strictEqual(types.filter((t) => t === 'HTTP_PROXY').length, 1, 'one HTTP proxy for the container namespace');
 	});
 });

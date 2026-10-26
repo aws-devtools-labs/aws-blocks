@@ -119,15 +119,25 @@ export interface ApiNamespaceOptions {
    * native client released before per-namespace paths — still runs on the
    * default compute. API calls stay capped at ~29 seconds by
    * the gateway whatever the compute's `maxTimeoutSeconds`; run longer work in an
-   * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). Only a
-   * `serverless` compute can serve API namespaces today. In local dev every
-   * namespace still runs in the one dev server process.
+   * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). In
+   * local dev every namespace still runs in the one dev server process.
    *
-   * Typed structurally — anything whose `resolve()` yields a `serverless`
-   * compute, which is what a `Compute` block is — so this entry carries no CDK
-   * types.
+   * A `container` compute serves its namespaces from its long-running tasks — no
+   * cold starts, and CPU and memory sized for the workload:
+   *
+   * ```ts
+   * const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+   * export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+   * ```
+   *
+   * The gateway reaches the container's tasks through an internal load balancer
+   * the compute provisions in the app's VPC; the same ~29-second cap applies.
+   * `RawRoute`s always run on the default compute.
+   *
+   * Typed structurally — anything whose `resolve()` yields a compute, which is
+   * what a `Compute` block is — so this entry carries no CDK types.
    */
-  compute?: { resolve(): { readonly type: 'serverless' } };
+  compute?: { resolve(): { readonly type: 'serverless' | 'container' } };
 }
 
 /**

@@ -84,8 +84,10 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
 		// bootstrap.mjs writes both bundles here before exec, so the path is stable.
 		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
-		`  await import(${JSON.stringify(backendModulePath)});`,
-		'  await runContainer();',
+		`  const backend = await import(${JSON.stringify(backendModulePath)});`,
+		// The backend module is what the container serves its API from (when the
+		// compute hosts an API namespace), exactly as the Lambda handler does.
+		'  await runContainer({ backend });',
 		'})();',
 	].join('\n');
 

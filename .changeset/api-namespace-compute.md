@@ -35,8 +35,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   `ApiNamespace` argument.
 - One `Compute` can host several namespaces and `AsyncJob`s; they then run in
   the same function.
-- Only `serverless` computes can serve API namespaces for now; a `container`
-  compute is a type error.
+- A `serverless` or a `container` compute can serve API namespaces.
 - Namespaces without a `compute`, `RawRoute`s and auth routes stay on the
   default compute. In local dev every namespace still runs in the dev server.
 - A `compute` created in a different `BlocksBackend` can't serve this backend's

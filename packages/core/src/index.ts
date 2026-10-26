@@ -63,6 +63,7 @@ export {
 	isContainerRuntime,
 	isJobWorker,
 	registerContainerPoller,
+	type RunContainerOptions,
 	runContainer,
 	runJobWorker,
 } from './container-runtime.js';
