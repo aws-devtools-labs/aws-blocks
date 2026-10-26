@@ -10,8 +10,9 @@
  *   buffered) unless the app picked a preset. `'default'` keeps the API Gateway
  *   REST (payload 1.0, streamed) build.
  * - `lambdaWebAdapter` — `false` when the stack's region has no Lambda Web
- *   Adapter layer (see `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`). Nitro then
- *   builds `aws-lambda` behind the HTTP API instead of `node-server`.
+ *   Adapter layer (see `LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`), or isn't known
+ *   at synth (a stack with no `env`). Nitro then builds `aws-lambda` behind
+ *   the HTTP API instead of `node-server`.
  * - `edgeToRegional` — build Next.js `runtime: 'edge'` routes as regional
  *   Lambda functions instead of Lambda@Edge.
  * - `skipIsr` — build without the incremental-regeneration machinery: no tag

@@ -1112,9 +1112,10 @@ export class Hosting extends Construct {
     // invokes the server (an API Gateway HTTP API: payload 2.0, buffered) and
     // for the settings that trim the build.
     // A region with no Lambda Web Adapter layer can't run a Nitro
-    // `node-server` behind the HTTP API; an unresolved region keeps the default.
+    // `node-server` behind the HTTP API. An unresolved region (a stack with no
+    // `env`, as in the templates) may be one of them, so it counts as one too.
     const region = cdk.Stack.of(this).region;
-    const noWebAdapter = !cdk.Token.isUnresolved(region) && !lambdaWebAdapterAvailableIn(region);
+    const noWebAdapter = cdk.Token.isUnresolved(region) || !lambdaWebAdapterAvailableIn(region);
     const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
       withBuildProfile(
         {

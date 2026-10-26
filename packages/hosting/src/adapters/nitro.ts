@@ -62,7 +62,8 @@ export type NitroAdapterOptions = {
    * Behind an API Gateway HTTP API (`serverInvoke: 'http-api'`, see
    * `withBuildProfile`) it is `'node-server'` too: the Lambda Web Adapter
    * server runs buffered, whatever `awsLambda.streaming` says. In a region
-   * with no Lambda Web Adapter layer (`lambdaWebAdapter: false`) it stays
+   * with no Lambda Web Adapter layer, or a stack whose region isn't known at
+   * synth (`lambdaWebAdapter: false`), it stays
    * `'aws-lambda'`, which serves the HTTP API as long as
    * `awsLambda.streaming` is off.
    */

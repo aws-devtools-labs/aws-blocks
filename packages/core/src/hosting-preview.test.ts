@@ -558,6 +558,16 @@ describe('the trim settings on their own', () => {
     assert.strictEqual(supported.profile?.lambdaWebAdapter, undefined);
   });
 
+  it('a stack with no env (region unknown at synth) counts as one without the layer', () => {
+    const seen: { profile?: BuildProfile } = {};
+    new Hosting(new Stack(new App(), 'EnvAgnostic'), 'Hosting', {
+      root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+      customAdapter: ssrFixture(tmpDir, seen),
+      frontDoor: { kind: 'apiGateway' },
+    });
+    assert.strictEqual(seen.profile?.lambdaWebAdapter, false);
+  });
+
   it("`buildId: 'fixed'` works behind the ALB (no edge cache)", () => {
     createSpaBuildOutput(tmpDir);
     const stack = newStack('FixedAlb');

@@ -680,9 +680,11 @@ payload format 2.0 event and can't stream, so the server is built for it: the
 Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
 `aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
 pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
-Adapter server, run buffered) unless the app sets a preset. In a region with no
-Lambda Web Adapter layer (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
-`@aws-blocks/hosting/adapters`), Nitro keeps the `aws-lambda` preset, which
+Adapter server, run buffered) unless the app sets a preset and the stack's
+region is pinned to one with a Lambda Web Adapter layer
+(`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
+`@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
+Nitro keeps the `aws-lambda` preset, which
 the HTTP API serves while `awsLambda.streaming` is off. A route served by
 a compute other than the server (for example a Next.js `runtime: 'edge'` route
 built as a regional function) gets its own route to that function. A
