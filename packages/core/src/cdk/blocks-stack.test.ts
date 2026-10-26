@@ -163,6 +163,65 @@ describe('ApiUrl output and the Hosting front-door claim', () => {
 	});
 });
 
+describe('apiWaf', () => {
+	const withWaf = (scope: Construct, id: string, extra: Record<string, unknown>) =>
+		BlocksStack.create(scope, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			...extra,
+		});
+
+	test('apigateway (default): associates a REGIONAL web ACL with the shared gateway stage', async () => {
+		const stack = await withWaf(new cdk.App(), 'ApiWafStack', { apiWaf: { enabled: true } });
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'REGIONAL' });
+		template.hasResourceProperties('AWS::WAFv2::WebACLAssociation', {
+			ResourceArn: Match.objectLike({ 'Fn::Join': Match.anyValue() }),
+		});
+		const [assoc] = Object.values(template.findResources('AWS::WAFv2::WebACLAssociation'));
+		assert.match(JSON.stringify(assoc.Properties.ResourceArn), /restapis/);
+	});
+
+	test('cloudfront in us-east-1: puts a CLOUDFRONT web ACL on the managed distribution', async () => {
+		const stack = await withWaf(new cdk.App(), 'ApiWafCfStack', {
+			env: { region: 'us-east-1' },
+			apiFrontDoor: 'cloudfront',
+			apiWaf: { enabled: true },
+		});
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::WAFv2::WebACL', { Scope: 'CLOUDFRONT' });
+		template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
+		template.hasResourceProperties('AWS::CloudFront::Distribution', {
+			DistributionConfig: { WebACLId: Match.anyValue() },
+		});
+	});
+
+	test('rejects an invalid apiWaf before the backend module is imported', async () => {
+		await assert.rejects(
+			() => withWaf(new cdk.App(), 'BadApiWafStack', { apiWaf: { enabled: true, rateLimit: 10 } }),
+			/apiWaf\.rateLimit must be an integer of at least 100/,
+		);
+	});
+
+	test('BlocksBackend: associates the web ACL with its own gateway stage', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'HostStack');
+		await BlocksBackend.create(stack, 'Backend', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: sideEffectBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+			apiWaf: { webAclArn: 'arn:aws:wafv2:us-west-2:111122223333:regional/webacl/mine/abcd' },
+		});
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::WAFv2::WebACL', 0);
+		template.hasResourceProperties('AWS::WAFv2::WebACLAssociation', {
+			WebACLArn: 'arn:aws:wafv2:us-west-2:111122223333:regional/webacl/mine/abcd',
+		});
+	});
+});
+
 describe('legacy side-effect mode (no default export)', () => {
 	test('module with only side effects still registers constructs via globalThis', async () => {
 		const app = new cdk.App();

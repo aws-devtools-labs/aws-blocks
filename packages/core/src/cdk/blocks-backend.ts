@@ -12,7 +12,8 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import type { ApiFrontDoorTier } from '../common/index.js';
+import type { ApiFrontDoorTier, ApiWafOptions } from '../common/index.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
@@ -88,6 +89,15 @@ export interface BlocksBackendProps {
 	 * @see BlocksStackProps.apiFrontDoor for the full description of each tier.
 	 */
 	apiFrontDoor?: ApiFrontDoorTier;
+	/**
+	 * Put AWS WAF in front of the backend API: a `REGIONAL` web ACL on the API
+	 * Gateway stage under `apiFrontDoor: 'apigateway'`, a `CLOUDFRONT` one on the
+	 * managed distribution under `'cloudfront'`. Default: off.
+	 *
+	 * @see BlocksStackProps.apiWaf for the full description, including the
+	 * us-east-1 requirement and what happens when `Hosting` fronts the API.
+	 */
+	apiWaf?: ApiWafOptions;
 }
 
 /**
@@ -327,7 +337,7 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
-	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
+	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
 }
 
@@ -412,6 +422,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -519,6 +531,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Validate and record the tier before the backend module is imported, so an
 		// invalid value fails before any app code runs.
 		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() finds this by walking the
 		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack

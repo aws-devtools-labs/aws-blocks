@@ -34,10 +34,17 @@ import {
 	ResponseHeadersPolicy,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
+import type { Stage } from 'aws-cdk-lib/aws-apigateway';
 import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import type { Construct, IConstruct } from 'constructs';
 import type { ApiFrontDoorTier } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import {
+	attachApiWafToStage,
+	type ResolvedApiWaf,
+	warnApiWafDeferredToHosting,
+	webAclArnForDistribution,
+} from './api-waf.js';
 import { registerConfig } from './config-registry.js';
 
 /** Construct id of the managed distribution. */
@@ -90,6 +97,8 @@ export interface ApiFrontDoorOwner {
 	 * backend module is imported — so a read from inside that module sees it.
 	 */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting, recorded at construction; `undefined` when WAF is off. */
+	_apiWaf?: ResolvedApiWaf;
 }
 
 /**
@@ -208,6 +217,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		private readonly owner: Construct & ApiFrontDoorOwner,
 		private readonly provision: boolean,
 		private readonly gatewayUrl?: string,
+		private readonly gatewayStage?: Stage,
 	) {}
 
 	visit(_node: IConstruct): void {
@@ -216,14 +226,23 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 
 		const stack = cdk.Stack.of(this.owner);
 
+		const waf = this.owner._apiWaf;
+
 		// `Hosting` fronts the API itself, and has already published its origin
 		// (recorded on this same owner instance). Provisioning a second distribution
-		// would double the hops and split the domain.
-		if (this.owner._apiFrontDoorClaimedByHosting) return;
+		// would double the hops and split the domain. The API's WAF then belongs on
+		// Hosting's front door too.
+		if (this.owner._apiFrontDoorClaimedByHosting) {
+			if (waf) warnApiWafDeferredToHosting(this.owner);
+			return;
+		}
 
 		// The `apigateway` tier: clients call the gateway directly, so there is no
-		// CloudFront distribution to build.
-		if (!this.provision) return;
+		// CloudFront distribution to build; a WAF attaches to the gateway stage.
+		if (!this.provision) {
+			if (waf && this.gatewayStage) attachApiWafToStage(this.owner, this.gatewayStage, waf);
+			return;
+		}
 
 		// No gateway URL means no origin, so there is nothing coherent to put behind
 		// the default behavior.
@@ -249,6 +268,10 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 			// alike. Per-path behaviors would only carry traffic once a namespace
 			// resolves to a distinct origin.
 			defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS, responseHeadersPolicy: securityHeadersPolicy },
+			// The `cloudfront` tier's WAF sits on the distribution, where it sees the
+			// real client IP (a REGIONAL ACL behind CloudFront would rate-limit per
+			// edge location instead).
+			webAclId: waf ? webAclArnForDistribution(this.owner, waf) : undefined,
 		});
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
@@ -307,11 +330,14 @@ export function resolveApiFrontDoor(apiFrontDoor: ApiFrontDoorTier | undefined):
  * @param provision whether to build the `cloudfront` tier's distribution
  * @param gatewayUrl the shared REST API gateway URL (`https://{host}/{stage}/aws-blocks/api`),
  *   the origin the distribution forwards to
+ * @param gatewayStage the shared REST API's stage, where the `apigateway` tier's
+ *   WAF attaches (see `apiWaf`)
  */
 export function scheduleApiFrontDoor(
 	owner: Construct & ApiFrontDoorOwner,
 	provision: boolean,
 	gatewayUrl?: string,
+	gatewayStage?: Stage,
 ): void {
-	cdk.Aspects.of(owner).add(new ApiFrontDoorAspect(owner, provision, gatewayUrl));
+	cdk.Aspects.of(owner).add(new ApiFrontDoorAspect(owner, provision, gatewayUrl, gatewayStage));
 }

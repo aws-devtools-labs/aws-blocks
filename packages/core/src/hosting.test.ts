@@ -592,6 +592,28 @@ describe('Hosting', () => {
     });
   });
 
+  describe('apiWaf when Hosting fronts the API', () => {
+    it('creates no API web ACL and warns to set the WAF on Hosting', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ApiWafHostingStack');
+      // What BlocksStack records from `apiWaf: { enabled: true }`; plumbing only.
+      (stack as Stack & { _apiWaf?: { rateLimit: number } })._apiWaf = { rateLimit: 1000 };
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+      };
+      scheduleApiFrontDoor(stack, true, api.apiUrl);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::WAFv2::WebACL', 0);
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('apiWaf creates no web ACL'));
+      assert.strictEqual(warnings.length, 1);
+    });
+  });
+
   // ── API integration tests ────────────────────────────────────
 
   describe('API integration', () => {

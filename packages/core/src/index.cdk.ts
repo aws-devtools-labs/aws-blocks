@@ -62,6 +62,7 @@ export {
 } from './cdk/index.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
 export {
+	type ApiWafOptions,
 	type BlocksStackProps,
 	type BuildingBlockMeta,
 	buildingBlockParent,

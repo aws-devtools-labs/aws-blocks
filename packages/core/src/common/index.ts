@@ -447,6 +447,32 @@ export function buildingBlockParent(
  */
 export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
 
+/**
+ * AWS WAF protection for the backend API. See {@link BlocksStackProps.apiWaf}.
+ *
+ * Either let Blocks create a web ACL (`enabled: true`, optionally with a
+ * `rateLimit`), or bring your own (`webAclArn`). The two are mutually exclusive.
+ */
+export interface ApiWafOptions {
+  /**
+   * Create a Blocks-managed web ACL with the AWS managed Common and Known Bad
+   * Inputs rule groups and a per-IP rate limit. Default: `false`.
+   */
+  enabled?: boolean;
+  /**
+   * Requests allowed per client IP in any 5-minute window before the rate rule
+   * blocks it. At least 100 (an AWS WAF minimum). Default: 1000. Only with
+   * `enabled: true`.
+   */
+  rateLimit?: number;
+  /**
+   * ARN of an existing web ACL to attach instead of creating one. Its scope must
+   * match where it attaches: `REGIONAL` under `apiFrontDoor: 'apigateway'`,
+   * `CLOUDFRONT` (created in us-east-1) under `apiFrontDoor: 'cloudfront'`.
+   */
+  webAclArn?: string;
+}
+
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -488,6 +514,33 @@ export interface BlocksStackProps extends StackProps {
    * migration.
    */
   apiFrontDoor?: ApiFrontDoorTier;
+  /**
+   * Put AWS WAF in front of the backend API. Default: off.
+   *
+   * The web ACL attaches to whichever front door clients reach the API through:
+   *
+   * - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the API Gateway
+   *   stage. Works in any region.
+   * - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed
+   *   distribution. AWS only creates CloudFront web ACLs in us-east-1, so outside
+   *   us-east-1 pass the ARN of one you created there (`webAclArn`); `enabled:
+   *   true` fails synth in any other region. The gateway's own `execute-api`
+   *   endpoint stays reachable and is not covered.
+   * - When a CloudFront-backed `Hosting` fronts the API, the API is served from
+   *   Hosting's distribution: set the WAF there (`frontDoor.features.waf`).
+   *   `apiWaf` then creates nothing, and synth warns.
+   *
+   * The Blocks-managed web ACL runs the AWS managed Common rule set (with its
+   * 8 KB request-body size rule set to count, since RPC bodies are routinely
+   * larger) and Known Bad Inputs rule set, plus a per-IP rate limit. WAF is
+   * billed per web ACL, per rule and per request.
+   *
+   * @example
+   * ```ts
+   * await BlocksStack.create(app, 'my-app', { ...props, apiWaf: { enabled: true, rateLimit: 2000 } });
+   * ```
+   */
+  apiWaf?: ApiWafOptions;
 }
 
 export class BlocksStack {
