@@ -145,6 +145,26 @@ describe('buildRouteTable — coalescing, basePath, ordering', () => {
     assert.equal(byPattern['/_next/data/*'], 'server');
     assert.equal(byPattern['/_next/image*'], 'server');
   });
+
+  it('still coalesces prerendered pages under ISR when the table already routes their parent/* statically (Nitro)', () => {
+    // Nitro emits a static `/blog/*` row for `public/blog/` plus a bare and a
+    // subtree row per prerendered page. Under ISR the `/blog` group flips to a
+    // server wildcard, but its members were static like the `/blog/*` row, so
+    // they don't collide with it and still coalesce: the table stays bounded.
+    const pages = Array.from({ length: 50 }, (_, i) => `/blog/post-${i}`);
+    const routes: RouteBehavior[] = [
+      { pattern: '/_nuxt/*', target: 'static' },
+      { pattern: '/blog/*', target: 'static' },
+      ...pages.flatMap((p): RouteBehavior[] => [
+        { pattern: p, target: 'static' },
+        { pattern: `${p}/*`, target: 'static' },
+      ]),
+      { pattern: '/*', target: 'default' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false, isrActive: true });
+    assert.ok(entries.length <= 4, `expected a bounded table, got ${entries.length} rows`);
+    assert.ok(entries.some((e) => e.pattern === '/blog/*'));
+  });
 });
 
 describe('coalesceRoutes / routeSpecificity (relocated, still exported here)', () => {

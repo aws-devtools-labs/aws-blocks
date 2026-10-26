@@ -158,8 +158,11 @@ export const coalesceRoutes = (
     // when no image origin exists). Its children are narrower exceptions to
     // it; coalescing them would emit a second `parent/*` row that captures
     // the whole subtree (`/_next/static/*` → server → 404), so keep them.
+    // The members' own kind is compared, not the ISR-flipped one: prerendered
+    // pages under a static `parent/*` row (Nitro's `/blog/*`) are no exception
+    // to it, and still coalesce.
     const wildcardKind = explicitKind.get(`${parent}/*`);
-    const collides = wildcardKind !== undefined && wildcardKind !== kind;
+    const collides = wildcardKind !== undefined && wildcardKind !== members[0][1];
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
