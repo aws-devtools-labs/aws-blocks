@@ -16,6 +16,7 @@ import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML } from './default_not_found.js';
 import { NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { imagePathPrefixes, trimTrailingSlashes } from './asset_proxy_core.js';
 
 type StoredObject = {
   body: string;
@@ -533,5 +534,31 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     const plain = loadHandler(generateApiGwAssetProxyCode({ spaFallback: false }), IMAGE_OBJECTS);
     const res = await plain(get('/_next/image', { url: '/img/cat.png' }));
     assert.equal(res.statusCode, 404);
+  });
+});
+
+// ── Slash trimming stays linear on a long run of slashes ───────────────────
+// A `/\/+$/` regex backtracks quadratically on a long run of `/` that is not at
+// the end of the string; the image prefixes and the API Gateway door's basePath
+// trim trailing slashes with a linear scan instead.
+
+describe('trailing-slash trimming is linear', () => {
+  // A slash run inside the value (after a leading character, so a leading
+  // strip doesn't remove it): a backtracking `/\/+$/` takes ~0.7 s on this.
+  const longRun = `a${'/'.repeat(40_000)}x`;
+
+  it('imagePathPrefixes normalizes prefixes and handles a long slash run quickly', () => {
+    assert.deepEqual(imagePathPrefixes(['img/', '//img//', '/_ipx']), ['/_ipx', '/img']);
+    const started = performance.now();
+    assert.deepEqual(imagePathPrefixes([longRun]), ['/_ipx', `/${longRun}`]);
+    assert.ok(performance.now() - started < 200, 'trimming must not backtrack');
+  });
+
+  it('trimTrailingSlashes keeps the value up to its last non-slash character', () => {
+    assert.equal(trimTrailingSlashes('/app///'), '/app');
+    assert.equal(trimTrailingSlashes('///'), '');
+    const started = performance.now();
+    assert.equal(trimTrailingSlashes(longRun), longRun);
+    assert.ok(performance.now() - started < 200, 'trimming must not backtrack');
   });
 });

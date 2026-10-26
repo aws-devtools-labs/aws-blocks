@@ -40,7 +40,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
-import { imagePathPrefixes } from './asset_proxy_core.js';
+import { imagePathPrefixes, trimTrailingSlashes } from './asset_proxy_core.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
@@ -247,7 +247,7 @@ export class ApiGatewayConstruct extends Construct {
     // No image function: the framework image endpoints go to the asset proxy,
     // which answers them with the source image.
     if (props.imageFallback && !imageFn) {
-      const base = (plan.policies.basePath ?? '').replace(/\/+$/, '');
+      const base = trimTrailingSlashes(plan.policies.basePath ?? '');
       const pathForms = imagePathPrefixes(props.imageFallback.pathPrefixes).map((p) => `${base}${p}/{proxy+}`);
       for (const path of [`${base}/_next/image`, ...pathForms, `${base}/_image`]) {
         if (seen.has(path)) continue;

@@ -49,7 +49,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
 
 /** `value` without its trailing slashes (a linear scan; a `/\/+$/` regex backtracks on a long slash run). */
-const trimTrailingSlashes = (value: string): string => {
+export const trimTrailingSlashes = (value: string): string => {
   let end = value.length;
   while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
   return value.slice(0, end);
@@ -132,7 +132,7 @@ export type AssetProxyOptions = ProxyRules & {
  * @returns the prefixes the proxy matches.
  */
 export const imagePathPrefixes = (prefixes: readonly string[] = []): string[] => [
-  ...new Set(['/_ipx', ...prefixes].map((p) => `/${p.replace(/^\/+/, '').replace(/\/+$/, '')}`).filter((p) => p !== '/')),
+  ...new Set(['/_ipx', ...prefixes].map((p) => `/${trimTrailingSlashes(p.replace(/^\/+/, ''))}`).filter((p) => p !== '/')),
 ];
 
 export const assetProxyCoreJs = (opts: AssetProxyOptions): string => {
