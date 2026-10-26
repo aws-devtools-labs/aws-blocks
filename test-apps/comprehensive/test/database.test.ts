@@ -134,6 +134,33 @@ export function databaseTests(getApi: () => typeof apiType) {
       }
     });
 
+    // Request errors (SQLSTATE 23514, 23502, 23503, 42501) must serialize to a
+    // named 4xx over the wire, not a generic 500 QueryFailed, so a client can
+    // branch on them with isBlocksError. The PGlite mock enforces every
+    // constraint and policy, so this exercises the real translate path locally.
+    const requestErrorCases = [
+      { method: 'dbCheckViolation', status: 400, name: DatabaseErrors.CheckViolation },
+      { method: 'dbNotNullViolation', status: 400, name: DatabaseErrors.NotNullViolation },
+      { method: 'dbForeignKeyViolation', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+      { method: 'dbRlsViolation', status: 403, name: DatabaseErrors.PermissionDenied },
+      { method: 'dbMissingGrant', status: 403, name: DatabaseErrors.PermissionDenied },
+    ] as const;
+    for (const { method, status, name } of requestErrorCases) {
+      test(`Database - ${method} returns ${status} ${name} over the wire`, async () => {
+        const api = getApi();
+        await assert.rejects(
+          () => api[method](`re-${Date.now().toString(36)}`),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, status, `${name} must be ${status}, not 500`);
+            assert.ok(isBlocksError(e, name), `expected ${name}, got ${e.name}`);
+            assert.strictEqual(e.retriable, false);
+            return true;
+          },
+        );
+      });
+    }
+
     // Kysely transactions must be atomic on the real engine.
     test('Database - Kysely transaction commits transfer', async () => {
       const api = getApi();

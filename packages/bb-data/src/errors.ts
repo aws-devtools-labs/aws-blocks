@@ -15,6 +15,10 @@ export const DatabaseErrors = {
   TransactionFailed: 'TransactionFailedException',
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
+  PermissionDenied: 'PermissionDeniedException',
+  CheckViolation: 'CheckViolationException',
+  NotNullViolation: 'NotNullViolationException',
+  ForeignKeyViolation: 'ForeignKeyViolationException',
 } as const;
 
 /**
@@ -64,6 +68,40 @@ export function uniqueConstraintConflict(cause: Error): ApiError {
   });
 }
 
+/**
+ * Request errors: SQLSTATEs caused by what the caller asked for, not by a server
+ * failure. Each maps to a 4xx `ApiError` with a stable name and a fixed message,
+ * so callers can branch with `isBlocksError(e, DatabaseErrors.PermissionDenied)`
+ * (and so on) on the server and the client. None is retriable: the same statement
+ * fails the same way. The raw driver text, which names tables, columns and
+ * constraints, is kept only as `cause` (server-side).
+ *
+ * - `42501` insufficient_privilege: a row-level-security `WITH CHECK` rejection
+ *   or a missing grant for the role → 403 `PermissionDenied`
+ * - `23514` check_violation → 400 `CheckViolation`
+ * - `23502` not_null_violation → 400 `NotNullViolation`
+ * - `23503` foreign_key_violation: the referenced row is missing, or rows still
+ *   reference the one being deleted → 409 `ForeignKeyViolation`
+ */
+const REQUEST_ERRORS: Record<string, { status: number; name: string; message: string }> = {
+  '42501': { status: 403, name: DatabaseErrors.PermissionDenied, message: 'Permission denied for this operation' },
+  '23514': { status: 400, name: DatabaseErrors.CheckViolation, message: 'A value violates a check constraint' },
+  '23502': { status: 400, name: DatabaseErrors.NotNullViolation, message: 'A required value is missing' },
+  '23503': { status: 409, name: DatabaseErrors.ForeignKeyViolation, message: 'The item violates a foreign key constraint' },
+};
+
+/**
+ * Build the 4xx ApiError for a request-error SQLSTATE (see {@link REQUEST_ERRORS}),
+ * or `undefined` when `code` is not one of them. Shared by every engine
+ * translator (PGlite, pg-client, Data API) so all paths produce an identically
+ * shaped error.
+ */
+export function requestError(code: string, cause: Error): ApiError | undefined {
+  const entry = REQUEST_ERRORS[code];
+  if (!entry) return undefined;
+  return new ApiError(entry.message, entry.status, { name: entry.name, cause });
+}
+
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
 
 /**
@@ -106,6 +144,7 @@ const RE_TAG_MESSAGES: Record<string, string> = {
   [DatabaseErrors.TransactionFailed]: 'The database transaction failed',
   [DatabaseErrors.UniqueConstraintViolation]: 'The item violates a unique constraint',
   [DatabaseErrors.SerializationFailure]: 'The transaction failed due to a serialization conflict',
+  ...Object.fromEntries(Object.values(REQUEST_ERRORS).map(({ name, message }) => [name, message])),
 };
 
 /**

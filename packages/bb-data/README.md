@@ -217,6 +217,19 @@ try {
     // Duplicate key — email already exists. Serialized as HTTP 409 (Conflict),
     // not retriable (a blind retry of the same insert fails identically).
   }
+  if (isBlocksError(e, DatabaseErrors.PermissionDenied)) {
+    // A row-level-security policy rejected the row (for example a withRLS()
+    // user writing someone else's row), or the role has no grant on the table.
+    // Serialized as HTTP 403.
+  }
+  if (isBlocksError(e, DatabaseErrors.CheckViolation) || isBlocksError(e, DatabaseErrors.NotNullViolation)) {
+    // A value fails a CHECK constraint, or a required column is missing.
+    // Serialized as HTTP 400.
+  }
+  if (isBlocksError(e, DatabaseErrors.ForeignKeyViolation)) {
+    // The referenced row doesn't exist, or other rows still reference the one
+    // being deleted. Serialized as HTTP 409 (Conflict).
+  }
   if (isBlocksError(e, DatabaseErrors.QueryFailed)) {
     // General query failure (syntax error, missing table, etc.)
   }
@@ -233,6 +246,13 @@ try {
   }
 }
 ```
+
+The client-visible message of each error is a fixed string; the driver's own
+text, which names tables, columns and constraints, stays on the server as the
+error's `cause`. Only `SerializationFailure` and `ConnectionFailed` are worth
+retrying: the request errors (`PermissionDenied`, `CheckViolation`,
+`NotNullViolation`, `ForeignKeyViolation`, `UniqueConstraintViolation`) fail the
+same way every time.
 
 ## What It Provisions (AWS)
 

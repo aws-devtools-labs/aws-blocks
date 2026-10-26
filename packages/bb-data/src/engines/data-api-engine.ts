@@ -11,7 +11,7 @@ import {
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { installClientUserAgent } from '@aws-blocks/core';
-import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError, reTagged, requestError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -111,7 +111,12 @@ function translateError(e: unknown): never {
         // Duplicate key: surface as a 409 (Conflict), not a generic 500. Not
         // retriable. Matches the PGlite / pg-client engine paths.
         throw uniqueConstraintConflict(e);
-      } else if (code.startsWith('08')) {
+      }
+      // Request errors (42501, 23514, 23502, 23503): a 4xx, not a generic 500.
+      // Matches the PGlite / pg-client engine paths.
+      const request = requestError(code, e);
+      if (request) throw request;
+      if (code.startsWith('08')) {
         name = DatabaseErrors.ConnectionFailed;
       } else {
         name = DatabaseErrors.QueryFailed;

@@ -64,10 +64,16 @@ Error translation happens at the engine layer, not the database layer. Each engi
 |---------------|-------------------|
 | `40001` | `SerializationFailure` (→ `ApiError` 409, retriable) |
 | `23505` | `UniqueConstraintViolation` (→ `ApiError` 409, not retriable) |
+| `42501` | `PermissionDenied` (→ `ApiError` 403, not retriable): row-level-security `WITH CHECK` rejection or missing grant |
+| `23514` | `CheckViolation` (→ `ApiError` 400, not retriable) |
+| `23502` | `NotNullViolation` (→ `ApiError` 400, not retriable) |
+| `23503` | `ForeignKeyViolation` (→ `ApiError` 409, not retriable) |
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
 
 Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
+
+The four request errors (`42501`, `23514`, `23502`, `23503`) are built by the shared `requestError()` helper in `errors.ts`, used by the PGlite, pg-client and Data API engines (the Data API path parses the SQLState from the message), so all three produce an identically shaped `ApiError` with a fixed client message and the driver error kept as `cause`. PGlite enforces every constraint, grant and policy, so these mappings are verified by engine unit tests against real PGlite and by an over-the-wire e2e test (`test-apps/comprehensive/test/database.test.ts`).
 
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
 

@@ -22,6 +22,22 @@ test('DatabaseErrors has all expected keys', () => {
   assert.strictEqual(DatabaseErrors.ConnectionFailed, 'ConnectionFailedException');
   assert.strictEqual(DatabaseErrors.TransactionFailed, 'TransactionFailedException');
   assert.strictEqual(DatabaseErrors.UniqueConstraintViolation, 'UniqueConstraintViolationException');
+  assert.strictEqual(DatabaseErrors.PermissionDenied, 'PermissionDeniedException');
+  assert.strictEqual(DatabaseErrors.CheckViolation, 'CheckViolationException');
+  assert.strictEqual(DatabaseErrors.NotNullViolation, 'NotNullViolationException');
+  assert.strictEqual(DatabaseErrors.ForeignKeyViolation, 'ForeignKeyViolationException');
+});
+
+test('wrapError keeps a request-error name with its stable message', () => {
+  const raw = Object.assign(new Error('permission denied for table projects'), { name: DatabaseErrors.PermissionDenied });
+  assert.throws(
+    () => wrapError(raw),
+    (e: Error) => {
+      assert.strictEqual(e.name, DatabaseErrors.PermissionDenied);
+      assert.ok(!e.message.includes('projects'), 'driver text must not reach the message');
+      return true;
+    },
+  );
 });
 
 test('wrapError preserves a known DatabaseErrors name, brands it, and keeps the raw error as cause', () => {

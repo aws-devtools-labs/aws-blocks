@@ -360,6 +360,37 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
   );
 });
 
+const REQUEST_ERROR_CASES = [
+  { code: '42501', driver: 'new row violates row-level security policy for table "notes"', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '42501', driver: 'permission denied for table projects', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '23514', driver: 'new row for relation "projects" violates check constraint "projects_name_check"', status: 400, name: DatabaseErrors.CheckViolation },
+  { code: '23502', driver: 'null value in column "name" of relation "projects" violates not-null constraint', status: 400, name: DatabaseErrors.NotNullViolation },
+  { code: '23503', driver: 'insert or update on table "notes" violates foreign key constraint "notes_project_id_fkey"', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+];
+
+for (const { code, driver, status, name } of REQUEST_ERROR_CASES) {
+  test(`Data API request error (SQLState ${code}: ${driver.slice(0, 40)}…) maps to ${name} (ApiError ${status})`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(`ERROR: ${driver}; SQLState: ${code}`);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError, 'expected an ApiError');
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.name, name);
+        assert.strictEqual(err.retriable, false);
+        assert.ok(!err.message.includes(driver), 'driver text must not reach the message');
+        return true;
+      },
+    );
+  });
+}
+
 test('a genuine non-serialization query error still maps to QueryFailed', async () => {
   const engine = createEngine({
     ExecuteStatementCommand: () => {
