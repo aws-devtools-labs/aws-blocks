@@ -13,7 +13,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import type { api as apiType } from 'aws-blocks';
 
@@ -227,12 +227,20 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 					found = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: `${base} ` });
 				}
 				assert.deepStrictEqual(found, [u]);
-				assert.deepStrictEqual(await api.authCAdminScan({ attribute: 'name', match: 'equals', value: `${base} plain` }), [u]);
+				assert.deepStrictEqual(
+					await api.authCAdminScan({ attribute: 'name', match: 'equals', value: `${base} plain` }),
+					[u],
+				);
 				for (const value of [`${base} q"x`, `${base} b\\x`, `${base} b\\`, `${base} a\\b "c" \\"d\\"`]) {
 					for (const match of ['equals', 'startsWith'] as const) {
 						await assert.rejects(
 							() => api.authCAdminScan({ attribute: 'name', match, value }),
-							(e: unknown) => isBlocksError(e, AuthCognitoErrors.InvalidParameter),
+							// The block's own message, so a 400 from Cognito itself cannot pass for the refusal.
+							(e: unknown) =>
+								isBlocksError(e, AuthCognitoErrors.InvalidParameter) &&
+								e instanceof ApiError &&
+								e.status === 400 &&
+								e.message.includes('cannot contain a double quote or a backslash'),
 							`expected InvalidParameter for ${match} ${JSON.stringify(value)}`,
 						);
 					}

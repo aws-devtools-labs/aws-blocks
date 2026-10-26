@@ -392,7 +392,7 @@ export interface AdminUserFilter {
 	/**
 	 * Value to compare against. It cannot contain `"` or `\`: `scan()` throws a 400
 	 * `AuthCognitoErrors.InvalidParameter` for such a value (locally too), because
-	 * Cognito `ListUsers` does not match them literally.
+	 * Cognito `ListUsers` does not match such values literally.
 	 */
 	value: string;
 }

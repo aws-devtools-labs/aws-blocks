@@ -263,7 +263,8 @@ describe('auth.admin user lifecycle', () => {
 		for (const value of ['a"b', 'a\\b', 'a\\']) {
 			assert.throws(
 				() => auth.admin.scan({ attribute: 'username', match: 'equals', value }),
-				(e: unknown) => isBlocksError(e, AuthCognitoErrors.InvalidParameter) && e instanceof ApiError && e.status === 400,
+				(e: unknown) =>
+					isBlocksError(e, AuthCognitoErrors.InvalidParameter) && e instanceof ApiError && e.status === 400,
 				`expected InvalidParameter for ${JSON.stringify(value)}`,
 			);
 		}

@@ -1263,7 +1263,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   async authCAdminCreateUserWithName(username: string, temporaryPassword: string, name: string) {
     // Seeds the standard `name` attribute (filterable by ListUsers, unlike custom
-    // attributes) so authCAdminScan can check how filter values are escaped.
+    // attributes) so authCAdminScan can check filter-value matching and the
+    // refusal of values containing `"` or `\`.
     const u = await authC.admin.createUser(username, {
       temporaryPassword,
       attributes: { name, email: `${username}@example.com` },
