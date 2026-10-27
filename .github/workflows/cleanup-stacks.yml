@@ -61,9 +61,7 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
-      # The steps below source scripts/ci/aws-error.sh, the REST API sweep runs
-      # scripts/ci/rest-api-quota.sh and the Amplify sweep runs
-      # scripts/ci/amplify-stuck-delete.sh.
+      # Every leg: the Amplify sweep runs scripts/ci/amplify-stuck-delete.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |

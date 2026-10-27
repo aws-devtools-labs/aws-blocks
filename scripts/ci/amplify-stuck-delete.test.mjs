@@ -822,4 +822,17 @@ describe('cleanup-stacks.yml checkout', () => {
 		const comment = lines.slice(at - 3, at).join('\n');
 		assert.match(comment, /amplify-stuck-delete\.sh/);
 	});
+
+	// The Amplify step runs on every leg, so the script must be there on each.
+	it('checks out scripts/ci on every leg', () => {
+		const lines = readFileSync(WORKFLOW, 'utf8').split('\n');
+		const at = lines.findIndex((l, i) => i > lines.indexOf('  cleanup:') && l.trim().startsWith('- uses: actions/checkout@'));
+		const step = [];
+		for (const line of lines.slice(at + 1)) {
+			if (line.trim().startsWith('- ')) break;
+			step.push(line.trim());
+		}
+		assert.ok(!step.some((l) => l.startsWith('if:')), 'the checkout must run on every leg');
+		assert.ok(step.includes('scripts/ci'), 'sparse-checkout must include scripts/ci');
+	});
 });
