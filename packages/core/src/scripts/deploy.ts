@@ -321,7 +321,13 @@ export async function deploy(options: DeployOptions) {
     registerFrameworkFromSink(frameworkSink);
 
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
+    // `--all` can write more than one stack's outputs (e.g. the us-east-1
+    // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
+    // — the main Blocks stack, which also holds the Hosting outputs — rather
+    // than relying on the write order of the outputs file. Falls back to the
+    // first group so a single-stack app is unchanged.
+    const stackGroups = Object.values(outputs) as Record<string, string>[];
+    const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME
