@@ -104,7 +104,7 @@ export class EmailClient extends Scope {
 	async send(message: EmailMessage): Promise<SendResult> {
 		const { to, subject, body, html, cc, bcc } = message;
 		// Same checks as the mock, so local and deployed accept the same input.
-		validateMessage(message, this.fromAddress);
+		validateMessage(message, this.fromAddress, this.replyTo);
 		const recipients = Array.isArray(to) ? to : [to];
 
 		const command = new SendEmailCommand({
@@ -156,7 +156,7 @@ export class EmailClient extends Scope {
 		const textOnly: number[] = [];
 		for (let i = 0; i < messages.length; i++) {
 			try {
-				validateMessage(messages[i], this.fromAddress);
+				validateMessage(messages[i], this.fromAddress, this.replyTo);
 			} catch (err: any) {
 				results[i] = { status: 'failed', error: err.message ?? 'Invalid message' };
 				continue;
