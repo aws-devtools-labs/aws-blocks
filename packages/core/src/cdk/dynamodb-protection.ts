@@ -3,24 +3,16 @@
 
 import { Annotations, type RemovalPolicy } from 'aws-cdk-lib';
 import { type ITable, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
-import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
 import type { Construct } from 'constructs';
 import type { BlocksDefaults } from './blocks-defaults.js';
+import { type KmsBlockIdentity, type KmsEncryptionOption, resolveKmsEncryption } from './kms-encryption.js';
 
-/**
- * A reference to an existing customer-managed KMS key, produced by a block's
- * `fromKmsKey(arn)` factory. Pass it as the `encryption` option to encrypt the
- * table with a CMK you already own — letting several tables share one key
- * instead of each provisioning its own dedicated key.
- */
-export interface ExternalKmsKeyRef {
-	readonly __brand: 'ExternalKmsKeyRef';
-	readonly keyArn: string;
-}
+export type { ExternalKmsKeyRef } from './kms-encryption.js';
 
 /** The per-block durability/encryption options every Blocks DynamoDB table reads. */
 export interface DynamoDbProtectionOptions {
-	readonly encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	readonly encryption?: KmsEncryptionOption;
 	readonly pointInTimeRecovery?: boolean | { retentionDays: number };
 }
 
@@ -29,12 +21,7 @@ export interface DynamoDbProtectionOptions {
  * fields travel together so a caller cannot pair one block's prefix with
  * another's factory hint.
  */
-export interface DynamoDbBlockIdentity {
-	/** The block's npm name, used as the annotation ID prefix (e.g. `@aws-blocks/bb-kv-store`). */
-	readonly warningPrefix: string;
-	/** The block's factory name shown in the unrecognized-encryption warning (e.g. `KVStore.fromKmsKey`). */
-	readonly fromKmsKeyHint: string;
-}
+export type DynamoDbBlockIdentity = KmsBlockIdentity;
 
 /** The resolved DynamoDB protection, ready to spread into `new Table(...)`. */
 export interface ResolvedDynamoDbProtection {
@@ -76,26 +63,11 @@ export function resolveDynamoDbProtection(
 	defaults: BlocksDefaults,
 	identity: DynamoDbBlockIdentity,
 ): ResolvedDynamoDbProtection {
-	const { warningPrefix, fromKmsKeyHint } = identity;
+	const { warningPrefix } = identity;
 	// `encryption` accepts two string literals or an ExternalKmsKeyRef
-	// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
-	// Anything else is a typo — warn rather than silently using the default.
-	const encryptionOption = options?.encryption;
-	const isKmsKeyRef = typeof encryptionOption === 'object'
-		&& encryptionOption !== null
-		&& encryptionOption.__brand === 'ExternalKmsKeyRef';
-	if (
-		encryptionOption !== undefined
-		&& encryptionOption !== 'aws-managed'
-		&& encryptionOption !== 'customer-managed'
-		&& !isKmsKeyRef
-	) {
-		Annotations.of(scope).addWarningV2(
-			`${warningPrefix}:UnknownEncryption`,
-			`Unrecognized encryption '${String(encryptionOption)}' (expected 'aws-managed', ` +
-				`'customer-managed', or ${fromKmsKeyHint}(arn)) — falling back to 'aws-managed'.`,
-		);
-	}
+	// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`). The
+	// shared resolver warns on anything else and falls back to 'aws-managed'.
+	const kms = resolveKmsEncryption(scope, options?.encryption, identity);
 
 	// PITR is one knob (`boolean | { retentionDays }`) resolved from the
 	// per-block option, else the stack-wide `defaults.pointInTimeRecovery`
@@ -125,16 +97,8 @@ export function resolveDynamoDbProtection(
 	// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
 	// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
 	// Otherwise the AWS-managed `aws/dynamodb` key.
-	let encryptionKey: IKey | undefined;
-	let encryption: TableEncryption;
-	if (isKmsKeyRef) {
-		encryption = TableEncryption.CUSTOMER_MANAGED;
-		encryptionKey = Key.fromKeyArn(scope, 'encryption-key', encryptionOption.keyArn);
-	} else if (encryptionOption === 'customer-managed') {
-		encryption = TableEncryption.CUSTOMER_MANAGED;
-	} else {
-		encryption = TableEncryption.AWS_MANAGED;
-	}
+	const encryptionKey: IKey | undefined = kms.kind === 'imported' ? kms.key : undefined;
+	const encryption = kms.kind === 'aws-managed' ? TableEncryption.AWS_MANAGED : TableEncryption.CUSTOMER_MANAGED;
 
 	return {
 		// PITR spec is only emitted when enabled — leaving it undefined keeps

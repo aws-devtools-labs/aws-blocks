@@ -68,3 +68,12 @@ export {
 	type ResolvedDynamoDbProtection,
 	resolveDynamoDbProtection,
 } from './dynamodb-protection.js';
+// The service-agnostic half of the above: the `encryption` option parser, also
+// used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
+// `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.
+export {
+	type KmsBlockIdentity,
+	type KmsEncryptionOption,
+	type ResolvedKmsEncryption,
+	resolveKmsEncryption,
+} from './kms-encryption.js';

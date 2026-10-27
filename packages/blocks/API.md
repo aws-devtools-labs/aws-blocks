@@ -106,6 +106,7 @@ import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
 import { ExternalUserPoolRef } from '@aws-blocks/bb-auth-cognito';
 import { ExternalBucketRef as FBExternalBucketRef } from '@aws-blocks/bb-file-bucket';
+import { ExternalKmsKeyRef as FBExternalKmsKeyRef } from '@aws-blocks/bb-file-bucket';
 import { PutOptions as FBPutOptions } from '@aws-blocks/bb-file-bucket';
 import { ScanOptions as FBScanOptions } from '@aws-blocks/bb-file-bucket';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -146,6 +147,7 @@ import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
+import { ObjectLockOptions } from '@aws-blocks/bb-file-bucket';
 import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
@@ -404,6 +406,8 @@ export { ExternalUserPoolRef }
 
 export { FBExternalBucketRef }
 
+export { FBExternalKmsKeyRef }
+
 export { FBPutOptions }
 
 export { FBScanOptions }
@@ -571,6 +575,8 @@ export { MetricUnit }
 export { MFAPreference }
 
 export { ModelConfig }
+
+export { ObjectLockOptions }
 
 export { OIDCUser }
 
