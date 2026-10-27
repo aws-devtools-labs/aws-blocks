@@ -9,7 +9,7 @@ import {
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { type ITopic, type ITopicSubscription, Topic } from 'aws-cdk-lib/aws-sns';
-import { createAlarmTopicKey } from './monitoring_construct.js';
+import { createAlarmTopicKey, warnIfUndeliverable } from './monitoring_construct.js';
 
 /**
  * Props for {@link UsEast1MonitoringStack}.
@@ -98,6 +98,12 @@ export class UsEast1MonitoringStack extends Stack {
         'CloudFront is returning 5xx for >=5% of requests over 5 minutes.',
     });
     this.alarm.addAlarmAction(new SnsAction(this.topic));
+
+    // Judge this stack's OWN topic on its OWN alarm: off-region the 5xx alarm
+    // lives here, not in the regional construct, so without this check an
+    // undeliverable us-east-1 topic (carrying the only 5xx alarm) would go
+    // unwarned.
+    warnIfUndeliverable(this, this.topic, [this.alarm]);
 
     // Surface the us-east-1 topic ARN as an output of THIS stack for
     // operators who want the raw ARN. Subscriptions passed via props are
