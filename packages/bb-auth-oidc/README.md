@@ -374,7 +374,7 @@ The app client's callback / logout URLs are registered for you: the app's public
 Use `additionalCallbackUrls` / `additionalLogoutUrls` for redirect targets that can't be derived at synth:
 
 - browser PKCE SPA redirect pages (the SPA page URL is app-specific);
-- native app custom URI schemes (e.g. `myapp://auth/callback`);
+- native app custom URI schemes (e.g. `myapp://auth/callback`) used as the `redirect_uri` of a direct, client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`) — the [relay flow](#relay-flow-for-native-sign-in) needs none, since its `redirect_uri` is the backend's HTTPS callback and the custom scheme is only the `relayTo` target;
 - custom-domain names beyond the primary one (only the primary app origin is registered automatically);
 - a sandbox dev server on a port other than `3000`.
 

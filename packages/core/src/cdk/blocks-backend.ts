@@ -360,6 +360,10 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
  * `cdk.Lazy` producer, which runs at synth once the gateway exists. The gateway
  * fronts every compute target the same way, so the URL is compute-agnostic.
  *
+ * @internal First-party plumbing for Building Blocks that resolve late-built
+ * values from a `cdk.Lazy` producer; exported for them, not a stability-guaranteed
+ * public API.
+ *
  * @param scope - Any construct in the backend (used to locate the backend root).
  */
 export function getSharedGatewayUrl(scope: Construct): string | undefined {

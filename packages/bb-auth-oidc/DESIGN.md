@@ -196,12 +196,17 @@ the producer rather than in the constructor.
 `localhost`. A non-https app origin is left off the client and emits the
 `@aws-blocks/bb-auth-oidc:PlainHttpPublicOrigin` synth warning; federated
 sign-in through that origin fails until the app is served over https. A
-whole-token origin that only resolves at deploy can't be scheme-checked and is
-registered as-is.
+whole-token origin that only resolves at deploy (a CloudFormation intrinsic)
+can't be scheme-checked at synth, so it is deliberately registered as-is and
+Cognito validates it at deploy.
 
 **When to add URLs.** Redirect targets that can't be derived at synth: browser
-PKCE SPA pages, native relay custom schemes, custom-domain names other than the
-primary one, and a sandbox dev server on a port other than `3000`.
+PKCE SPA pages, native custom schemes used as the `redirect_uri` of a direct,
+client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`),
+custom-domain names other than the primary one, and a sandbox dev server on a
+port other than `3000`. The relay flow needs no extra entry: its `redirect_uri`
+is the backend's https callback (derived above) and the native custom scheme is
+only the `relayTo` target.
 
 These URLs are a CDK-layer concern only: the mock runtime has no Cognito app
 client (`cognitoFederated` isn't available in `npm run dev`, see above), so

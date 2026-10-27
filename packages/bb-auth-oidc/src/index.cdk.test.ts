@@ -516,3 +516,122 @@ test('CDK (#1001): additionalCallbackUrls / additionalLogoutUrls reject non-loca
 		additionalLogoutUrls: ['http://localhost:5173/'],
 	});
 });
+
+// --- classifyPublicOrigin: every scheme branch has a positive AND a negative case,
+// so defeating any single scheme check flips one of these assertions.
+
+/** The fallback entries the client gets when nothing else is registered. */
+const FALLBACK_CALLBACK = 'https://localhost/aws-blocks/auth/callback';
+
+function plainHttpWarnings(stack: cdk.Stack) {
+	return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpPublicOrigin'));
+}
+
+test('CDK (#1001): a plain-http literal origin is skipped (only the fallback is registered) and warns', () => {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', 'http://my-alb-123.us-east-1.elb.amazonaws.com');
+	const { callbackUrls, logoutUrls } = clientUrls(Template.fromStack(stack));
+	assert.deepStrictEqual(callbackUrls, [FALLBACK_CALLBACK]);
+	assert.deepStrictEqual(logoutUrls, ['https://localhost/']);
+	const warnings = plainHttpWarnings(stack);
+	assert.strictEqual(warnings.length, 1);
+	assert.match(String(warnings[0].entry.data), /my-alb-123\.us-east-1\.elb\.amazonaws\.com/);
+});
+
+test('CDK (#1001): an http:// origin with a deploy-time token host (certless ALB door) is skipped and warns', () => {
+	// `http://${Token}`: the scheme is a literal, the host only resolves at deploy.
+	// Without the literal-scheme check this would fall through to "register as-is".
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
+	const albDns = cdk.Fn.importValue('AlbDnsName');
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', `http://${albDns}`);
+	const { callbackUrls, logoutUrls } = clientUrls(Template.fromStack(stack));
+	assert.deepStrictEqual(callbackUrls, [FALLBACK_CALLBACK], 'the http door must not be registered');
+	assert.deepStrictEqual(logoutUrls, ['https://localhost/']);
+	assert.ok(!JSON.stringify(callbackUrls).includes('AlbDnsName'));
+	assert.strictEqual(plainHttpWarnings(stack).length, 1, 'exactly one PlainHttpPublicOrigin warning');
+});
+
+test('CDK (#1001): a whole-token origin that resolves at synth to https is registered (no warning)', () => {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', cdk.Lazy.string({ produce: () => 'https://byo.example.com' }));
+	const { callbackUrls, logoutUrls } = clientUrls(Template.fromStack(stack));
+	assert.deepStrictEqual(callbackUrls, ['https://byo.example.com/aws-blocks/auth/callback']);
+	assert.deepStrictEqual(logoutUrls, ['https://byo.example.com/']);
+	assert.strictEqual(plainHttpWarnings(stack).length, 0);
+});
+
+test('CDK (#1001): a whole-token origin that resolves at synth to http is skipped and warns', () => {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', cdk.Lazy.string({ produce: () => 'http://byo-alb.example.com' }));
+	const { callbackUrls } = clientUrls(Template.fromStack(stack));
+	assert.deepStrictEqual(callbackUrls, [FALLBACK_CALLBACK], 'the resolved http origin must not be registered');
+	const warnings = plainHttpWarnings(stack);
+	assert.strictEqual(warnings.length, 1);
+	assert.match(String(warnings[0].entry.data), /byo-alb\.example\.com/);
+});
+
+test('CDK (#1001): a whole-token origin that only resolves at deploy is deliberately registered as-is', () => {
+	const { stack, parent } = setup();
+	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', cdk.Fn.importValue('BrandedOrigin'));
+	const { callbackUrls } = clientUrls(Template.fromStack(stack));
+	assert.strictEqual(callbackUrls.length, 1);
+	const json = JSON.stringify(callbackUrls[0]);
+	assert.ok(json.includes('BrandedOrigin'), `expected the imported origin, got ${json}`);
+	assert.ok(json.includes('aws-blocks/auth/callback'));
+	assert.strictEqual(plainHttpWarnings(stack).length, 0);
+});
+
+// --- assertCognitoClientUrl: the RAW string is what gets registered, so it is validated as written.
+
+test('CDK (#1001): additionalCallbackUrls / additionalLogoutUrls reject malformed or unsafe entries at synth', () => {
+	const build = (extra: { additionalCallbackUrls?: string[]; additionalLogoutUrls?: string[] }) => {
+		const { parent } = setup();
+		new AuthOIDC(parent, 'auth', { providers: [federatedProvider(extra)] });
+	};
+	const rejects = (url: string, pattern: RegExp, option: 'additionalCallbackUrls' | 'additionalLogoutUrls' = 'additionalCallbackUrls') => {
+		assert.throws(
+			() => build({ [option]: [url] }),
+			(err: unknown) => {
+				assert.ok(err instanceof Error);
+				// Names the provider, the option and the offending URL.
+				assert.ok(err.message.includes(`cognitoFederated('Google') option ${option}`), err.message);
+				assert.ok(err.message.includes(`'${url}'`), err.message);
+				assert.match(err.message, pattern);
+				return true;
+			},
+			`expected ${JSON.stringify(url)} to be rejected`,
+		);
+	};
+	rejects('javascript:alert(1)', /'javascript:' scheme/);
+	rejects('data:text/html,hi', /'data:' scheme/);
+	rejects('file:///etc/hosts', /'file:' scheme/, 'additionalLogoutUrls');
+	rejects('https://user@app.example.com/cb', /userinfo/);
+	rejects('https://app.example.com\\@other.example/cb', /backslash/);
+	rejects('https:///nohost/cb', /has no host/);
+	rejects(' https://app.example.com/cb', /whitespace or control characters/);
+	rejects('https://app.example.com/cb ', /whitespace or control characters/);
+	rejects('https://app.example.com/\tcb', /whitespace or control characters/);
+	rejects('https://*.example.com/cb', /wildcard host/);
+	rejects('https://exämple.com/cb', /non-ASCII host/);
+	rejects('https://app.example.com/cb?code=abc', /reserved OAuth query parameter\(s\) 'code'/);
+	rejects('https://app.example.com/cb?x=1&state=s', /'state'/, 'additionalLogoutUrls');
+	rejects('nope', /no scheme/);
+	// Accepted: https, http on localhost, a punycode host, a non-reserved query, native custom schemes.
+	build({
+		additionalCallbackUrls: [
+			'https://app.example.com/cb',
+			'https://xn--exmple-cua.com/cb',
+			'https://app.example.com/cb?tenant=a',
+			'myapp://auth/callback',
+			'com.example.app:/oauth2redirect',
+		],
+		additionalLogoutUrls: ['http://localhost:5173/', 'myapp://signed-out'],
+	});
+	// Unresolved tokens are skipped (their value isn't known at synth).
+	build({ additionalCallbackUrls: [cdk.Fn.importValue('ExtraCallback')] });
+});

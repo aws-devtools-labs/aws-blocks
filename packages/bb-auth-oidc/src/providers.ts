@@ -309,7 +309,12 @@ export interface CognitoFederatedOpts<N extends string = string> {
 	 *
 	 * - Browser PKCE SPA pages: the browser client (`index.browser.ts`) sets
 	 *   `redirect_uri` to the SPA page URL, which is app-specific.
-	 * - Native relay custom schemes (e.g. `myapp://auth/callback`).
+	 * - Native custom schemes (e.g. `myapp://auth/callback`) used as the
+	 *   `redirect_uri` of a direct, client-initiated PKCE sign-in
+	 *   (`signIn(provider, { redirectPath })`). Not needed for the relay flow:
+	 *   there the `redirect_uri` is the backend's https callback (already derived
+	 *   above) and the custom scheme is only the `relayTo` target, which Cognito
+	 *   never sees.
 	 * - Additional custom-domain names: only the PRIMARY custom domain flows into
 	 *   `BLOCKS_PUBLIC_ORIGIN`; register `https://<other-name><callbackPath>` here
 	 *   for every other name the app is served from.
@@ -323,8 +328,9 @@ export interface CognitoFederatedOpts<N extends string = string> {
 	 * Extra sign-out (logout) URLs to register on the Cognito app client, in
 	 * addition to the derived ones (the public origin root, the shared API
 	 * Gateway base URL and, in sandbox mode, `http://localhost:3000/`). Use it for
-	 * the same cases as `additionalCallbackUrls` — SPA pages, native relay
-	 * schemes, and custom-domain names other than the primary one. Merged across
+	 * the same cases as `additionalCallbackUrls` — SPA pages, native custom
+	 * schemes used as a direct redirect, and custom-domain names other than the
+	 * primary one. Merged across
 	 * every `cognitoFederated()` provider and de-duplicated.
 	 */
 	additionalLogoutUrls?: string[];

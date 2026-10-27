@@ -369,7 +369,8 @@ export class AuthOIDC<
 	 *   usual `https://${Token}` CloudFront / custom-domain value), or a
 	 *   whole-token value that resolves at synth to an `https://` string. A
 	 *   whole-token value that only resolves at deploy (a CloudFormation
-	 *   intrinsic) can't be inspected and is registered as-is, as before.
+	 *   intrinsic) can't be scheme-checked at synth, so it is deliberately
+	 *   registered as-is and Cognito validates it at deploy.
 	 * - `skip`: the scheme is known at synth and isn't `https://` (e.g. a
 	 *   certless ALB's `http://${Token}`). `display` is the origin when it is a
 	 *   plain string, for the warning message.
@@ -392,7 +393,8 @@ export class AuthOIDC<
 				? { kind: 'register', origin }
 				: { kind: 'skip', display: resolved };
 		}
-		// By design: a deploy-time token can't be scheme-checked at synth, so it is registered as-is (pre-existing behavior).
+		// Deliberate: a deploy-time intrinsic can't be scheme-checked at synth, so it is
+		// registered as-is and Cognito validates the resolved URL at deploy.
 		return { kind: 'register', origin };
 	}
 
@@ -541,28 +543,88 @@ export class AuthOIDC<
 }
 
 /**
+ * Schemes never accepted as a Cognito app-client URL, even though they parse.
+ */
+const DENIED_CLIENT_URL_SCHEMES: ReadonlySet<string> = new Set(['javascript', 'data', 'file', 'vbscript']);
+
+/**
+ * OAuth query parameters the authorization server appends to the redirect; a
+ * registered URL that already carries one collides with the redirect contract.
+ */
+const RESERVED_CLIENT_URL_QUERY_PARAMS: readonly string[] = ['code', 'state'];
+
+/**
  * Synth-time check for a caller-supplied Cognito app-client URL
- * (`additionalCallbackUrls` / `additionalLogoutUrls`). Cognito rejects, at
- * deploy, a plain `http://` URL whose host isn't `localhost` and any URL with a
- * fragment; this reports either as a synth error naming the URL and the option.
- * Unresolved CDK tokens are skipped (their value isn't known at synth). Custom
- * schemes (`myapp://auth/callback`) are accepted.
+ * (`additionalCallbackUrls` / `additionalLogoutUrls`). The string is registered
+ * on the app client exactly as written, so the string-level checks run on the
+ * RAW value (WHATWG `URL` parsing normalizes some forms away) and `URL` parsing
+ * is used only for structural checks. Rejected, as a synth error naming the URL
+ * and the option:
+ *
+ * - whitespace or control characters anywhere (incl. leading/trailing);
+ * - a backslash, or userinfo (`@`) in the authority;
+ * - the `javascript:`, `data:`, `file:` and `vbscript:` schemes;
+ * - `http:` / `https:` without exactly `//` followed by a host, a wildcard
+ *   (`*`) or non-ASCII host;
+ * - plain `http://` whose host isn't `localhost` (Cognito accepts http only for
+ *   localhost);
+ * - a fragment (`#`), or a `code` / `state` query parameter;
+ * - anything the `URL` constructor can't parse.
+ *
+ * Unresolved CDK tokens are skipped (their value isn't known at synth). Native
+ * custom schemes (`myapp://auth/callback`, `com.example.app:/oauth2redirect`)
+ * are accepted.
  */
 function assertCognitoClientUrl(url: string, option: string, provider: string): void {
 	if (cdk.Token.isUnresolved(url)) return;
 	const where = `cognitoFederated('${provider}') option ${option}`;
+	const reject: (reason: string) => never = reason => {
+		throw new Error(`${where}: '${url}' ${reason}`);
+	};
+
+	// --- String-level checks on the raw value (before any normalization). ---
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
+	if (url !== url.trim() || /[\s\x00-\x1F\x7F]/.test(url)) {
+		reject('is not a valid URL: it contains whitespace or control characters.');
+	}
+	if (url.includes('\\')) reject('contains a backslash; use forward slashes only.');
+	const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+	if (!schemeMatch) reject('is not a valid URL: it has no scheme.');
+	const scheme = schemeMatch[1].toLowerCase();
+	if (DENIED_CLIENT_URL_SCHEMES.has(scheme)) {
+		reject(`uses the '${scheme}:' scheme, which is not accepted for callback or sign-out URLs.`);
+	}
+	// Raw authority: what follows `scheme://` up to the first `/`, `?` or `#`.
+	const rest = url.slice(scheme.length + 1);
+	const authority = rest.startsWith('//') ? rest.slice(2).split(/[/?#]/, 1)[0] : undefined;
+	if (authority?.includes('@')) reject('contains userinfo (\'@\') in the host; callback and sign-out URLs take a plain host.');
+	if (authority?.includes('*')) reject('uses a wildcard host; register each host explicitly.');
+	// Anything outside printable ASCII (control characters were rejected above).
+	if (authority && /[^\u0020-\u007E]/.test(authority)) {
+		reject('has a non-ASCII host; use its ASCII (punycode) form.');
+	}
+	const web = scheme === 'http' || scheme === 'https';
+	// `https:///x` would be normalized by `URL` to host `x`; require `//<host>` verbatim.
+	if (web && !authority) reject(`has no host; expected '${scheme}://<host>/...'.`);
+
+	// --- Structural checks on the parsed URL. ---
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
 	} catch {
-		throw new Error(`${where}: '${url}' is not a valid URL.`);
+		reject('is not a valid URL.');
 	}
 	if (url.includes('#')) {
-		throw new Error(`${where}: '${url}' contains a URL fragment ('#'); Cognito does not accept fragments in callback or sign-out URLs.`);
+		reject("contains a URL fragment ('#'); Cognito does not accept fragments in callback or sign-out URLs.");
 	}
-	if (parsed.protocol === 'http:' && parsed.hostname !== 'localhost') {
-		throw new Error(
-			`${where}: '${url}' uses http with a host other than localhost; Cognito accepts http only for localhost. Use an https URL.`,
+	if (web && !parsed.hostname) reject(`has no host; expected '${scheme}://<host>/...'.`);
+	if (scheme === 'http' && parsed.hostname !== 'localhost') {
+		reject('uses http with a host other than localhost; Cognito accepts http only for localhost. Use an https URL.');
+	}
+	const reserved = RESERVED_CLIENT_URL_QUERY_PARAMS.filter(p => parsed.searchParams.has(p));
+	if (reserved.length > 0) {
+		reject(
+			`carries the reserved OAuth query parameter(s) ${reserved.map(p => `'${p}'`).join(', ')}, which the authorization server appends on redirect.`,
 		);
 	}
 }
