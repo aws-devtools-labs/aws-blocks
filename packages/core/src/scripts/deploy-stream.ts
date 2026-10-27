@@ -367,6 +367,8 @@ export interface CdkDeployArgsOptions {
  *   redrawing progress bar. The bar needs a TTY, which a piped/backgrounded
  *   deploy does not have, and a half-rendered bar is not a usable progress
  *   signal in a log file.
+ *
+ * `npm run destroy` selects the same stacks (`cdk destroy --all`).
  */
 export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOptions): string[] {
   return [
@@ -383,6 +385,20 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
     '--context',
     `projectRoot=${projectRoot}`,
   ];
+}
+
+/**
+ * Pick the app's stack outputs from a `cdk deploy --outputs-file` JSON object
+ * (`{ [stackName]: { [outputKey]: value } }`).
+ *
+ * The deploys select every stack (`--all`), and CDK writes one entry per
+ * deployed stack that has outputs, in deploy order, so the app's stack is not
+ * always the first entry. Picks the stack that carries the `ApiUrl` output,
+ * else the first stack, else `{}`.
+ */
+export function selectAppStackOutputs(outputs: Record<string, Record<string, string>>): Record<string, string> {
+  const stacks = Object.values(outputs);
+  return stacks.find((stack) => typeof stack?.ApiUrl === 'string') ?? stacks[0] ?? {};
 }
 
 /** Unref'd sleep: a pending flush grace must never keep the process alive. */

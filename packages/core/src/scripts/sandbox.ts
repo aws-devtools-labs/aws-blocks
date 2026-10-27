@@ -14,7 +14,7 @@ import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
-import { formatDeploySignal } from './deploy-stream.js';
+import { formatDeploySignal, selectAppStackOutputs } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -160,6 +160,34 @@ export function buildSandboxDeployArgs({
 }
 
 /**
+ * Build the `npx cdk watch …` argv the sandbox loop runs after the first deploy.
+ *
+ * Kept pure (no I/O) so the argv contract can be asserted directly, like
+ * {@link buildSandboxDeployArgs}.
+ *
+ * - `*`: watch and redeploy every top-level stack, the same selection as the
+ *   sandbox deploy's `--all`. Without a selector, `cdk watch` on an app with
+ *   more than one stack never deploys and prints no error. `cdk watch`
+ *   declares no `--all` option (the CLI warns that it "will be ignored"), so
+ *   this uses the documented stack wildcard; `*` does not match stacks nested
+ *   in a CDK Stage, just as `--all` does not select them.
+ */
+export function buildSandboxWatchArgs({
+  outDir,
+  projectRoot,
+  backendPath,
+}: Pick<SandboxDeployArgsOptions, 'outDir' | 'projectRoot' | 'backendPath'>): string[] {
+  return [
+    "cdk", "watch",
+    "*",
+    `--outputs-file`, `${outDir}/outputs.json`,
+    `--context`, `projectRoot=${projectRoot}`,
+    `--context`, `sandboxMode=true`,
+    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
+  ];
+}
+
+/**
  * Operator-facing recovery guidance printed when a sandbox deploy fails.
  *
  * Express Mode (see {@link buildSandboxDeployArgs}) disables CloudFormation's
@@ -286,12 +314,7 @@ export async function startSandbox(options: SandboxOptions) {
   registerFrameworkFromSink(frameworkSink);
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
-  // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
-  // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
-  // on the outputs file's write order; fall back to the first group so a
-  // single-stack app is unchanged.
-  const stackGroups = Object.values(outputs) as Record<string, string>[];
-  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+  const stackOutputs = selectAppStackOutputs(outputs);
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -342,13 +365,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch",
-    `--outputs-file`, `${outDir}/outputs.json`,
-    `--context`, `projectRoot=${process.cwd()}`,
-    `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
-  ], {
+  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs({ outDir, projectRoot: process.cwd(), backendPath }), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
