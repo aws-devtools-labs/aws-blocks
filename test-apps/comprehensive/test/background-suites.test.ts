@@ -104,6 +104,23 @@ test('a test filter in NODE_OPTIONS does not reach the child', async () => {
   }
 });
 
+test('an inspector flag in NODE_OPTIONS does not reach the child', async () => {
+  const previous = process.env.NODE_OPTIONS;
+  // --inspect-port, not --inspect-brk: an unstripped --inspect-brk would make
+  // the child wait for a debugger instead of failing this test.
+  process.env.NODE_OPTIONS = `${previous ?? ''} --inspect-port=0`.trim();
+  try {
+    const { lines, output } = sink();
+    await backgroundSuites(['env'], { entry, output }).suites[0].done();
+    const printed = lines.find((l) => l.includes('NODE_OPTIONS='));
+    assert.ok(printed, JSON.stringify(lines));
+    assert.doesNotMatch(printed, /--inspect/);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previous;
+  }
+});
+
 test('a --test-skip-pattern still reaches the child', async () => {
   const previous = process.env.NODE_OPTIONS;
   process.env.NODE_OPTIONS = `${previous ?? ''} --test-skip-pattern="fake background test fails"`.trim();

@@ -4,8 +4,8 @@
 /**
  * Stand-in for run-background-suite.ts in background-suites.test.ts. The
  * suite name picks the behaviour: `pass`, `fail` (one failing test), `crash`
- * (throws at import, before any test) or `slow` (writes FAKE_SUITE_MARKER
- * after a second).
+ * (throws at import, before any test), `slow` (writes FAKE_SUITE_MARKER
+ * after a second) or `env` (prints the NODE_OPTIONS it was started with).
  */
 
 import { writeFileSync } from 'node:fs';
@@ -28,5 +28,11 @@ if (mode === 'slow') {
     await setTimeout(1000);
     const marker = process.env.FAKE_SUITE_MARKER;
     if (marker) writeFileSync(marker, 'done');
+  });
+}
+
+if (mode === 'env') {
+  test('fake background test prints its NODE_OPTIONS', () => {
+    console.log(`NODE_OPTIONS=${process.env.NODE_OPTIONS ?? ''}`);
   });
 }
