@@ -29,13 +29,6 @@ export {
 	type NativeDeclarationInput,
 	type NativeDeclarationSource,
 } from './native-catalogs.js';
-export {
-	type DeployStage,
-	type PredeployContext,
-	type PredeployResult,
-	runPredeployHooks,
-	type SynthesizedStack,
-} from './predeploy-hooks.js';
 export { readNativeDeclarations } from './read-native-declarations.js';
 export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
