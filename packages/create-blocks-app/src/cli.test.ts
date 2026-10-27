@@ -179,6 +179,36 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every HTML template declares a UTF-8 charset', () => {
+    // Without it, a host that sends `Content-Type: text/html` with no charset
+    // (S3, most static servers) makes the browser decode the page as
+    // windows-1252, so any non-ASCII text in the HTML or a classic script
+    // renders as mojibake. Browsers only honour the tag in the first 1024 bytes.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const htmlPath = join(templatesDir, entry.name, 'index.html');
+      if (!existsSync(htmlPath)) continue;
+      const head = readFileSync(htmlPath, 'utf-8').slice(0, 1024);
+      if (!/<head>\s*<meta charset="utf-8"\s*\/?>/i.test(head)) {
+        problems.push(`${entry.name}: index.html should open <head> with <meta charset="utf-8">`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it('nextjs template wraps each page section in its own error boundary', () => {
+    // error.tsx covers the whole route: without per-section boundaries, one
+    // failing Server Component replaces the page, client components included.
+    const pageDir = join(__dirname, '..', 'templates', 'nextjs', 'src', 'app');
+    assert.ok(existsSync(join(pageDir, 'section-boundary.tsx')), 'section-boundary.tsx is missing');
+    const sections = readFileSync(join(pageDir, 'page.tsx'), 'utf-8').match(/<section[\s\S]*?<\/section>/g) ?? [];
+    assert.ok(sections.length > 0, 'page.tsx has no <section> elements');
+    const unwrapped = sections.filter((section) => !section.includes('<SectionBoundary>'));
+    assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
+  });
+
   it('every template sandbox script forwards --deploy-only to startSandbox and exits', () => {
     // Run each template's real aws-blocks/scripts/sandbox.ts against a stubbed
     // `@aws-blocks/blocks/scripts` that records the options it receives. The
@@ -503,7 +533,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId for fresh project scaffolding', () => {
+  it('generates .blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
     const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
     try {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
@@ -512,6 +542,12 @@ describe('create-blocks-app auto-detection', () => {
       assert.ok(config.stackId, '.blocks/config.json should have a stackId');
       assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
       assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
+      // The bare template's commented examples import zod, so a fresh app must depend on it
+      // at the template's range (read from the template — dependency bumps change it).
+      const templateZod = JSON.parse(readFileSync(join(__dirname, '../templates/bare/package.json'), 'utf-8')).dependencies?.zod;
+      assert.strictEqual(typeof templateZod, 'string', 'templates/bare/package.json should declare a zod dependency');
+      const appPkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(appPkg.dependencies?.zod, templateZod, 'scaffolded app should depend on zod at the template range');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

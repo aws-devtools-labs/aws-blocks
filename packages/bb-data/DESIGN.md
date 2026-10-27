@@ -64,10 +64,18 @@ Error translation happens at the engine layer, not the database layer. Each engi
 |---------------|-------------------|
 | `40001` | `SerializationFailure` (→ `ApiError` 409, retriable) |
 | `23505` | `UniqueConstraintViolation` (→ `ApiError` 409, not retriable) |
+| `42501` | `PermissionDenied` (→ `ApiError` 403, not retriable): the caller's statement hit a row-level-security `WITH CHECK` rejection or a missing grant |
+| `23514` | `CheckViolation` (→ `ApiError` 400, not retriable) |
+| `23502` | `NotNullViolation` (→ `ApiError` 400, not retriable) |
+| `23503` | `ForeignKeyViolation` (→ `ApiError` 409, not retriable) |
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
 
 Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
+
+The four request errors (`42501`, `23514`, `23502`, `23503`) are built by the shared `requestError()` helper in `errors.ts`, used by the PGlite, pg-client and Data API engines (the Data API path parses the SQLState from the message), so all three produce an identically shaped `ApiError` with a fixed client message and the driver error kept as `cause`, whether the error is raised by a statement or at `COMMIT` (a deferred constraint). PGlite enforces every constraint and policy, and enforces grants once a statement runs under `SET ROLE` (PGlite itself runs as superuser), so these mappings are verified by engine unit tests against real PGlite and by an over-the-wire e2e test (`test-apps/comprehensive/test/database.test.ts`).
+
+`42501` from `withRLS()`'s own `SET LOCAL ROLE` is not a caller error: it means the database user isn't a member of the role (on PostgreSQL 16+, the role's creator gets only `ADMIN`, not `SET`), which fails every `withRLS()` call. `setRLSContext()` (`rls.ts`) catches that case and re-tags it as a 500 `QueryFailed`, logging the `GRANT <role> TO CURRENT_USER` that fixes it. Only `rls.ts` knows the statement came from the framework, which is why the classification lives there and not in the engine translators.
 
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
 
