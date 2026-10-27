@@ -290,6 +290,11 @@ jobs:
       - name: Check API backward compatibility
         run: npm run check:api
 
+      # The scheduled stack cleanup (cleanup-stacks.yml) deletes orphaned log groups
+      # with this step; it must never delete one whose function or cluster is live.
+      - name: Test the orphaned log group sweep
+        run: node --test scripts/ci/sweep-log-groups.test.mjs
+
       # Tests the splitter the local-unit jobs use.
       - name: Test the unit test sharding
         run: node --test scripts/ci/unit-test-shard.test.mjs
