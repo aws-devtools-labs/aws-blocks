@@ -14,8 +14,9 @@
 #   run      e2e + blocked, the jobs that start at all
 #
 # An unknown job name blocks every job the changes call for. It only fails
-# this script when the changes call for none: a failure here skips every E2E
-# job, and a skipped required check counts as passing.
+# this script when the changes call for none: a failure here fails E2E Sandbox
+# and E2E Production (the required ones) and skips the other E2E jobs, whereas
+# blocking fails each of them.
 #
 # Tests: node --test scripts/ci/e2e-selection.test.mjs
 

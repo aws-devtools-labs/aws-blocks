@@ -18,14 +18,22 @@ export type CustomErrorResponsesOptions = {
   readonly pathPrefix: string;
   /** Whether the app renders on a server: the 502/503/504 pages are then the server's own. */
   readonly hasCompute: boolean;
+  /**
+   * Whether the pages are object keys under `pathPrefix` (`DoorInput.app.errorPages`:
+   * the app's `404.html`, a framework page, or the default `_not_found.html`),
+   * served at those keys. Otherwise they are the app's local files, uploaded
+   * as `404.html` / `500.html` (the built-in CloudFront door). @default false
+   */
+  readonly pageKeys?: boolean;
 };
 
 /**
  * The custom error responses for the app's error pages.
  *
- * - `notFound` → 404 serves `<pathPrefix>/404.html` (not cached).
- * - `serverError` → 500 serves `<pathPrefix>/500.html`; for an app without a
- *   server also 502, 503 and 504 (cached 10 s).
+ * - `notFound` → 404 serves `<pathPrefix>/404.html` (not cached), or
+ *   `<pathPrefix>/<notFound>` with `pageKeys`.
+ * - `serverError` → 500 serves `<pathPrefix>/500.html` (or `<pathPrefix>/<serverError>`
+ *   with `pageKeys`); for an app without a server also 502, 503 and 504 (cached 10 s).
  *
  * @param pages which error pages the app configured.
  * @param options where the pages are served from, and whether the app has a server.
@@ -36,11 +44,13 @@ export function customErrorResponses(
   options: CustomErrorResponsesOptions,
 ): ErrorResponse[] {
   const responses: ErrorResponse[] = [];
+  const pagePath = (page: unknown, uploadedAs: string): string =>
+    `${options.pathPrefix}/${options.pageKeys && typeof page === 'string' ? page.replace(/^\/+/, '') : uploadedAs}`;
   if (pages?.notFound) {
     responses.push({
       httpStatus: 404,
       responseHttpStatus: 404,
-      responsePagePath: `${options.pathPrefix}/404.html`,
+      responsePagePath: pagePath(pages.notFound, '404.html'),
       ttl: Duration.seconds(0),
     });
   }
@@ -53,7 +63,7 @@ export function customErrorResponses(
       responses.push({
         httpStatus: status,
         responseHttpStatus: status,
-        responsePagePath: `${options.pathPrefix}/500.html`,
+        responsePagePath: pagePath(pages.serverError, '500.html'),
         ttl: Duration.seconds(10),
       });
     }
