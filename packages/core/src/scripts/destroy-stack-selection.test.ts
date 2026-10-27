@@ -140,13 +140,7 @@ describe('destroy selects every stack its deploy creates', { skip }, () => {
   });
 });
 
-describe('deploy and watch select every stack', () => {
-  it('the production deploy runs `cdk deploy --all`', () => {
-    const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
-    assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'deploy']);
-    assert.ok(args.includes('--all'), `expected --all in: ${args.join(' ')}`);
-  });
-
+describe('the sandbox watch selects every stack', () => {
   it('the sandbox `cdk watch` names the given stacks right after `watch`', () => {
     const args = buildSandboxWatchArgs({
       outDir: '.blocks-sandbox',

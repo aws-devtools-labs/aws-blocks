@@ -7,5 +7,7 @@ const backendPath = process.argv[2];
 
 await destroy({
   cdkAppPath: backendPath,
-  projectRoot: process.cwd()
+  projectRoot: process.cwd(),
+  // A local run in a terminal must not wait on the multi-stack confirmation.
+  force: true,
 });
