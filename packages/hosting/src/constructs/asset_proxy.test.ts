@@ -14,6 +14,8 @@ import { describe, it } from 'node:test';
 import * as zlib from 'node:zlib';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML } from './default_not_found.js';
+import { NOT_FOUND_PAGE_KEY } from '../defaults.js';
 
 type StoredObject = {
   body: string;
@@ -409,3 +411,25 @@ for (const [label, generate, event] of variants) {
     });
   });
 }
+
+// ── The built-in default 404 page (a multi-page static site with none of its own) ──
+
+for (const [label, generate, event] of variants) {
+  describe(`${label} asset proxy — the default 404 page`, () => {
+    it('a miss answers 404 with the default page the build carries at _not_found.html', async () => {
+      const objects = {
+        [`${PREFIX}/index.html`]: { body: '<html>home</html>', contentType: 'text/html' },
+        [`${PREFIX}/${NOT_FOUND_PAGE_KEY}`]: { body: DEFAULT_NOT_FOUND_PAGE_HTML, contentType: 'text/html' },
+      };
+      const proxy = loadHandler(generate({ spaFallback: false, errorPages: { notFound: NOT_FOUND_PAGE_KEY } }), objects);
+      for (const miss of ['/this/does/not/exist-12345', '/missing.js']) {
+        const res = await proxy(event(miss));
+        assert.equal(res.statusCode, 404, miss);
+        assert.match(res.headers['content-type'], /^text\/html/);
+        assert.match(decode(res), /404 — Page Not Found/);
+      }
+      assert.equal((await proxy(event('/'))).statusCode, 200);
+    });
+  });
+}
+

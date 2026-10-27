@@ -114,7 +114,9 @@ the Lambda response, so it is capped at about 750 KB (gzipped when
 compressible) behind the ALB (1 MB response) and 4.5 MB behind API Gateway
 (Lambda's 6 MB response); synth lists every larger build asset
 (`@aws-blocks/hosting:AssetExceedsProxyLimit`). ALB listener rules are packed
-and synth warns past the default 100 (`AlbRuleLimit`). Past CloudFront's 25
+within the per-rule limits (five condition values, six wildcards; a pattern
+with more wildcards fails synth with `UnsupportedRoutePatternError`), and synth
+warns past the default 100 (`AlbRuleLimit`). Past CloudFront's 25
 cache behaviors, the stacked door's edge serves the remaining static routes
 through the ALB and warns (`@aws-blocks/hosting:StackedEdgeBehaviorLimit`).
 
@@ -139,12 +141,14 @@ survives), and a native handler server (Nitro's `aws-lambda` preset) runs
 behind a small ALB event shim that maps the ALB event to the API Gateway REST
 shape (method, decoded query, base64 body) and the response back.
 
-The server sees the viewer's host as `x-forwarded-host` behind every built-in
-door, never a value the client sent. The CloudFront door and the stacked
-door's edge set it at the edge; behind the ALB and API Gateway doors, a native
-handler server gets it from `Host` through a small shim (a streaming handler
-stays streaming), and a Lambda Web Adapter server that reads its host from
-`x-forwarded-host` (SvelteKit's `HOST_HEADER`) reads `host` instead.
+The CloudFront door and the stacked door's edge set `x-forwarded-host` from
+the viewer's `Host`. Behind the ALB and API Gateway doors, a native handler
+server gets it from `Host` through a small shim (a streaming handler stays
+streaming), and a Lambda Web Adapter server that reads its host from
+`x-forwarded-host` through `HOST_HEADER` (SvelteKit) reads `host` instead. Any
+other Lambda Web Adapter server (Astro's Node adapter, Nitro's `node-server`)
+receives the request's headers as sent, so it shouldn't trust
+`x-forwarded-host` behind those doors.
 
 Redirects behave the same on every door. A wildcard tail spliced onto a
 root-relative destination keeps one leading slash on the CloudFront door too,
