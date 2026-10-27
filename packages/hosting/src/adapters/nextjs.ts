@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync } from 'local-pkg';
+import { getProjectPackageInfo } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { targetCompute } from './shared/compute_target.js';
 import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
@@ -1267,7 +1267,7 @@ export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
  * `.open-next/`) or when the version can't be parsed.
  */
 const warnIfOpenNextOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('@opennextjs/aws', { paths: [projectDir] });
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_OPENNEXT_RANGE)) return;
@@ -1305,7 +1305,7 @@ type InstalledOpenNext = { version: string; nextPeerRange?: string };
 const findInstalledOpenNext = (
   projectDir: string,
 ): InstalledOpenNext | undefined => {
-  const info = getPackageInfoSync('@opennextjs/aws', { paths: [projectDir] });
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
   if (!info?.version) return undefined;
   const peers = (info.packageJson as { peerDependencies?: Record<string, string> })
     .peerDependencies;
@@ -1510,7 +1510,7 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
  * @internal
  */
 export const detectNextVersion = (projectDir: string): string | undefined => {
-  const info = getPackageInfoSync('next', { paths: [projectDir] });
+  const info = getProjectPackageInfo('next', projectDir);
   const version = info?.version;
   return version && semver.valid(version) ? version : undefined;
 };

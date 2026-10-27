@@ -7,6 +7,7 @@ import type { SpawnSyncOptions } from 'node:child_process';
 import semver from 'semver';
 import { spawn } from './spawn.js';
 import {
+  detectNextVersion,
   hasExistingMiddlewareManifest,
   installLinuxSharpForImageOptimizer,
   nextjsAdapter,
@@ -2503,5 +2504,33 @@ void describe('installLinuxSharpForImageOptimizer — sharp floor (GHSA-wq5f-xc8
     seedSharp('0.35.5', 'x64');
     installLinuxSharpForImageOptimizer(openNextDir);
     assert.strictEqual(installs.length, 0);
+  });
+});
+
+void describe('detectNextVersion in a workspace', () => {
+  void it("reads the app's next, not the version hoisted to the workspace root", () => {
+    // An app pinning next@15.5.7 under a root that hoists next@16.4.2: the
+    // root's version would pick the Next 16 image-optimizer patch and hide a
+    // peer-range mismatch.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nextjs-workspace-'));
+    try {
+      const app = path.join(root, 'apps', 'web');
+      for (const [dir, version] of [
+        [root, '16.4.2'],
+        [app, '15.5.7'],
+      ] as const) {
+        const pkgDir = path.join(dir, 'node_modules', 'next');
+        fs.mkdirSync(pkgDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(pkgDir, 'package.json'),
+          JSON.stringify({ name: 'next', version, main: 'index.js' }),
+        );
+        fs.writeFileSync(path.join(pkgDir, 'index.js'), '');
+      }
+      fs.writeFileSync(path.join(app, 'package.json'), '{}');
+      assert.strictEqual(detectNextVersion(app), '15.5.7');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
