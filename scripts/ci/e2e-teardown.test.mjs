@@ -429,10 +429,18 @@ describe('e2e-teardown.mjs', () => {
 		assert.deepEqual(r.output.trim().split('\n'), [`stacks=${denied}`, `stacks=${denied} ${deleting}`]);
 	});
 
-	it('outputs no stack when the suite cleaned up', () => {
-		const r = run({ stacks: [], jobStatus: 'success', keep: '1' });
+	it('outputs no stack when nothing is left', () => {
+		const r = run({ stacks: [], jobStatus: 'cancelled', keep: '1' });
 		assert.equal(r.status, 0, r.out);
 		assert.doesNotMatch(r.output, /stacks=\S/);
+	});
+
+	it('fails when a passing suite kept its stack but no stack matches', () => {
+		// E2E Production's suite always leaves its stack: a miss means the names drifted.
+		const r = run({ suffix: 'pr-9-1', stacks: [stack('bb-test-prod-default-k3x9q2')], jobStatus: 'success', keep: '1' });
+		assert.equal(r.status, 1, r.out);
+		assert.deepEqual(deletes(r.calls), []);
+		assert.match(r.out, /::error title=E2E teardown::The suite kept its stack, but no stack has id runner-k3x9q2 and suffix pr-9-1 \(or pr-9-1-k3x9q2 /);
 	});
 });
 
@@ -518,6 +526,8 @@ describe('pr-checks.yml', () => {
 		it(`${id} keeps its stacks`, () => {
 			const head = headOf(jobs[id]);
 			assert.match(head, /^ {4}env:\n(?: {6}.*\n)*? {6}BLOCKS_SANDBOX_KEEP: '1'$/m, `${id}: set BLOCKS_SANDBOX_KEEP in the job env`);
+			// The teardown finds the salt-only production name only with the suffix.
+			assert.match(head, /^ {4}env:\n(?: {6}.*\n)*? {6}BLOCKS_STACK_SUFFIX: pr-\$\{\{/m, `${id}: set BLOCKS_STACK_SUFFIX in the job env`);
 		});
 	}
 

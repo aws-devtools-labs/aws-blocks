@@ -38,8 +38,10 @@
 //
 // With BLOCKS_SANDBOX_KEEP set the suite keeps its stacks on purpose, so this
 // step is the job's teardown: the job no longer waits ~12-22 minutes for the
-// delete, and E2E Teardown Verify waits for it instead. Either way, the stacks
-// not yet gone go to the `stacks` step output (space-separated) for that job.
+// delete, and E2E Teardown Verify waits for it instead. A passing job that kept
+// its stack fails when this finds none: the names have drifted. Either way, the
+// stacks not yet gone go to the `stacks` step output (space-separated) for that
+// job.
 //
 // Env: JOB_STATUS (`job.status`), BLOCKS_STACK_SUFFIX (the job's, optional),
 // BLOCKS_SANDBOX_KEEP, E2E_TEARDOWN_STRICT, GITHUB_OUTPUT,
@@ -171,7 +173,16 @@ async function main() {
 	// Nested stacks go with their root stack.
 	const mine = JSON.parse(list.out || '[]').filter((s) => !s.ParentId && ours(s.StackName));
 	if (mine.length === 0) {
-		console.log(`No stack with id ${id}${suffix ? ` and suffix ${suffix}` : ''} is left: nothing left to delete.`);
+		const which = `id ${id}${suffix ? ` and suffix ${suffix}` : ''}`;
+		// A passing suite that keeps its stack must have left one: none found
+		// means the stack names and this match have drifted apart, and the
+		// stack would leak on every run.
+		if (kept && jobStatus === 'success') {
+			const forms = saltToken ? `${which} (or ${suffix}-${salt} for the production name)` : which;
+			error(`The suite kept its stack, but no stack has ${forms}; check the app's stack name against this match.`);
+			return 1;
+		}
+		console.log(`No stack with ${which} is left: nothing left to delete.`);
 		return 0;
 	}
 
