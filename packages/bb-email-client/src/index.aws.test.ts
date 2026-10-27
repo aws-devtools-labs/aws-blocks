@@ -138,6 +138,19 @@ test('sendBatch() marks an invalid entry failed without sending it, like the moc
 	assert.strictEqual(entries.length, 1, 'only the valid entry is sent');
 });
 
+test('sendBatch() gives an entry that is invalid in two ways the same error on the mock and AWS', async () => {
+	// More than 50 recipients AND a malformed address: both layers run the same
+	// checks in the same order, so the first failing check names the error.
+	const entry: EmailMessage = { to: [...fiftyOne, 'bad'], subject: 's', body: 'b' };
+	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com' });
+	const mockResult = await mock.sendBatch([entry]);
+	const { email } = awsClient();
+	const awsResult = await email.sendBatch([entry]);
+	assert.strictEqual(mockResult.results[0].status, 'failed');
+	assert.strictEqual(awsResult.results[0].status, 'failed');
+	assert.strictEqual(mockResult.results[0].error, awsResult.results[0].error);
+});
+
 test('sendBatch() sends a text-only message with no HTML part', async () => {
 	const { email, sent } = awsClient();
 	const body = 'Hi <b>there</b>, click <a href="https://example.com">here</a>';

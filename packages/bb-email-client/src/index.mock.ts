@@ -24,7 +24,7 @@ export type {
 } from './types.js';
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
-import { countRecipients, MAX_RECIPIENTS_PER_MESSAGE, validateMessage } from './validation.js';
+import { validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
@@ -148,10 +148,8 @@ export class EmailClient extends Scope {
 
 		for (let i = 0; i < messages.length; i++) {
 			const msg = messages[i];
-			if (countRecipients(msg) > MAX_RECIPIENTS_PER_MESSAGE) {
-				results.push({ status: 'failed', error: `Recipient count exceeds ${MAX_RECIPIENTS_PER_MESSAGE}.` });
-				continue;
-			}
+			// send() runs validateMessage(), the same checks in the same order as
+			// the AWS sendBatch(), so a rejected entry gets the same error text.
 			try {
 				const sendResult = await this.send(msg);
 				results.push({ status: 'success', messageId: sendResult.messageId });
