@@ -387,14 +387,25 @@ production deployment. Two independent checks enforce that:
   the `sandboxMode` CDK context isn't `true`. `npm run sandbox` sets that context
   and `npm run deploy` doesn't. It is the same signal `addBlocksStackMetadata`
   uses for the `blocks:deployment-type` tag.
-- **Runtime.** CDK context doesn't exist in the Lambda, so the construct writes
-  the sandbox bit to runtime config (`BLOCKS_AUTH_OIDC_SANDBOX_<FULLID>`, via
-  `registerConfig`). In a deployed Lambda (`AWS_LAMBDA_FUNCTION_NAME` set), the
-  AWS runtime entry refuses to mount stub routes unless that flag is `true`.
-  This catches an artifact built without the synth check. Outside Lambda (client
-  codegen imports the module) there is nothing to mount, so the check is skipped.
+- **Runtime.** CDK context doesn't exist on deployed compute, so the construct
+  writes the sandbox bit to runtime config (`BLOCKS_AUTH_OIDC_SANDBOX_<FULLID>`,
+  via `registerConfig`). On deployed compute, the AWS runtime entry refuses to
+  mount stub routes unless that flag is `true`, which catches an artifact built
+  without the synth check. "Deployed" is `isDeployedEnv()` from
+  `@aws-blocks/core/bb-utils` (`BLOCKS_CONFIG_BUCKET` + `BLOCKS_CONFIG_KEY`, set
+  on every compute target Blocks configures: Lambda, ECS/Fargate, AgentCore), the
+  same signal the mock-entry guard uses, so the two can't drift. In local dev
+  and client codegen those variables are absent, so the check is skipped.
 
 The stub's authorization codes are HMAC-signed with a 32-byte key from
 `randomBytes`, generated per process like its RS256 keypairs, and checked with
 `timingSafeEqual`. No key ships in the package, so a code can't be forged from
 the published source.
+
+Per-process keys mean the stub assumes one serving process, which is how it is
+used: locally (one dev server) and in a sandbox (one warm container under test
+traffic). That assumption predates the code key: the RS256 keypair is also per
+process, and the relying party's callback fetches the stub's JWKS over HTTP, so
+two containers would already disagree on the signing key. Deriving only the code
+key from a shared secret would not make multi-container sign-in work; that needs
+a shared keypair as well, which is out of scope here.

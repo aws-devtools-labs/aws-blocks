@@ -265,7 +265,7 @@ providers: [
 ]
 ```
 
-The stub signs in any identity without a credential, so it never reaches production: `cdk synth` throws when a `stubIdp()` provider is configured outside sandbox mode (`npm run sandbox` sets the `sandboxMode` context; `npm run deploy` doesn't), and a deployed Lambda without the sandbox flag refuses to mount the stub routes. Choose providers by environment when one app runs everywhere, for example `providers: isSandbox ? [stubIdp({ name: 'corporate' })] : [customOidc({ name: 'corporate', ... })]`. Its authorization codes are signed with a key generated per process, so a code is redeemable only by the process that issued it.
+The stub signs in any identity without a credential, so it never reaches production: `cdk synth` throws when a `stubIdp()` provider is configured outside sandbox mode (`npm run sandbox` sets the `sandboxMode` context; `npm run deploy` doesn't), and deployed compute without the sandbox flag refuses to mount the stub routes. Choose providers by environment when one app runs everywhere, for example `providers: isSandbox ? [stubIdp({ name: 'corporate' })] : [customOidc({ name: 'corporate', ... })]`. Its authorization codes are signed with a key generated per process, so a code is redeemable only by the process that issued it.
 
 #### The login screen and `onAuthorize`
 
