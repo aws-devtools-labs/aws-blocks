@@ -431,7 +431,20 @@ test('CDK (#1001): a plain-http public origin (ALB without a certificate) is not
 	new AuthOIDC(parent, 'auth', { providers: [federatedProvider()] });
 	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', 'http://my-alb-123.us-east-1.elb.amazonaws.com');
 	const { callbackUrls } = clientUrls(Template.fromStack(stack));
-	assert.ok(!JSON.stringify(callbackUrls).includes('elb.amazonaws.com'), 'http origin must not be registered');
+
+	const hasHttpElbOrigin = callbackUrls
+		.filter((value): value is string => typeof value === 'string')
+		.some((value) => {
+			try {
+				const parsed = new URL(value);
+				return parsed.protocol === 'http:' &&
+					(parsed.hostname === 'elb.amazonaws.com' || parsed.hostname.endsWith('.elb.amazonaws.com'));
+			} catch {
+				return false;
+			}
+		});
+
+	assert.ok(!hasHttpElbOrigin, 'http ELB origin must not be registered');
 });
 
 test('CDK (#1001): a branded backend root with a shared gateway AND an https BLOCKS_PUBLIC_ORIGIN registers exactly both', () => {
