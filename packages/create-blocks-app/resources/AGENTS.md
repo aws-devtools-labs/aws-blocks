@@ -5,7 +5,7 @@
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
+- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
 
@@ -161,7 +161,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
 - **To store data, reach for a storage Building Block** — default to `DistributedTable` for app records you list or query as a collection (todos, notes, orders); use `KVStore` for values you read and write by one key, structured or not (settings, flags, caches, sessions, per-user preferences). Both are constructed with a `Scope` and used inside your API methods; read their `README.md`/`API.md` (see the docs pointer above) for the exact API. The full catalog (auth, files, realtime, email, scheduled/async work, …) is in the docs `README.md`.
-- **The framework model above covers the common path.** Read a block's own docs (`README.md`, then `API.md` / `DESIGN.md` where present) when you need a block's specific API surface — not every block has all three, so a missing file is not an error (see the **AWS Blocks docs** bullet for where the docs folder lives).
+- **The framework model above covers the common path.** For a block's specific API surface, read its `README.md`; open `API.md` only for an exact signature and `DESIGN.md` only when you are stuck (see the **AWS Blocks docs** bullet for where the docs folder lives).
 
 ## Deploying (requires AWS credentials)
 
