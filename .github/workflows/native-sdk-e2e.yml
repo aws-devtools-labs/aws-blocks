@@ -497,8 +497,8 @@ jobs:
           dart run bin/e2e_test.dart
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
-      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning. It runs only once AWS credentials were set up: before that
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
       # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'
@@ -606,8 +606,8 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
-      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning. It runs only once AWS credentials were set up: before that
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
       # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'
@@ -739,8 +739,8 @@ jobs:
         run: ./gradlew ${{ matrix.gradle-task }}
 
       # e2e-cleanup.mjs first stops what earlier steps left running (after a
-      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
-      # as a warning. It runs only once AWS credentials were set up: before that
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
       # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
         if: always() && steps.aws-creds.outcome == 'success'

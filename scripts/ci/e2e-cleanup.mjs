@@ -13,7 +13,8 @@
 //    are currently reading from cdk.out" / "Another CLI is currently synthing".
 //    An orphaned deploy that had not yet submitted its stack operation could
 //    also submit it after the cleanup ran (an operation CloudFormation already
-//    has runs to the end either way; the destroy's retries absorb that).
+//    has runs to the end either way). Most teardowns retry a stack that is
+//    still busy; one that doesn't fails, and is reported as below.
 //    This stops every process carrying this job's RUNNER_TRACKING_ID, the id
 //    the runner itself uses to terminate orphans at job end, except this
 //    process, its ancestors, and everything the cleanup step itself started.
