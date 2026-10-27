@@ -255,7 +255,8 @@ Standalone hosting apps get two bundled CLIs:
 npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
 cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
 npx hosting-secret list --prefix /myapp/secrets
-npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets               # recoverable
+npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # immediate, no recovery
 
 # SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
 npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
@@ -271,8 +272,11 @@ prompt still work). `list` prints names only, never values.
 
 `remove` on a **secret** is recoverable by default — the value enters Secrets
 Manager's recovery window and can be restored (guards against a typo'd prod key).
-Pass `--force` to delete immediately with no recovery. (`config` removes are always
-immediate — SSM Parameter Store has no recovery window.)
+Pass `--force` to delete immediately with no recovery. `--force` always needs
+`--yes` (or `-y`) to confirm, in every stage, and prints a warning naming the stage
+(or saying the un-staged value is shared by every stage, production included)
+before it deletes. (`config` removes are always immediate — SSM Parameter Store has
+no recovery window — so `--force` changes nothing there and needs no `--yes`.)
 
 > **Footguns to know.**
 > 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys

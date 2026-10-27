@@ -6,16 +6,15 @@ import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
-import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, isSandboxContext } from '@aws-blocks/core/cdk';
+import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
 import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { BB_NAME } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
@@ -259,7 +258,15 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const existing = (stack as any)[GSI_PROVIDER_KEY] as SharedGsiProvider | undefined;
 	if (existing) return existing;
 
-	const __dirname = dirname(fileURLToPath(import.meta.url));
+	// `dist/gsi-manager-lambda/` (build:lambda) when installed; a vendorized copy
+	// (src/ only) bundles src/gsi-manager-lambda.ts at synth instead.
+	const gsiManagerCode = () =>
+		deployTimeLambdaCode({
+			moduleUrl: import.meta.url,
+			bundleDir: './gsi-manager-lambda',
+			source: './gsi-manager-lambda',
+			target: 'node24', // = build:lambda
+		});
 
 	const tableArns: string[] = [];
 	const sandboxTableArns: string[] = [];
@@ -270,7 +277,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const gsiManagerLambda = new LambdaFunction(stack, 'BlocksGsiManager', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+		code: gsiManagerCode(),
 		timeout: Duration.minutes(15),
 		logGroup: new LogGroup(stack, 'BlocksGsiManagerLogs', {
 			retention: logRetention,
@@ -281,7 +288,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const gsiIsCompleteLambda = new LambdaFunction(stack, 'BlocksGsiIsComplete', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.isCompleteHandler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+		code: gsiManagerCode(),
 		timeout: Duration.minutes(1),
 		logGroup: new LogGroup(stack, 'BlocksGsiIsCompleteLogs', {
 			retention: logRetention,

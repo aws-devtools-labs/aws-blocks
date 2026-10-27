@@ -89,7 +89,7 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 | WebSocket API | API Gateway WebSocketApi | Client WebSocket endpoint |
 | WebSocket Stage | WebSocketStage (`rt`, auto-deploy) | Deployment stage |
 
-All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. No separate Lambdas are created.
+All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design). No separate Lambdas are created.
 
 #### Stage defaults (throttling + access logging)
 
