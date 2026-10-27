@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getConfig, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -19,10 +19,23 @@ import { BedrockModels } from './models.js';
  * AgentCore requires a `runtimeSessionId` of at least 33 characters. Conversation/channel ids
  * are UUIDs (36 chars) in the normal path and pass through unchanged; anything shorter is hashed
  * to a stable 64-char hex id — stable per input, so a conversation keeps routing to one warm
- * microVM across turns/resumes.
+ * microVM across turns/resumes. Only conversation ids are passed to it: a turn without a
+ * conversation gets a fresh session instead (see {@link runtimeSessionIdFor}).
  */
 function toRuntimeSessionId(base: string): string {
 	return base.length >= 33 ? base : createHash('sha256').update(base).digest('hex');
+}
+
+/**
+ * The AgentCore session for a turn. A conversation routes to its own session (its id). A turn
+ * without a conversation has no state to keep, so it gets a fresh session of its own
+ * (`turn-<uuid>`, 41 characters, never a UUID) instead of the bare channelId: the channelId is
+ * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
+ * in that user's session.
+ */
+function runtimeSessionIdFor(payload: { conversationId?: string }): string {
+	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
+	return `turn-${randomUUID()}`;
 }
 
 /**
@@ -74,7 +87,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	 * and responds immediately, so this `InvokeAgentRuntime` call does NOT hold the connection for
 	 * the turn's duration — the loop keeps running server-side for up to the 8h session lifetime.
 	 * `runtimeSessionId` is keyed by conversationId so a conversation's turns/resumes reuse one
-	 * warm microVM.
+	 * warm microVM; a turn without a conversation gets its own session (see runtimeSessionIdFor).
 	 *
 	 * @internal Internal compute seam; not customer API.
 	 */
@@ -104,7 +117,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 		await this._agentCore.send(
 			new InvokeAgentRuntimeCommand({
 				agentRuntimeArn: runtimeArn,
-				runtimeSessionId: toRuntimeSessionId(payload.conversationId ?? payload.channelId),
+				runtimeSessionId: runtimeSessionIdFor(payload),
 				contentType: 'application/json',
 				accept: 'application/json',
 				payload: new TextEncoder().encode(JSON.stringify(body)),

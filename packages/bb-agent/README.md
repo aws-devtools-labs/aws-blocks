@@ -22,7 +22,7 @@ const agent = new Agent(scope, 'support-agent', {
 
 // Create a conversation and stream a response
 const conversationId = await agent.createConversationId('user-123');
-const channel = await agent.getChannel(conversationId);
+const channel = await agent.getChannel(conversationId, { userId: 'user-123' });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 const result = await agent.stream('Until when are you open tomorrow?', { conversationId, userId: 'user-123' });
@@ -42,11 +42,11 @@ const agent = new Agent(scope, id, config)
 | `stream(message, options?)` | `Promise<AgentStreamResult>` | Submit a message. Returns immediately with `{ channelId, channel, complete }`. |
 | `resume(channelId, responses, options?)` | `Promise<void>` | Resume an interrupted agent with user responses. Chunks publish to the same channel. |
 | `createConversationId(userId)` | `Promise<string>` | Generate a new conversation ID (UUID). |
-| `getConversation(id, options?)` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. See [Reading conversation history](#reading-conversation-history). |
+| `getConversation(id, { userId, limit? })` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. Empty unless `userId` owns the conversation. See [Reading conversation history](#reading-conversation-history). |
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
-| `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
-| `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
+| `getPendingInterrupts(conversationId, { userId })` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
+| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents ignore the `userId` (their channels are not user-scoped), but pass the session's `userId` anyway, not a placeholder. |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -54,38 +54,41 @@ const agent = new Agent(scope, id, config)
 
 ```typescript
 // Correct: subscribe first, await established, then send
-const channel = await agent.getChannel(conversationId);
+const channel = await agent.getChannel(conversationId, { userId });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 await agent.stream(message, { conversationId, userId });
 
 // Wrong: send first, subscribe after — early chunks lost
 await agent.stream(message, { conversationId, userId });
-const channel = await agent.getChannel(conversationId); // too late!
+const channel = await agent.getChannel(conversationId, { userId }); // too late!
 ```
 
 The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
 
-### Authorization (caller responsibility)
+### Authorization
 
-The Agent BB scopes data by `conversationId`, which is an unguessable UUID, but it does **not** authorize the caller against a conversation on read paths. `getConversation(id)` and `getPendingInterrupts(conversationId)` take only an id, so any caller that supplies a valid conversation ID gets the messages back.
+Every method that takes a `userId` treats it as the caller's identity and checks it against the conversation's owner (the `userId` passed to `createConversationId`):
 
-Your API handler owns authorization: derive `userId` from the authenticated session and verify the conversation belongs to that user before reading it. `listConversations(userId)` returns only the conversations a user owns, so it's the safe way to resolve which conversation IDs a caller may access:
+- `stream()` and `resume()` throw `AgentErrors.ConversationNotFound` when `options.conversationId` doesn't belong to `options.userId`. A non-owner can't add turns to someone else's conversation or approve their pending tool calls.
+- `getConversation(id, { userId })` and `getPendingInterrupts(conversationId, { userId })` return `[]` for a conversation the user doesn't own.
+- `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
+- `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
+- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call written for the older signatures, such as `getConversation(id)` or `getConversation(id, { limit })`, fails loudly instead of returning data.
+- A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
+
+**`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
+
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getMessages(conversationId: string) {
-    const user = await auth.getCurrentUser(context);
-    const owned = await agent.listConversations(user.userId);
-    if (!owned.some(c => c.conversationId === conversationId)) {
-      throw new Error('Not found');
-    }
-    return agent.getConversation(conversationId);
+    const user = await auth.requireAuth(context);
+    return agent.getConversation(conversationId, { userId: user.userId });
   },
 }));
 ```
-
-`deleteConversation(id, userId)` is owner-scoped internally — it verifies the conversation belongs to `userId` before deleting anything, so a non-owner call is a no-op.
 
 ### AgentStreamResult
 
@@ -152,13 +155,13 @@ user → interrupt → approval → tool-call → tool-result → assistant
 
 #### Reading conversation history
 
-`getConversation(id)` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
+`getConversation(id, { userId })` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
 
 - With no `limit`, you get every message in chronological order.
 - With `{ limit: N }`, you get the **most recent N** messages, still ordered oldest-first (not the first N). `limit: 0` (or any negative value) returns an empty array.
 
 ```typescript
-const recent = await agent.getConversation(id, { limit: 10 }); // last 10, oldest-first
+const recent = await agent.getConversation(id, { userId, limit: 10 }); // last 10, oldest-first
 const first = recent[0];           // oldest of the 10
 const last  = recent.at(-1);       // newest message
 ```
@@ -391,7 +394,7 @@ import { isBlocksError } from '@aws-blocks/core';
 import { AgentErrors } from '@aws-blocks/bb-agent';
 
 try {
-  await agent.getConversation(id);
+  await agent.getConversation(id, { userId });
 } catch (e: unknown) {
   if (isBlocksError(e, AgentErrors.PersistenceRequired)) {
     // agent is in inferenceOnly mode
@@ -407,6 +410,8 @@ try {
 | `AgentErrors.StreamFailed` | Agent encountered an error during execution. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
+| `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
+| `AgentErrors.InvalidUsage` | With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key. |
 
 ### Streaming Mode
 
@@ -530,7 +535,7 @@ const agent = new Agent(scope, 'support', {
   }),
 });
 
-const user = await auth.getCurrentUser(requestContext);
+const user = await auth.requireAuth(requestContext);
 await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
 ```
 
@@ -899,7 +904,7 @@ You get all of this with **no app code** when you use `realtimeTransport` — it
 
 ### React: hold the instance once, drive `useState` from the callbacks
 
-`createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal; thread a `userId` through `createConversation` / the transport's `sendMessage` the same way when your API needs it (or resolve the user server-side).
+`createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal and sends no `userId`: resolve the user from the session in your backend handlers (see [Authorization](#authorization)).
 
 ```tsx
 'use client'; // Next.js only — createChat opens a browser WebSocket, so it must run in a Client Component. Plain React (Vite/CRA) can omit this.
@@ -1015,7 +1020,7 @@ import { useChat } from '@aws-blocks/bb-agent/client';
 const chat = useChat({
   api: {
     sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
-    createConversation: () => api.createConversation(userId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
     resume: (chId, responses, convId) => api.resume(chId, responses, convId),
   },
@@ -1048,6 +1053,8 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import type { InterruptResponse } from '@aws-blocks/bb-agent';
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
 
 const scope = new Scope('my-app');
 
@@ -1056,20 +1063,35 @@ const agent = new Agent(scope, 'chat', {
   systemPrompt: 'You are a helpful assistant.',
 });
 
+// Any auth block works (AuthBasic, AuthCognito, AuthOIDC); the userId comes from
+// the session, never from a request parameter. See "Authorization" above.
+const auth = new AuthBasic(scope, 'auth');
+
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async createConversation(userId: string) {
-    return { conversationId: await agent.createConversationId(userId) };
+  async createConversation() {
+    const user = await auth.requireAuth(context);
+    return { conversationId: await agent.createConversationId(user.userId) };
   },
-  async sendMessage(conversationId: string, message: string, channelId: string, userId: string) {
-    const result = await agent.stream(message, { conversationId, channelId, userId });
+  async sendMessage(conversationId: string, message: string, channelId: string) {
+    const user = await auth.requireAuth(context);
+    const result = await agent.stream(message, { conversationId, channelId, userId: user.userId });
     return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
-    const messages = await agent.getConversation(conversationId);
-    return { messages };
+    const user = await auth.requireAuth(context);
+    return { messages: await agent.getConversation(conversationId, { userId: user.userId }) };
+  },
+  async getPendingInterrupts(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userId }) };
+  },
+  async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
+    const user = await auth.requireAuth(context);
+    await agent.resume(channelId, responses, { conversationId, userId: user.userId });
   },
   async getChannel(channelId: string) {
-    return agent.getChannel(channelId);
+    const user = await auth.requireAuth(context);
+    return agent.getChannel(channelId, { userId: user.userId });
   },
 }));
 ```
@@ -1079,13 +1101,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 ```typescript
 import { useChat } from '@aws-blocks/bb-agent/client';
 
-const userId = getCurrentUserId();
-
 const chat = useChat({
   api: {
-    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId, userId),
-    createConversation: () => api.createConversation(userId),
+    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
+    resume: (chId, responses, convId) => api.resume(chId, responses, convId),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id),
   },
   // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
   // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
@@ -1096,6 +1118,7 @@ const chat = useChat({
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
+  onInterrupt: (interrupts) => showApprovalUI(interrupts),
 });
 
 // Send a message — useChat handles subscribe-before-send automatically
@@ -1109,7 +1132,7 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 
 ### 2. React: hold the instance once, drive `useState` from the callbacks
 
-`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal — it omits the `userId` that the End-to-End example (#1) threads through `createConversation` / `sendMessage`; thread it the same way here when your API needs it (or resolve the user server-side).
+`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. The `api` wiring matches the End-to-End example (#1): the backend resolves the user from the session, so the client never sends a `userId`.
 
 ```tsx
 'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
@@ -1224,7 +1247,7 @@ const agent = new Agent(scope, 'support', {
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async chat(message: string, conversationId: string) {
-    const user = await auth.getCurrentUser(context);
+    const user = await auth.requireAuth(context);
     return await agent.stream(message, {
       conversationId,
       userId: user.userId,

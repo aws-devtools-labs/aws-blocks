@@ -92,6 +92,7 @@ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
 import { DeleteOptions as DTDeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { ExternalKmsKeyRef as DTExternalKmsKeyRef } from '@aws-blocks/bb-distributed-table';
+import { GetOptions as DTGetOptions } from '@aws-blocks/bb-distributed-table';
 import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';
 import { QueryOptions as DTQueryOptions } from '@aws-blocks/bb-distributed-table';
 import { ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
@@ -377,6 +378,8 @@ export { DistributedTableOptions }
 export { DTDeleteOptions }
 
 export { DTExternalKmsKeyRef }
+
+export { DTGetOptions }
 
 export { DTPutOptions }
 

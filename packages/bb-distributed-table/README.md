@@ -18,7 +18,7 @@ const table = new DistributedTable(scope, id, options)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a single item by primary key. |
+| `get(key, options?)` | `Promise<T \| null>` | Retrieve a single item by primary key. Pass `{ consistentRead: true }` for a strongly consistent read. |
 | `put(item, options?)` | `Promise<void>` | Store an item. Overwrites unless conditions are set. |
 | `delete(key, options?)` | `Promise<void>` | Remove an item by primary key. |
 | `query(options)` | `AsyncIterable<T>` | Query items by index or primary key. |
@@ -69,6 +69,13 @@ const settings = new DistributedTable(scope, 'settings', {
 
 // Key object requires only the partition key
 await settings.get({ settingId: 'theme' });
+```
+
+**Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. On AWS every other read (`getBatch()`, `query()`, `scan()`) stays eventually consistent.
+
+```typescript
+// Sees a put() that has just completed, on AWS as well as locally
+const fresh = await orders.get({ userId: 'alice', orderId: '001' }, { consistentRead: true });
 ```
 
 ### Query

@@ -376,10 +376,21 @@ export interface ToolCallRecord {
 }
 
 export interface StreamOptions<TContext = DefaultToolContext> {
+	/**
+	 * Conversation to continue. Must have been created by `createConversationId(userId)` for the
+	 * same `userId`, or `stream()` throws ConversationNotFound (not checked for `inferenceOnly` agents).
+	 */
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
+	/**
+	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
+	 * With persistence the chunks are published on this channel scoped to `userId`; subscribe with
+	 * `getChannel(channelId, { userId })`.
+	 */
 	channelId?: string;
-	/** User ID for conversation scoping. Defaults to 'anonymous'. */
+	/**
+	 * User ID for conversation scoping. Required when persistence is enabled (take it from the
+	 * authenticated session); defaults to 'anonymous' only for `inferenceOnly` agents.
+	 */
 	userId?: string;
 	/**
 	 * Per-call context forwarded to every tool invocation as `context`. Use it to pass
@@ -399,7 +410,10 @@ export interface StreamOptions<TContext = DefaultToolContext> {
  * and the `complete()` helper is dropped (functions don't serialize).
  */
 export interface AgentStreamResult {
-	/** Realtime channel ID where chunks are published. */
+	/**
+	 * Realtime channel ID where chunks are published (the one you passed, or the default). With
+	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, { userId })`.
+	 */
 	channelId: string;
 	/**
 	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.

@@ -33,7 +33,7 @@ export interface AgentTurnPayload<TContext = DefaultToolContext> {
 	message: string;
 	/** Conversation to persist to / restore the session from (undefined for inferenceOnly). */
 	conversationId?: string;
-	/** Realtime channel the client subscribes to for this turn's chunks. */
+	/** Channel id the caller chose (or the default). Chunks are published on `chunksChannel(channelId, userId)`. */
 	channelId: string;
 	/** Conversation owner. */
 	userId: string;
@@ -282,13 +282,19 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * entrypoint (agentcore-entry.ts) calls it as a background async task on AWS, and locally
 	 * {@link dispatchTurn} calls it in-process. Errors are caught and published as an `error`
 	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
+	 * Two cases publish no chunk and are only logged (and persisted): a turn whose channel can't
+	 * be scoped to its user (stream()/resume() reject that before dispatching; the bare
+	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
+	 * itself fails to publish (e.g. a channel path over Realtime's size limit).
 	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
 	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+		let channel: string | undefined;
 		try {
-			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
+			channel = this.chunksChannel(payload.channelId, payload.userId);
+			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
@@ -304,7 +310,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				this.log.error('Failed to persist error to history', { error: persistErr });
 			}
 			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
-			await this.rt.publish('chunks', payload.channelId, { type: 'error', error: errorMessage });
+			// Without a scoped channel there is no channel of the caller's to report on: never fall back to
+			// the bare, caller-chosen channelId (it may be another user's scoped channel). The publish itself
+			// can fail (e.g. a channel path over Realtime's size limit); the turn runs fire-and-forget, so
+			// log it rather than let it become an unhandled rejection.
+			if (channel === undefined) return;
+			try {
+				await this.rt.publish('chunks', channel, { type: 'error', error: errorMessage });
+			} catch (publishErr) {
+				this.log.error('Failed to publish error chunk', { error: publishErr instanceof Error ? publishErr.message : String(publishErr) });
+			}
 		}
 	}
 
@@ -340,7 +355,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *
 	 * @param message - the user message that starts the turn (ignored on the resume path)
 	 * @param conversationId - conversation to load/persist history for; undefined means no persistence
-	 * @param channelId - Realtime channel the stream chunks are published to
+	 * @param channelId - Realtime channel the stream chunks are published to (already user-scoped by invokeTurn)
 	 * @param userId - owner of the conversation, stored on every persisted message
 	 * @param interruptResponses - approval responses when resuming a turn paused on a HITL interrupt
 	 * @param context - per-call tool context, threaded to tool handlers via Strands invocationState
@@ -670,21 +685,33 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * when the AgentCore Runtime can't be invoked (unresolved runtime ARN, or an `InvokeAgentRuntime`
 	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
 	 * `stream()` so a dispatch failure isn't lost.
+	 *
+	 * @throws ConversationNotFound when `options.conversationId` was not created by
+	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
+	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
+	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
 		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
+		const rtChannel = this.chunksChannel(channelId, userId);
+		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
+		const channel = this.rt.getChannel('chunks', rtChannel);
+		// Most callers never await `channel`; don't let a rejection go unhandled.
+		channel.catch(() => {});
 		return {
 			channelId,
 			/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
-			channel: this.rt.getChannel('chunks', channelId),
+			channel,
 			/** Wait for the complete response (server-side). Resolves on done, rejects on error. */
 			complete: () => new Promise<AgentStreamChunk>((resolve, reject) => {
-				const unsub = this.rt.subscribe('chunks', channelId, (data) => {
+				const unsub = this.rt.subscribe('chunks', rtChannel, (data) => {
 					const chunk = data as AgentStreamChunk;
 					if (chunk.type === 'done') {
 						unsub();
@@ -710,6 +737,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Like `stream()`, errors surface on two paths: loop failures arrive as an `error` chunk on the
 	 * channel once the turn is dispatched, while a failure to *dispatch* (e.g. on AWS when the AgentCore
 	 * Runtime can't be invoked) rejects this `resume()` call itself. Always `await` it.
+	 *
+	 * @throws ConversationNotFound when `options.conversationId` does not belong to `options.userId`,
+	 *   before any approval is persisted or the turn is dispatched. Not checked for `inferenceOnly` agents.
+	 * @throws InterruptRequired when `responses` is empty or `options.conversationId` is missing.
+	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
@@ -731,6 +765,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		}
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
+		// Every validation and ownership check runs before any approval is persisted, so a
+		// resume rejected by one of them leaves no approval behind. (A failure to dispatch,
+		// after the approvals are written, still rejects this call with them in place.) Scope
+		// the channel (it throws, rather than failing in the background turn, for a userId that
+		// can't be scoped; see chunksChannel) and validate the tool context first: both are
+		// local checks.
+		this.chunksChannel(channelId, userId);
+		const context = this.resolveContext(options?.context);
+		// A non-owner must not be able to approve (or `trust`) someone else's pending tool call.
+		await this.assertOwnsConversation(conversationId, userId);
 		// Persist each decision to conversation history
 		if (conversationId && this.messages) {
 			for (const r of responses) {
@@ -743,8 +787,69 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			interruptId: r.interruptId,
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
-		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
+	}
+
+	/**
+	 * The Realtime channel a turn's chunks are published on. With persistence it is
+	 * scoped to the user: the default channelId is the conversation id, and a caller
+	 * may pick any channelId, so an unscoped channel would let a non-owner who knows a
+	 * conversation id publish onto, or subscribe to, the owner's live channel.
+	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
+	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
+	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
+	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId.
+	 */
+	private chunksChannel(channelId: string, userId: string): string {
+		if (!this.conversations) return channelId;
+		let user: string;
+		try {
+			user = encodeURIComponent(userId);
+		} catch {
+			throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+		}
+		return `u/${user}/${channelId}`;
+	}
+
+	/**
+	 * Whether `userId` owns `conversationId`. The messages table is partitioned by
+	 * conversationId and snapshot storage is keyed by sessionId alone, so neither is
+	 * user-scoped on its own. The conversation record IS keyed by { userId, conversationId }
+	 * (written by createConversationId), so its presence is the ownership proof.
+	 */
+	private async ownsConversation(conversationId: string, userId: string): Promise<boolean> {
+		if (!this.conversations) return false;
+		// Strongly consistent: the documented flow is createConversationId() followed
+		// straight away by stream(), and an eventually consistent GetItem on AWS can
+		// miss the record that was just written and reject the user's first message.
+		return !!(await this.conversations.get({ userId, conversationId }, { consistentRead: true }));
+	}
+
+	/**
+	 * Returns `options.userId`, or throws InvalidUsage when `options` is not an object with a
+	 * non-empty string `userId`. A caller on an older signature (no second argument, `{ limit }`
+	 * only, or the userId as a bare string) fails loudly instead of getting an empty result on
+	 * the mock and an opaque marshalling error on AWS, and can never read another user's data.
+	 */
+	private requireUserId(options: unknown, method: string, signature: string): string {
+		const userId = typeof options === 'object' && options !== null ? (options as { userId?: unknown }).userId : undefined;
+		if (typeof userId !== 'string' || !userId) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires the caller's userId in an options object: ${signature}. Take it from the authenticated session.`);
+		}
+		return userId;
+	}
+
+	/**
+	 * Throws ConversationNotFound unless `userId` owns `conversationId`. A no-op for
+	 * inferenceOnly agents, which keep no conversation records to check against.
+	 * "Not found" covers both a missing and a foreign conversation so the error
+	 * doesn't confirm that another user's conversation exists.
+	 */
+	private async assertOwnsConversation(conversationId: string, userId: string): Promise<void> {
+		if (!this.conversations) return;
+		if (!(await this.ownsConversation(conversationId, userId))) {
+			throw blocksAgentError(AgentErrors.ConversationNotFound, `Conversation '${conversationId}' was not found for this user. Create it with createConversationId(userId) and pass the same userId to stream()/resume().`);
+		}
 	}
 
 	/**
@@ -770,22 +875,38 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		return conversationId;
 	}
 
-	/** Get a Realtime channel for streaming chunks. Use this to subscribe before calling stream(). */
-	getChannel(channelId: string) {
-		return this.rt.getChannel('chunks', channelId);
+	/** Get a Realtime channel for streaming chunks. Use this to subscribe before calling stream().
+	 *
+	 * Owner-scoped when persistence is enabled: pass the same `userId` you pass to
+	 * stream()/resume(), taken from the authenticated session. The channel only
+	 * carries that user's turns, so a caller who knows another user's conversation
+	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
+	 * agent has no owner to scope by, so its channels are not user-scoped and the
+	 * `userId` is not used.
+	 *
+	 * @param options.userId - The caller's user id (the same one passed to stream()/resume()).
+	 */
+	async getChannel(channelId: string, options: { userId: string }) {
+		if (!this.conversations) return this.rt.getChannel('chunks', channelId);
+		const userId = this.requireUserId(options, 'getChannel', 'getChannel(channelId, { userId })');
+		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
 	}
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
 	 *
-	 * ⚠️ Does NOT verify ownership — it reads by conversationId alone. The caller must
-	 * authorize the request (e.g. confirm the conversation belongs to the authenticated
-	 * user via listConversations(userId)) before exposing the result. See the
-	 * "Authorization (caller responsibility)" section in the README.
+	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
+	 * non-owner can't read another user's pending tool calls (or their interrupt IDs).
+	 * Throws InvalidUsage when `options.userId` is missing (with persistence enabled).
+	 *
+	 * @param options.userId - The caller's user id; the conversation must have been created by
+	 *   createConversationId(userId).
 	 *
 	 * TODO: optimize — query in reverse with limit instead of loading all messages.
 	 */
-	async getPendingInterrupts(conversationId: string): Promise<Array<{ id: string; name: string; reason?: any }>> {
+	async getPendingInterrupts(conversationId: string, options: { userId: string }): Promise<Array<{ id: string; name: string; reason?: any }>> {
 		if (!this.messages) return [];
+		const userId = this.requireUserId(options, 'getPendingInterrupts', 'getPendingInterrupts(conversationId, { userId })');
+		if (!(await this.ownsConversation(conversationId, userId))) return [];
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
 		let lastInterrupt: any = null;
@@ -817,18 +938,22 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Get messages in a conversation (for frontend display).
 	 * Returns the most recent messages when `limit` is specified.
 	 *
-	 * ⚠️ Does NOT verify ownership — it reads by conversationId alone. The caller must
-	 * authorize the request (e.g. confirm the conversation belongs to the authenticated
-	 * user via listConversations(userId)) before returning messages. See the
-	 * "Authorization (caller responsibility)" section in the README.
+	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
+	 * caller who knows another user's conversation id can't read its history. Pass the
+	 * `userId` from the authenticated session (see the "Authorization" section in the
+	 * README). Throws InvalidUsage when `options.userId` is missing.
 	 *
+	 * @param options.userId - The caller's user id; the conversation must have been created by
+	 *   createConversationId(userId).
 	 * @param options.limit - Maximum number of (most recent) messages to return.
 	 *   A `limit` of `0` returns an empty array, and any negative value is treated
 	 *   the same as `0` (returns no messages). Omit `limit` to return all messages.
 	 * TODO: support pagination
 	 */
-	async getConversation(id: string, options?: { limit?: number }): Promise<Message[]> {
+	async getConversation(id: string, options: { userId: string; limit?: number }): Promise<Message[]> {
 		if (!this.messages) throw blocksAgentError(AgentErrors.PersistenceRequired, 'getConversation() requires persistence. Set inferenceOnly: false (default).');
+		const userId = this.requireUserId(options, 'getConversation', 'getConversation(id, { userId, limit? })');
+		if (!(await this.ownsConversation(id, userId))) return [];
 		// A limit of 0 means "zero messages", and a negative limit is nonsensical
 		// for a message count. The previous `options?.limit && ...` guard treated 0
 		// (and never reached the negative case usefully) as falsy, so the cap was
@@ -855,16 +980,11 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Delete a conversation and its agent state. */
 	async deleteConversation(id: string, userId: string): Promise<void> {
 		if (!this.messages || !this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'deleteConversation() requires persistence. Set inferenceOnly: false (default).');
-		// Verify ownership before any destructive work. The messages table is
-		// partitioned by conversationId (not userId) and snapshot storage is keyed
-		// by sessionId alone, so deleting them is NOT user-scoped on its own. The
-		// conversation record IS keyed by { userId, conversationId }, so its absence
-		// means the caller is not the owner (or the conversation doesn't exist).
-		// Without this guard, a non-owner could wipe another user's message history
-		// and session state while the owner's conversation record (a no-op keyed
-		// delete) survived. Bail out unless the caller owns the conversation.
-		const owned = await this.conversations.get({ userId, conversationId: id });
-		if (!owned) return;
+		// Verify ownership before any destructive work: deleting messages and session
+		// state is NOT user-scoped on its own (see ownsConversation). Without this guard,
+		// a non-owner could wipe another user's message history and session state while
+		// the owner's conversation record (a no-op keyed delete) survived.
+		if (!(await this.ownsConversation(id, userId))) return;
 		// Delete conversation record first — if it fails mid-way, orphaned messages are invisible (better than broken conversation with missing messages)
 		await this.conversations.delete({ userId, conversationId: id });
 		// Delete all messages in batch
