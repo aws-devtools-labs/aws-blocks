@@ -129,9 +129,16 @@ try {
 ## Local Development
 
 In local dev mode (`npm run dev`), emails are:
-- Logged to the console with format: `[Email:{id}] → recipient | Subject: ... | Body: ...`
+- Logged to the console as a block (body and HTML truncated):
+  ```
+  [Email:{id}]
+    Recipient: a@example.com, b@example.com
+    Subject:   ...
+    Body:      ...
+    HTML:      ...   (only when html is set)
+  ```
 - Persisted to `.bb-data/{fullId}/emails.json` for inspection
-- Batch sends emit a rate-limit warning (simulating SES sandbox behavior)
+- Validated with the same checks as the deployed client, so an address or message rejected locally is rejected the same way when deployed
 
 ## Package Export Conditions
 
