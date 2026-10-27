@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, getDeploymentType, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -188,7 +188,7 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 });
 
 // AuthOIDC - OIDC sign-in gate
-// Uses the stub IdP in mock runtime — no real IdP needed for local tests.
+// Uses the stub IdP in local and sandbox — no real IdP needed for tests.
 //
 // ── Sign-in records (e2e read-back) ─────────────────────────────────────────
 //
@@ -221,10 +221,24 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
   return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
-const oidcProviders = [
-  stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
-] as const;
+// The stub IdP is sandbox-only: AuthOIDC rejects stub providers at synth for
+// production deployments and never mounts their routes there. Choose providers
+// by deployment type so the production e2e still deploys every AuthOIDC
+// instance. `getDeploymentType()` is set from the CDK context at synth and
+// delivered to compute via the BB config, so synth and runtime agree. The
+// production branch uses a placeholder real provider (AuthOIDC needs at least
+// one); the e2e only asserts its route surface, never a real Google sign-in.
+const stubsAllowed = getDeploymentType() !== 'production';
+
+/** Placeholder real provider for production deployments (never signed in to). */
+const placeholderGoogle = () => google({ clientId: 'e2e-placeholder', clientSecret: 'e2e-placeholder' });
+
+const oidcProviders = stubsAllowed
+  ? [
+      stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
+      stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
+    ] as const
+  : [placeholderGoogle()] as const;
 
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
@@ -237,9 +251,9 @@ const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
-  providers: [
-    stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/extras/callback',
   signOutPath: '/aws-blocks/auth/extras/signout',
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
@@ -263,9 +277,9 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
-  providers: [
-    stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/relay/callback',
   signOutPath: '/aws-blocks/auth/relay/signout',
   allowBearerAuth: true,

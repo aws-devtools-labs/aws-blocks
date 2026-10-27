@@ -1,5 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
+import type { Construct, IConstruct } from 'constructs';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { isDisableValue } from '../telemetry/consent.js';
 import { CORE_VERSION } from '../version.js';
@@ -17,6 +17,25 @@ const CDK_DISABLE_VERSION_REPORTING_CONTEXT_KEY = 'aws:cdk:disable-version-repor
 interface BuildingBlockCensus {
 	readonly officialNames: Set<string>;
 	customCount: number;
+}
+
+/**
+ * Whether `scope` is being synthesized for a sandbox (dev-loop) deployment.
+ *
+ * Reads the CDK context key `sandboxMode`, which the sandbox scripts pass as
+ * `-c sandboxMode=true`; both the string `'true'` and boolean `true` count.
+ * Anything else (absent, `'false'`, ...) means a production deployment.
+ *
+ * This is the single source of truth for the synth-time deployment type: it
+ * drives the `blocks:deployment-type` tag and the `BLOCKS_DEPLOYMENT_TYPE`
+ * value propagated to deployed compute (read back at runtime via
+ * `getDeploymentType()`).
+ *
+ * @param scope - Any construct in the app; context is inherited from the app.
+ */
+export function isSandboxContext(scope: IConstruct): boolean {
+	const value = scope.node.tryGetContext('sandboxMode');
+	return value === 'true' || value === true;
 }
 
 /**
@@ -51,9 +70,7 @@ interface BuildingBlockCensus {
  *   then written to its root stack.
  */
 export function addBlocksStackMetadata(stack: cdk.Stack): void {
-	const isSandbox =
-		stack.node.tryGetContext('sandboxMode') === 'true' || stack.node.tryGetContext('sandboxMode') === true;
-	const mode = isSandbox ? 'sandbox' : 'production';
+	const mode = isSandboxContext(stack) ? 'sandbox' : 'production';
 	cdk.Tags.of(stack).add('blocks:deployment-type', mode);
 
 	const rootStack = getRootStack(stack);

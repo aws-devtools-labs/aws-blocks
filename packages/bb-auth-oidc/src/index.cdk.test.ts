@@ -24,7 +24,7 @@ import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { buildingBlockParent, Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
-import { AuthOIDC, cognitoFederated, google } from './index.cdk.js';
+import { AuthOIDC, cognitoFederated, google, stubIdp } from './index.cdk.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar } from './utils.js';
 import type { AppSettingLike } from './providers.js';
 
@@ -47,8 +47,8 @@ afterEach(() => {
 	delete (globalThis as any).CURRENT_BLOCKS_STACK;
 });
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
-	const app = new cdk.App();
+function setup(context?: Record<string, unknown>): { stack: StubBlocksStack; parent: Scope } {
+	const app = new cdk.App({ context });
 	const stack = new StubBlocksStack(app, 'TestStack');
 	const parent = new Scope('app');
 	return { stack, parent };
@@ -290,4 +290,54 @@ test('CDK: signInRoutePath() works during synth and follows callbackPath', () =>
 		callbackPath: '/aws-blocks/auth/real/callback',
 	});
 	assert.strictEqual(custom.signInRoutePath('my provider'), '/aws-blocks/auth/real/signin/my%20provider');
+});
+
+// `stubIdp()` providers are restricted to sandbox deployments, which the
+// sandbox scripts signal with the `sandboxMode` CDK context key.
+test('CDK: a stubIdp provider without sandboxMode context fails at synth, naming the provider', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }),
+		/AuthOIDC 'auth': stubIdp provider 'dev' is only available in sandbox deployments \(run `npm run sandbox`, i\.e\. CDK context sandboxMode=true\)/,
+	);
+});
+
+test('CDK: multiple stubIdp providers without sandboxMode are all named with plural wording', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AuthOIDC(parent, 'my-auth', { providers: [stubIdp({ name: 'dev' }), stubIdp({ name: 'qa' })] }),
+		/AuthOIDC 'my-auth': stubIdp providers 'dev', 'qa' are only available in sandbox deployments/,
+	);
+});
+
+test('CDK: mixed real + stub providers without sandboxMode name only the stub provider', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AuthOIDC(parent, 'auth', {
+			providers: [google({ clientId: 'cid', clientSecret: 'secret' }), stubIdp({ name: 'dev' })],
+		}),
+		(err: unknown) => {
+			assert.ok(err instanceof Error);
+			assert.match(err.message, /AuthOIDC 'auth': stubIdp provider 'dev' is only available in sandbox/);
+			assert.ok(!err.message.includes("'google'"), `unexpected real provider in message: ${err.message}`);
+			return true;
+		},
+	);
+});
+
+test("CDK: a stubIdp provider is accepted with sandboxMode='true'", () => {
+	const { parent } = setup({ sandboxMode: 'true' });
+	assert.doesNotThrow(() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }));
+});
+
+test('CDK: a stubIdp provider is accepted with sandboxMode=true (boolean)', () => {
+	const { parent } = setup({ sandboxMode: true });
+	assert.doesNotThrow(() => new AuthOIDC(parent, 'auth', { providers: [stubIdp({ name: 'dev' })] }));
+});
+
+test('CDK: real-only providers synth without sandboxMode context', () => {
+	const { parent } = setup();
+	assert.doesNotThrow(() => new AuthOIDC(parent, 'auth', {
+		providers: [google({ clientId: 'cid', clientSecret: 'secret' })],
+	}));
 });

@@ -7,7 +7,7 @@ import type { ScopeParent } from '../common/index.js';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { CORE_VERSION } from '../version.js';
 import { Scope } from './index.js';
-import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 
 before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
@@ -407,5 +407,33 @@ describe('AWSBlocks value carries no customer text', () => {
 		const value = blocksValue(stack);
 		assert.strictEqual(value, `1;core=${CORE_VERSION};mode=production;bb=;custom=1`);
 		assert.ok(!value.includes('Evil'));
+	});
+});
+
+describe('isSandboxContext', () => {
+	test('true when sandboxMode context is string "true"', () => {
+		const app = new cdk.App({ context: { sandboxMode: 'true' } });
+		assert.strictEqual(isSandboxContext(new cdk.Stack(app, 'S')), true);
+	});
+
+	test('true when sandboxMode context is boolean true', () => {
+		const app = new cdk.App({ context: { sandboxMode: true } });
+		assert.strictEqual(isSandboxContext(new cdk.Stack(app, 'S')), true);
+	});
+
+	test('false when sandboxMode context is absent', () => {
+		const app = new cdk.App();
+		assert.strictEqual(isSandboxContext(new cdk.Stack(app, 'S')), false);
+	});
+
+	test('false when sandboxMode context is string "false"', () => {
+		const app = new cdk.App({ context: { sandboxMode: 'false' } });
+		assert.strictEqual(isSandboxContext(new cdk.Stack(app, 'S')), false);
+	});
+
+	test('reads context from a nested construct', () => {
+		const app = new cdk.App({ context: { sandboxMode: 'true' } });
+		const child = new Construct(new cdk.Stack(app, 'S'), 'Child');
+		assert.strictEqual(isSandboxContext(child), true);
 	});
 });
