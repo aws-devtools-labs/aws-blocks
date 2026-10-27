@@ -318,7 +318,13 @@ npm install --save-dev @opennextjs/aws@~4.0.3
   });
   ```
 
-  Without it, synth fails with `EdgeComputeRequiresRegionError`.
+  Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
+  `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
+  for the Lambda@Edge function, so bootstrap `us-east-1` too
+  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
+  has more than one stack is tracked in
+  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
 

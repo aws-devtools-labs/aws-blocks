@@ -1281,18 +1281,23 @@ const warnIfOpenNextOutOfRange = (projectDir: string): void => {
  * The `@opennextjs/aws` version the adapter builds with when the project
  * doesn't declare one. It sits inside {@link VERIFIED_OPENNEXT_RANGE}, so an
  * undeclared OpenNext never resolves to whatever `npx` would fetch as the
- * newest (unverified) release. Of the verified versions it has the widest
- * `next` peer range, so it accepts the most Next.js apps.
+ * newest (unverified) release. It is the newest verified release.
+ *
+ * Bump together with {@link OPENNEXT_FALLBACK_NEXT_PEER_RANGE} and the
+ * `@opennextjs/aws` pin in the `create-blocks-app` `nextjs` template
+ * (`version_pins.test.ts` checks the template pin).
  * @internal
  */
 export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
 
 /**
- * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares. Used to
- * check the app's Next.js version when OpenNext isn't installed (so there's no
- * installed `package.json` to read it from).
+ * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares in its
+ * `package.json`. Used to check the app's Next.js version when OpenNext isn't
+ * installed (so there's no installed `package.json` to read it from). Must be
+ * copied from the fallback version's published `peerDependencies.next`.
+ * @internal
  */
-const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
+export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
 
 /** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
 type InstalledOpenNext = { version: string; nextPeerRange?: string };
@@ -1322,7 +1327,9 @@ const warnIfNextOutsideOpenNextPeerRange = (
 ): void => {
   const nextVersion = detectNextVersion(projectDir);
   if (!nextVersion || !nextPeerRange || !semver.validRange(nextPeerRange)) return;
-  if (semver.satisfies(nextVersion, nextPeerRange)) return;
+  // `includePrerelease`: a `next` canary/rc inside the range (e.g.
+  // `16.3.0-canary.5`) is not a mismatch.
+  if (semver.satisfies(nextVersion, nextPeerRange, { includePrerelease: true })) return;
   process.stderr.write(
     `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextPeerRange}). ` +
       'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
@@ -1895,11 +1902,17 @@ const runNextBuild = (projectDir: string): void => {
  * Execute the OpenNext build command.
  *
  * Runs `npx @opennextjs/aws build` from the project directory. The consumer
- * project must have @opennextjs/aws installed as a devDependency — this avoids
- * bloating the hosting package for SPA/static users who don't need OpenNext.
+ * project should have @opennextjs/aws installed as a devDependency — Hosting
+ * declares it only as an optional peer, which avoids bloating the hosting
+ * package for SPA/static users who don't need OpenNext.
  *
- * If @opennextjs/aws is not installed, npx will fail with a clear error.
- * We catch it and provide an actionable resolution message.
+ * If @opennextjs/aws is not installed, the build warns and runs
+ * `npx --yes @opennextjs/aws@<OPENNEXT_FALLBACK_VERSION> build` instead of
+ * letting npx fetch the newest (unverified) release. A failed build throws
+ * `OpenNextNotFoundError` when OpenNext wasn't installed (resolution: declare
+ * the pinned version) and `OpenNextBuildError` when it was. Before building,
+ * it also warns when the app's `next` version is outside the building
+ * OpenNext's `next` peer range.
  */
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
   // Hosting declares `@opennextjs/aws` as an optional peer, so nothing
@@ -1995,7 +2008,11 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
           resolution:
             "Add @opennextjs/aws to your project's devDependencies (this also avoids downloading it during the build):\n\n" +
             `  npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n\n` +
-            'Then re-run your deployment. If it still fails, check the build output above.',
+            'Then re-run your deployment. If it still fails, check the build output above. Common issues:\n' +
+            '  - Missing Next.js dependencies (run: npm install)\n' +
+            '  - Invalid next.config.js\n' +
+            '  - TypeScript compilation errors in your app\n' +
+            '  - No network access to the npm registry during the build (declaring the dependency avoids the download)',
         },
         error as Error,
       );

@@ -20,6 +20,7 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
   OPENNEXT_FALLBACK_VERSION,
   VERIFIED_OPENNEXT_RANGE,
 } from './nextjs.js';
@@ -2099,6 +2100,10 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
         err.resolution.includes(`@opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}`),
         `resolution should name the pin; got: ${err.resolution}`,
       );
+      assert.ok(
+        err.resolution.includes('Common issues'),
+        `resolution should also cover genuine build failures; got: ${err.resolution}`,
+      );
       return true;
     });
   });
@@ -2125,6 +2130,35 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
           c.includes('>=15.5.18 <16 || >=16.2.6'),
       ),
       `expected a peer-range warning; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('checks next against the fallback peer range when @opennextjs/aws is not installed', () => {
+    writeFixtureWithOpenNextVersion('3.10.0');
+    fs.rmSync(path.join(tmpDir, 'node_modules', '@opennextjs'), {
+      recursive: true,
+      force: true,
+    });
+    writeNextVersion('15.5.7');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      stderrChunks.some(
+        (c) =>
+          c.includes('next@15.5.7') &&
+          c.includes(`@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`) &&
+          c.includes(OPENNEXT_FALLBACK_NEXT_PEER_RANGE),
+      ),
+      `expected a peer-range warning naming the fallback range; stderr was: ${stderrChunks.join('')}`,
+    );
+  });
+
+  void it('does NOT warn for a next prerelease inside the peer range', () => {
+    writeFixtureWithOpenNextVersion('4.0.3', '>=15.5.18 <16 || >=16.2.6');
+    writeNextVersion('16.3.0-canary.5');
+    nextjsAdapter({ projectDir: tmpDir });
+    assert.ok(
+      !stderrChunks.some((c) => c.includes('outside the Next.js range')),
+      `unexpected peer-range warning for a prerelease; stderr was: ${stderrChunks.join('')}`,
     );
   });
 
