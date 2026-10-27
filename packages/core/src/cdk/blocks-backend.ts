@@ -26,7 +26,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
-import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
+import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -346,6 +346,25 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 		);
 	}
 	return owner._sharedGateway;
+}
+
+/**
+ * The shared REST API's base URL (`restApi.url`,
+ * `https://{id}.execute-api.{region}.amazonaws.com/{stage}/` — trailing slash
+ * included) for the backend root that owns `scope`, or `undefined` when that
+ * root has no shared gateway yet (e.g. the backend module is still being
+ * imported, or the root is a bare `cdk.Stack` in a unit test). Read-only.
+ *
+ * Building Blocks are constructed while the backend module is imported, before
+ * `create()` builds the gateway, so they must call this from inside a
+ * `cdk.Lazy` producer, which runs at synth once the gateway exists. The gateway
+ * fronts every compute target the same way, so the URL is compute-agnostic.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getSharedGatewayUrl(scope: Construct): string | undefined {
+	const root = getBlocksRoot(scope) as { _sharedGateway?: SharedGateway };
+	return root._sharedGateway?.restApi.url;
 }
 
 /**

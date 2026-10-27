@@ -202,6 +202,37 @@ export interface CognitoFederatedProvider<N extends string = string> extends Pro
 	readonly idpClientId: { readonly fullId: string; get(): Promise<string> };
 	/** The IdP's OAuth client secret as an AppSetting-like object. */
 	readonly idpClientSecret: { readonly fullId: string; get(): Promise<string> };
+	/**
+	 * Extra callback (redirect) URLs to register on the Cognito app client, in
+	 * addition to the ones `AuthOIDC` derives at synth. Derived automatically:
+	 * the app's public origin (`BLOCKS_PUBLIC_ORIGIN` — the CloudFront / primary
+	 * custom-domain / door URL, when a front door publishes one) plus the
+	 * callback path, the shared API Gateway URL plus the callback path, and — in
+	 * sandbox mode — `http://localhost:3000` plus the callback path.
+	 *
+	 * Add entries here for redirect targets that can't be derived at synth:
+	 *
+	 * - Browser PKCE SPA pages: the browser client (`index.browser.ts`) sets
+	 *   `redirect_uri` to the SPA page URL, which is app-specific.
+	 * - Native relay custom schemes (e.g. `myapp://auth/callback`).
+	 * - Additional custom-domain names: only the PRIMARY custom domain flows into
+	 *   `BLOCKS_PUBLIC_ORIGIN`; register `https://<other-name><callbackPath>` here
+	 *   for every other name the app is served from.
+	 * - A sandbox dev server on a port other than `3000`.
+	 *
+	 * All `cognitoFederated()` providers share one app client, so the entries of
+	 * every provider are merged (and de-duplicated).
+	 */
+	readonly additionalCallbackUrls?: readonly string[];
+	/**
+	 * Extra sign-out (logout) URLs to register on the Cognito app client, in
+	 * addition to the derived ones (the public origin root, the shared API
+	 * Gateway base URL and, in sandbox mode, `http://localhost:3000/`). Use it for
+	 * the same cases as `additionalCallbackUrls` — SPA pages, native relay
+	 * schemes, and custom-domain names other than the primary one. Merged across
+	 * every `cognitoFederated()` provider and de-duplicated.
+	 */
+	readonly additionalLogoutUrls?: readonly string[];
 }
 
 export type ProviderConfig =

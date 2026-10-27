@@ -49,6 +49,7 @@ export {
 	BlocksBackend,
 	type BlocksBackendProps,
 	type CoreBlocksBackendProps,
+	getSharedGatewayUrl,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
@@ -57,7 +58,13 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
+export {
+	finalizeConfigRegistry,
+	getConfigDeployment,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerConfig,
+} from './config-registry.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';

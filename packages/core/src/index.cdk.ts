@@ -51,6 +51,8 @@ export {
 	getConfigDeployment,
 	getConfigLocation,
 	getOrCreateOnRoot,
+	getRegisteredConfigValue,
+	getSharedGatewayUrl,
 	getVpcContext,
 	registerConfig,
 	registerDashboardFinalizer,

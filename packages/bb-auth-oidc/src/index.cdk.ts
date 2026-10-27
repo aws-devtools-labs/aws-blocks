@@ -29,7 +29,14 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import {
+	BuildingBlockScope,
+	DEFAULT_NODE_RUNTIME,
+	getRegisteredConfigValue,
+	getSharedGatewayUrl,
+	registerConfig,
+	synthGuard,
+} from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -228,10 +235,9 @@ export class AuthOIDC<
 			if (idp) idpDependencies.push(idp);
 		}
 
-		// Callback URLs get the real API Gateway URL post-deploy or via a
-		// custom resource; the placeholder below keeps synth valid. The path must
-		// match the BB's callback route (under `/aws-blocks/auth/`).
+		// The callback path must match the BB's callback route (under `/aws-blocks/auth/`).
 		const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
+		const { callbackUrls, logoutUrls } = this.cognitoClientUrls(cognitoProviders, callbackPath);
 		const client = pool.addClient('app-client', {
 			generateSecret: true,
 			oAuth: {
@@ -241,8 +247,8 @@ export class AuthOIDC<
 					cognito.OAuthScope.EMAIL,
 					cognito.OAuthScope.PROFILE,
 				],
-				callbackUrls: [`https://localhost${callbackPath}`],
-				logoutUrls: ['https://localhost/'],
+				callbackUrls,
+				logoutUrls,
 			},
 			supportedIdentityProviders: idpDependencies.length > 0
 				? cognitoProviders.map(p => cognito.UserPoolClientIdentityProvider.custom(p.identityProvider))
@@ -259,6 +265,161 @@ export class AuthOIDC<
 		registerConfig(this, `${envPrefix}_CLIENT_SECRET`, client.userPoolClientSecret.unsafeUnwrap());
 		registerConfig(this, `${envPrefix}_REGION`, stack.region);
 		registerConfig(this, `${envPrefix}_DOMAIN`, domainConfig.cognitoDomain);
+	}
+
+	/**
+	 * The callback and sign-out URLs registered on the Cognito app client. They
+	 * must match the `redirect_uri` the runtime sends (`computeCallbackUrl` in
+	 * `auth-oidc.ts`), or Cognito's `/oauth2/authorize` answers `redirect_mismatch`.
+	 *
+	 * Both lists are `cdk.Lazy` because the URLs they need don't exist yet when
+	 * `AuthOIDC` is constructed: the backend module (where `AuthOIDC` is built) is
+	 * imported before `create()` builds the shared API Gateway, and
+	 * `BLOCKS_PUBLIC_ORIGIN` is registered later still — by `Hosting` (built after
+	 * `create()` resolves) or by the managed `apiFrontDoor: 'cloudfront'` aspect
+	 * (which runs at synth). The producers run at synth, after all of that.
+	 *
+	 * Each list holds, de-duplicated:
+	 *
+	 * - `BLOCKS_PUBLIC_ORIGIN` + path, when a front door publishes an `https://`
+	 *   one — what the runtime sends whenever that origin is set (CloudFront /
+	 *   custom domain / HTTPS ALB / stacked doors, and `apiFrontDoor: 'cloudfront'`).
+	 * - The shared API Gateway URL (`restApi.url`, stage included) + path — what
+	 *   the runtime derives from the request when no public origin is published
+	 *   (bare API Gateway). The gateway fronts every compute target, so this holds
+	 *   whatever compute serves the auth routes.
+	 * - `http://localhost:3000` + path, in sandbox mode only — the local dev
+	 *   server's loopback origin.
+	 * - The caller's `additionalCallbackUrls` / `additionalLogoutUrls`.
+	 *
+	 * Neither list can come out empty in a deployed backend (the gateway URL is
+	 * always present there); if neither the gateway nor anything else is
+	 * available (an isolated unit test with no backend root), the producer falls
+	 * back to the original `https://localhost` placeholder so the client still
+	 * synthesizes.
+	 */
+	private cognitoClientUrls(
+		cognitoProviders: readonly CognitoFederatedProvider[],
+		callbackPath: string,
+	): { callbackUrls: string[]; logoutUrls: string[] } {
+		const sandbox =
+			this.node.tryGetContext('sandboxMode') === 'true' || this.node.tryGetContext('sandboxMode') === true;
+		// Origin roots, resolved at synth. Each ends WITH a trailing slash, so it is
+		// itself the sign-out URL and the callback URL is the root + the path minus
+		// its leading `/` (no double slash). Token-safe: the gateway URL is an
+		// opaque `${Token[...]}` string whose trailing `/` can't be stripped before
+		// deploy, so a suffix is appended rather than trimmed — the same join the
+		// shared gateway uses for `apiUrl`.
+		const originRoots = (): string[] => {
+			const roots: string[] = [];
+			// `https://<domain>` (no trailing slash), as published by Hosting / the front door.
+			// Only an `https://` origin is registered: Cognito accepts plain `http://` only
+			// for `localhost`, so registering a plain-HTTP door (an ALB without a
+			// certificate publishes `http://<alb-dns>`) would fail the app client's deploy.
+			// Skipping it does NOT make sign-in work through the gateway URL instead: the
+			// runtime (`computeCallbackUrl`) sends `BLOCKS_PUBLIC_ORIGIN` as the
+			// `redirect_uri` whenever it is set, so sign-in through such a door fails with
+			// `redirect_mismatch` until the app is served over HTTPS. A synth warning says
+			// so (see `warnOnPlainHttpPublicOrigin`).
+			const publicOrigin = this.classifyPublicOrigin();
+			if (publicOrigin?.kind === 'register') {
+				roots.push(`${publicOrigin.origin}/`);
+			}
+			// `restApi.url` = `https://{id}.execute-api.{region}.amazonaws.com/{stage}/`.
+			const gatewayUrl = getSharedGatewayUrl(this);
+			if (gatewayUrl) roots.push(gatewayUrl);
+			if (sandbox) roots.push('http://localhost:3000/');
+			return roots;
+		};
+		const relativeCallbackPath = callbackPath.replace(/^\/+/, '');
+		const dedupe = (urls: readonly (string | undefined)[]): string[] =>
+			[...new Set(urls.filter((u): u is string => !!u))];
+		const extraCallbacks = cognitoProviders.flatMap(p => p.additionalCallbackUrls ?? []);
+		const extraLogouts = cognitoProviders.flatMap(p => p.additionalLogoutUrls ?? []);
+		// Fail at synth on caller URLs Cognito would reject at deploy (late, as a
+		// CloudFormation failure). Token entries can't be inspected and are left as-is.
+		for (const p of cognitoProviders) {
+			for (const u of p.additionalCallbackUrls ?? []) assertCognitoClientUrl(u, 'additionalCallbackUrls', p.identityProvider);
+			for (const u of p.additionalLogoutUrls ?? []) assertCognitoClientUrl(u, 'additionalLogoutUrls', p.identityProvider);
+		}
+		this.warnOnPlainHttpPublicOrigin();
+
+		const callbackUrls = cdk.Lazy.list({
+			produce: () => {
+				const urls = dedupe([...originRoots().map(root => `${root}${relativeCallbackPath}`), ...extraCallbacks]);
+				// Cognito requires at least one callback URL once OAuth flows are on.
+				return urls.length > 0 ? urls : [`https://localhost${callbackPath}`];
+			},
+		});
+		const logoutUrls = cdk.Lazy.list({
+			produce: () => {
+				const urls = dedupe([...originRoots(), ...extraLogouts]);
+				return urls.length > 0 ? urls : ['https://localhost/'];
+			},
+		});
+		return { callbackUrls, logoutUrls };
+	}
+
+	/**
+	 * Decide whether `BLOCKS_PUBLIC_ORIGIN` can be registered on the Cognito app
+	 * client. Called at synth (from the `cdk.Lazy` producers and the validation
+	 * hook), after every front door has registered its origin.
+	 *
+	 * - `register`: the origin is `https://` — a literal `https://` prefix (the
+	 *   usual `https://${Token}` CloudFront / custom-domain value), or a
+	 *   whole-token value that resolves at synth to an `https://` string. A
+	 *   whole-token value that only resolves at deploy (a CloudFormation
+	 *   intrinsic) can't be inspected and is registered as-is, as before.
+	 * - `skip`: the scheme is known at synth and isn't `https://` (e.g. a
+	 *   certless ALB's `http://${Token}`). `display` is the origin when it is a
+	 *   plain string, for the warning message.
+	 * - `undefined`: no public origin is published.
+	 */
+	private classifyPublicOrigin():
+		| { kind: 'register'; origin: string }
+		| { kind: 'skip'; display?: string }
+		| undefined {
+		const origin = getRegisteredConfigValue(this, 'BLOCKS_PUBLIC_ORIGIN');
+		if (typeof origin !== 'string' || !origin) return undefined;
+		if (origin.startsWith('https://')) return { kind: 'register', origin };
+		if (!cdk.Token.isUnresolved(origin)) return { kind: 'skip', display: origin };
+		// Unresolved, with a literal non-https scheme in front (`http://${Token}`).
+		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(origin)) return { kind: 'skip' };
+		// Whole token (e.g. a BYO door's `Lazy` string): resolve it if synth can.
+		const resolved: unknown = cdk.Stack.of(this).resolve(origin);
+		if (typeof resolved === 'string') {
+			return resolved.startsWith('https://')
+				? { kind: 'register', origin }
+				: { kind: 'skip', display: resolved };
+		}
+		return { kind: 'register', origin };
+	}
+
+	/**
+	 * Emit a synth warning when the app publishes a public origin that is not
+	 * `https://` (so it is left off the Cognito app client). Runs as a validation
+	 * hook, i.e. after aspects (the managed `apiFrontDoor` registers its origin in
+	 * one) and after `Hosting` — the same point the `cdk.Lazy` producers see.
+	 */
+	private warnOnPlainHttpPublicOrigin(): void {
+		this.node.addValidation({
+			validate: () => {
+				const publicOrigin = this.classifyPublicOrigin();
+				if (publicOrigin?.kind === 'skip') {
+					const shown = publicOrigin.display ? ` (${publicOrigin.display})` : '';
+					cdk.Annotations.of(this).addWarningV2(
+						'@aws-blocks/bb-auth-oidc:PlainHttpPublicOrigin',
+						`The app's public origin${shown} is not https, so it was not registered as a Cognito ` +
+							'callback URL (Cognito rejects http callback URLs other than localhost). The runtime ' +
+							'sends the public origin as the redirect_uri whenever one is published, so federated ' +
+							'sign-in will fail with redirect_mismatch until the app is served over https (for ' +
+							'example, attach a certificate or a custom domain to the front door). For advanced ' +
+							'setups, register extra redirect targets with additionalCallbackUrls.',
+					);
+				}
+				return [];
+			},
+		});
 	}
 
 	/**
@@ -376,4 +537,31 @@ export class AuthOIDC<
 	getAuthorizeParams(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'getAuthorizeParams'); }
 	refreshBearerTokens(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'refreshBearerTokens'); }
 	signOut(..._args: unknown[]): never { return synthGuard('AuthOIDC', 'signOut'); }
+}
+
+/**
+ * Synth-time check for a caller-supplied Cognito app-client URL
+ * (`additionalCallbackUrls` / `additionalLogoutUrls`). Cognito rejects, at
+ * deploy, a plain `http://` URL whose host isn't `localhost` and any URL with a
+ * fragment; this reports either as a synth error naming the URL and the option.
+ * Unresolved CDK tokens are skipped (their value isn't known at synth). Custom
+ * schemes (`myapp://auth/callback`) are accepted.
+ */
+function assertCognitoClientUrl(url: string, option: string, provider: string): void {
+	if (cdk.Token.isUnresolved(url)) return;
+	const where = `cognitoFederated('${provider}') option ${option}`;
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error(`${where}: '${url}' is not a valid URL.`);
+	}
+	if (url.includes('#')) {
+		throw new Error(`${where}: '${url}' contains a URL fragment ('#'); Cognito does not accept fragments in callback or sign-out URLs.`);
+	}
+	if (parsed.protocol === 'http:' && parsed.hostname !== 'localhost') {
+		throw new Error(
+			`${where}: '${url}' uses http with a host other than localhost; Cognito accepts http only for localhost. Use an https URL.`,
+		);
+	}
 }
