@@ -3,7 +3,8 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertNotMockInDeployedEnv } from './runtime-guard.js';
+import { assertNotMockInDeployedEnv, isDeployedEnv } from './runtime-guard.js';
+import * as bbUtils from '../bb-utils.js';
 
 const ENV_KEYS = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;
 let saved: Record<string, string | undefined> = {};
@@ -62,5 +63,30 @@ describe('assertNotMockInDeployedEnv', () => {
 
 	it('is a no-op when neither is set (local dev)', () => {
 		assert.doesNotThrow(() => assertNotMockInDeployedEnv('bb-test'));
+	});
+});
+
+describe('isDeployedEnv', () => {
+	it('is true only when both config variables are set, on any compute', () => {
+		assert.equal(isDeployedEnv(), false);
+		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+		assert.equal(isDeployedEnv(), false, 'a partial configuration is not deployed');
+		process.env.BLOCKS_CONFIG_KEY = 'test-key.json';
+		assert.equal(isDeployedEnv(), true);
+	});
+
+	it('ignores Lambda-only variables', () => {
+		const saved = process.env.AWS_LAMBDA_FUNCTION_NAME;
+		process.env.AWS_LAMBDA_FUNCTION_NAME = 'fn';
+		try {
+			assert.equal(isDeployedEnv(), false);
+		} finally {
+			if (saved === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME;
+			else process.env.AWS_LAMBDA_FUNCTION_NAME = saved;
+		}
+	});
+
+	it('is exported from @aws-blocks/core/bb-utils for Building Block authors', () => {
+		assert.equal(bbUtils.isDeployedEnv, isDeployedEnv);
 	});
 });

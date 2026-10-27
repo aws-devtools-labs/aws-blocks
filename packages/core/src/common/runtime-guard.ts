@@ -47,7 +47,7 @@
  * condition is the sole protection; see the "compute target Blocks doesn't own"
  * guidance in `docs/guides/extending-with-existing-aws-resources.md`.
  */
-function isDeployedEnv(): boolean {
+export function isDeployedEnv(): boolean {
 	return Boolean(process.env.BLOCKS_CONFIG_BUCKET) && Boolean(process.env.BLOCKS_CONFIG_KEY);
 }
 
