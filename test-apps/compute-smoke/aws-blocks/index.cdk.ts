@@ -49,6 +49,18 @@ const stackName = sandboxMode
   ? `bb-test-compute-${id}-${leg}${suffix ? `-${suffix}` : ''}`
   : `bb-test-compute-prod-${leg}-${suffix || 'default'}-${id}`;
 
+// The FileBucket's id: Scope 'compute' + FileBucket 'artifacts' in index.ts, so
+// the bucket is `<stackName>-compute-artifacts`. CI deploys sandbox mode only;
+// scripts/ci/e2e-stack-prefixes.test.mjs checks the longest name of both modes
+// with CI's suffix.
+const MAX_STACK_NAME_LENGTH = 63 - '-compute-artifacts'.length;
+if (stackName.length > MAX_STACK_NAME_LENGTH) {
+  throw new Error(
+    `Stack name ${stackName} is ${stackName.length} characters; the artifacts bucket name needs it to be at most ` +
+    `${MAX_STACK_NAME_LENGTH}. Shorten BLOCKS_STACK_SUFFIX.`,
+  );
+}
+
 const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 
 if (!vpcId) {
@@ -87,6 +99,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   },
 });
 
-for (const stack of [blocksStack, vpcRefStack]) cdk.Tags.of(stack).add('blocks:purpose', 'compute-smoke-e2e');
+// Tag the whole app, so the vpc-ref stack carries the purpose tag too:
+// cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
+cdk.Tags.of(app).add('blocks:purpose', 'compute-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:api-front-door', apiFrontDoor);
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
