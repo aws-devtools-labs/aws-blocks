@@ -358,12 +358,6 @@ describe('pr-checks.yml', () => {
 	const NO_STACK = {
 		'e2e-supabase': 'reads a secret; the database is external',
 		'e2e-sandbox-vpc': 'deploys only the persistent shared VPC, which must survive; its suite is a skip today',
-		// Pending: the compute-smoke leak fix adds this job's always() teardown and
-		// removes this entry. Its stacks (bb-compute-smoke-*) are outside the
-		// prefixes the E2E role may delete directly, so e2e-teardown.mjs can only
-		// delete them once they are renamed under bb-test-; until then only the
-		// app's own cdk destroy (test/sandbox-destroy.ts) can remove them.
-		'e2e-compute-smoke': 'teardown pending in the compute-smoke leak fix',
 	};
 
 	it('lists only real jobs as stack-free', () => {
