@@ -327,11 +327,13 @@ export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
 	CorsRule,
 	ExternalBucketRef as FBExternalBucketRef,
+	ExternalKmsKeyRef as FBExternalKmsKeyRef,
 	FileBucketOptions,
 	FileContent,
 	FileInfo,
 	GetUrlOptions,
 	LifecycleRule,
+	ObjectLockOptions,
 	PutOptions as FBPutOptions,
 	PutUrlOptions,
 	ScanOptions as FBScanOptions,

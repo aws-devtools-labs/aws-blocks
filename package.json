@@ -116,6 +116,7 @@
     "test:e2e:hosting-ssr-sveltekit": "cd test-apps/hosting-ssr-sveltekit && npm run test:e2e:sandbox",
     "check:exports-consistency": "npx tsx scripts/check-aws-blocks-exports-consistency.ts",
     "check:client-user-agent": "npx tsx scripts/check-client-user-agent-consistency.ts",
+    "check:runtime-guard": "node --experimental-strip-types scripts/check-runtime-guard-coverage.ts",
     "check:packed-assets": "npx tsx scripts/check-packed-assets.ts",
     "lint": "biome lint --skip=correctness/noUndeclaredDependencies --reporter=github --changed --since=origin/main --no-errors-on-unmatched packages/",
     "lint:deps": "npx tsx scripts/lint-deps.ts",
