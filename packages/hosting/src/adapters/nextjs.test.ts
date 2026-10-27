@@ -1248,6 +1248,51 @@ void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () =>
     fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
+  // ── The 5-arg signature arrived in PATCH releases, not at Next 16 ─────
+  // Published `next` packages: 4-arg up to 15.5.15, 5-arg from 15.5.16 on the
+  // 15.x line; 4-arg on 16.0.x, 16.1.x and 16.2.0–16.2.4, 5-arg from 16.2.5.
+
+  void it('DOES patch on Next 15.5.16+ (the 5-arg signature was backported)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.28');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('does NOT patch on Next 16.2.4 (still the 4-arg signature)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('16.2.4');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.doesNotMatch(out, /\{\},void 0,/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it("reads the arity from the installed next's image-optimizer source over its version", () => {
+    // The source is the ground truth: a version the range calls 4-arg, whose
+    // installed source declares the 5-arg signature, is patched.
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.7');
+    const serverDir = path.join(projectDir, 'node_modules', 'next', 'dist', 'server');
+    fs.mkdirSync(serverDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(serverDir, 'image-optimizer.js'),
+      'async function fetchInternalImage(href, _req, _res, maximumResponseBody, handleRequest) {}\n',
+    );
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
   void it('patches when the Next version is unknown (default to Next 16 behavior)', () => {
     const bundle = writeBundle(
       'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',

@@ -1516,6 +1516,52 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
 };
 
 /**
+ * The `next` versions whose `fetchInternalImage` takes the 5-arg
+ * `(href, _req, _res, maximumResponseBody, handleRequest)` signature, from the
+ * published packages' `dist/server/image-optimizer.js`: 15.5.16 and later on
+ * the 15.x line, 16.2.5 and later on 16.x (16.0.x, 16.1.x and 16.2.0–16.2.4
+ * are still 4-arg). Used when the installed source can't be read.
+ * @internal
+ */
+export const NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE = '>=15.5.16 <16 || >=16.2.5';
+
+/**
+ * How many parameters the installed Next.js's `fetchInternalImage` takes:
+ * read from `next/dist/server/image-optimizer.js` (the code OpenNext bundles),
+ * else derived from `nextVersion` and
+ * {@link NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE}. `undefined` when neither is
+ * known.
+ * @internal
+ */
+export const detectFetchInternalImageArity = (
+  projectDir: string,
+  nextVersion: string | undefined,
+): 4 | 5 | undefined => {
+  const rootPath = getProjectPackageInfo('next', projectDir)?.rootPath;
+  if (rootPath) {
+    try {
+      const src = fs.readFileSync(
+        path.join(rootPath, 'dist', 'server', 'image-optimizer.js'),
+        'utf-8',
+      );
+      const params = /function fetchInternalImage\(([^)]*)\)/.exec(src)?.[1];
+      if (params !== undefined) {
+        const count = params.split(',').filter((p) => p.trim()).length;
+        if (count === 4 || count === 5) return count;
+      }
+    } catch {
+      // Unreadable or a different layout — fall back to the version.
+    }
+  }
+  if (!nextVersion) return undefined;
+  return semver.satisfies(nextVersion, NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE, {
+    includePrerelease: true,
+  })
+    ? 5
+    : 4;
+};
+
+/**
  * Patch the OpenNext image-optimization bundle for the Next.js 16
  * image-optimizer signature change.
  *
@@ -1525,6 +1571,11 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
  *   |--------|-------------------------------------------------------------------|
  *   | 15.5.x | `(href, _req, _res, handleRequest)` — 4 args                       |
  *   | 16.x   | `(href, _req, _res, maximumResponseBody, handleRequest)` — 5 args  |
+ *
+ *   Correction: the change landed in PATCH releases on both lines — 4 args up
+ *   to 15.5.15 and on 16.0.x, 16.1.x and 16.2.0–16.2.4; 5 args from 15.5.16
+ *   and from 16.2.5. The gate therefore reads the installed `next`'s
+ *   signature ({@link detectFetchInternalImageArity}) instead of its major.
  *
  * `@opennextjs/aws` (≤3.10.x) calls it with FOUR positional args
  * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`). That call is:
@@ -1555,20 +1606,22 @@ export const patchImageOptimizerForNext16 = (
   const root = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(root)) return; // image optimization disabled for this app
 
-  // Version gate: the `void 0` insertion is ONLY correct for Next ≥ 16 (the
-  // 5-arg `fetchInternalImage`). On Next 15.x the OpenNext 4-arg call is
-  // already correct, so patching would corrupt it. When the version is
-  // knowable and < 16, skip entirely.
+  // Arity gate: the `void 0` insertion is ONLY correct for a Next.js whose
+  // `fetchInternalImage` takes 5 args. On a 4-arg Next the OpenNext call is
+  // already correct, so patching would corrupt it. The 5-arg signature
+  // arrived in patch releases (15.5.16, 16.2.5), not at a major, so read it
+  // from the installed `next` and fall back to the published boundaries.
   const nextVersion = projectDir ? detectNextVersion(projectDir) : undefined;
-  if (nextVersion && semver.major(nextVersion) < 16) {
+  const arity = projectDir ? detectFetchInternalImageArity(projectDir, nextVersion) : undefined;
+  if (arity === 4) {
     process.stderr.write(
-      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion} uses the ` +
+      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion ?? '(unknown version)'} uses the ` +
         `4-arg fetchInternalImage signature that OpenNext already calls correctly ` +
-        `(the maximumResponseBody parameter was added in Next 16).\n`,
+        `(the maximumResponseBody parameter arrived in Next 15.5.16 and 16.2.5).\n`,
     );
     return;
   }
-  if (!nextVersion) {
+  if (arity === undefined) {
     // Version unknown (e.g. a pre-built `.open-next/` with no resolvable
     // `next` in scope). Default to patching, since Next 16 (5-arg) is the
     // common case — log it so the build output explains the choice.
