@@ -5,9 +5,10 @@
 //   1. Local developer sandbox (`npm run deploy`) — the Dart Flutter example
 //      and OIDC relay testing target the fixed-name `bb-test-native-bindings-dart`
 //      stack (the relay needs a real HTTPS callback).
-//   2. CI (native-sdk-e2e.yml `dart-e2e-sandbox` job) — deploys then tears down a
-//      per-run stack. It sets BLOCKS_STACK_SUFFIX to a unique value so concurrent
-//      runs get isolated stacks and never collide with the developer sandbox.
+//   2. CI (the `*-e2e-sandbox` jobs in native-sdk-e2e.yml, four sandbox deploys
+//      per run) — each deploys then tears down a per-run stack. They set
+//      BLOCKS_STACK_SUFFIX to a unique value so concurrent runs get isolated
+//      stacks and never collide with the developer sandbox.
 // Minimal variant of the comprehensive app's index.cdk.ts (no sandbox-id salt).
 
 import * as cdk from 'aws-cdk-lib';
@@ -17,7 +18,28 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const app = new cdk.App();
+// Default the `sandboxMode` context to on, so `npm run deploy` (both uses above)
+// builds DistributedTable GSIs the way `npm run sandbox` does. Here that is the
+// `todos` table and the Realtime connections table: the GSI custom resource
+// recreates each table with all its indexes at once (about a minute) instead of
+// adding them one at a time and waiting for each to backfill (about 17 minutes
+// for `todos`). This stack is disposable (see `defaults` below); on the
+// long-lived developer stack it also means a later index change drops and
+// recreates the table.
+//
+// The recreate copies the items back (held only in the Lambda's memory:
+// unprocessed batch writes are not retried, and a failure after the delete
+// loses the ones not yet written) but not the settings CloudFormation applied
+// when it created the table: TTL, the table tags and the encryption setting
+// (the table falls back to the AWS owned key) are gone afterwards, while
+// CloudFormation still records them. So the native suites run against a
+// connections table with TTL off (`expiresAt` rows don't expire); no native
+// test checks expiry or encryption, and that is accepted for these tests. The fast path re-applying them is tracked in
+// https://github.com/aws-devtools-labs/aws-blocks/issues/985. The serial
+// production GSI path, which keeps the table, is covered by the comprehensive
+// app's production deploy. A direct
+// `cdk synth/deploy --context sandboxMode=false` still overrides the default.
+const app = new cdk.App({ context: { sandboxMode: 'true' } });
 
 // BLOCKS_STACK_NAME wins if set. Otherwise: the fixed developer-sandbox name when
 // no suffix is present, or a compact suffixed name in CI (BLOCKS_STACK_SUFFIX is
