@@ -179,8 +179,14 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 17 min in all, leaving this 30-min job time to deploy, test
+      # and clean up; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 19
+        run: node scripts/ci/install-playwright.mjs --deadline-minutes 17 chromium
 
       - name: Deploy sandbox
         run: |

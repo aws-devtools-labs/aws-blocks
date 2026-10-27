@@ -239,6 +239,11 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      # Keeps every Playwright browser install bounded (an apt hang once held a
+      # Hosting job for 57 min).
+      - name: Test the Playwright install wrapper
+        run: node --test scripts/ci/install-playwright.test.mjs
+
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
       - name: Check runtime mock-guard coverage
@@ -1032,8 +1037,13 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 23 min in all; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 25
+        run: node scripts/ci/install-playwright.mjs chromium
 
       - name: E2E Test Hosting (${{ matrix.framework }})
         run: npm run ${{ matrix.script }}
