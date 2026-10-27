@@ -117,13 +117,21 @@ describe('always() cleanup steps', () => {
 	// The command a teardown line runs, without the wrapper.
 	const command = (line) => line.replace(/^.*scripts\/ci\/e2e-cleanup\.mjs"? -- /, '');
 
-	/** The !cancelled() teardown lines that end in `|| true` or that no later wrapped cleanup step retries. */
+	/** Whether a step's script (comment lines aside) runs e2e-cleanup.mjs, on any line. */
+	const runsWrapper = (step) =>
+		(step?.run ?? '').split('\n').some((l) => !/^\s*#/.test(l) && /scripts\/ci\/e2e-cleanup\.mjs/.test(l));
+
+	/**
+	 * The !cancelled() teardown lines that can't fail (`|| true`, or the step runs through e2e-cleanup.mjs,
+	 * which exits 0), or that no later wrapped cleanup step retries.
+	 */
 	const unretried = (wfs) => {
 		const wrapped = teardowns(wfs, false);
 		return teardowns(wfs, true)
 			.filter(
-				({ where, line, index }) =>
+				({ where, line, index, steps }) =>
 					/\|\| *true/.test(line) ||
+					runsWrapper(steps[index]) ||
 					!wrapped.some(
 						(t) => t.where === where && t.index > index && t.line.endsWith(` -- ${command(line)}`),
 					),
@@ -140,19 +148,29 @@ describe('always() cleanup steps', () => {
 				return !(at >= 0 && at < index && (steps[at].run ?? '').split('\n').some(teardownLine));
 			});
 
+	/**
+	 * The steps a cleanup retries (`steps.<id>.outcome != 'success'` in its `if`) whose teardown runs through
+	 * e2e-cleanup.mjs: the wrapper exits 0 on a failed teardown, so that step always succeeds and the retry
+	 * never runs.
+	 */
+	const wrappedRetried = ({ if: cond, steps }) =>
+		[...cond.matchAll(/steps\.([\w-]+)\.outcome != 'success'/g)]
+			.map(([, id]) => id)
+			.filter((id) => runsWrapper(steps.find((s) => s.id === id)));
+
 	it('finds the teardown steps of the hosting, telemetry, amplify and native jobs', () => {
 		assert.ok(teardownLines.length >= 8, JSON.stringify(teardownLines, null, 2));
 	});
 
+	// always(), then the credentials check. Only conditions that skip a retry the job no longer needs may
+	// follow: no ||, which would bypass the credentials check, and nothing that turns the step off after
+	// a cancel.
+	const cleanupIf =
+		/^always\(\) && steps\.aws-creds\.outcome == 'success'( && steps\.[\w-]+\.outcome != 'success')*$/;
+
 	it('run only once the job has AWS credentials', () => {
 		for (const { where, if: cond, steps, index } of teardownLines) {
-			// Only conditions that skip a retry the job no longer needs may follow: no ||, which would
-			// bypass the credentials check, and nothing that turns the step off after a cancel.
-			assert.match(
-				cond,
-				/^always\(\) && steps\.aws-creds\.outcome == 'success'( && steps\.[\w-]+\.outcome != 'success')*$/,
-				where,
-			);
+			assert.match(cond, cleanupIf, where);
 			// ... where each named step is an earlier teardown in this job (the one being retried).
 			const bad = badRetryIds({ if: cond, steps, index });
 			assert.deepEqual(bad, [], `${where}: steps.${bad[0]} is not an earlier teardown step of this job`);
@@ -191,7 +209,44 @@ describe('always() cleanup steps', () => {
 		assert.equal(unretried(withRun(`${destroy.run} || true`)).length, 1, '|| true');
 		assert.equal(unretried(withRun('npx tsx other-destroy.ts')).length, 1, 'other stack');
 		assert.equal(unretried(withRun('tsx test/sandbox-destroy.ts app.ts')).length, 1, 'other command');
-		assert.deepEqual(unretried(withRun(wrappedRun)), [], 'both wrapped');
+		assert.equal(unretried(withRun(wrappedRun)).length, 1, 'the !cancelled() step wrapped: it never fails');
+	});
+
+	it('accepts only the cleanup conditions that still run after a cancel, with credentials', () => {
+		const creds = "steps.aws-creds.outcome == 'success'";
+		assert.match(`always() && ${creds}`, cleanupIf);
+		assert.match(`always() && ${creds} && steps.destroy.outcome != 'success'`, cleanupIf);
+		for (const bad of [
+			`(failure() || cancelled()) && ${creds}`,
+			`failure() && ${creds}`,
+			`cancelled() && ${creds}`,
+			`always() && ${creds} || failure()`,
+			`always() && ${creds} && !cancelled()`,
+			`always() && ${creds} && success()`,
+			`always() && ${creds} && steps.destroy.outcome == 'success'`,
+		]) {
+			assert.doesNotMatch(bad, cleanupIf, bad);
+		}
+	});
+
+	// E2E Hosting's Destroy sandbox, for one: it must fail on a failed destroy, so Cleanup sandbox retries.
+	it('a step that a cleanup retries does not run its teardown through e2e-cleanup.mjs', () => {
+		for (const t of teardownLines) {
+			const bad = wrappedRetried(t);
+			assert.deepEqual(bad, [], `${t.where}: steps.${bad[0]} goes through e2e-cleanup.mjs, so it never fails`);
+		}
+		const destroy = (run) => ({ id: 'destroy', run });
+		const cond = "always() && steps.aws-creds.outcome == 'success' && steps.destroy.outcome != 'success'";
+		const plain = 'npx tsx test/sandbox-destroy.ts app.ts';
+		assert.deepEqual(wrappedRetried({ if: cond, steps: [destroy(plain)] }), []);
+		const wrapped = `node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- ${plain}`;
+		assert.deepEqual(wrappedRetried({ if: cond, steps: [destroy(wrapped)] }), ['destroy']);
+		const split = `node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- \\\n  ${plain}`;
+		assert.deepEqual(wrappedRetried({ if: cond, steps: [destroy(split)] }), ['destroy'], 'line continuation');
+		assert.deepEqual(
+			wrappedRetried({ if: cond, steps: [destroy(`# not scripts/ci/e2e-cleanup.mjs\n${plain}`)] }),
+			[],
+		);
 	});
 
 	it('flags a retry condition that does not name the step it retries', () => {
