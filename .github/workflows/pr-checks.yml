@@ -766,18 +766,33 @@ jobs:
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
-      # The test tears its stack down itself and fails the run if it can't. This
-      # retries after a failed, cancelled or timed-out run, which would otherwise
-      # leave the stack (its distribution and its endpoints in the shared VPC)
-      # behind. Nothing is deployed before the VPC ID is exported.
-      - name: Destroy stack (if left behind)
-        if: (failure() || cancelled()) && steps.vpc-id.outcome == 'success'
-        working-directory: test-apps/compute-smoke
-        run: |
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || {
-            echo "::error::Could not destroy the compute suite's stack; the scheduled stack cleanup will retry."
-            exit 1
-          }
+      # The suite destroys its stacks in test.after and fails the run if it
+      # can't, but test.after never runs when this job is cancelled (a new push
+      # cancels the run), times out or crashes. A leaked stack keeps its
+      # distribution and its VPC endpoints in the shared compute test VPC, so
+      # every later run in the same account fails to deploy. Delete what this
+      # checkout deployed (the app stack and its -vpc-ref, both named with the
+      # sandbox id), after a failure, a cancel or a pass that left a stack:
+      # skipped when nothing was synthesized, one ListStacks call when the suite
+      # cleaned up. Not `cdk destroy`: it waits for the delete to finish (about
+      # 12 minutes with the endpoints), and GitHub force-stops a cancelled job 5
+      # minutes after the cancel, so these two steps get 3 minutes together and
+      # only start the deletes. Fresh credentials, since the first session can
+      # expire before a long or timed-out job gets here.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/compute-smoke
 
   e2e-production:
     permissions:
