@@ -260,6 +260,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # A test app whose stacks the stale-stack sweeper can't match leaks every
+      # stack whose teardown fails.
+      - name: Test that cleanup-stacks.yml covers the E2E stacks
+        run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
+
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
       - name: Test the E2E job selection
@@ -710,7 +715,7 @@ jobs:
     needs: [build-and-test-local, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 70
     environment: e2e
     # Serialize this suite across PRs: it provisions private-DNS interface
     # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
@@ -779,21 +784,81 @@ jobs:
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
 
+      # The last run's teardown returns once its deletes are accepted, and its
+      # end releases the lock above, so its stacks can still hold their VPC
+      # endpoints here: deleting, or still finishing a create that a cancel cut
+      # off. While this job holds the lock and has not deployed, any
+      # bb-test-compute- stack in an *_IN_PROGRESS state is an earlier run's (or
+      # an earlier leg's). Deploying now would
+      # fail with a conflicting private DNS name. Wait up to 10 minutes for them
+      # to settle, then deploy regardless. (The job timeout leaves room for it.)
+      # Once the compute test VPC has permanent endpoints (test-infra's
+      # BlocksComputeTestVpcEndpoints), the app adds none and runs need no lock,
+      # so there is nothing to wait for.
+      - name: Wait for an earlier run's stacks to settle
+        timeout-minutes: 12
+        run: |
+          # GitHub runs this step with `bash -e` only; without pipefail a failed
+          # list-stacks would read as "nothing in progress".
+          set -o pipefail
+          if grep -q BlocksComputeTestVpcEndpoints test-infra/vpc-test-stack.ts; then
+            echo "The compute test VPC has permanent endpoints: nothing to wait for."
+            exit 0
+          fi
+          stacks() {
+            aws cloudformation list-stacks --stack-status-filter "$@" --output json \
+              --query "StackSummaries[?starts_with(StackName, 'bb-test-compute-')].StackName" | jq -r 'join(" ")'
+          }
+          deadline=$((SECONDS + 600))
+          while :; do
+            if ! busy=$(stacks CREATE_IN_PROGRESS ROLLBACK_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_IN_PROGRESS \
+              UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS); then
+              echo "::warning title=Compute Smoke::Could not list the stacks of earlier runs, deploying anyway."
+              break
+            fi
+            if [ -z "$busy" ]; then break; fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning title=Compute Smoke::Still in progress after 10 minutes, deploying anyway: $busy"
+              break
+            fi
+            echo "Waiting for these stacks to settle: $busy"
+            sleep 30
+          done
+          # A delete that failed (often on the endpoints themselves) leaves them in place.
+          if failed=$(stacks DELETE_FAILED) && [ -n "$failed" ]; then
+            echo "::warning title=Compute Smoke::DELETE_FAILED, may still hold VPC endpoints: $failed"
+          fi
+
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
 
-      # The test tears its stack down itself and fails the run if it can't. This
-      # retries after a failed, cancelled or timed-out run, which would otherwise
-      # leave the stack (its distribution and its endpoints in the shared VPC)
-      # behind. Nothing is deployed before the VPC ID is exported.
-      - name: Destroy stack (if left behind)
-        if: (failure() || cancelled()) && steps.vpc-id.outcome == 'success'
-        working-directory: test-apps/compute-smoke
-        run: |
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || {
-            echo "::error::Could not destroy the compute suite's stack; the scheduled stack cleanup will retry."
-            exit 1
-          }
+      # The suite destroys its stacks in test.after and fails the run if it
+      # can't, but test.after never runs when this job is cancelled (a new push
+      # cancels the run), times out or crashes. A leaked stack keeps its
+      # distribution and its VPC endpoints in the shared compute test VPC, so
+      # every later run in the same account fails to deploy. Delete what this
+      # checkout deployed (the app stack and its -vpc-ref, both named with the
+      # sandbox id), after a failure, a cancel or a pass that left a stack:
+      # skipped when nothing was synthesized, one ListStacks call when the suite
+      # cleaned up. Not `cdk destroy`: it waits for the delete to finish (about
+      # 12 minutes with the endpoints), and GitHub force-stops a cancelled job 5
+      # minutes after the cancel, so these two steps get 3 minutes together and
+      # only start the deletes. Fresh credentials, since the first session can
+      # expire before a long or timed-out job gets here.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/compute-smoke
 
   e2e-production:
     permissions:

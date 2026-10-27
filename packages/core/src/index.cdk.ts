@@ -54,6 +54,7 @@ export {
 	getRegisteredConfigValue,
 	getSharedGatewayUrl,
 	getVpcContext,
+	isSandboxContext,
 	registerConfig,
 	registerDashboardFinalizer,
 	registerTracer,
@@ -62,7 +63,15 @@ export {
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 	synthGuard,
 } from './cdk/index.js';
-export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
+export {
+	_resetConfigCache,
+	getCachedConfigValue,
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+} from './common/config.js';
+export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
 export {
 	type BlocksStackProps,
 	type BuildingBlockMeta,

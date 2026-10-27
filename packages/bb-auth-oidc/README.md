@@ -206,7 +206,7 @@ Sessions outlive the IdP's ID token — users won't get kicked out every hour. T
 - `github({ clientId, clientSecret, scopes? })` — OAuth 2.0 (no ID token; userinfo fetched + mapped automatically).
 - `customOidc({ name, issuerUrl, clientId, clientSecret, scopes?, attributeMapping? })` — any OIDC issuer (Okta, Auth0, Cognito User Pools, Entra).
 - `customOauth2({ name, authUrl, tokenUrl, userInfoUrl, clientId, clientSecret, scopes, mapClaims })` — bare OAuth 2.0 with a customer-supplied claim mapper.
-- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. See [Local development](#local-development).
+- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. Local and sandbox deployments only. See [Local development](#local-development).
 
 ### Pointing at an existing Cognito User Pool
 
@@ -247,12 +247,16 @@ In sandbox the frontend is served locally while the backend runs as a deployed A
 When you want none of that setup — offline, deterministic, no credentials — use `stubIdp()`:
 
 ```typescript
-import { AuthOIDC, stubIdp } from '@aws-blocks/bb-auth-oidc';
+import { AuthOIDC, google, stubIdp, getDeploymentType } from '@aws-blocks/blocks';
 
-const auth = new AuthOIDC(app, 'auth', {
-	providers: [stubIdp({ name: 'google' })],
-});
+const providers = getDeploymentType() === 'production'
+	? [google({ clientId, clientSecret })]
+	: [stubIdp({ name: 'google' })];
+
+const auth = new AuthOIDC(app, 'auth', { providers });
 ```
+
+`stubIdp()` is restricted to local development (`npm run dev`) and sandbox (`npm run sandbox`) deployments: synth fails when any other deployment configures a `stubIdp()` provider, and deployed compute serves the stub IdP routes only in a sandbox. `getDeploymentType()` returns `'local'`, `'sandbox'`, or `'production'` and reports the same value at synth and at runtime, so selecting providers with it keeps both sides consistent. At synth it reports the deployment type inside your backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun importing it); at runtime it reports it on deployed compute. Wherever Blocks config and context are not present (before `create()`, in plain scripts, or on non-Blocks compute) it returns `'local'`, so call it from the backend module, as in the examples above. Authorization codes issued by the stub are signed with a key derived per deployment from the instance's cookie-signing secret.
 
 `stubIdp()` is a real, spec-conformant OIDC provider that runs in-process: RS256 signing with a real keypair, a JWKS endpoint, OIDC discovery, the authorization-code grant with PKCE, refresh-token rotation, and RFC 7009 revocation. The engine runs the identical discovery + verify code path it uses against a real IdP. It just signs deterministic local users instead of authenticating a human. It is an explicit choice that sits next to your real providers in the `providers` array — it never silently replaces one. It is also what you use for E2E.
 
@@ -261,7 +265,10 @@ You can mix the two freely; the code is the source of truth in every environment
 ```typescript
 providers: [
 	google({ clientId, clientSecret }),  // real Google everywhere, incl. local
-	stubIdp({ name: 'corporate' }),       // AWS Blocks stub everywhere
+	// AWS Blocks stub for local and sandbox; a real provider in production
+	getDeploymentType() === 'production'
+		? customOidc({ name: 'corporate', issuerUrl, clientId: corpClientId, clientSecret: corpClientSecret })
+		: stubIdp({ name: 'corporate' }),
 ]
 ```
 

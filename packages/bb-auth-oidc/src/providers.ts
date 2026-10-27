@@ -147,25 +147,24 @@ export interface StubIdpOpts<N extends string = string> {
  *
  * Composable: you can mix real and stub providers in the same instance.
  *
+ * Available in local development and sandbox deployments only: synth fails
+ * when any other deployment configures a `stubIdp()` provider. Select
+ * providers with `getDeploymentType()` so the stub is used only where allowed.
+ *
  * @example
  * ```typescript
- * import { AuthOIDC, stubIdp } from '@aws-blocks/blocks';
+ * import { AuthOIDC, customOidc, google, stubIdp, getDeploymentType } from '@aws-blocks/blocks';
  *
- * // E2E test app — stub providers, no real IdP needed
- * const auth = new AuthOIDC(app, 'auth', {
- *   providers: [
- *     stubIdp({ name: 'google' }),
- *     stubIdp({ name: 'corporate' }),
- *   ],
- * });
+ * // Production — real providers. Local dev, sandbox, and E2E — stub
+ * // providers with the same names, no real IdP needed.
+ * const providers = getDeploymentType() === 'production'
+ *   ? [
+ *       google({ clientId, clientSecret }),
+ *       customOidc({ name: 'corporate', issuerUrl: 'https://login.corp.com', ... }),
+ *     ]
+ *   : [stubIdp({ name: 'google' }), stubIdp({ name: 'corporate' })];
  *
- * // Production — real providers
- * const auth = new AuthOIDC(app, 'auth', {
- *   providers: [
- *     google({ clientId, clientSecret }),
- *     customOidc({ name: 'corporate', issuerUrl: 'https://login.corp.com', ... }),
- *   ],
- * });
+ * const auth = new AuthOIDC(app, 'auth', { providers });
  * ```
  */
 export function stubIdp<N extends string>(opts: StubIdpOpts<N>): StubProvider<N> {

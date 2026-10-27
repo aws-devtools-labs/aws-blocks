@@ -285,7 +285,12 @@ export async function startSandbox(options: SandboxOptions) {
   registerFrameworkFromSink(frameworkSink);
 
   const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
-  const stackOutputs = Object.values(outputs)[0] as Record<string, string> || {};
+  // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
+  // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
+  // on the outputs file's write order; fall back to the first group so a
+  // single-stack app is unchanged.
+  const stackGroups = Object.values(outputs) as Record<string, string>[];
+  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {

@@ -101,7 +101,7 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
         });
         console.log('✅ Stack destroyed');
       } catch (error) {
-        // In CI a failed teardown fails the run (the job's last step retries the
+        // In CI a failed teardown fails the run (the job's last step starts the
         // destroy); a stack left behind would keep its endpoints in the shared VPC.
         if (process.env.CI) throw error;
         console.log('⚠️  Stack destroy failed — run test/sandbox-destroy.ts again, or the scheduled cleanup removes it');

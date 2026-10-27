@@ -10,7 +10,7 @@ import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, isSandboxContext } from '@aws-blocks/core/cdk';
 import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
@@ -82,7 +82,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		}
 
 		const tableName = this.fullId.substring(0, 255);
-		const isSandbox = this.node.tryGetContext('sandboxMode') === 'true';
+		const isSandbox = isSandboxContext(this);
 
 		// Probe the schema's validate() to determine if a key field is numeric.
 		// Sends a test value of 0 for the field — if validation doesn't flag it,

@@ -34,6 +34,7 @@ import {
 	DEFAULT_NODE_RUNTIME,
 	getRegisteredConfigValue,
 	getSharedGatewayUrl,
+	isSandboxContext,
 	registerConfig,
 	synthGuard,
 } from '@aws-blocks/core/cdk';
@@ -111,6 +112,21 @@ export class AuthOIDC<
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+
+		// `stubIdp()` providers are a local/sandbox development aid. Reject them
+		// at synth for any non-sandbox deployment, before provisioning anything.
+		// The runtime entry applies the matching check when mounting routes.
+		const stubProviderNames = options.providers.filter((p) => p.kind === 'stub').map((p) => p.name);
+		if (stubProviderNames.length > 0 && !isSandboxContext(this)) {
+			const quoted = stubProviderNames.map((n) => `'${n}'`).join(', ');
+			const label = stubProviderNames.length === 1 ? `provider ${quoted} is` : `providers ${quoted} are`;
+			throw new Error(
+				`AuthOIDC '${id}': stubIdp ${label} only available in sandbox deployments ` +
+					'(run `npm run sandbox`, i.e. CDK context sandboxMode=true). ' +
+					'Configure a real provider (google, github, customOidc, customOauth2) for other deployments, ' +
+					'or select providers with getDeploymentType() so the stub is used only for local and sandbox.',
+			);
+		}
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;
@@ -302,8 +318,7 @@ export class AuthOIDC<
 		cognitoProviders: readonly CognitoFederatedProvider[],
 		callbackPath: string,
 	): { callbackUrls: string[]; logoutUrls: string[] } {
-		const sandbox =
-			this.node.tryGetContext('sandboxMode') === 'true' || this.node.tryGetContext('sandboxMode') === true;
+		const sandbox = isSandboxContext(this);
 		// Origin roots, resolved at synth. Each ends WITH a trailing slash, so it is
 		// itself the sign-out URL and the callback URL is the root + the path minus
 		// its leading `/` (no double slash). Token-safe: the gateway URL is an
