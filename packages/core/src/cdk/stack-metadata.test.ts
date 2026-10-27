@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { describe, test } from 'node:test';
+import { before, describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
@@ -8,6 +8,8 @@ import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { CORE_VERSION } from '../version.js';
 import { Scope } from './index.js';
 import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+
+before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
 
 function blocksValue(stack: cdk.Stack): string {
 	return Template.fromStack(stack).toJSON().Metadata.AWSToolsMetrics.AWSBlocks;

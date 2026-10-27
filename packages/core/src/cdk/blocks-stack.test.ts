@@ -401,6 +401,8 @@ describe('a namespace bound to another backend is not routed (multi-backend synt
 });
 
 describe('AWSBlocks template metadata (BlocksStack.create)', () => {
+	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+
 	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
 
 	test('writes AWSBlocks by default', async () => {
