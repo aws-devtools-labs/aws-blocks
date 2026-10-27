@@ -435,17 +435,6 @@ function extractMethodTypeInfo(
 	return { params, returnType, transferable, skipCodegen };
 }
 
-/**
- * Wrappers an async method's written return type is spelled with, and which carry no
- * type argument of their own. `AsyncAPI<T>` writes `Promise<Awaited<R>>`, so a node
- * reached through the mapper is wrapped twice.
- */
-const RETURN_WRAPPERS: ReadonlySet<string> = new Set(['Promise', 'Awaited']);
-
-/**
- * A parenthesized annotation wraps the node a check wants to see, and TypeScript
- * accepts any depth of them.
- */
 function unwrapParens(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
 	let current = node;
 	while (current && ts.isParenthesizedTypeNode(current)) current = current.type;
@@ -453,18 +442,17 @@ function unwrapParens(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
 }
 
 /**
- * Walk a return-type AST node, unwrapping a single layer of `Promise<T>`,
- * and return the inner `TypeReferenceNode` if any. Used to recover the
- * syntactic type-arguments the customer wrote — `Promise<RealtimeChannel>`
- * has no inner `<...>`, while `Promise<RealtimeChannel<X>>` does.
+ * The written type reference inside an async return annotation, found through any
+ * parentheses and a single `Promise<T>` layer. Used to recover the type arguments the
+ * customer wrote: `Promise<RealtimeChannel>` has no inner `<...>`, `Promise<RealtimeChannel<X>>` does.
  */
-function unwrapPromiseTypeNode(node: ts.TypeNode | undefined, depth = 0): ts.TypeReferenceNode | undefined {
-	if (depth > MAX_DEPTH) return undefined;
+function unwrapPromiseTypeNode(node: ts.TypeNode | undefined): ts.TypeReferenceNode | undefined {
 	const written = unwrapParens(node);
 	if (!written || !ts.isTypeReferenceNode(written)) return undefined;
 	const name = ts.isIdentifier(written.typeName) ? written.typeName.text : written.typeName.getText();
-	if (RETURN_WRAPPERS.has(name) && written.typeArguments && written.typeArguments.length === 1) {
-		return unwrapPromiseTypeNode(written.typeArguments[0], depth + 1);
+	if (name === 'Promise' && written.typeArguments && written.typeArguments.length === 1) {
+		const inner = unwrapParens(written.typeArguments[0]);
+		return inner && ts.isTypeReferenceNode(inner) ? inner : undefined;
 	}
 	return written;
 }
@@ -564,10 +552,7 @@ function extractMethodsFromResolvedType(
 
 /**
  * A mapped-type property has no `valueDeclaration`, so fall back to its sole
- * declaration; several would give no single annotation to pick. From there a method
- * annotates itself, a function-typed property annotates the type, and a
- * handler-literal property annotates its initializer; a declaration carrying no
- * annotation yields `undefined`.
+ * declaration; several would give no single annotation to pick.
  */
 function syntacticReturnTypeNode(prop: ts.Symbol): ts.TypeReferenceNode | undefined {
 	const decl = prop.valueDeclaration ?? (prop.declarations?.length === 1 ? prop.declarations[0] : undefined);
@@ -640,10 +625,20 @@ function detectTransferable(
 	// no `typeArguments`, treat the type as non-generic (defaults filled in
 	// by the checker shouldn't appear in the spec).
 	const typeArgs: JsonSchema[] = [];
-	const wroteTypeArgs = syntacticNode?.typeArguments && syntacticNode.typeArguments.length > 0;
-	if (wroteTypeArgs) {
-		const typeRef = type as ts.TypeReference;
-		const resolvedArgs = typeRef.typeArguments ?? [];
+	// All or nothing: a partial list would pass the arity check with the wrong types in it,
+	// since a dropped argument shifts the rest left. A trailing parameter filled from its
+	// default, or a wrapper the checker resolves away (the `Awaited<T>` in
+	// `Promise<Awaited<R>>`), leaves an argument nobody wrote. `===` is the right compare
+	// here: one checker interns its types, so the written node and the resolved argument
+	// are the same instance. A structural compare would accept a wrapper's own argument.
+	// This tightens both callers, not only the resolved-type one: emission used to need
+	// any written type argument, and now needs every one of them.
+	const writtenArgs = syntacticNode?.typeArguments ?? [];
+	const resolvedArgs = (type as ts.TypeReference).typeArguments ?? [];
+	const customerWroteEvery =
+		writtenArgs.length === resolvedArgs.length &&
+		writtenArgs.every((written, index) => checker.getTypeFromTypeNode(written) === resolvedArgs[index]);
+	if (customerWroteEvery) {
 		for (const arg of resolvedArgs) {
 			// Explicit `unknown` / `any` → empty schema (matches Req 4.3).
 			const argFlags = arg.getFlags();

@@ -781,9 +781,34 @@ describe('extractMethodTypes — transferable detection', () => {
 		}
 	});
 
-	// Documented limitation, not desired behaviour: the written node names the alias,
-	// which carries no type arguments of its own. Pinned so a fix cannot land silently.
-	it('reads through the Awaited wrapper the AsyncAPI mapped type writes', () => {
+	// Consumers read these positionally and need one per declared parameter, so a list the
+	// customer only partly wrote is emitted as none rather than shifting the rest left.
+	it('emits nothing when a trailing type parameter is filled from its default', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				export interface Reading { celsius: number; }
+				export interface PairDescriptor { __blocks: 'example-iot/pair'; }
+				export interface Pair<A, B = string> { toJSON(): PairDescriptor; a: A; b: B; }
+				export interface IotApi { pair(): Promise<Pair<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.pair');
+			assert.strictEqual(info?.transferable?.blocksTag, 'example-iot/pair');
+			assert.deepStrictEqual(info?.transferable?.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('emits nothing when a utility wrapper stands between the annotation and the transferable', () => {
 		const dir = createTempProject({
 			'tsconfig.json': TRANSFERABLE_TSCONFIG,
 			'iot.ts': `
@@ -804,10 +829,10 @@ describe('extractMethodTypes — transferable detection', () => {
 		});
 		try {
 			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('iotApi.defaulted')?.transferable?.blocksTag, 'example-iot/stream');
 			assert.deepStrictEqual(types.get('iotApi.defaulted')?.transferable?.typeArgs, []);
-			const explicit = types.get('iotApi.explicit')?.transferable?.typeArgs;
-			assert.strictEqual(explicit?.length, 1, 'an explicit arg survives both wrappers');
-			assert.strictEqual(explicit?.[0]?.title, 'Reading');
+			// `Awaited<…>`'s own argument is not the transferable's, so neither form emits one.
+			assert.deepStrictEqual(types.get('iotApi.explicit')?.transferable?.typeArgs, []);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -840,6 +865,34 @@ describe('extractMethodTypes — transferable detection', () => {
 		}
 	});
 
+	it('leaves the transferable undetected for a union or an optional method', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi {
+					maybe(): Promise<DeviceLink<Reading> | undefined>;
+					optional?(): Promise<DeviceLink<Reading>>;
+				}
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('iotApi.maybe')?.transferable, undefined);
+			assert.strictEqual(types.get('iotApi.optional')?.transferable, undefined);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Documented limitation, not desired behaviour: the written node names the alias,
+	// which carries no type arguments of its own. Pinned so a fix cannot land silently.
 	it('drops the type arg when the written return is a type alias for the generic', () => {
 		const dir = createTempProject({
 			'tsconfig.json': TRANSFERABLE_TSCONFIG,
