@@ -525,8 +525,10 @@ function extractMethodsFromResolvedType(
 		// Extract return type (unwrap Promise<T>)
 		let retType = checker.getReturnTypeOfSignature(sig);
 		retType = unwrapPromise(retType, checker);
-		// Check if the return type is a transferable before converting to schema
-		const transferable = detectTransferable(retType, checker);
+		// `sig.declaration` is not usable here: on the `AsyncAPI<T>` mapped-type path
+		// it resolves to the mapper's own `Promise<Awaited<R>>`, which would report
+		// `Awaited<R>` as a written type argument.
+		const transferable = detectTransferable(retType, checker, syntacticReturnTypeNode(prop));
 		const returnType = tsTypeToJsonSchema(retType, checker);
 
 		// JSDoc lives on the original method declaration, which we can reach
@@ -540,6 +542,26 @@ function extractMethodsFromResolvedType(
 
 		result.set(key, { params, returnType, transferable, skipCodegen });
 	}
+}
+
+/**
+ * The return-type node `prop` was declared with, or `undefined` when no declaration
+ * carries one. A mapped-type property has no `valueDeclaration`, so fall back to its
+ * sole declaration; from there a method annotates itself, a function-typed property
+ * annotates the type, and a handler-literal property annotates its initializer.
+ */
+function syntacticReturnTypeNode(prop: ts.Symbol): ts.TypeReferenceNode | undefined {
+	const decl = prop.valueDeclaration ?? (prop.declarations?.length === 1 ? prop.declarations[0] : undefined);
+	if (!decl) return undefined;
+	if (ts.isMethodSignature(decl) || ts.isMethodDeclaration(decl)) return unwrapPromiseTypeNode(decl.type);
+	if (ts.isPropertySignature(decl) || ts.isPropertyDeclaration(decl)) {
+		return decl.type && ts.isFunctionTypeNode(decl.type) ? unwrapPromiseTypeNode(decl.type.type) : undefined;
+	}
+	if (ts.isPropertyAssignment(decl)) {
+		const init = decl.initializer;
+		if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return unwrapPromiseTypeNode(init.type);
+	}
+	return undefined;
 }
 
 // ── Transferable detection ───────────────────────────────────────────────────
