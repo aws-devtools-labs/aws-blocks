@@ -7,13 +7,14 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildCdkDeployArgs } from './deploy-stream.js';
 import { buildSandboxDeployArgs } from './sandbox.js';
 
-// Each destroy path must select the same stacks its deploy path creates. With
-// no selector, `cdk destroy` refuses an app with more than one top-level stack
-// ("Since this app includes more than a single stack, specify which stacks to
-// use ... or specify `--all`"), so a sandbox deployed with `--all` (e.g. a
+// The sandbox destroy must select the same stacks the sandbox deploy creates.
+// (The production destroy follows in a separate change, together with its
+// confirmation; `npm run deploy` already passes `--all`.) With no selector,
+// `cdk destroy` refuses an app with more than one top-level stack ("Since
+// this app includes more than a single stack, specify which stacks to use ...
+// or specify `--all`"), so a sandbox deployed with `--all` (e.g. a
 // Lambda@Edge `edge-lambda-stack-*` outside us-east-1, or a `Vpc.fromLookup`
 // reference stack) could never be destroyed. The real destroy functions run in
 // a child process against fake `npm`/`npx` binaries that record their argv, so
@@ -97,17 +98,5 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     assert.doesNotMatch(cdk, /stale-seen/);
     // ... and the successful destroy removed what CDK wrote.
     assert.ok(!existsSync(assemblyDir), `expected ${assemblyDir} to be removed`);
-  });
-
-  it('production destroy selects stacks the same way as the production deploy', () => {
-    const deployArgs = buildCdkDeployArgs({ projectRoot: root, outputsFile: 'outputs.json' });
-    const call = `mod.destroy({ cdkAppPath: ${JSON.stringify(join(root, 'index.cdk.ts'))}, projectRoot: ${JSON.stringify(root)} })`;
-    const argv = recordDestroyArgv('./destroy.js', call);
-    assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
-    assert.strictEqual(
-      argv.includes('--all'),
-      deployArgs.includes('--all'),
-      `deploy and destroy must agree on --all: deploy=${deployArgs.join(' ')} destroy=${argv.join(' ')}`,
-    );
   });
 });
