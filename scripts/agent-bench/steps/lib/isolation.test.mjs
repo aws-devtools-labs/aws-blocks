@@ -228,14 +228,20 @@ describe('the agent-user boundary on a real host', () => {
 		assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
 	});
 
-	// enterAgentPhase reaps before its root ACL walk, which a live agent process could redirect with a
+	// enterAgentPhase reaps before its ACL walks, which a live agent process could redirect with a
 	// symlink swap (acl walks by path), so the reap must not lose a process that keeps changing pid.
+	// Each link waits 50 ms before it forks the next and exits, so pgrep always has a process to see
+	// (a link that forks at once lives too briefly for pgrep's /proc scan), while the pid keeps changing.
 	it('reap: kills a fork-and-exit chain and nothing comes back', needsBoundary, () => {
 		try {
-			const started = asAgent(`setsid nohup bash -c 'r() { r & exit; }; r' </dev/null >/dev/null 2>&1 &`);
+			const started = asAgent(`setsid nohup bash -c 'r() { sleep 0.05; r & exit; }; r' </dev/null >/dev/null 2>&1 &`);
 			assert.equal(started.status, 0, started.stderr);
-			sleepMs(200);
-			assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 0, 'the chain should be running');
+			let running = false;
+			for (let i = 0; i < 10 && !running; i++) {
+				sleepMs(100);
+				running = spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status === 0;
+			}
+			assert.equal(running, true, 'the chain should be running');
 			assert.equal(reapAgentProcesses(), true);
 			sleepMs(500);
 			assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
