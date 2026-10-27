@@ -38,10 +38,10 @@ function sweptPrefixes() {
 	return lists[0];
 }
 
-// The leading static text of each top-level string or template literal in a
-// TS expression: for `a ? \`bb-x-${id}\` : 'bb-y'` that is ['bb-x-', 'bb-y'].
-// Literals nested inside `${...}` are skipped.
-function literalPrefixes(expr) {
+// Each top-level string or template literal in a TS expression, with its
+// leading static text: for `a ? \`bb-x-${id}\` : 'bb-y'` the prefixes are
+// ['bb-x-', 'bb-y']. Literals nested inside `${...}` are part of their parent.
+function topLevelLiterals(expr) {
 	const out = [];
 	let i = 0;
 	while (i < expr.length) {
@@ -73,11 +73,12 @@ function literalPrefixes(expr) {
 			if (inPrefix) prefix += expr[j];
 			j++;
 		}
-		out.push(prefix);
+		out.push({ prefix, body: expr.slice(i + 1, j) });
 		i = j + 1;
 	}
 	return out;
 }
+const literalPrefixes = (expr) => topLevelLiterals(expr).map((l) => l.prefix);
 
 // Test apps a workflow runs: named in a workflow, or in a root npm script a
 // workflow runs (following `npm run` chains).
@@ -202,6 +203,12 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 		// GitHub force-stops a cancelled job 5 minutes after the cancel.
 		assert.ok(minutes(refresh) >= 1 && minutes(teardown) >= 1, 'both teardown steps need timeout-minutes');
 		assert.ok(minutes(refresh) + minutes(teardown) <= 4, 'the teardown steps may take at most 4 minutes together');
+		// No step may wait for a whole delete first: `cdk destroy` takes longer than
+		// the 5 minutes GitHub gives a cancelled job, so the teardown would never run.
+		for (const step of steps.slice(0, -2)) {
+			const code = step.replace(/^\s*#.*$/gm, '');
+			assert.doesNotMatch(code, /sandbox-destroy\.ts|cdk destroy/, `a step before the teardown runs a full destroy:\n${step}`);
+		}
 	});
 
 	it('names every stack with the sandbox id the teardown matches', () => {
@@ -213,5 +220,80 @@ describe('pr-checks.yml e2e-compute-smoke', () => {
 		// The teardown matches the id as a dash-delimited token.
 		assert.equal(m[1].match(/-\$\{id\}(?=\$\{|-|`)/g)?.length, 2, 'both stack names must contain -${id} as a token');
 		assert.match(src, /new cdk\.Stack\(app, `\$\{stackName\}-vpc-ref`/);
+	});
+
+	// The FileBucket is named `<stackName>-compute-artifacts` and S3 caps
+	// bucket names at 63 characters, so a long PR number or attempt would fail
+	// the synth.
+	it('keeps the longest stack name within the bucket-name limit', () => {
+		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
+		const app = read('test-apps/compute-smoke/aws-blocks/index.ts');
+		assert.match(app, /new Scope\('compute'\)/);
+		assert.match(app, /new FileBucket\(scope, 'artifacts'\)/);
+		assert.match(src, /const MAX_STACK_NAME_LENGTH = 63 - '-compute-artifacts'\.length;/);
+		assert.match(src, /if \(stackName\.length > MAX_STACK_NAME_LENGTH\) \{\n\s*throw /);
+		const max = 63 - '-compute-artifacts'.length;
+		// The front-door leg in the name: the longest one.
+		const legs = src.match(/const leg = \{([^}]*)\}\[apiFrontDoor\];/)?.[1];
+		assert.ok(legs, 'no `const leg = { ... }[apiFrontDoor];` in index.cdk.ts');
+		const leg = [...legs.matchAll(/'([^']*)'/g)].map((m) => m[1]).reduce((a, b) => (b.length > a.length ? b : a), '');
+		assert.ok(leg.length > 0, `no leg values in { ${legs} }`);
+		assert.match(src, /randomUUID\(\)\.slice\(0, 8\)/);
+		// The job only runs on pull requests: a 4-digit PR number, a 2-digit attempt.
+		assert.match(job.match(/^ {4}if: (.+)$/m)?.[1] ?? '', /github\.event\.pull_request\.head\.repo\.full_name ==/);
+		const env = job.match(/^ {6}BLOCKS_STACK_SUFFIX: (.+)$/m)?.[1];
+		assert.ok(env, 'e2e-compute-smoke sets no BLOCKS_STACK_SUFFIX');
+		const ciSuffix = env
+			.replace('${{ github.event.pull_request.number || github.run_id }}', '9999')
+			.replace('${{ github.run_attempt }}', '99');
+		assert.doesNotMatch(ciSuffix, /\$\{\{/, `unexpected BLOCKS_STACK_SUFFIX shape: ${env}`);
+		const expand = (body, sfx) =>
+			body
+				.replace('${id}', 'x'.repeat(8))
+				.replace('${leg}', leg)
+				.replace("${suffix ? `-${suffix}` : ''}", sfx ? `-${sfx}` : '')
+				.replace("${suffix || 'default'}", sfx || 'default');
+		const [sandbox, production] = topLevelLiterals(src.match(/const stackName =([\s\S]*?);\n/)[1]).map((l) => l.body);
+		// CI deploys sandbox mode only; production mode must fit with CI's suffix too.
+		for (const name of [expand(sandbox, ciSuffix), expand(production, ciSuffix), expand(production, '')]) {
+			assert.doesNotMatch(name, /\$\{/, `unexpected interpolation in ${name}`);
+			assert.ok(name.length <= max, `${name} is ${name.length} characters, over ${max}`);
+		}
+	});
+
+	// The teardown returns once each delete is accepted, and the job's end
+	// releases the per-account lock. The next run must not deploy its private-DNS
+	// endpoints while the last run's are still being deleted, or still being
+	// created after a cancel.
+	it("waits for an earlier run's stacks to finish deleting before it deploys", () => {
+		const at = (name) => steps.findIndex((s) => s.includes(`- name: ${name}\n`));
+		const deploy = at('E2E Compute Smoke');
+		const wait = steps.findIndex((s) => /DELETE_IN_PROGRESS/.test(s));
+		assert.ok(wait > 0 && wait < deploy, 'no DELETE_IN_PROGRESS wait before E2E Compute Smoke');
+		for (const state of ['CREATE_IN_PROGRESS', 'ROLLBACK_IN_PROGRESS', 'DELETE_IN_PROGRESS']) {
+			assert.match(steps[wait], new RegExp(`stacks [A-Z_ \\\\\n]*\\b${state}\\b`), `the wait misses ${state}`);
+		}
+		const credentials = steps.findIndex((s) => s.includes('uses: ./.github/actions/e2e-aws-credentials'));
+		assert.ok(credentials < wait, 'the wait must come after the credentials step');
+		const src = read('test-apps/compute-smoke/aws-blocks/index.cdk.ts');
+		const prefix = steps[wait].match(/starts_with\(StackName, '([^']+)'\)/)?.[1];
+		assert.ok(prefix, 'the wait must filter stacks with starts_with(StackName, ...)');
+		// Exactly the app's own prefix: a wider one would wait on other suites' stacks.
+		const names = literalPrefixes(src.match(/const stackName =([\s\S]*?);\n/)[1]);
+		const common = names.reduce((a, b) => {
+			let n = 0;
+			while (n < a.length && a[n] === b[n]) n++;
+			return a.slice(0, n);
+		});
+		assert.equal(prefix, common, `the wait's prefix '${prefix}' is not the stack names' '${common}'`);
+		assert.ok(minutes(steps[wait]) >= 1 && minutes(steps[wait]) <= 12, 'the wait needs a timeout-minutes of at most 12');
+		assert.equal(ifOf(steps[wait]), undefined, 'the wait runs only when the job reaches it');
+		// With permanent endpoints (no lock, no per-stack endpoints) it must not
+		// wait on other runs' stacks.
+		assert.match(steps[wait], /if grep -q BlocksComputeTestVpcEndpoints test-infra\/vpc-test-stack\.ts; then\n.*\n\s*exit 0\n/);
+		assert.ok(steps[wait].indexOf('exit 0') < steps[wait].indexOf('while :'), 'the guard must come before the wait loop');
+		// The step shell is `bash -e`: without pipefail, jq's exit status hides a failed list-stacks.
+		assert.match(steps[wait], /^ {10}set -o pipefail\n/m);
+		assert.ok(steps[wait].indexOf('set -o pipefail') < steps[wait].indexOf('stacks()'), 'set pipefail before the stacks helper');
 	});
 });

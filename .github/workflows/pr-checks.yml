@@ -694,7 +694,7 @@ jobs:
     needs: [build-and-test-local, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 70
     environment: e2e
     # Serialize this suite across PRs: it provisions private-DNS interface
     # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
@@ -762,6 +762,51 @@ jobs:
         run: |
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
+
+      # The last run's teardown returns once its deletes are accepted, and its
+      # end releases the lock above, so its stacks can still hold their VPC
+      # endpoints here: deleting, or still finishing a create that a cancel cut
+      # off. While this job holds the lock and has not deployed, any
+      # bb-test-compute- stack in an *_IN_PROGRESS state is an earlier run's (or
+      # an earlier leg's). Deploying now would
+      # fail with a conflicting private DNS name. Wait up to 10 minutes for them
+      # to settle, then deploy regardless. (The job timeout leaves room for it.)
+      # Once the compute test VPC has permanent endpoints (test-infra's
+      # BlocksComputeTestVpcEndpoints), the app adds none and runs need no lock,
+      # so there is nothing to wait for.
+      - name: Wait for an earlier run's stacks to settle
+        timeout-minutes: 12
+        run: |
+          # GitHub runs this step with `bash -e` only; without pipefail a failed
+          # list-stacks would read as "nothing in progress".
+          set -o pipefail
+          if grep -q BlocksComputeTestVpcEndpoints test-infra/vpc-test-stack.ts; then
+            echo "The compute test VPC has permanent endpoints: nothing to wait for."
+            exit 0
+          fi
+          stacks() {
+            aws cloudformation list-stacks --stack-status-filter "$@" --output json \
+              --query "StackSummaries[?starts_with(StackName, 'bb-test-compute-')].StackName" | jq -r 'join(" ")'
+          }
+          deadline=$((SECONDS + 600))
+          while :; do
+            if ! busy=$(stacks CREATE_IN_PROGRESS ROLLBACK_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_IN_PROGRESS \
+              UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS); then
+              echo "::warning title=Compute Smoke::Could not list the stacks of earlier runs, deploying anyway."
+              break
+            fi
+            if [ -z "$busy" ]; then break; fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning title=Compute Smoke::Still in progress after 10 minutes, deploying anyway: $busy"
+              break
+            fi
+            echo "Waiting for these stacks to settle: $busy"
+            sleep 30
+          done
+          # A delete that failed (often on the endpoints themselves) leaves them in place.
+          if failed=$(stacks DELETE_FAILED) && [ -n "$failed" ]; then
+            echo "::warning title=Compute Smoke::DELETE_FAILED, may still hold VPC endpoints: $failed"
+          fi
 
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
