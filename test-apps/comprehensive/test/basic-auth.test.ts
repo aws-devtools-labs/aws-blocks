@@ -458,6 +458,76 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(user.username, username);
         await api.authSignOut();
       });
+
+      // A password reset invalidates every outstanding session: the reset bumps
+      // the user's session epoch, so a cookie captured BEFORE the reset is
+      // rejected when replayed after. The shared `api` client's cookie jar can't
+      // hold a cookie across the reset, so this drives raw JSON-RPC with a manual
+      // Cookie header (the same bypass the sign-out revocation test uses) to prove
+      // the stale-epoch rejection travels over the wire — exercising the real
+      // epoch:<username> KVStore read and the branded SessionRevoked name through
+      // the JSON-RPC serializer, which a mock-only test cannot.
+      test('a cookie captured before a password reset is rejected when replayed after', async () => {
+        const baseUrl = getBaseUrl();
+        const username = uniqueUser();
+
+        // Confirm the user through the normal client first (needs the code poll).
+        const api = getApi();
+        await api.authSignUp(username, 'password123');
+        const signUpCode = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, signUpCode!.code);
+
+        // Sign in over raw RPC twice (two devices) and capture both Set-Cookies
+        // (jar-bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        const cookie = sessionCookieHeader(signIn.setCookies);
+        assert.ok(cookie, 'authSignIn issued a session cookie');
+        const secondSignIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        const secondCookie = sessionCookieHeader(secondSignIn.setCookies);
+        assert.ok(secondCookie, 'a second authSignIn issued another session cookie');
+
+        // The captured cookie authenticates before the reset.
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before reset');
+
+        // Reset the password for that user (over the wire): request a code, poll
+        // for the reset code (not the sign-up one), and confirm the new password.
+        await rpcRaw(baseUrl, 'authResetPassword', [username]);
+        const resetCode = await pollForCode(api, username, { not: signUpCode!.code });
+        assert.ok(resetCode, 'reset issued a verification code');
+        await rpcRaw(baseUrl, 'authConfirmResetPassword', [username, resetCode!.code, 'newpass123']);
+
+        // Replaying the exact pre-reset cookie now fails: the token is unexpired
+        // and signature-valid, but its `ep` claim is older than the user's bumped
+        // epoch (read from the real epoch:<username> KVStore marker).
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed pre-reset cookie is rejected after reset');
+
+        // The stale-epoch session surfaces as SessionRevokedException (401)
+        // THROUGH the JSON-RPC serializer — error.data.name carries the branded
+        // name across the wire (AGENTS.md asks for an e2e when serialization
+        // changes).
+        const err = await rpcRawExpectError(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(err.code, 401, 'requireAuth rejects the stale-epoch cookie with 401');
+        assert.strictEqual(
+          err.data?.name,
+          AuthBasicErrors.SessionRevoked,
+          'the invalidated session surfaces as SessionRevokedException over the wire',
+        );
+
+        // Every pre-reset session is gone, not just the first one.
+        const secondAfter = await rpcRaw(baseUrl, 'authCheckAuth', [], secondCookie);
+        assert.strictEqual(secondAfter.result, false, 'the second pre-reset cookie is rejected too');
+
+        // A session created after the reset works: the new token carries the
+        // bumped epoch, so a regression that rejects every post-reset token
+        // would fail here.
+        const postReset = await rpcRaw(baseUrl, 'authSignIn', [username, 'newpass123']);
+        const postResetCookie = sessionCookieHeader(postReset.setCookies);
+        assert.ok(postResetCookie, 'signing in with the new password issued a session cookie');
+        const postResetCheck = await rpcRaw(baseUrl, 'authCheckAuth', [], postResetCookie);
+        assert.strictEqual(postResetCheck.result, true, 'a post-reset session authenticates');
+      });
     });
 
     // ── Code read-back durability (regression, #172) ─────────────────────
