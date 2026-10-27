@@ -144,6 +144,17 @@ test('a test filter in the parent\'s flags does not reach the child', () => {
   }
 });
 
+test('an inspector flag in the parent\'s flags does not reach the child', () => {
+  // The space form leaves the port as its own token; passed on, it would be
+  // taken as the script to run and every suite would fail to start.
+  for (const flag of [['--inspect-port=0'], ['--inspect-port', '0']]) {
+    const r = spawnSync(process.execPath, [...process.execArgv, ...flag, join(fixtures, 'filtered-parent.ts'), 'pass'], {
+      encoding: 'utf8',
+    });
+    assert.equal(r.stdout.trim(), 'resolved', `${flag.join(' ')}: ${r.stderr}`);
+  }
+});
+
 test('names the failing tests from colored reporter output too', async () => {
   const previous = process.env.FORCE_COLOR;
   process.env.FORCE_COLOR = '1';

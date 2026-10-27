@@ -93,28 +93,36 @@ const MAX_FAILING_TESTS = 10;
 const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-only'];
 
 /**
- * `flags` without the test filters, and without the value of a
- * `--test-name-pattern <value>` form. A flag is matched without the double
- * quotes NODE_OPTIONS may wrap it in.
+ * Inspector flags: three children would fight over the debug port (and with
+ * --inspect-brk wait for a debugger forever). Of these only --inspect-port and
+ * --debug-port take their value as a separate argument.
  */
-function withoutTestFilters(flags: readonly string[]): string[] {
+const isInspectorFlag = (flag: string): boolean => flag.startsWith('--inspect') || flag.startsWith('--debug-port');
+const INSPECTOR_FLAGS_WITH_VALUE = ['--inspect-port', '--debug-port'];
+
+/**
+ * `flags` without the test filters and the inspector flags, and without the
+ * value of a separate-value form (`--test-name-pattern <value>`,
+ * `--inspect-port <port>`). A flag is matched without the double quotes
+ * NODE_OPTIONS may wrap it in.
+ */
+function withoutChildUnsafeFlags(flags: readonly string[]): string[] {
   const kept: string[] = [];
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i].replace(/"/g, '');
-    const name = TEST_FILTER_FLAGS.find((f) => flag === f || flag.startsWith(`${f}=`));
-    if (!name) kept.push(flags[i]);
-    else if (flag === name && name !== '--test-only') i++;
+    const filter = TEST_FILTER_FLAGS.find((f) => flag === f || flag.startsWith(`${f}=`));
+    if (filter) {
+      if (flag === filter && filter !== '--test-only') i++;
+    } else if (isInspectorFlag(flag)) {
+      if (INSPECTOR_FLAGS_WITH_VALUE.includes(flag)) i++;
+    } else kept.push(flags[i]);
   }
   return kept;
 }
 
-/**
- * This process's flags minus the test filters and the inspector ones: three
- * children would fight over the debug port (and with --inspect-brk wait for a
- * debugger forever).
- */
+/** This process's flags minus the test filters and the inspector flags. */
 function childExecArgv(): string[] {
-  return withoutTestFilters(process.execArgv).filter((flag) => !flag.startsWith('--inspect'));
+  return withoutChildUnsafeFlags(process.execArgv);
 }
 
 /**
@@ -144,9 +152,7 @@ function nodeOptionsTokens(options: string): string[] {
 function childEnv(): NodeJS.ProcessEnv {
   const { NODE_TEST_CONTEXT: _runnerContext, ...env } = process.env;
   if (env.NODE_OPTIONS) {
-    env.NODE_OPTIONS = withoutTestFilters(nodeOptionsTokens(env.NODE_OPTIONS))
-      .filter((flag) => !flag.replace(/"/g, '').startsWith('--inspect'))
-      .join(' ');
+    env.NODE_OPTIONS = withoutChildUnsafeFlags(nodeOptionsTokens(env.NODE_OPTIONS)).join(' ');
   }
   return env;
 }
