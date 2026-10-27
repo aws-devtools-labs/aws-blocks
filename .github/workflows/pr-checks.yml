@@ -274,6 +274,11 @@ jobs:
       - name: Test the required checks' failure paths
         run: node --test scripts/ci/required-checks.test.mjs
 
+      # The Hosting delete replay (scripts/ci/hosting-teardown-replay.mjs): its
+      # log parser and quota model, against fixture logs (no GitHub calls).
+      - name: Test the Hosting teardown replay
+        run: node --test scripts/ci/hosting-teardown-replay.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -284,6 +289,11 @@ jobs:
 
       - name: Check API backward compatibility
         run: npm run check:api
+
+      # The scheduled stack cleanup (cleanup-stacks.yml) deletes orphaned log groups
+      # with this step; it must never delete one whose function or cluster is live.
+      - name: Test the orphaned log group sweep
+        run: node --test scripts/ci/sweep-log-groups.test.mjs
 
       # Tests the splitter the local-unit jobs use.
       - name: Test the unit test sharding
@@ -969,6 +979,12 @@ jobs:
     environment: e2e
     strategy:
       fail-fast: false
+      # The legs run in one account, which allows one REST API delete every 30
+      # seconds, so their stack deletes can queue behind each other. They are
+      # not spread on purpose: fixed delays would need re-tuning whenever the
+      # suites' durations change. scripts/ci/hosting-teardown-replay.mjs
+      # replays recent runs' deletes through that quota, to check how long
+      # they wait or to evaluate a schedule (its header lists the inputs).
       matrix:
         include:
           - framework: spa
@@ -1014,8 +1030,9 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
       HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
-      # Web Function and front-door jobs keep the sandbox after the suite for the redeploy check.
-      BLOCKS_SANDBOX_KEEP: ${{ (matrix.compute-type == 'web-function' || matrix.front-door) && '1' || '' }}
+      # The suite keeps its sandbox; Destroy sandbox below deletes it (after the
+      # Web Function and front-door redeploy checks, which need it).
+      BLOCKS_SANDBOX_KEEP: '1'
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - name: Check the E2E trailer
@@ -1057,6 +1074,7 @@ jobs:
         run: node scripts/ci/install-playwright.mjs chromium
 
       - name: E2E Test Hosting (${{ matrix.framework }})
+        id: e2e
         run: npm run ${{ matrix.script }}
 
       # Sandbox deploys use Express Mode (rollback disabled), which rejects
@@ -1070,8 +1088,20 @@ jobs:
         if: matrix.front-door
         run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
 
+      # Runs whenever the suite ran, passed or failed, like the suite's own
+      # afterAll destroy did, and a failed destroy fails the job, as it did
+      # from the afterAll (Web Function legs too; before, only Cleanup sandbox
+      # destroyed theirs, and ignored a failure). Cleanup sandbox retries when
+      # this step didn't succeed.
+      - name: Destroy sandbox
+        id: destroy
+        if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
+        run: |
+          cd ${{ matrix.app-dir }}
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
+
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
