@@ -237,8 +237,8 @@ export class EmailClient extends Scope {
 			}
 		} catch (err: any) {
 			// Entire chunk failed — mark all as failed
+			const mapped = mapSesError(err);
 			for (const globalIdx of chunkIndices) {
-				const mapped = mapSesError(err);
 				results[globalIdx] = { status: 'failed', error: mapped.message };
 			}
 		}
