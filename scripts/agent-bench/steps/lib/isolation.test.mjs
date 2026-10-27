@@ -281,8 +281,46 @@ describe('the agent-user boundary on a real host', () => {
 		}
 	});
 
-	// The grant runs as root, so it must not follow a symlink the agent planted in the workspace.
-	it('the root workspace grant does not follow an agent-planted symlink out of the workspace', needsBoundary, () => {
+	// The harness-user walk can't set ACLs inside a dir the agent made 0700, but the agent-user walk
+	// restores the harness user's access there, so the next round gets through.
+	it('enterAgentPhase re-grants a workspace holding a dir the agent made private', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const made = asAgent(`cd '${ws}' && mkdir private && echo kept > private/f && chmod 0700 private`);
+			assert.equal(made.status, 0, made.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			assert.equal(readFileSync(join(ws, 'private', 'f'), 'utf-8'), 'kept\n');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// Each entry is granted by its owner, never by root, so an entry owned by anyone else is left
+	// alone and fails the phase closed.
+	it('enterAgentPhase fails closed on a workspace entry neither user owns, and leaves its ACL alone', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		const foreign = join(ws, 'root-owned');
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			sudo('/usr/bin/touch', foreign);
+			sudo('/usr/bin/setfacl', '-b', foreign); // drop the ACL it inherited from the workspace default
+			const phase = withEnv({ PATH: path, BENCH_ALLOW_BARE_SHELL: undefined }, () => enterAgentPhase(ws));
+			assert.equal(phase.isolated, false);
+			assert.match(phase.error ?? '', /workspace ACL grant failed/);
+			const acl = spawnSync('/usr/bin/getfacl', ['--omit-header', foreign], { encoding: 'utf-8' });
+			assert.equal(acl.status, 0, acl.stderr);
+			assert.doesNotMatch(acl.stdout, new RegExp(`user:${BENCH_AGENT_USER}:`));
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// The grant must not follow a symlink the agent planted in the workspace.
+	it('the workspace grant does not follow an agent-planted symlink out of the workspace', needsBoundary, () => {
 		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
 		const outside = mkdtempSync(join(tmpdir(), 'bench-outside-'));
 		try {

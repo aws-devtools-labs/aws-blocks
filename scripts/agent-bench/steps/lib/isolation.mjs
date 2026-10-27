@@ -98,11 +98,13 @@ export function isolationAvailable() {
  * creates stay mutually accessible) and the agent user search (x) on every ancestor: absolute-path
  * opens (npm/node/tsc) need x on each parent. x only traverses; it lists or reads nothing.
  *
- * The recursive grants run as root: from the second agent phase on (step 3 after step 2), the
- * workspace holds files the agent user created, and only a file's owner or root may set its ACL.
- * -P keeps that root walk from following a symlink the agent planted out of the workspace, so the
- * root itself is passed as its real path (-P also skips a symlink argument). -P is checked per path,
- * not per fd, so the caller must reap every agent-user process first (enterAgentPhase does).
+ * From the second agent phase on (step 3 after step 2), the workspace holds files the agent user
+ * created, and only a file's owner (or root) may set its ACL. So each entry is granted by its owner:
+ * one walk as the harness user over its entries, one as the agent user over the agent's, never as
+ * root. Both walks go by path (find/setfacl), so a process that swaps a workspace dir for a symlink
+ * mid-walk could redirect one, but only onto files that walk's user could already change. The
+ * caller still reaps every agent-user process first (enterAgentPhase does), so the harness walk
+ * can't be raced either. An entry owned by anyone else fails the grant closed.
  * @param {string} root
  * @returns {boolean} true only if the workspace grants succeeded
  */
@@ -110,20 +112,55 @@ export function prepareWorkspaceIsolation(root) {
 	if (!isolationAvailable()) return false;
 	let me = process.env.USER ?? '';
 	if (!me) me = spawnSync(BIN.id, ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
+	const uid = String(process.getuid?.() ?? '');
 	let abs;
 	try {
 		abs = realpathSync(resolve(root));
 	} catch {
 		return false;
 	}
+	if (!uid) return false;
 	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync(BIN.sudo, ['-n', BIN.setfacl, '-R', '-P', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync(BIN.sudo, ['-n', BIN.setfacl, '-R', '-P', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
+	// The agent walk has to reach the workspace, so the ancestors get x first.
 	for (let dir = dirname(abs), prev = ''; dir && dir !== prev && dir !== '/'; prev = dir, dir = dirname(dir)) {
 		spawnSync(BIN.setfacl, ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
 	}
-	return true;
+	// cwd '/': runuser keeps the harness cwd, and find fails if its user can't return to it.
+	const opts = { stdio: 'ignore', timeout: 120_000, cwd: '/' };
+	const ok = (r) => r.status === 0 && !r.error;
+	const agentWalk = asAgent([], [BIN.find, ...ownedGrantArgs(abs, BENCH_AGENT_USER, spec)]);
+	// Each walk also restores the other user's access to the dirs it owns, so a walk that one of
+	// those dirs blocked (e.g. the agent made it 0700) gets through on the next round.
+	let granted = false;
+	for (let round = 0; round < 3 && !granted; round++) {
+		const mine = ok(spawnSync(BIN.find, ownedGrantArgs(abs, uid, spec), opts));
+		const agents = ok(spawnSync(agentWalk.file, agentWalk.args, opts));
+		granted = mine && agents;
+	}
+	if (!granted) return false;
+	const foreign = spawnSync(BIN.find, ['-P', abs, '!', '-user', uid, '!', '-user', BENCH_AGENT_USER, '-print', '-quit'], {
+		encoding: 'utf8',
+		timeout: 120_000,
+		cwd: '/',
+	});
+	return ok(foreign) && foreign.stdout === '';
+}
+
+// find args that grant `spec` on every entry under `abs` owned by `owner`: access + default ACL on
+// dirs, access ACL on everything else but symlinks. find -P never follows a symlink and setfacl -P
+// skips one passed as an argument.
+function ownedGrantArgs(abs, owner, spec) {
+	const dflt = spec
+		.split(',')
+		.map((e) => `d:${e}`)
+		.join(',');
+	return [
+		'-P', abs, '-user', owner, '(',
+		'(', '-type', 'd', '-exec', BIN.setfacl, '-P', '-m', `${spec},${dflt}`, '{}', '+', ')',
+		'-o',
+		'(', '!', '-type', 'd', '!', '-type', 'l', '-exec', BIN.setfacl, '-P', '-m', spec, '{}', '+', ')',
+		')',
+	];
 }
 
 /** Single-quote a string for safe interpolation into a shell command. */
@@ -461,8 +498,8 @@ export function reapAgentProcesses() {
  * @returns {{isolated: boolean, error?: undefined} | {isolated: false, error: string}}
  */
 export function enterAgentPhase(root, options = {}) {
-	// Reap before the grant: its root walk goes by path, so a live agent-user process could swap a
-	// workspace dir for a symlink mid-walk and redirect it outside the workspace.
+	// Reap before the grant: its walks go by path, so a live agent-user process could swap a
+	// workspace dir for a symlink mid-walk and redirect the harness-user walk outside the workspace.
 	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
 	if (!isolationAvailable() || !prepareWorkspaceIsolation(root)) {
 		if (bareShellAllowed()) return { isolated: false };
