@@ -14,7 +14,7 @@ import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
-import { formatDeploySignal, selectAppStack } from './deploy-stream.js';
+import { formatDeploySignal, readAppStackOutputs } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
@@ -175,6 +175,10 @@ export function buildSandboxDeployArgs({
  *   stacks are named exactly. An empty list passes no selector (CDK then
  *   watches the app's only stack). The set is fixed when the session starts:
  *   a stack added while it runs is deployed by the next `npm run sandbox`.
+ *   Until then, adding or removing a top-level stack can stop the watch from
+ *   redeploying at all (a single-stack app passes no selector, and `cdk watch`
+ *   deploys nothing for an app that now has two), so restart `npm run sandbox`
+ *   after it.
  */
 export function buildSandboxWatchArgs({
   outDir,
@@ -188,8 +192,32 @@ export function buildSandboxWatchArgs({
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${projectRoot}`,
     `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
+    `--app`, `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`
   ];
+}
+
+/**
+ * The `cdk watch` argv for a sandbox session that just deployed the assembly
+ * at `assemblyDir` with `--all`: {@link buildSandboxWatchArgs} naming the
+ * stacks that {@link sandboxWatchStacks} picks from the assembly's top-level
+ * stacks ({@link topLevelStackPaths}).
+ */
+export function watchArgsForAssembly(
+  assemblyDir: string,
+  options: Pick<SandboxDeployArgsOptions, 'outDir' | 'projectRoot' | 'backendPath'>,
+): string[] {
+  return buildSandboxWatchArgs({ ...options, stacks: sandboxWatchStacks(topLevelStackPaths(assemblyDir)) });
+}
+
+/**
+ * Quote `backendPath` for the `--app` command string. CDK runs that string
+ * through a shell, so an unquoted path containing a space would split. cmd.exe
+ * (Windows) does not treat single quotes as quoting and would keep them in the
+ * path, so Windows gets double quotes; POSIX shells get single quotes.
+ */
+export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return `"${backendPath}"`;
+  return `'${backendPath.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -330,8 +358,7 @@ export async function startSandbox(options: SandboxOptions) {
 
   registerFrameworkFromSink(frameworkSink);
 
-  const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
-  const stackOutputs = selectAppStack(outputs).outputs;
+  const stackOutputs = readAppStackOutputs(`${outDir}/outputs.json`).outputs;
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -382,11 +409,10 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs({
+  const cdkWatch = spawnCommand("npx", watchArgsForAssembly(assemblyDir, {
     outDir,
     projectRoot: process.cwd(),
     backendPath,
-    stacks: sandboxWatchStacks(topLevelStackPaths(assemblyDir)),
   }), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
@@ -482,19 +508,50 @@ export function toDeleteObjects(listed: {
 
 /** Collect a stack's S3 bucket physical names (paginated — a large stack has
  * >100 resources, so a single page can miss the hosting bucket that blocks the
- * delete). Returns [] if the stack is already gone / not accessible. */
+ * delete). Throws if the stack is already gone / not accessible (the caller
+ * skips it).
+ *
+ * Only the buckets the stack's delete removes are returned, since only those
+ * can block it: a bucket whose `DeletionPolicy` in the DEPLOYED template is
+ * anything but `Delete` (CDK's `RemovalPolicy.RETAIN`, the production preset's
+ * default, or `RETAIN_ON_UPDATE_OR_DELETE`) is kept by CloudFormation, so it is
+ * skipped and its objects survive; so is a bucket already `DELETE_COMPLETE` or
+ * `DELETE_SKIPPED`. The deployed template is what CloudFormation acts on, even
+ * if the app's code changed since the last deploy. Fails closed: when that
+ * template can't be read or parsed (reading it needs the
+ * `cloudformation:GetTemplate` permission), it warns and returns [], so no
+ * bucket of the stack is emptied. */
 export async function listStackBucketNames(cfn: CloudFormationClient, stackName: string): Promise<string[]> {
-	const { ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
-	const buckets: string[] = [];
+	const { GetTemplateCommand, ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
+	const buckets: Array<{ logicalId?: string; physicalId: string }> = [];
 	let token: string | undefined;
 	do {
 		const res = await cfn.send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
 		for (const r of res.StackResourceSummaries ?? []) {
-			if (r.ResourceType === 'AWS::S3::Bucket' && r.PhysicalResourceId) buckets.push(r.PhysicalResourceId);
+			if (r.ResourceType !== 'AWS::S3::Bucket' || !r.PhysicalResourceId) continue;
+			if (r.ResourceStatus === 'DELETE_COMPLETE' || r.ResourceStatus === 'DELETE_SKIPPED') continue;
+			buckets.push({ logicalId: r.LogicalResourceId, physicalId: r.PhysicalResourceId });
 		}
 		token = res.NextToken;
 	} while (token);
-	return buckets;
+	if (buckets.length === 0) return [];
+	let resources: Record<string, { DeletionPolicy?: unknown }>;
+	try {
+		const { TemplateBody } = await cfn.send(new GetTemplateCommand({ StackName: stackName, TemplateStage: 'Processed' }));
+		resources = (JSON.parse(TemplateBody ?? '') as { Resources?: Record<string, { DeletionPolicy?: unknown }> }).Resources ?? {};
+	} catch (e) {
+		console.warn(
+			`  ⚠️  ${stackName}: could not read its deployed template (needs cloudformation:GetTemplate) to tell which ` +
+				`buckets it keeps, so none of its buckets are emptied: ${(e as Error).message}`,
+		);
+		return [];
+	}
+	return buckets
+		.filter(({ logicalId }) => {
+			const resource = logicalId === undefined ? undefined : resources[logicalId];
+			return resource !== undefined && (resource.DeletionPolicy === undefined || resource.DeletionPolicy === 'Delete');
+		})
+		.map(({ physicalId }) => physicalId);
 }
 
 /**
@@ -565,17 +622,7 @@ export function topLevelStacks(assemblyDir: string): AssemblyStack[] {
  * in a nested assembly and are not listed. [] if the assembly can't be read.
  */
 export function topLevelStackPaths(assemblyDir: string): string[] {
-	type Artifact = { type?: string; displayName?: string };
-	try {
-		const { artifacts = {} } = JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as {
-			artifacts?: Record<string, Artifact>;
-		};
-		return Object.entries(artifacts)
-			.filter(([, artifact]) => artifact.type === 'aws:cloudformation:stack')
-			.map(([id, artifact]) => artifact.displayName ?? id);
-	} catch {
-		return [];
-	}
+	return readStackArtifacts(assemblyDir).map(([id, artifact]) => artifact.displayName ?? id);
 }
 
 /**
@@ -701,6 +748,8 @@ export async function destroyRetryClients(projectRoot: string): Promise<Required
  * Each stack's resources are listed in that stack's own Region (see
  * {@link topLevelStacks}), so a stack outside the default Region, such as a
  * us-east-1 Lambda@Edge `edge-lambda-stack-*`, is not skipped as "not found".
+ * A bucket the stack's delete keeps (a `RETAIN` removal policy) is never
+ * emptied: see {@link listStackBucketNames}.
  */
 export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: EmptyBucketsClients = {}): Promise<void> {
 	try {
@@ -949,7 +998,7 @@ export interface DestroyRetryDeps {
 	sleep: (ms: number) => Promise<void>;
 	/** Backoff between retries. Default: 1min, then 2min. */
 	retryDelays?: number[];
-	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
+	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stacks'). */
 	successLabel?: string;
 	/**
 	 * Whether the attempt that started at `attemptStartedAt` (epoch ms) failed

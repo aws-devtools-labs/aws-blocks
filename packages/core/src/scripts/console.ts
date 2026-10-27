@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { trackCommand } from '../telemetry/trackCommand.js';
-import { selectAppStack } from './deploy-stream.js';
+import { readAppStackOutputs } from './deploy-stream.js';
 
 export interface ConsoleOptions {
   stackId?: string;
@@ -45,10 +44,9 @@ export async function openConsole(options: ConsoleOptions) {
     if (options.stackId) {
       stackName = options.stackId;
     } else if (options.outputsFile) {
-      const outputs = JSON.parse(readFileSync(options.outputsFile, 'utf-8'));
       // The deploys write every top-level stack's outputs; pick the app's stack
       // the same way the deploy does, not whichever stack finished first.
-      const selected = selectAppStack(outputs).stackName;
+      const selected = readAppStackOutputs(options.outputsFile).stackName;
       if (!selected) throw new Error(`No stack outputs in ${options.outputsFile}; deploy first`);
       stackName = selected;
     } else {

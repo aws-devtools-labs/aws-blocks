@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, mock } from 'node:test';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -10,7 +13,6 @@ import { productionDestroyDeps } from './destroy.js';
 import {
 	type AssemblyStack,
 	destroyWasThrottled,
-	emptySandboxBuckets,
 	isThrottleReason,
 	runDestroyWithRetries,
 	sandboxDestroyDeps,
@@ -486,11 +488,63 @@ describe('destroy call sites', () => {
 		assert.deepStrictEqual(regions, ['eu-west-1', 'eu-west-1', 'us-east-1']);
 	});
 
-	it('production destroy detects throttles and empties buckets before a retry', () => {
-		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {});
-		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
-		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
+	it('production destroy detects throttles, empties buckets and checks Lambda@Edge before a retry, with its own clients', async () => {
+		const regions: Array<string | undefined> = [];
+		const { cfn, calls } = fakeCfn({ s: attempt('s', 1, THROTTLE) });
+		const listed: string[] = [];
+		const cfnFor = (region: string | undefined) => {
+			regions.push(region);
+			return {
+				send: async (cmd: { constructor: { name: string }; input: { StackName: string } }) => {
+					if (cmd.constructor.name === 'ListStackResourcesCommand') {
+						listed.push(cmd.input.StackName);
+						return { StackResourceSummaries: [] };
+					}
+					return cfn.send(cmd as never);
+				},
+			} as unknown as CloudFormationClient;
+		};
+		const s3 = { send: async () => ({}) } as unknown as S3Client;
+		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {}, { cfnFor, s3 });
+		const stacks = [{ stackName: 's', region: 'eu-west-1' }];
+		assert.ok(deps.isThrottled, 'isThrottled is wired');
+		assert.strictEqual(await deps.isThrottled(stacks, SINCE), true);
+		assert.deepStrictEqual(calls, ['s:0']);
+		await deps.emptyBuckets(stacks);
+		assert.deepStrictEqual(listed, ['s']);
+		assert.ok(deps.edgeReplicaBlocked, 'edgeReplicaBlocked is wired');
+		await deps.edgeReplicaBlocked([{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' }], SINCE);
+		assert.deepStrictEqual(listed, ['s', 'edge-lambda-stack-x']);
+		assert.deepStrictEqual(regions, ['eu-west-1', 'eu-west-1', 'us-east-1']);
+		assert.strictEqual(deps.rerunCommand, 'npm run destroy');
 		assert.strictEqual(deps.successLabel, 'Production stacks');
+	});
+
+	it("production destroy lists the stacks from the assembly under projectRoot, not the working directory", (t) => {
+		const projectRoot = mkdtempSync(join(tmpdir(), 'bb-prod-asm-'));
+		t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
+		const dir = join(projectRoot, '.blocks-sandbox', 'destroy.out');
+		mkdirSync(dir, { recursive: true });
+		const stack = (stackName: string, region: string) => ({
+			type: 'aws:cloudformation:stack',
+			environment: `aws://000000000000/${region}`,
+			properties: { templateFile: `${stackName}.template.json`, stackName },
+		});
+		writeFileSync(
+			join(dir, 'manifest.json'),
+			JSON.stringify({
+				version: '22.0.0',
+				artifacts: { app: stack('app', 'eu-west-1'), 'edge-lambda-stack-x': stack('edge-lambda-stack-x', 'us-east-1') },
+			}),
+		);
+		const clients = { cfnFor: () => ({}) as CloudFormationClient, s3: {} as S3Client };
+		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot }, {}, clients);
+		// The test's working directory is not projectRoot.
+		assert.notStrictEqual(process.cwd(), projectRoot);
+		assert.deepStrictEqual(deps.listStacks(), [
+			{ stackName: 'app', region: 'eu-west-1' },
+			{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' },
+		]);
 	});
 
 	it('destroyWasThrottled returns false for no stacks and calls no AWS API', async () => {
