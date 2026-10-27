@@ -90,7 +90,7 @@ const createEnvStack = (
 const spaManifest: DeployManifest = {
   version: 1,
   compute: {},
-  staticAssets: { directory: '/tmp/assets' },
+  staticAssets: { directory: '/tmp/assets', spaFallback: true },
   routes: [{ pattern: '/*', target: 'static' }],
   buildId: 'test-spa-1',
 };

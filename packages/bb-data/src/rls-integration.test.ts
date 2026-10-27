@@ -17,6 +17,8 @@ import { rmSync } from 'node:fs';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { sql } from '@aws-blocks/data-common';
+import { ApiError } from '@aws-blocks/core';
+import { DatabaseErrors } from './errors.js';
 
 const TEST_DIR = '.bb-data-rls-integration-' + process.pid;
 let engine: PGliteEngine;
@@ -124,4 +126,50 @@ test('integration: withRLS transaction maintains context across multiple queries
     const rows = await tx.query<{ id: string }>(sql`SELECT * FROM todos ORDER BY id`);
     assert.strictEqual(rows.length, 2); // only user-1's rows
   });
+});
+
+// On PostgreSQL 16+ (Aurora included) a non-superuser that creates a role gets
+// ADMIN on it but not SET, so withRLS()'s SET LOCAL ROLE is refused with 42501.
+// That is a setup problem that fails every withRLS() call, so it must surface as
+// a 500 QueryFailed, not the 403 PermissionDenied a caller's own statement gets.
+// PGlite normally runs as superuser, so switch the session to a CREATEROLE user,
+// which is how Aurora's master user works.
+async function setupWithoutRoleMembership(): Promise<RLSEnabledDatabase> {
+  engine = new PGliteEngine(TEST_DIR);
+  await engine.execute('CREATE ROLE app_owner LOGIN CREATEROLE');
+  await engine.execute('GRANT CREATE ON SCHEMA public TO app_owner');
+  await engine.execute('SET SESSION AUTHORIZATION app_owner');
+  await engine.execute('CREATE ROLE authenticated NOLOGIN');
+  await engine.execute('CREATE TABLE notes (id TEXT PRIMARY KEY)');
+  await engine.execute('GRANT SELECT ON notes TO authenticated');
+  return new RLSEnabledDatabase(engine);
+}
+
+test('integration: a refused role switch is a 500 QueryFailed, not a 403', async () => {
+  const db = await setupWithoutRoleMembership();
+  const errors: unknown[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => errors.push(args.join(' '));
+  try {
+    await assert.rejects(
+      () => db.withRLS({ userId: 'user-1' }).query(sql`SELECT * FROM notes`),
+      (e: unknown) => {
+        assert.ok(e instanceof Error);
+        assert.strictEqual(e.name, DatabaseErrors.QueryFailed);
+        assert.ok(!(e instanceof ApiError), 'must not carry a 4xx status');
+        assert.match(String((e.cause as Error).message), /permission denied to set role/);
+        return true;
+      },
+    );
+  } finally {
+    console.error = original;
+  }
+  assert.ok(errors.some((line) => /GRANT authenticated TO CURRENT_USER/.test(String(line))), 'logs the fix');
+});
+
+test('integration: after GRANT authenticated TO CURRENT_USER, withRLS() works for a non-superuser', async () => {
+  const db = await setupWithoutRoleMembership();
+  await engine.execute('GRANT authenticated TO CURRENT_USER');
+  const row = await db.withRLS({ userId: 'user-1' }).queryOne<{ r: string }>(sql`SELECT current_user AS r`);
+  assert.strictEqual(row?.r, 'authenticated');
 });

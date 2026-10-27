@@ -533,7 +533,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId for fresh project scaffolding', () => {
+  it('generates .blocks/config.json with stackId and ships zod for fresh bare project scaffolding', () => {
     const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
     try {
       const result = run([tmpDir, '--template', 'bare', '--skip-install']);
@@ -542,6 +542,12 @@ describe('create-blocks-app auto-detection', () => {
       assert.ok(config.stackId, '.blocks/config.json should have a stackId');
       assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
       assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
+      // The bare template's commented examples import zod, so a fresh app must depend on it
+      // at the template's range (read from the template — dependency bumps change it).
+      const templateZod = JSON.parse(readFileSync(join(__dirname, '../templates/bare/package.json'), 'utf-8')).dependencies?.zod;
+      assert.strictEqual(typeof templateZod, 'string', 'templates/bare/package.json should declare a zod dependency');
+      const appPkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(appPkg.dependencies?.zod, templateZod, 'scaffolded app should depend on zod at the template range');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
