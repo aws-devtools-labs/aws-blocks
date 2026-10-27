@@ -330,8 +330,13 @@ export interface CognitoFederatedOpts<N extends string = string> {
 	 * Gateway base URL and, in sandbox mode, `http://localhost:3000/`). Use it for
 	 * the same cases as `additionalCallbackUrls` — SPA pages, native custom
 	 * schemes used as a direct redirect, and custom-domain names other than the
-	 * primary one. Merged across
-	 * every `cognitoFederated()` provider and de-duplicated.
+	 * primary one. Merged across every `cognitoFederated()` provider and
+	 * de-duplicated.
+	 *
+	 * Note: sign-out currently clears the session and revokes the refresh token
+	 * (`/oauth2/revoke`); it does not redirect to Cognito's hosted `/logout`
+	 * endpoint. Logout URLs are registered for completeness and forward
+	 * compatibility, but the current sign-out path doesn't use them.
 	 */
 	additionalLogoutUrls?: string[];
 }

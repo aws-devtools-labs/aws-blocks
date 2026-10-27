@@ -545,11 +545,12 @@ export class AuthOIDC<
 /**
  * Schemes never accepted as a Cognito app-client URL, even though they parse.
  */
-const DENIED_CLIENT_URL_SCHEMES: ReadonlySet<string> = new Set(['javascript', 'data', 'file', 'vbscript']);
+const DENIED_CLIENT_URL_SCHEMES: ReadonlySet<string> = new Set(['javascript', 'data', 'file', 'vbscript', 'blob', 'about']);
 
 /**
  * OAuth query parameters the authorization server appends to the redirect; a
  * registered URL that already carries one collides with the redirect contract.
+ * Mirrors the OAuth 2.0 authorization-code redirect parameters (`code`, `state`).
  */
 const RESERVED_CLIENT_URL_QUERY_PARAMS: readonly string[] = ['code', 'state'];
 
@@ -563,7 +564,8 @@ const RESERVED_CLIENT_URL_QUERY_PARAMS: readonly string[] = ['code', 'state'];
  *
  * - whitespace or control characters anywhere (incl. leading/trailing);
  * - a backslash, or userinfo (`@`) in the authority;
- * - the `javascript:`, `data:`, `file:` and `vbscript:` schemes;
+ * - the `javascript:`, `data:`, `file:`, `vbscript:`, `blob:` and `about:`
+ *   schemes;
  * - `http:` / `https:` without exactly `//` followed by a host, a wildcard
  *   (`*`) or non-ASCII host;
  * - plain `http://` whose host isn't `localhost` (Cognito accepts http only for

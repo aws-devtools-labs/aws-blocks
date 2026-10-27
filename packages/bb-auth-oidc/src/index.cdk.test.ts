@@ -610,6 +610,8 @@ test('CDK (#1001): additionalCallbackUrls / additionalLogoutUrls reject malforme
 	rejects('javascript:alert(1)', /'javascript:' scheme/);
 	rejects('data:text/html,hi', /'data:' scheme/);
 	rejects('file:///etc/hosts', /'file:' scheme/, 'additionalLogoutUrls');
+	rejects('blob:https://app.example.com/550e8400-e29b-41d4-a716-446655440000', /'blob:' scheme/);
+	rejects('about:blank', /'about:' scheme/, 'additionalLogoutUrls');
 	rejects('https://user@app.example.com/cb', /userinfo/);
 	rejects('https://app.example.com\\@other.example/cb', /backslash/);
 	rejects('https:///nohost/cb', /has no host/);

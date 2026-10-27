@@ -208,6 +208,11 @@ port other than `3000`. The relay flow needs no extra entry: its `redirect_uri`
 is the backend's https callback (derived above) and the native custom scheme is
 only the `relayTo` target.
 
+**Logout URLs are not exercised yet.** `CognitoFederationEngine.signOut()` clears
+the session and best-effort revokes the refresh token (`/oauth2/revoke`); it
+does not redirect to Cognito's hosted `/logout` endpoint. `logoutUrls` are
+registered for completeness and forward compatibility.
+
 These URLs are a CDK-layer concern only: the mock runtime has no Cognito app
 client (`cognitoFederated` isn't available in `npm run dev`, see above), so
 there is nothing to mirror locally.

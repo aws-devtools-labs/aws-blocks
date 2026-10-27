@@ -393,6 +393,10 @@ cognitoFederated({
 
 Entries from every `cognitoFederated()` provider are merged into the one shared app client and de-duplicated; each URL is validated at synth.
 
+Sign-out clears the session and revokes the refresh token; it doesn't redirect through Cognito's hosted `/logout` endpoint, so the logout URLs are registered for completeness but aren't used by the current sign-out path.
+
+**Upgrading.** The app client's callback and logout URLs are now managed by the Building Block. URLs added to the Cognito app client outside of CDK (for example, in the console as a workaround) are replaced on the next deploy — re-add any you still need through `additionalCallbackUrls` / `additionalLogoutUrls`.
+
 In local dev (`npm run dev`), `cognitoFederated` is **not available** — Cognito federation needs the deployed User Pool + app-client credentials, which only exist after `npm run sandbox` / `npm run deploy`. Declaring the provider doesn't block local dev, but a cognito-federated sign-in fails fast with a clear message. For local sign-in, add an explicit `stubIdp({ name })` provider (see [Local development](#local-development)); exercise the real Cognito flow in sandbox/deploy.
 
 ### When to use Cognito federation vs self-hosted
