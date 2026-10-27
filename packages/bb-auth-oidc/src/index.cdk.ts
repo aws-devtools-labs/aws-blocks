@@ -392,6 +392,7 @@ export class AuthOIDC<
 				? { kind: 'register', origin }
 				: { kind: 'skip', display: resolved };
 		}
+		// By design: a deploy-time token can't be scheme-checked at synth, so it is registered as-is (pre-existing behavior).
 		return { kind: 'register', origin };
 	}
 
