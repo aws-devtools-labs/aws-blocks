@@ -94,22 +94,28 @@ const TEST_FILTER_FLAGS = ['--test-name-pattern', '--test-only'];
 
 /**
  * Inspector flags: three children would fight over the debug port (and with
- * --inspect-brk wait for a debugger forever). Of these only --inspect-port and
- * --debug-port take their value as a separate argument.
+ * --inspect-brk wait for a debugger forever). Of these --inspect-port,
+ * --debug-port and --inspect-publish-uid can take their value as a separate
+ * argument.
  */
 const isInspectorFlag = (flag: string): boolean => flag.startsWith('--inspect') || flag.startsWith('--debug-port');
-const INSPECTOR_FLAGS_WITH_VALUE = ['--inspect-port', '--debug-port'];
+const INSPECTOR_FLAGS_WITH_VALUE = ['--inspect-port', '--debug-port', '--inspect-publish-uid'];
 
 /**
  * `flags` without the test filters and the inspector flags, and without the
  * value of a separate-value form (`--test-name-pattern <value>`,
  * `--inspect-port <port>`). A flag is matched without the double quotes
- * NODE_OPTIONS may wrap it in.
+ * NODE_OPTIONS may wrap it in, and with `_` in its name read as `-` (node
+ * accepts both spellings).
  */
 function withoutChildUnsafeFlags(flags: readonly string[]): string[] {
   const kept: string[] = [];
   for (let i = 0; i < flags.length; i++) {
-    const flag = flags[i].replace(/"/g, '');
+    const unquoted = flags[i].replace(/"/g, '');
+    const eq = unquoted.indexOf('=');
+    const flag = unquoted.startsWith('--')
+      ? (eq < 0 ? unquoted : unquoted.slice(0, eq)).replace(/_/g, '-') + (eq < 0 ? '' : unquoted.slice(eq))
+      : unquoted;
     const filter = TEST_FILTER_FLAGS.find((f) => flag === f || flag.startsWith(`${f}=`));
     if (filter) {
       if (flag === filter && filter !== '--test-only') i++;

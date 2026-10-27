@@ -136,7 +136,11 @@ test('a --test-skip-pattern still reaches the child', async () => {
 });
 
 test('a test filter in the parent\'s flags does not reach the child', () => {
-  for (const filter of [['--test-name-pattern=no-test-has-this-name'], ['--test-name-pattern', 'no-test-has-this-name']]) {
+  for (const filter of [
+    ['--test-name-pattern=no-test-has-this-name'],
+    ['--test-name-pattern', 'no-test-has-this-name'],
+    ['--test_name_pattern=no-test-has-this-name'],
+  ]) {
     const r = spawnSync(process.execPath, [...process.execArgv, ...filter, join(fixtures, 'filtered-parent.ts')], {
       encoding: 'utf8',
     });
@@ -147,7 +151,12 @@ test('a test filter in the parent\'s flags does not reach the child', () => {
 test('an inspector flag in the parent\'s flags does not reach the child', () => {
   // The space form leaves the port as its own token; passed on, it would be
   // taken as the script to run and every suite would fail to start.
-  for (const flag of [['--inspect-port=0'], ['--inspect-port', '0']]) {
+  for (const flag of [
+    ['--inspect-port=0'],
+    ['--inspect-port', '0'],
+    ['--inspect_port', '0'],
+    ['--inspect-publish-uid', 'http'],
+  ]) {
     const r = spawnSync(process.execPath, [...process.execArgv, ...flag, join(fixtures, 'filtered-parent.ts'), 'pass'], {
       encoding: 'utf8',
     });
