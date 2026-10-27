@@ -510,6 +510,12 @@ describe('destroy call sites', () => {
 		assert.ok(deps.isThrottled, 'isThrottled is wired');
 		assert.strictEqual(await deps.isThrottled(stacks, SINCE), true);
 		assert.deepStrictEqual(calls, ['s:0']);
+		// The previous attempt's failure time reaches the check, so its throttle is not counted again.
+		const stale = fakeCfn({ s: shortPreviousAttempt() });
+		const staleDeps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {}, { cfnFor: () => stale.cfn, s3 });
+		assert.ok(staleDeps.isThrottled);
+		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE), true, 'without previousFailureAt the skew window lets it in');
+		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE, SINCE - 20_000), false);
 		await deps.emptyBuckets(stacks);
 		assert.deepStrictEqual(listed, ['s']);
 		assert.ok(deps.edgeReplicaBlocked, 'edgeReplicaBlocked is wired');
