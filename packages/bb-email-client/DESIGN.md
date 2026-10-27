@@ -39,15 +39,15 @@ No SNS topics for bounce/complaint handling, no SES templates, no dedicated IP p
 
 The mock and the AWS entry point run the same checks from `src/validation.ts` before a message is sent, so a message rejected locally is also rejected when deployed, before any SES call:
 
-- every address (To, CC, BCC and the sender) is a basic RFC 5322 addr-spec, or a name-addr (`Jane Doe <jane@example.com>`, which SES also accepts); control characters, CR and LF included, are rejected;
+- every address (To, CC, BCC, the sender and any reply-to) is a basic RFC 5322 addr-spec, or a name-addr, which SES also accepts. The display name must be a phrase of atoms separated by spaces (`Jane Doe <jane@example.com>`) or a single quoted-string (`"Doe, Jane" <jane@example.com>`), so a comma or semicolon outside quotes can't make one entry a list of addresses. The raw string is checked as given (no trimming). C0 and C1 control characters (CR, LF and NEL included), DEL, U+2028 and U+2029 are rejected, and the address is shown in the error message with control characters escaped;
 - at most 50 recipients per message (To + CC + BCC) → `InvalidInputException`;
-- at most 40 MB per message → `EmailSendFailedException`.
+- at most 40 MB per message → `EmailSendFailedException`. This is an approximate early check: it measures the message as JSON, without MIME headers or transfer-encoding overhead (base64 or quoted-printable adds about a third), so a message somewhat under 40 MB can still be rejected by SES once encoded, with an SES error instead.
 
 `send()` throws; within `sendBatch()` an invalid message is marked `failed` in the per-entry results and not sent.
 
 ## HTML Part
 
-A message gets an HTML part only when `html` is set, for both `send()` and `sendBatch()`. `sendBatch()` uses `SendBulkEmail`, where one inline template is shared by every entry of a call, so it sends messages with `html` and messages without it in separate calls: the text-only call's template has no HTML part. A plain-text `body` is never placed in an HTML part, where a mail client would render any markup in it.
+A message gets an HTML part only when `html` is set, for both `send()` and `sendBatch()`. `sendBatch()` uses `SendBulkEmail`, where one inline template is shared by every entry of a call, so it sends messages with `html` and messages without it in separate calls: the text-only call's template has no HTML part. The calls with an HTML part go first, so send order differs from input order, while `results` stays in input order. A plain-text `body` is never placed in an HTML part, where a mail client would render any markup in it.
 
 ## IAM
 
