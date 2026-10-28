@@ -19,7 +19,9 @@ import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.RpcModel
 import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.model.TypeDefinition
+import com.aws.blocks.kotlin.model.TypeArgRole
 import com.aws.blocks.kotlin.model.TypeRef
+import com.aws.blocks.kotlin.model.transferableTypeArg
 import com.aws.blocks.kotlin.model.UnionVariant
 
 /** Where the local dev server listens, for a spec that declares no server of its own. */
@@ -28,11 +30,6 @@ private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 /** The path a Blocks backend serves RPC on. */
 private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
 
-/** The transferable tag of an OIDC client, whose type argument names its providers. */
-private const val OIDC_CLIENT_TAG = "oidc/client"
-
-/** What an operation's provider enum is called when nothing else in its object claims the name. */
-private const val PROVIDER_ENUM_NAME = "Provider"
 
 /**
  * Transforms an [RpcModel] into a language-independent [CodegenModel].
@@ -102,7 +99,7 @@ class CodegenModelBuilder {
             val returnType = resolveType(method.result?.schema ?: TypeRef.Primitive("void"), collector, explicitName = method.result?.name)
             val nestedTypes = collector.buildNestedTypesForMethod(method.name)
             val result = OperationResult(
-                type = withOidcProviders(returnType, method.result?.schema, nestedTypes),
+                type = withParameterValues(returnType, method.result?.schema, nestedTypes),
                 description = method.result?.description
             )
 
@@ -119,50 +116,51 @@ class CodegenModelBuilder {
         return grouped.map { (name, ops) -> ApiNamespace(name = name, operations = ops) }
     }
 
-    // ── OIDC provider names ──────────────────────────────────────────
+    // ── Parameter-value type arguments ───────────────────────────────
 
     /**
-     * Gives an operation's own `oidc/client` result the enum of providers it signs in with, which
-     * the generator emits in the operation's object. The names come from the spec's type args; a
-     * result whose providers didn't resolve to string literals keeps none, and so does a client
-     * nested inside another type, since only an operation's own client hydrates.
+     * Gives an operation's own result the enum of values its [TypeArgRole.PARAMETER_VALUES] type
+     * argument permits, which the generator emits in the operation's object. The values come from
+     * the spec's type args; an argument that didn't resolve to string literals contributes none,
+     * and neither does a transferable nested inside another type, which doesn't hydrate.
      */
-    private fun withOidcProviders(
+    private fun withParameterValues(
         resolved: ResolvedType,
         schema: TypeRef?,
         nestedTypes: List<NestedTypeNode>,
     ): ResolvedType {
-        val values = oidcProviderValues(schema) ?: return resolved
-        val enumName = providerEnumName(takenTypeNames(nestedTypes))
-        return attachProviderEnum(resolved, ResolvedType.Enum(name = enumName, values = values))
+        val transferable = directTransferable(schema) ?: return resolved
+        val typeArg = transferableTypeArg(transferable.transferableName)
+        if (typeArg.role != TypeArgRole.PARAMETER_VALUES) return resolved
+        val values = (transferable.typeArgs.firstOrNull() as? TypeRef.UnionLiteral)?.values ?: return resolved
+        val name = parameterValuesName(typeArg.typeArgName, takenTypeNames(nestedTypes))
+        return attachTypeArg(resolved, ResolvedType.Enum(name = name, values = values))
     }
 
-    /** The providers a direct or optional `oidc/client` result names, if the spec resolved them. */
-    private fun oidcProviderValues(schema: TypeRef?): List<String>? {
+    /** The transferable an operation returns directly, or inside a nullable. */
+    private fun directTransferable(schema: TypeRef?): TypeRef.Transferable? {
         var typeRef = schema
         while (typeRef is TypeRef.Nullable) typeRef = typeRef.inner
-        val transferable = typeRef as? TypeRef.Transferable ?: return null
-        if (transferable.transferableName != OIDC_CLIENT_TAG) return null
-        return (transferable.typeArgs.firstOrNull() as? TypeRef.UnionLiteral)?.values
+        return typeRef as? TypeRef.Transferable
     }
 
-    private fun attachProviderEnum(resolved: ResolvedType, providers: ResolvedType.Enum): ResolvedType =
+    private fun attachTypeArg(resolved: ResolvedType, typeArg: ResolvedType.Enum): ResolvedType =
         when (resolved) {
-            is ResolvedType.Nullable -> ResolvedType.Nullable(attachProviderEnum(resolved.inner, providers))
-            is ResolvedType.Transferable -> resolved.copy(typeArgs = listOf(providers))
+            is ResolvedType.Nullable -> ResolvedType.Nullable(attachTypeArg(resolved.inner, typeArg))
+            is ResolvedType.Transferable -> resolved.copy(typeArgs = listOf(typeArg))
             else -> resolved
         }
 
     /**
-     * `Provider`, unless the operation's object already holds a type by that name or reaches one
-     * the enum would shadow.
+     * The tag's own name for the argument, unless the operation's object already holds a type by
+     * that name or reaches one the enum would shadow.
      */
-    private fun providerEnumName(taken: Set<String>): String {
-        if (PROVIDER_ENUM_NAME !in taken) return PROVIDER_ENUM_NAME
-        var candidate = "Result$PROVIDER_ENUM_NAME"
+    private fun parameterValuesName(preferred: String, taken: Set<String>): String {
+        if (preferred !in taken) return preferred
+        var candidate = "Result$preferred"
         var attempt = 2
         while (candidate in taken) {
-            candidate = "Result$PROVIDER_ENUM_NAME$attempt"
+            candidate = "Result$preferred$attempt"
             attempt++
         }
         return candidate
@@ -267,14 +265,13 @@ class CodegenModelBuilder {
                 elements = typeRef.elements.map { resolveType(it, collector) },
             )
             is TypeRef.Nullable -> ResolvedType.Nullable(resolveType(typeRef.inner, collector))
-            // An oidc/client's type argument names its providers, not a type to generate. The
-            // operation's own result gets them back as an enum in [withOidcProviders].
+            // A parameter-value argument permits values rather than naming a type to generate.
+            // The operation's own result gets them back as an enum in [withParameterValues].
             is TypeRef.Transferable -> ResolvedType.Transferable(
                 transferableName = typeRef.transferableName,
-                typeArgs = if (typeRef.transferableName == OIDC_CLIENT_TAG) {
-                    emptyList()
-                } else {
-                    typeRef.typeArgs.map { resolveType(it, collector) }
+                typeArgs = when (transferableTypeArg(typeRef.transferableName).role) {
+                    TypeArgRole.PARAMETER_VALUES -> emptyList()
+                    TypeArgRole.DATA -> typeRef.typeArgs.map { resolveType(it, collector) }
                 },
             )
             is TypeRef.ObjectWithOneOf -> {
@@ -759,9 +756,9 @@ class CodegenModelBuilder {
                 }
 
                 is TypeRef.Transferable -> {
-                    // Recurse into type args to collect any referenced types. An oidc/client's
-                    // argument names providers, which never become a type of their own here.
-                    if (typeRef.transferableName != OIDC_CLIENT_TAG) {
+                    // Recurse into type args to collect any referenced types. A parameter-value
+                    // argument names no type of its own, so it collects nothing here.
+                    if (transferableTypeArg(typeRef.transferableName).role == TypeArgRole.DATA) {
                         for (arg in typeRef.typeArgs) {
                             collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
                         }

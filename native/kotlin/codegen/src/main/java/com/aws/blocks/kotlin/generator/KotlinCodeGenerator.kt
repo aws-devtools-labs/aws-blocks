@@ -16,8 +16,10 @@ import com.aws.blocks.kotlin.model.PrimitiveKind
 import com.aws.blocks.kotlin.model.ResolvedField
 import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.ServerDefinition
+import com.aws.blocks.kotlin.model.TypeArgRole
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.UnionVariant
+import com.aws.blocks.kotlin.model.transferableTypeArg
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -46,6 +48,18 @@ private data class TransferableBinding(
     val isGeneric: Boolean,
     /** What a generic binding's argument is when the spec names none. */
     val defaultTypeArgument: TypeName? = null,
+    /**
+     * The interface a generated [com.aws.blocks.kotlin.model.TypeArgRole.PARAMETER_VALUES] enum
+     * implements, through which the runtime reads [typeArgValueName] off a value.
+     */
+    val typeArgConstraint: ClassName? = null,
+    /** The property such an enum carries its value in. */
+    val typeArgValueName: String = "value",
+    /**
+     * KDoc for such an enum, taking the method name. Prose belongs to the tag, so a generated
+     * doc reads as the block's own rather than as the generator's wording for every tag.
+     */
+    val typeArgDoc: String = "The values %L accepts.",
 )
 
 /**
@@ -65,10 +79,13 @@ private val knownTransferableBindings = mapOf(
         isGeneric = true,
         // A spec that didn't resolve its provider names signs in by name.
         defaultTypeArgument = ClassNames.providerName,
+        typeArgConstraint = ClassNames.oidcProvider,
+        typeArgValueName = "providerName",
+        typeArgDoc = "The providers %L signs in with.",
     ),
 )
 
-/** The transferable tag of an OIDC client, whose type argument is the enum of its providers. */
+/** The transferable tag of an OIDC client, which the relayTo gate and its hydration name. */
 private const val OIDC_CLIENT_TAG = "oidc/client"
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
@@ -218,7 +235,7 @@ class KotlinCodeGenerator(
                         )
                     )
                 }
-                oidcProviderRenameWarning(operation, namespace.name, apiClassName(namespace))
+                parameterValuesRenameWarning(operation, namespace.name, apiClassName(namespace))
                     ?.let(warnings::add)
             }
         }
@@ -249,61 +266,70 @@ class KotlinCodeGenerator(
         else -> false
     }
 
+    /** Whether an operation's method is replaced by the stub an unconfigured OIDC build gets. */
+    private fun isStubbed(operation: Operation): Boolean =
+        stubOidc && containsOidcTransferable(operation.result.type)
+
     /**
-     * The providers an operation's own `oidc/client` result signs in with, which become an enum in
-     * the operation's object. A spec that didn't name them, and a client nested inside another
-     * type, have none.
+     * The values an operation's own result permits for its client's parameter, which become an
+     * enum in the operation's object. A spec that didn't resolve them to string literals, and a
+     * transferable in any other position, have none.
      */
-    private fun oidcProviderEnum(operation: Operation): ResolvedType.Enum? {
-        if (stubOidc) return null
+    private fun parameterValuesEnum(operation: Operation): ResolvedType.Enum? {
+        if (isStubbed(operation)) return null
         val transferable = unwrapNullableTransferable(operation.result.type) ?: return null
-        if (transferable.transferableName != OIDC_CLIENT_TAG) return null
+        if (transferableTypeArg(transferable.transferableName).role != TypeArgRole.PARAMETER_VALUES) {
+            return null
+        }
         return transferable.typeArgs.firstOrNull() as? ResolvedType.Enum
     }
 
-    /** Names the enum when it isn't `Provider`, since the operation's object already uses that name. */
-    private fun oidcProviderRenameWarning(
+    /** Names the enum when the tag's own name was taken by something in the operation's object. */
+    private fun parameterValuesRenameWarning(
         operation: Operation,
         namespace: String,
         className: String,
     ): String? {
-        val providers = oidcProviderEnum(operation) ?: return null
-        if (providers.name == "Provider") return null
-        return "kotlin: ${fullMethodName(operation, namespace)} names its providers " +
-            "$className.${toPascalCase(operation.name)}.${providers.name}, since its operation " +
-            "already uses the name Provider."
+        val values = parameterValuesEnum(operation) ?: return null
+        val transferable = unwrapNullableTransferable(operation.result.type) ?: return null
+        val preferred = transferableTypeArg(transferable.transferableName).typeArgName
+        if (values.name == preferred) return null
+        return "kotlin: ${fullMethodName(operation, namespace)} generates " +
+            "$className.${toPascalCase(operation.name)}.${values.name} rather than $preferred, " +
+            "since its operation already uses that name."
     }
 
     private fun fullMethodName(operation: Operation, namespace: String): String =
         if (namespace == "_default") operation.name else "$namespace.${operation.name}"
 
     /**
-     * An [com.aws.blocks.kotlin.oidc.OidcProvider] enum whose constants carry the names the
-     * backend knows its providers by, which is what types the operation's client.
+     * The enum of values an operation's client accepts for its parameter. Each constant carries
+     * the value it stands for in a property, rather than a serial name, so the runtime can read it
+     * through the binding's interface and a caller can read it directly.
      */
-    private fun generateOidcProviderEnum(
+    private fun generateParameterValuesEnum(
         operation: Operation,
         namespace: String,
-        providers: ResolvedType.Enum,
+        values: ResolvedType.Enum,
+        binding: TransferableBinding,
     ): TypeSpec {
         val builder = TypeSpec
-            .enumBuilder(providers.name)
-            .addKdoc("The providers `%L` signs in with.", fullMethodName(operation, namespace))
-            .addSuperinterface(ClassNames.oidcProvider)
+            .enumBuilder(values.name)
+            .addKdoc(binding.typeArgDoc, "`${fullMethodName(operation, namespace)}`")
             .primaryConstructor(
                 FunSpec.constructorBuilder()
-                    .addParameter("providerName", String::class)
+                    .addParameter(binding.typeArgValueName, String::class)
                     .build(),
             )
-            .addProperty(
-                PropertySpec.builder("providerName", String::class)
-                    .addModifiers(KModifier.OVERRIDE)
-                    .initializer("providerName")
-                    .build(),
-            )
-        // The provider name goes in the constructor rather than a serial name, so it is public API
-        // a caller can read, but the constants are named like any other generated enum's.
-        for ((constant, value) in enumConstantNames(providers.values)) {
+        val property = PropertySpec.builder(binding.typeArgValueName, String::class)
+            .initializer(binding.typeArgValueName)
+        binding.typeArgConstraint?.let {
+            builder.addSuperinterface(it)
+            property.addModifiers(KModifier.OVERRIDE)
+        }
+        builder.addProperty(property.build())
+        // Named like any other generated enum's constants.
+        for ((constant, value) in enumConstantNames(values.values)) {
             builder.addEnumConstant(
                 constant,
                 TypeSpec.anonymousClassBuilder()
@@ -1205,7 +1231,7 @@ class KotlinCodeGenerator(
         }
 
         for (operation in namespace.operations) {
-            if (stubOidc && containsOidcTransferable(operation.result.type)) {
+            if (isStubbed(operation)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = operationContexts[operation]
@@ -1217,7 +1243,7 @@ class KotlinCodeGenerator(
 
         // Add nested operation objects for operations that have nested types
         for (operation in namespace.operations) {
-            if (operation.nestedTypes.isNotEmpty() || oidcProviderEnum(operation) != null) {
+            if (operation.nestedTypes.isNotEmpty() || parameterValuesEnum(operation) != null) {
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
@@ -1239,18 +1265,18 @@ class KotlinCodeGenerator(
      * serializers emitted in a separate top-level file.
      */
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
-        val providers = oidcProviderEnum(operation)
-        if (operation.nestedTypes.isEmpty() && providers == null) return null
+        val parameterValues = parameterValuesEnum(operation)
+        if (operation.nestedTypes.isEmpty() && parameterValues == null) return null
         val opObjectName = toPascalCase(operation.name)
         val context = OperationTypeContext(opObjectName)
 
-        // The provider enum isn't a nested type of the result, so register it directly; the
+        // A parameter-value enum isn't a nested type of the result, so register it directly; the
         // result's type argument then resolves to it like any other type in the object.
-        if (providers != null) {
+        if (parameterValues != null) {
             context.register(
-                providers,
-                ClassName("", opObjectName, providers.name),
-                ClassName(packageName, apiClassName, opObjectName, providers.name),
+                parameterValues,
+                ClassName("", opObjectName, parameterValues.name),
+                ClassName(packageName, apiClassName, opObjectName, parameterValues.name),
             )
         }
 
@@ -1300,8 +1326,13 @@ class KotlinCodeGenerator(
         val objectName = toPascalCase(operation.name)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
-        oidcProviderEnum(operation)?.let { providers ->
-            objectBuilder.addType(generateOidcProviderEnum(operation, namespace, providers))
+        parameterValuesEnum(operation)?.let { values ->
+            val binding = knownTransferableBindings[
+                unwrapNullableTransferable(operation.result.type)?.transferableName,
+            ]
+            if (binding != null) {
+                objectBuilder.addType(generateParameterValuesEnum(operation, namespace, values, binding))
+            }
         }
 
         for (node in operation.nestedTypes) {
@@ -1892,7 +1923,7 @@ class KotlinCodeGenerator(
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ) {
-        if (stubOidc && transferable.transferableName == "oidc/client") return
+        if (stubOidc && transferable.transferableName == OIDC_CLIENT_TAG) return
 
         val returnType = resolveTransferable(transferable, index, serializerContext, qualified = true)
         val typeArgument = transferable.typeArgs.firstOrNull()?.let {

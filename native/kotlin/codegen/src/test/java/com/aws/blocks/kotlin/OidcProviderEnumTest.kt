@@ -127,7 +127,7 @@ class OidcProviderEnumTest : FunSpec({
             " OidcClient<GetClient.ResultProvider>"
         source shouldContain "public enum class ResultProvider("
         result.warnings.single() shouldContain
-            "auth.getClient names its providers Auth.GetClient.ResultProvider"
+            "auth.getClient generates Auth.GetClient.ResultProvider rather than Provider"
     }
 
     test("a client nested in another type gets no providers and no enum") {

@@ -433,6 +433,8 @@ The one exception is an `oidc/client`, which carries the provider names the type
 
 Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, whose `signIn(provider:relayTo:launcher:)` takes only those providers. Without the field, the client is `OIDCClient<String>`.
 
+Because both meanings share one field, each generator classifies the argument itself: `realtime/channel`'s is a payload to generate and decode, `oidc/client`'s is the set of values its client accepts. Kotlin keeps that classification as per-tag data (`TypeArgRole` in `codegen/.../model/Transferables.kt`) rather than branching on the tag, but the fact is still restated per platform — a new transferable whose argument isn't a payload has to be added to each. A dedicated spec field would be the way to stop that.
+
 Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<ProviderName>`, where `ProviderName` is the Kotlin runtime's own wrapper for any provider name (not the TypeScript `ProviderName<P>` above), and `signIn` takes that name. Dart ignores it for now.
 
 ### `x-blocks-native-packages` (document root)
