@@ -16,6 +16,7 @@ import type { Construct, IConstruct } from 'constructs';
 import {
 	APP_ID_PATTERN,
 	type AppViolation,
+	checkApiChild,
 	checkResourcePolicy,
 	checkRole,
 	isResourcePolicyType,
@@ -199,12 +200,17 @@ export function collectAppViolations(
 	}
 
 	// Resource policies under the root (Lambda permissions, queue / bucket / secret /
-	// topic policies) that open up a resource outside the app.
+	// topic policies) that open up a resource outside the app, and API Gateway
+	// children attached to an API outside it.
 	for (const node of root.node.findAll()) {
-		if (!cdk.CfnResource.isCfnResource(node) || !isResourcePolicyType(node.cfnResourceType)) continue;
-		const stack = cdk.Stack.of(node);
-		const found = checkResourcePolicy(node.cfnResourceType, render(node), app.id, node.node.path, parametersOf(stack));
-		violations.push(...found);
+		if (!cdk.CfnResource.isCfnResource(node)) continue;
+		const type = node.cfnResourceType;
+		if (isResourcePolicyType(type)) {
+			violations.push(...checkResourcePolicy(type, render(node), app.id, node.node.path, parametersOf(cdk.Stack.of(node))));
+		} else if (type.startsWith('AWS::ApiGateway')) {
+			// A stage, route or deployment on an API outside the app's own template.
+			violations.push(...checkApiChild(type, render(node), app.id, node.node.path, parametersOf(cdk.Stack.of(node))));
+		}
 	}
 
 	// Policies attached to any of those roles (the shared role's DefaultPolicy,

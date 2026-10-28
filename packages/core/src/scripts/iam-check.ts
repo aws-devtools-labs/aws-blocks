@@ -28,6 +28,7 @@ import {
 	checkRole,
 	checkStackName,
 	checkStatement,
+	checkApiChild,
 	checkLayer,
 	checkTransforms,
 	isResourcePolicyType,
@@ -107,6 +108,8 @@ function checkTemplate(template: Template, id: string, stackId: string): AppViol
 			for (const s of asArray(doc?.Statement)) out.push(...checkStatement(s, id, where, parameters));
 		} else if (type === 'AWS::IAM::User' || type === 'AWS::IAM::Group') {
 			out.push(...checkManagedPolicies(asArray(props.ManagedPolicyArns as unknown[] | undefined), where));
+		} else if (type.startsWith('AWS::ApiGateway')) {
+			out.push(...checkApiChild(type, props, id, where, parameters));
 		} else if (type === 'AWS::Lambda::LayerVersion') {
 			out.push(...checkLayer(props, id, where));
 		} else if (isResourcePolicyType(type)) {
