@@ -1520,6 +1520,71 @@ describe('model-factory', () => {
 	});
 });
 
+describe('createStrandsModel on a Bedrock Mantle endpoint', () => {
+	const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+	const originalFetch = globalThis.fetch;
+	const originalKey = process.env.OPENAI_API_KEY;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+		else process.env.OPENAI_API_KEY = originalKey;
+		_setMantleResolverForTest('us-east-1', undefined);
+	});
+
+	/** Minimal streamed Chat Completions response (the chat adapter always requests `stream: true`). */
+	function chatCompletionStream(): Response {
+		const chunk = (delta: object, finish: string | null) => `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: MANTLE.modelId, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+		const body = `${chunk({ role: 'assistant', content: 'hi' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+		return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+	}
+
+	/** Stubs fetch (before the model's OpenAI client captures it) and records each request's Authorization header. */
+	function captureAuthorization(): string[] {
+		const seen: string[] = [];
+		globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get('authorization') ?? '');
+			return chatCompletionStream();
+		}) as typeof fetch;
+		return seen;
+	}
+
+	async function callModel(model: Awaited<ReturnType<typeof createStrandsModel>>): Promise<void> {
+		const { Message, TextBlock } = await import('@strands-agents/sdk');
+		for await (const _event of model.stream([new Message({ role: 'user', content: [new TextBlock('hello')] })])) {
+			// Drain the stream so the request completes.
+		}
+	}
+
+	test('resolves the minted key before each request, so a refreshed key is sent', async () => {
+		const keys = ['k1', 'k2'];
+		let resolved = 0;
+		_setMantleResolverForTest('us-east-1', async () => keys[resolved++] ?? 'unexpected');
+		const seen = captureAuthorization();
+		const model = await createStrandsModel(MANTLE);
+		await callModel(model);
+		await callModel(model);
+		assert.deepStrictEqual(seen, ['Bearer k1', 'Bearer k2']);
+	});
+
+	test('an explicit apiKey is sent as-is and no key is minted', async () => {
+		let minted = 0;
+		_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: 'explicit' }));
+		assert.deepStrictEqual(seen, ['Bearer explicit']);
+		assert.strictEqual(minted, 0);
+	});
+
+	test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+		process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+		_setMantleResolverForTest('us-east-1', async () => 'minted');
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: '' }));
+		assert.deepStrictEqual(seen, ['Bearer minted']);
+	});
+});
+
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
@@ -2451,6 +2516,45 @@ describe('checkModelHealth', () => {
 			assert.strictEqual(calls.length, 1);
 			assert.strictEqual(calls[0].url, 'https://bedrock-mantle.us-east-1.api.aws/v1/models');
 			assert.strictEqual(calls[0].headers.Authorization, 'Bearer bedrock-api-key-test');
+		});
+
+		test('an explicit apiKey is sent as-is and no key is minted', async () => {
+			let minted = 0;
+			_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: 'explicit' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer explicit']);
+			assert.strictEqual(minted, 0);
+		});
+
+		test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'minted');
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: '' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer minted']);
+		});
+
+		test('a rejected minted key returns false and logs a permissions hint without the key', async () => {
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-secret');
+			const warnings: Array<{ msg: string; meta?: any }> = [];
+			const warnLog = { ...log, warn: (msg: string, meta?: any) => { warnings.push({ msg, meta }); } };
+			globalThis.fetch = (async () => new Response(`{"error":"not authorized"}${'x'.repeat(500)}`, { status: 403 })) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0].msg, /Mantle rejected the minted key \(HTTP 403\) at https:\/\/bedrock-mantle\.us-east-1\.api\.aws\/v1\./);
+			assert.match(warnings[0].msg, /bedrock-mantle:CallWithBearerToken, bedrock-mantle:ListModels and bedrock-mantle:CreateInference in us-east-1/);
+			assert.ok(warnings[0].meta.bodySnippet.startsWith('{"error":"not authorized"}'));
+			assert.strictEqual(warnings[0].meta.bodySnippet.length, 200);
+			assert.ok(!JSON.stringify(warnings).includes('bedrock-api-key-secret'), 'the key is never logged');
 		});
 	});
 

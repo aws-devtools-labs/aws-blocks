@@ -108,6 +108,24 @@ describe('buildMantleBearerToken', () => {
 		);
 	});
 
+	test("matches the reference key when the session token contains !'()* (RFC 3986 escaping)", () => {
+		const token = buildMantleBearerToken({
+			credentials: {
+				accessKeyId: 'ASIAEXAMPLE',
+				secretAccessKey: SECRET,
+				sessionToken: "FwoGZX!'()*session/token+=",
+			},
+			region: 'us-west-2',
+			now: SIGNED_AT,
+			expiresInSeconds: 3600,
+		});
+		assert.strictEqual(
+			token,
+			'bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29tLz9BY3Rpb249Q2FsbFdpdGhCZWFyZXJUb2tlbiZYLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFTSUFFWEFNUExFJTJGMjAyNjAxMTUlMkZ1cy13ZXN0LTIlMkZiZWRyb2NrJTJGYXdzNF9yZXF1ZXN0JlgtQW16LURhdGU9MjAyNjAxMTVUMTAzMDQ1WiZYLUFtei1FeHBpcmVzPTM2MDAmWC1BbXotU2VjdXJpdHktVG9rZW49RndvR1pYJTIxJTI3JTI4JTI5JTJBc2Vzc2lvbiUyRnRva2VuJTJCJTNEJlgtQW16LVNpZ25hdHVyZT04OTBhNjM1NGQwNDVjY2JmYzQ1YTdlOTczZDk5ZGZmMDNhOTJkNmY2MzUwMDgyODU5OTFmOGY4ZTFjNTA5NGIyJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCZWZXJzaW9uPTE=',
+		);
+		assert.ok(decode(token).includes('X-Amz-Security-Token=FwoGZX%21%27%28%29%2Asession%2Ftoken%2B%3D&'));
+	});
+
 	test('caps the lifetime at 12 hours and at the credentials expiration', () => {
 		const credentials = { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: SECRET };
 		const expiresOf = (token: string) => Number(/X-Amz-Expires=(\d+)/.exec(decode(token))?.[1]);

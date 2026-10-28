@@ -11,7 +11,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // lazily inside createStrandsModel(). See issue #153.
 import type { CannedToolHints, ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
-import { getMantleApiKeyResolver, parseMantleRegion } from './mantle.js';
+import { getMantleApiKeyResolver, mintedMantleRegion } from './mantle.js';
 
 // TODO: validate model-specific inference config (e.g., some models don't support topP with temperature)
 
@@ -88,9 +88,10 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 		const baseUrl = endpoint.endsWith('/') ? endpoint.slice(0, -1) : endpoint;
 		const url = `${baseUrl}/models`;
 
-		// A Bedrock Mantle endpoint without an explicit apiKey authenticates with a short-term
-		// Bedrock API key minted from the AWS credentials; OPENAI_API_KEY is never sent there.
-		const mantleRegion = config.apiKey === undefined ? parseMantleRegion(config.endpoint) : undefined;
+		// A Bedrock Mantle endpoint without an explicit apiKey (an empty string counts as omitted)
+		// authenticates with a short-term Bedrock API key minted from the AWS credentials;
+		// OPENAI_API_KEY is never sent there.
+		const mantleRegion = mintedMantleRegion(config);
 		let resolvedKey: string | undefined;
 		if (mantleRegion) {
 			try {
@@ -120,6 +121,21 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, cu
 		}
 
 		if (!res.ok) {
+			// A rejected minted key almost always means the AWS identity lacks a Mantle permission;
+			// name the actions so the fix is obvious. The key itself is never logged.
+			if (mantleRegion && (res.status === 401 || res.status === 403)) {
+				let bodySnippet = '';
+				try {
+					bodySnippet = (await res.text()).slice(0, 200);
+				} catch {
+					// The status alone is enough for the hint.
+				}
+				log.warn(
+					`Mantle rejected the minted key (HTTP ${res.status}) at ${baseUrl}. Check that the AWS credentials allow bedrock-mantle:CallWithBearerToken, bedrock-mantle:ListModels and bedrock-mantle:CreateInference in ${mantleRegion}.`,
+					{ provider: config.provider, status: res.status, bodySnippet },
+				);
+				return false;
+			}
 			log.warn(`Endpoint returned HTTP ${res.status}: ${baseUrl}`, { provider: config.provider, status: res.status });
 			return false;
 		}
@@ -252,11 +268,11 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		if (!config.modelId) {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, "Model provider 'openai-api' requires modelId.");
 		}
-		// A Bedrock Mantle endpoint without an explicit apiKey authenticates with short-term
-		// Bedrock API keys minted from the AWS credentials. The resolver is handed to the OpenAI
-		// client as a function, which calls it before each request, so keys are refreshed over a
+		// A Bedrock Mantle endpoint without an explicit apiKey (an empty string counts as omitted)
+		// authenticates with short-term Bedrock API keys minted from the AWS credentials. The
+		// resolver is handed to the OpenAI client as a function, which calls it before each request, so keys are refreshed over a
 		// long session. OPENAI_API_KEY is not used for Mantle: an OpenAI key is never valid there.
-		const mantleRegion = config.apiKey === undefined ? parseMantleRegion(config.endpoint) : undefined;
+		const mantleRegion = mintedMantleRegion(config);
 		let apiKey: string | (() => Promise<string>) | undefined;
 		if (mantleRegion) {
 			apiKey = getMantleApiKeyResolver(mantleRegion, customUserAgent);

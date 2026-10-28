@@ -14,6 +14,7 @@
  */
 import { createHash, createHmac } from 'node:crypto';
 import { installClientUserAgent } from '@aws-blocks/core';
+import type { ModelConfig } from './types.js';
 
 /**
  * Matches a Mantle hostname and captures its AWS region (e.g. `us-east-1`, `us-gov-west-1`).
@@ -40,6 +41,18 @@ export function parseMantleRegion(endpoint: string | undefined): string | undefi
 	}
 	if (url.protocol !== 'https:') return undefined;
 	return MANTLE_HOSTNAME.exec(url.hostname)?.[1];
+}
+
+/**
+ * Returns the region whose short-term Bedrock API keys authenticate `m`, or `undefined` when `m`
+ * does not use minted keys.
+ *
+ * Keys are minted for an `openai-api` model on a Bedrock Mantle endpoint whose `apiKey` is
+ * omitted; an empty-string `apiKey` is treated as omitted. Shared by the health check, the model
+ * client, and the deploy-time permission grant so all three agree on when keys are minted.
+ */
+export function mintedMantleRegion(m: ModelConfig): string | undefined {
+	return m.provider === 'openai-api' && !m.apiKey ? parseMantleRegion(m.endpoint) : undefined;
 }
 
 /** AWS credentials used to sign a Bedrock short-term API key. */

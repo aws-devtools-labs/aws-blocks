@@ -201,7 +201,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `provider` | `'bedrock' \| 'openai-api' \| 'canned'` | Model provider. |
 | `modelId` | `string` | Model ID. Required for bedrock and openai-api. |
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
-| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](#bedrock-via-mantle) endpoint, omit it to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
+| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](#bedrock-via-mantle) endpoint, omit it (an empty string counts as omitted) to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
 | `cannedResponses` | `Record<string, string> \| string` | Canned-provider response dictionary, or path to a JSON dictionary. Ignored by real model providers. |
 | `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](#bedrock-guardrails). |
@@ -390,7 +390,7 @@ model: {
 }
 ```
 
-When `apiKey` is omitted for a Mantle endpoint (an `https://bedrock-mantle.<region>.api.aws` URL), the agent mints short-term Bedrock API keys from the AWS credentials it runs with and refreshes them automatically before they expire, so long sessions keep working:
+When `apiKey` is omitted (or an empty string) for a Mantle endpoint (an `https://bedrock-mantle.<region>.api.aws` URL), the agent mints short-term Bedrock API keys from the AWS credentials it runs with and refreshes them automatically before they expire, so long sessions keep working:
 
 - **Deployed**, the agent runs as the runtime role, which is granted `bedrock-mantle:CreateInference`, `bedrock-mantle:ListModels` and `bedrock-mantle:GetModel` on the endpoint region's Mantle projects, plus `bedrock-mantle:CallWithBearerToken` limited to short-term keys (`bedrock-mantle:BearerTokenType` = `SHORT_TERM`).
 - **Locally**, it uses your local AWS credentials, which need those same permissions.

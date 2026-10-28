@@ -244,7 +244,7 @@ test('CDK: no guardrail configured means no ApplyGuardrail grant', async () => {
 	assert.ok(!json.includes('bedrock:ApplyGuardrail'));
 });
 
-/** Synthesizes an Agent with the given deployed models and returns its IAM policy statements. */
+/** Synthesizes an Agent with the given deployed models and returns its IAM policy statements (inline and managed). */
 async function deployedModelStatements(deployed: unknown): Promise<Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>> {
 	const app = new cdk.App();
 	const stack = await BlocksStack.create(app, 'teststack', {
@@ -258,7 +258,8 @@ async function deployedModelStatements(deployed: unknown): Promise<Array<{ Actio
 		agentcoreAssetPath: ASSET_DIR,
 		model: { deployed: deployed as never },
 	});
-	return Object.values(Template.fromStack(stack).findResources('AWS::IAM::Policy'))
+	const template = Template.fromStack(stack);
+	return [...Object.values(template.findResources('AWS::IAM::Policy')), ...Object.values(template.findResources('AWS::IAM::ManagedPolicy'))]
 		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>);
 }
 
@@ -285,6 +286,16 @@ test('CDK: a deployed openai-api model on a Mantle endpoint without apiKey grant
 	assert.deepStrictEqual(actionsOf(bearer[0]), ['bedrock-mantle:CallWithBearerToken']);
 	assert.strictEqual(bearer[0].Resource, '*');
 	assert.deepStrictEqual(bearer[0].Condition, { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } });
+});
+
+test('CDK: an empty apiKey on a Mantle endpoint counts as omitted and gets the bedrock-mantle grant', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: '' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(statements)}`);
+	assert.ok(JSON.stringify(inference[0].Resource).includes(':bedrock-mantle:us-east-1:'));
+	assert.strictEqual(statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken')).length, 1);
 });
 
 test('CDK: no bedrock-mantle grant for non-Mantle openai-api, explicit apiKey, or bedrock-only models', async () => {

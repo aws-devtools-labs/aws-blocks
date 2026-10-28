@@ -27,7 +27,8 @@ export interface ModelConfig {
 	 *
 	 * For a Bedrock Mantle `endpoint`, omit it to authenticate with short-term Bedrock API keys minted from the
 	 * AWS credentials the agent runs with, refreshed automatically; `OPENAI_API_KEY` is not used for Mantle. The
-	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An explicit key takes precedence.
+	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An empty string is treated as
+	 * omitted. An explicit key takes precedence.
 	 */
 	apiKey?: string | (() => Promise<string>);
 	/**

@@ -10,7 +10,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
-import { parseMantleRegion } from './mantle.js';
+import { mintedMantleRegion } from './mantle.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
 import { BB_NAME } from './version.js';
@@ -90,14 +90,15 @@ export class Agent extends BuildingBlockScope {
 			);
 		}
 
-		// An `openai-api` model on a Bedrock Mantle endpoint without an explicit `apiKey` calls Mantle
-		// with short-term Bedrock API keys minted from the role the loop runs as, so that role needs
+		// An `openai-api` model on a Bedrock Mantle endpoint without an explicit `apiKey` (an empty
+		// string counts as omitted) calls Mantle with short-term Bedrock API keys minted from the role
+		// the loop runs as, so that role needs
 		// the Mantle inference actions (scoped to the endpoint's region) and CallWithBearerToken
 		// (a permission-only action that supports only Resource "*"). An explicit `apiKey` carries
 		// its own identity and needs no grant on the role.
 		const mantleRegions = [...new Set(
 			deployedModels.flatMap((m) => {
-				const region = m.provider === 'openai-api' && m.apiKey === undefined ? parseMantleRegion(m.endpoint) : undefined;
+				const region = mintedMantleRegion(m);
 				return region ? [region] : [];
 			}),
 		)];
