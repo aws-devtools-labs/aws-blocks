@@ -18,6 +18,15 @@ import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
+import {
+	type DestroyAttemptReport,
+	formatRetainedDependencyFailure,
+	formatRetainedSummary,
+	inspectDestroyAttempt,
+	isRetainedDependencyFailure,
+	mergeResources,
+	type StackResourceRef,
+} from './destroy-retained.js';
 
 export interface SandboxOptions {
   backendPath: string;
@@ -775,6 +784,25 @@ export interface DestroyRetryDeps {
 	random?: () => number;
 	/** Clock (epoch ms). Default: `Date.now`. */
 	now?: () => number;
+	/**
+	 * Read what the attempt that started at `attemptStartedAt` (epoch ms) did to
+	 * `stackNames`: the resources that failed to delete and the ones kept by
+	 * their removal policy (`previousFailureAt` as for `isThrottled`). A failed
+	 * attempt that {@link isRetainedDependencyFailure} says no retry can fix
+	 * stops the loop at once, with no bucket emptying and no wait. A rejection is
+	 * logged and treated as "nothing known". Default: nothing known.
+	 */
+	inspectAttempt?: (
+		stackNames: string[],
+		attemptStartedAt: number,
+		previousFailureAt?: number,
+	) => Promise<DestroyAttemptReport>;
+	/**
+	 * After a successful destroy, print the resources it kept because of their
+	 * removal policy (read with `inspectAttempt`; stack names come from
+	 * `listStackNames` when no attempt failed). Default: false.
+	 */
+	reportRetained?: boolean;
 }
 
 /**
@@ -802,6 +830,14 @@ export interface DestroyRetryDeps {
  * throttle schedule too: it is retried later, not hidden, and still fails the
  * call once the budget is spent. With 5-minute attempts a call can run for
  * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
+ *
+ * A failure no retry can fix stops the loop after the attempt that hit it: when
+ * `inspectAttempt` shows that every failed resource is still used by something
+ * and the app retains a resource that holds network interfaces (e.g. an Aurora
+ * cluster with a `retain` removal policy still sitting in the subnets being
+ * deleted), the loop prints what failed and what was retained, and throws
+ * without emptying buckets or waiting. With `reportRetained`, a successful
+ * destroy prints the resources it retained.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
@@ -815,12 +851,13 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	let lastFailureAt: number | undefined;
 	let throttleRetries = 0;
 	let ordinaryRetries = 0;
+	// Retained resources seen across all attempts: CloudFormation reports a
+	// resource as DELETE_SKIPPED only on the attempt that skipped it.
+	const retained: StackResourceRef[] = [];
 	for (let attempt = 0; ; attempt++) {
 		const attemptStartedAt = now();
 		try {
 			deps.runDestroy();
-			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
-			return;
 		} catch (error) {
 			const previousFailureAt = lastFailureAt;
 			lastFailureAt = now();
@@ -833,6 +870,24 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				console.warn(
 					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
 				);
+			}
+			if (deps.inspectAttempt) {
+				let report: DestroyAttemptReport | undefined;
+				try {
+					report = await deps.inspectAttempt(stackNames, attemptStartedAt, previousFailureAt);
+				} catch (e) {
+					console.warn(`  ⚠️  could not read why the delete failed; retrying as usual: ${(e as Error).message}`);
+				}
+				if (report) {
+					mergeResources(retained, report.retained);
+					const sofar = { failed: report.failed, retained };
+					// Deterministic: the retained resource keeps using what the delete
+					// needs to remove, so a retry fails the same way. Stop now.
+					if (isRetainedDependencyFailure(sofar)) {
+						console.error(formatRetainedDependencyFailure(sofar));
+						throw error;
+					}
+				}
 			}
 			let delayMs: number | undefined;
 			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
@@ -874,7 +929,21 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
 			}
 			await deps.sleep(delayMs);
+			continue;
 		}
+		console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
+		if (deps.reportRetained && deps.inspectAttempt) {
+			// Best-effort: the stacks are gone either way, this only says what was kept.
+			try {
+				if (stackNames === undefined) stackNames = deps.listStackNames();
+				const report = await deps.inspectAttempt(stackNames, attemptStartedAt, lastFailureAt);
+				mergeResources(retained, report.retained);
+			} catch (e) {
+				console.warn(`  ⚠️  could not list the resources this destroy retained: ${(e as Error).message}`);
+			}
+			if (retained.length > 0) console.log(formatRetainedSummary(retained));
+		}
+		return;
 	}
 }
 
@@ -917,6 +986,7 @@ export function sandboxDestroyDeps(backendPath: string, cdkEnv: NodeJS.ProcessEn
     listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
     emptyBuckets: emptySandboxBuckets,
     isThrottled: destroyWasThrottled,
+    inspectAttempt: inspectDestroyAttempt,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }
