@@ -461,15 +461,18 @@ function getStampedPackages(): Set<string> {
 
 /** A package's version from its package.json at the merge base, or null if it did not exist there. */
 function getVersionAtMergeBase(dir: string): string | null {
+	const spec = `${getMergeBase()}:packages/${dir}/package.json`;
+	try {
+		execFileSync("git", ["cat-file", "-e", spec], { cwd: ROOT, stdio: "ignore" });
+	} catch {
+		// The only failure left once the merge base resolved: the path is absent there.
+		return null;
+	}
 	let raw: string;
 	try {
-		raw = execFileSync("git", ["show", `${getMergeBase()}:packages/${dir}/package.json`], {
-			cwd: ROOT,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-	} catch {
-		return null;
+		raw = execFileSync("git", ["show", spec], { cwd: ROOT, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+	} catch (err) {
+		throw new GuardError(`Cannot read packages/${dir}/package.json at the merge base: ${(err as Error).message}`);
 	}
 	try {
 		const { version } = JSON.parse(raw);

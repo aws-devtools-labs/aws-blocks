@@ -143,4 +143,21 @@ describe('create-blocks-app version stamping from the published package', () => 
     assertStamped(workspace, 'Amplify aws-blocks/ workspace');
     assert.ok(workspace.dependencies?.['@aws-blocks/bb-kv-store'], 'the Amplify workspace should depend on bb-kv-store');
   });
+
+  it('fails non-zero, before writing anything, when the CLI has no range for a template package', () => {
+    const manifestPath = join(dirname(dirname(cli)), 'package.json');
+    const original = readFileSync(manifestPath, 'utf-8');
+    const broken = readManifest(manifestPath);
+    delete broken.devDependencies?.['@aws-blocks/hosting'];
+    writeFileSync(manifestPath, JSON.stringify(broken));
+    try {
+      const app = join(root, 'fresh-missing-range');
+      const result = run([app, '--template', 'default', '--skip-install'], root);
+      assert.notStrictEqual(result.exitCode, 0, result.output);
+      assert.match(result.output, /no version to pin @aws-blocks\/hosting/);
+      assert.strictEqual(existsSync(app), false, 'nothing should be written for a failed scaffold');
+    } finally {
+      writeFileSync(manifestPath, original);
+    }
+  });
 });
