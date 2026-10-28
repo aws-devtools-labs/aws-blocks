@@ -19,6 +19,10 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT = fileURLToPath(new URL('./e2e-teardown.mjs', import.meta.url));
 const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
 const ID = 'runner-k3x9q2';
+// The random half of the id: test-apps/comprehensive names its production
+// stack with only this (bb-test-prod-<suffix>-<salt>, since #1031).
+const SALT = 'k3x9q2';
+const CDK_ENTRY = fileURLToPath(new URL('../../test-apps/comprehensive/aws-blocks/index.cdk.ts', import.meta.url));
 
 // A stand-in for the AWS CLI: serves list-stacks / describe-stacks /
 // delete-stack from a JSON state file, logs each call, and applies scripted
@@ -106,7 +110,11 @@ describe('e2e-teardown.mjs', () => {
 	});
 
 	it('is a no-op when the suite already destroyed its stack', () => {
-		const r = run({ stacks: [stack(`bb-test-prod-pr-9-1-${ID}`, 'DELETE_COMPLETE')], jobStatus: 'success' });
+		const r = run({
+			suffix: 'pr-9-1',
+			stacks: [stack(`bb-test-prod-pr-9-1-${SALT}`, 'DELETE_COMPLETE')],
+			jobStatus: 'success',
+		});
 		assert.equal(r.status, 0, r.out);
 		assert.deepEqual(
 			r.calls.map((c) => c[1]),
@@ -117,21 +125,24 @@ describe('e2e-teardown.mjs', () => {
 
 	it("deletes only this checkout's root stacks", () => {
 		const r = run({
+			suffix: 'pr-9-1',
 			stacks: [
-				stack(`bb-test-prod-pr-9-1-${ID}`, 'CREATE_IN_PROGRESS'),
+				stack(`bb-test-prod-pr-9-1-${SALT}`, 'CREATE_IN_PROGRESS'),
 				stack(`bb-test-${ID}-pr-9-1`),
 				// Same PR, a newer run: a different id. Must survive.
-				stack('bb-test-prod-pr-9-1-runner-zzzzzz', 'CREATE_IN_PROGRESS'),
+				stack('bb-test-prod-pr-9-1-zzzzzz', 'CREATE_IN_PROGRESS'),
+				stack('bb-test-runner-zzzzzz-pr-9-1', 'CREATE_IN_PROGRESS'),
 				// A nested stack of ours: CloudFormation deletes it with its parent.
 				stack(`bb-test-${ID}-pr-9-1-Nested-ABC`, 'CREATE_COMPLETE', 'arn:parent'),
-				// The id only as a substring of another token.
-				stack(`bb-test-prod-pr-9-1-x${ID}`),
+				// The id or its salt only as a substring of another token.
+				stack(`bb-test-prod-pr-9-1-x${SALT}`),
+				stack(`bb-test-prod-pr-9-1-${SALT}0`),
 				stack(`bb-test-${ID}0-pr-9-1`),
 			],
 		});
 		assert.equal(r.status, 0, r.out);
-		assert.deepEqual(deletes(r.calls).sort(), [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${ID}`].sort());
-		assert.match(r.out, /::warning title=E2E teardown::.*bb-test-prod-pr-9-1-runner-k3x9q2/);
+		assert.deepEqual(deletes(r.calls).sort(), [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${SALT}`].sort());
+		assert.match(r.out, /::warning title=E2E teardown::.*bb-test-prod-pr-9-1-k3x9q2/);
 	});
 
 	it('leaves a stack that is already being deleted alone', () => {
@@ -262,16 +273,59 @@ describe('e2e-teardown.mjs', () => {
 			suffix: 'pr-9-1',
 			stacks: [
 				stack(`bb-test-${ID}-pr-9-1`),
-				stack(`bb-test-prod-pr-9-1-${ID}`),
-				// The same id under another PR or attempt (a bad id file).
+				stack(`bb-test-prod-pr-9-1-${SALT}`),
+				// The same id or salt under another PR or attempt (a bad id file).
 				stack(`bb-test-${ID}-pr-9-2`),
-				stack(`bb-test-prod-pr-19-1-${ID}`),
+				stack(`bb-test-prod-pr-19-1-${SALT}`),
+				stack(`bb-test-prod-pr-9-2-${SALT}`),
 				stack(`bb-test-${ID}-pr-9-10`),
 				stack(`bb-test-${ID}-xpr-9-1`),
 			],
 		});
 		assert.equal(r.status, 0, r.out);
-		assert.deepEqual(deletes(r.calls).sort(), [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${ID}`].sort());
+		assert.deepEqual(deletes(r.calls).sort(), [`bb-test-${ID}-pr-9-1`, `bb-test-prod-pr-9-1-${SALT}`].sort());
+	});
+
+	it('matches a stack by the salt only right after the suffix', () => {
+		// No BLOCKS_STACK_SUFFIX: only the whole id matches.
+		const r = run({
+			stacks: [
+				stack(`bb-test-prod-pr-9-1-${SALT}`),
+				stack(`bb-test-${ID}-pr-9-1`),
+				stack('bb-test-runner-zzzzzz-pr-9-1'),
+				stack(`bb-test-${ID}0-pr-9-1`),
+				stack(`bb-test-prod-pr-9-1-x${ID}`),
+			],
+		});
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), [`bb-test-${ID}-pr-9-1`]);
+		// A salt that is also a token of the suffix (a six-digit PR number) must
+		// not select every stack of the attempt.
+		const digits = run({
+			id: 'runner-123456',
+			suffix: 'pr-123456-1',
+			stacks: [stack('bb-test-runner-zzzzzz-pr-123456-1'), stack('bb-test-prod-pr-123456-1-123456')],
+		});
+		assert.equal(digits.status, 0, digits.out);
+		assert.deepEqual(deletes(digits.calls), ['bb-test-prod-pr-123456-1-123456']);
+	});
+
+	it('finds the stacks under the names the comprehensive app gives them', () => {
+		// Build both names from index.cdk.ts itself, so renaming a stack there
+		// breaks this test instead of leaking the stack.
+		const src = readFileSync(CDK_ENTRY, 'utf8');
+		const saltExpr = src.match(/^const salt = (.+);$/m)?.[1];
+		const names = src.match(/^const stackName = sandboxMode\n\s*\? `(.+)`\n\s*: `(.+)`;$/m);
+		assert.ok(saltExpr && names, 'index.cdk.ts: salt and stackName definitions not found');
+		const salt = new Function('id', `return ${saltExpr};`)(ID);
+		const build = (tpl) => new Function('id', 'suffix', 'salt', `return \`${tpl}\`;`)(ID, 'pr-9-1', salt);
+		const [sandbox, production] = [build(names[1]), build(names[2])];
+		assert.equal(production, `bb-test-prod-pr-9-1-${SALT}`);
+		for (const name of [sandbox, production]) {
+			const r = run({ suffix: 'pr-9-1', stacks: [stack(name)], jobStatus: 'cancelled' });
+			assert.equal(r.status, 0, r.out);
+			assert.deepEqual(deletes(r.calls), [name]);
+		}
 	});
 
 	it('refuses a BLOCKS_STACK_SUFFIX that is not a plain token', () => {
@@ -304,12 +358,6 @@ describe('pr-checks.yml', () => {
 	const NO_STACK = {
 		'e2e-supabase': 'reads a secret; the database is external',
 		'e2e-sandbox-vpc': 'deploys only the persistent shared VPC, which must survive; its suite is a skip today',
-		// Pending: the compute-smoke leak fix adds this job's always() teardown and
-		// removes this entry. Its stacks (bb-compute-smoke-*) are outside the
-		// prefixes the E2E role may delete directly, so e2e-teardown.mjs can only
-		// delete them once they are renamed under bb-test-; until then only the
-		// app's own cdk destroy (test/sandbox-destroy.ts) can remove them.
-		'e2e-compute-smoke': 'teardown pending in the compute-smoke leak fix',
 	};
 
 	it('lists only real jobs as stack-free', () => {

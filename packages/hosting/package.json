@@ -59,14 +59,14 @@
   "scripts": {
     "build": "tsc --build && npm run bundle:handlers",
     "bundle:handlers": "node scripts/bundle-handlers.mjs",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test 'dist/**/*.test.js'",
     "dev": "tsc --build --watch"
   },
   "dependencies": {
-    "@aws-sdk/client-cloudfront-keyvaluestore": "^3.1153.0",
-    "@aws-sdk/client-s3": "^3.1153.0",
-    "@aws-sdk/client-secrets-manager": "^3.1153.0",
-    "@aws-sdk/client-ssm": "^3.1153.0",
+    "@aws-sdk/client-cloudfront-keyvaluestore": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/client-secrets-manager": "^3.1156.0",
+    "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/signature-v4a": "^3.1138.0",
     "cross-spawn": "^7.0.6",
     "fast-glob": "^3.3.3",
@@ -76,7 +76,7 @@
     "semver": "^7.8.5",
     "zod": "^3.25.76",
     "@standard-schema/spec": "^1.1.0",
-    "@aws-sdk/client-lambda-web": "^3.1153.0"
+    "@aws-sdk/client-lambda-web": "^3.1156.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
@@ -87,7 +87,7 @@
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@opennextjs/aws": ">=3.10.0",
+    "@opennextjs/aws": ">=3.10.0 <5.0.0",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
     "typescript": ">=5.3.0"

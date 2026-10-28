@@ -57,12 +57,97 @@ export interface FileBucketOptions {
 	 * stack-wide `logRetention` default (see `BlocksDefaults.logRetention`);
 	 * `RetentionDays.INFINITE` keeps them indefinitely (no expiry rule).
 	 *
-	 * Resolves from the stack `defaults.accessLogging` when omitted, so a
-	 * production-postured stack can opt every FileBucket into logging without
-	 * a per-block option. Ignored by the mock and browser runtimes (no AWS
-	 * resource).
+	 * Resolves from the stack `defaults.storageAccessLogging` when omitted, and
+	 * from `defaults.accessLogging` when that is unset too, so a stack can opt
+	 * every FileBucket into logging without a per-block option. Ignored by the
+	 * mock and browser runtimes (no AWS resource).
 	 */
 	accessLogging?: boolean;
+	/**
+	 * Server-side encryption at rest. S3 always encrypts objects; this only
+	 * selects the key.
+	 *
+	 * - `'aws-managed'` (default): SSE-S3 with S3-managed keys. No key charge and
+	 *   no per-request KMS cost.
+	 * - `'customer-managed'`: SSE-KMS with a **dedicated** customer-managed KMS
+	 *   key (CMK) for this bucket, with automatic yearly rotation. You control the
+	 *   key policy and every use is logged in CloudTrail. Incurs the KMS monthly
+	 *   key charge; S3 Bucket Keys are enabled to keep per-request KMS charges
+	 *   low. The key follows the bucket's removal policy (destroyed with a
+	 *   `'destroy'` bucket, retained with a `'retain'` one).
+	 * - a {@link ExternalKmsKeyRef} from {@link FileBucket.fromKmsKey}: SSE-KMS
+	 *   with an **existing** CMK you own, so several buckets (or tables) can share
+	 *   one key. The key policy must let the account's IAM principals use it —
+	 *   Blocks grants the runtime role `kms:Decrypt` / `kms:GenerateDataKey*` on
+	 *   it, which only takes effect when the key policy delegates to IAM.
+	 *
+	 * Presigned `getUrl()` / `putUrl()` URLs keep working under SSE-KMS: they are
+	 * signed by the runtime role, which holds the key permissions.
+	 *
+	 * The access-log bucket (see {@link accessLogging}) always uses SSE-S3: S3
+	 * server access logging can't deliver to an SSE-KMS bucket.
+	 *
+	 * @example
+	 * ```ts
+	 * const key = FileBucket.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+	 * new FileBucket(scope, 'invoices', { encryption: key });
+	 * ```
+	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
+	 * Ignored by the mock and browser runtimes (no AWS resource to encrypt).
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
+	 * Enable S3 Object Lock (write-once-read-many) with a default retention
+	 * period applied to every new object version. Default: off.
+	 *
+	 * - `mode: 'governance'` — principals with `s3:BypassGovernanceRetention`
+	 *   can still shorten the retention or delete a locked version.
+	 * - `mode: 'compliance'` — **nobody**, including the account root user, can
+	 *   delete a locked version or shorten its retention until it expires.
+	 * - `retentionDays` — how long each version stays locked (a positive integer,
+	 *   at most 36500).
+	 *
+	 * Locking applies to object **versions**: `delete(path)` still succeeds (it
+	 * adds a delete marker, so the file disappears from `get` and `scan`), but
+	 * permanently deleting a locked version (`delete(path, { versionId })`)
+	 * fails until its retention expires, and the noncurrent-version expiration
+	 * rule (see {@link noncurrentVersionExpirationDays}) only removes a version
+	 * once its lock has expired.
+	 *
+	 * Presigned uploads are not supported: S3 requires a signed `Content-MD5` or
+	 * checksum header on every upload to an Object Lock bucket, which a URL
+	 * presigned before the file is known can't carry. `putUrl()` and
+	 * `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported`;
+	 * upload with `put()` (the SDK adds the checksum). Downloads are unaffected.
+	 *
+	 * Requirements, checked at synth:
+	 * - versioning must stay on (`versioned: false` is rejected);
+	 * - the bucket must be retained — `removalPolicy: 'destroy'` (including the
+	 *   sandbox preset's default) is rejected, because locked objects can't be
+	 *   emptied, so a teardown would fail. Pass `removalPolicy: 'retain'` to use
+	 *   Object Lock in a sandbox.
+	 *
+	 * Decide at creation time: CloudFormation can only turn Object Lock on when it
+	 * creates the bucket, so adding `objectLock` to an already-deployed
+	 * FileBucket fails the deploy (use a new FileBucket id instead), and S3 can't
+	 * turn Object Lock off once it's on. Once a bucket has Object Lock, changing
+	 * `mode` or `retentionDays` is an in-place update that applies to new
+	 * versions only.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'audit-exports', {
+	 *   objectLock: { mode: 'governance', retentionDays: 365 },
+	 * });
+	 * ```
+	 *
+	 * Ignored, with a synth warning, when `bucket` wraps an existing bucket.
+	 *
+	 * The mock validates the option and rejects presigned uploads, but does not
+	 * enforce retention.
+	 */
+	objectLock?: ObjectLockOptions;
 	/**
 	 * Days after which NONCURRENT object versions are permanently expired,
 	 * bounding the storage cost that versioning would otherwise let grow
@@ -251,6 +336,25 @@ export interface LifecycleRule {
 export interface ExternalBucketRef {
 	readonly __brand: 'ExternalBucketRef';
 	readonly bucketName: string;
+}
+
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link FileBucket.fromKmsKey}. Pass it as the `encryption` option to encrypt
+ * the bucket with a CMK you already own — letting several buckets (or tables)
+ * share one key instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
+}
+
+/** S3 Object Lock settings for {@link FileBucketOptions.objectLock}. */
+export interface ObjectLockOptions {
+	/** `'governance'` (bypassable with `s3:BypassGovernanceRetention`) or `'compliance'` (not bypassable by anyone). */
+	mode: 'governance' | 'compliance';
+	/** Default retention, in days, applied to every new object version. Positive integer, at most 36500. */
+	retentionDays: number;
 }
 
 // ── Client handle types (hydrated by middleware) ────────────────────────────

@@ -128,9 +128,9 @@ private actor RendezvousTokenStore: TokenStore {
 
 final class OIDCClientTests: XCTestCase {
 
-    private func makeClient(session: URLSession) -> OIDCClient {
+    private func makeClient(session: URLSession) -> OIDCClient<String> {
         let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: session)
-        return OIDCClient(
+        return OIDCClient<String>(
             exchangePath: "/auth/exchange",
             refreshPath: "/auth/refresh",
             signOutPath: "/auth/signout",
@@ -148,8 +148,8 @@ final class OIDCClientTests: XCTestCase {
         )
     }
 
-    private func makeClient(named namespace: String, on blocksClient: BlocksClient) -> OIDCClient {
-        OIDCClient(
+    private func makeClient(named namespace: String, on blocksClient: BlocksClient) -> OIDCClient<String> {
+        OIDCClient<String>(
             exchangePath: "/\(namespace)/exchange", refreshPath: "/\(namespace)/refresh", signOutPath: "/auth/signout",
             providers: ["google"], providerConfigs: [:], baseUrl: "https://api.example.com", client: blocksClient
         )
@@ -163,8 +163,8 @@ final class OIDCClientTests: XCTestCase {
     // MARK: - PKCE
 
     func testPKCEGeneration() {
-        let verifier = OIDCClient.generateVerifier()
-        let challenge = OIDCClient.generateChallenge(verifier)
+        let verifier = OIDCClient<String>.generateVerifier()
+        let challenge = OIDCClient<String>.generateChallenge(verifier)
         XCTAssertFalse(verifier.isEmpty)
         XCTAssertFalse(challenge.isEmpty)
         // base64URL: no '+', '/', or '='
@@ -173,11 +173,11 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertFalse(verifier.contains("="))
         XCTAssertFalse(challenge.contains("="))
         // Same verifier → same challenge (S256 deterministic)
-        XCTAssertEqual(challenge, OIDCClient.generateChallenge(verifier))
+        XCTAssertEqual(challenge, OIDCClient<String>.generateChallenge(verifier))
     }
 
     func testRandomValuesAreFullLengthNonZeroAndDistinct() throws {
-        let values = (0 ..< 8).map { _ in OIDCClient.generateVerifier() } + [OIDCClient.generateNonce()]
+        let values = (0 ..< 8).map { _ in OIDCClient<String>.generateVerifier() } + [OIDCClient<String>.generateNonce()]
         for value in values {
             // 32 bytes → 43 base64url chars (no padding)
             XCTAssertEqual(value.count, 43)
@@ -552,7 +552,7 @@ final class OIDCClientTests: XCTestCase {
             ]
         ]
         let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api")
-        let client = try OIDCClient.fromJSON(descriptor, baseUrl: "https://api.example.com", client: blocksClient)
+        let client = try OIDCClient<String>.fromJSON(descriptor, baseUrl: "https://api.example.com", client: blocksClient)
         XCTAssertEqual(client.providers, ["google"])
         XCTAssertEqual(client.exchangePath, "/auth/exchange")
         // Defaulted refreshPath
@@ -562,7 +562,7 @@ final class OIDCClientTests: XCTestCase {
 
     func testFromJSONThrowsOnMissingExchangePath() {
         let descriptor: [String: Any] = ["signOutPath": "/auth/signout"]
-        XCTAssertThrowsError(try OIDCClient.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
+        XCTAssertThrowsError(try OIDCClient<String>.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
             guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
             XCTAssertEqual(oidc, .malformedDescriptor("exchangePath"))
         }

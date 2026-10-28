@@ -37,10 +37,11 @@ func reportSiblingConfig(specPath: String, configPath: String?) {
     guard FileManager.default.fileExists(atPath: sibling) else { return }
     guard let configPath else {
         fputs(
-                "Error: \(sibling) exists but was not passed; declare it in the target's "
-                    + "resources, as .copy(\"\(blocksCodegenConfigName)\"), so the plugin forwards it\n",
-                stderr
-            )
+            "Error: \(sibling) exists but was not passed; in an Xcode project make it "
+                + "a member of the target, like the spec, or pass it to the CLI as "
+                + "the third argument, after the output directory\n",
+            stderr
+        )
         exit(1)
     }
     if resolvedPath(configPath) != resolvedPath(sibling) {

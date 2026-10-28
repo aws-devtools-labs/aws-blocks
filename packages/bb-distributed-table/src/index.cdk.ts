@@ -6,16 +6,15 @@ import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
-import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, isSandboxContext } from '@aws-blocks/core/cdk';
+import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
 import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { BB_NAME } from './version.js';
 
 export { DistributedTableErrors } from './errors.js';
@@ -82,7 +81,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		}
 
 		const tableName = this.fullId.substring(0, 255);
-		const isSandbox = this.node.tryGetContext('sandboxMode') === 'true';
+		const isSandbox = isSandboxContext(this);
 
 		// Probe the schema's validate() to determine if a key field is numeric.
 		// Sends a test value of 0 for the field — if validation doesn't flag it,
@@ -259,7 +258,15 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const existing = (stack as any)[GSI_PROVIDER_KEY] as SharedGsiProvider | undefined;
 	if (existing) return existing;
 
-	const __dirname = dirname(fileURLToPath(import.meta.url));
+	// `dist/gsi-manager-lambda/` (build:lambda) when installed; a vendorized copy
+	// (src/ only) bundles src/gsi-manager-lambda.ts at synth instead.
+	const gsiManagerCode = () =>
+		deployTimeLambdaCode({
+			moduleUrl: import.meta.url,
+			bundleDir: './gsi-manager-lambda',
+			source: './gsi-manager-lambda',
+			target: 'node24', // = build:lambda
+		});
 
 	const tableArns: string[] = [];
 	const sandboxTableArns: string[] = [];
@@ -270,7 +277,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const gsiManagerLambda = new LambdaFunction(stack, 'BlocksGsiManager', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+		code: gsiManagerCode(),
 		timeout: Duration.minutes(15),
 		logGroup: new LogGroup(stack, 'BlocksGsiManagerLogs', {
 			retention: logRetention,
@@ -281,7 +288,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	const gsiIsCompleteLambda = new LambdaFunction(stack, 'BlocksGsiIsComplete', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.isCompleteHandler',
-		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
+		code: gsiManagerCode(),
 		timeout: Duration.minutes(1),
 		logGroup: new LogGroup(stack, 'BlocksGsiIsCompleteLogs', {
 			retention: logRetention,
@@ -293,6 +300,18 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	gsiManagerLambda.addToRolePolicy(new PolicyStatement({
 		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
 		resources: cdk.Lazy.list({ produce: () => tableArns }),
+	}));
+
+	// On Delete, onEvent reads its own stack's status and template to tell a
+	// table leaving the stack (keep the indexes: the table is retained in
+	// production) from `indexes` being removed in an update (drop them).
+	// Read-only, this stack only. Added to the role's default policy, which the
+	// function DependsOn, so a stack delete cannot remove it before the custom
+	// resource's Delete runs (`addToRolePolicy` would emit a separate, unordered
+	// policy here because the statements above use a Lazy resource list).
+	gsiManagerLambda.role?.addToPrincipalPolicy(new PolicyStatement({
+		actions: ['cloudformation:DescribeStacks', 'cloudformation:GetTemplate'],
+		resources: [stack.stackId],
 	}));
 
 	gsiIsCompleteLambda.addToRolePolicy(new PolicyStatement({
