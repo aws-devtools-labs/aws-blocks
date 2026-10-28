@@ -600,7 +600,9 @@ export interface BlocksStackProps extends StackProps {
    *   CloudFront `Hosting` marks its requests with a header the rate rule
    *   exempts, and behind any other door (ALB, API Gateway, your own, or a
    *   CloudFront edge over a router) the rate rule is left off and synth warns;
-   *   rate-limit those on the door's own WAF.
+   *   rate-limit those on the door's own WAF. Either way, browser requests
+   *   arriving through a `Hosting` door aren't rate-limited by `apiWaf`: turn on
+   *   the door's own WAF to rate-limit them.
    * - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed
    *   distribution. AWS only creates CloudFront web ACLs in us-east-1, so outside
    *   us-east-1 pass the ARN of one you created there (`webAclArn`); `enabled:
@@ -624,7 +626,9 @@ export interface BlocksStackProps extends StackProps {
    * exceed 8 KB and carry user-written HTML, Markdown or paths as data; their
    * query-string, URI and header variants still block. For a stricter or
    * custom rule set, pass your own `webAclArn` (its scope and region are checked
-   * at synth). WAF is billed per web ACL, per rule and per request.
+   * at synth). A `webAclArn` is attached as-is: behind a `Hosting` door its IP
+   * rate rules count CloudFront edge or proxy IPs for browser traffic, and it
+   * can't use the internal marker header to exempt them. WAF is billed per web ACL, per rule and per request.
    *
    * @example
    * ```ts
