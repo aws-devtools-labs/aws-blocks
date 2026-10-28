@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseErrorException",
+  "message": "ERROR: syntax error at or near \"CREAT\"; Position: 1; SQLState: 42601",
+  "expected": "QueryFailed",
+  "provenance": "captured from a live Aurora PostgreSQL 17.7 Serverless v2 cluster via the RDS Data API (us-west-2, 2026-08-28)"
+}

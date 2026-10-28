@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseErrorException",
+  "message": "ERROR: duplicate key value violates unique constraint \"_capture_probe_pkey\"; SQLState: 23505",
+  "expected": "UniqueConstraintViolation",
+  "provenance": "captured from a live Aurora PostgreSQL 17.7 Serverless v2 cluster via the RDS Data API (us-west-2, 2026-08-28)"
+}
