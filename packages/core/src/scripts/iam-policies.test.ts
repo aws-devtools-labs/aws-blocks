@@ -204,6 +204,12 @@ describe('blocks-iam-policies — the deploy guard', () => {
 		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('appa'), otherExec), true);
 	});
 
+	test('denies creating, changing or deleting a stack without naming a role (CloudFormation would reuse the old one)', () => {
+		for (const action of ['cloudformation:DeleteStack', 'cloudformation:CreateChangeSet', 'cloudformation:UpdateStack']) {
+			assert.strictEqual(denied(action, stack('appa'), undefined), true, action);
+		}
+	});
+
 	test('allows its own stacks with its own execution role', () => {
 		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('appa'), ownExec), false);
 		assert.strictEqual(denied('cloudformation:ExecuteChangeSet', stack('appa-api'), ownExec), false);

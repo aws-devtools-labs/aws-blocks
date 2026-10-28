@@ -2431,6 +2431,15 @@ describe('Hosting', () => {
       const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');
       assert.ok(edgeStack, `edge stack not named appa-edge: ${stacks.map((s) => s.node.id)}`);
       assert.ok(!stacks.some((c) => c.node.id.startsWith('edge-lambda-stack')), 'no CDK-named edge stack');
+      // Role coverage finds the edge stack through EdgeFunction's private `_edgeFunction`: pin it.
+      // EdgeFunctions (bundlers may suffix the class name, e.g. `EdgeFunction2`).
+      const edgeFns = app.node.findAll().filter((n) => n.constructor.name.startsWith('EdgeFunction'));
+      assert.ok(edgeFns.length > 0, 'an EdgeFunction');
+      for (const fn of edgeFns) {
+        const real = (fn as unknown as { _edgeFunction?: Construct })._edgeFunction;
+        assert.ok(real, 'aws-cdk-lib no longer keeps the cross-region function in EdgeFunction._edgeFunction');
+        assert.strictEqual(Stack.of(real).node.id, 'appa-edge');
+      }
       const roles = Object.values(Template.fromStack(edgeStack).findResources('AWS::IAM::Role'));
       assert.ok(roles.length > 0, 'the edge stack should hold the Lambda@Edge role');
       for (const r of roles) {
