@@ -12,13 +12,17 @@ Email sending for transactional emails — welcome emails, password resets, orde
 
 ## Infrastructure (CDK)
 
-Creates the following resources:
+Creates no SES resources. The CDK layer only:
 
-- **SES Configuration Set:** For delivery tracking and event publishing
-	- **Name:** Derived from `scope.fullId`
-- **SES Email Identity:** Verifies the `fromAddress` (email-level verification)
-	- Domain-level verification is preferred for production but requires DNS access
-- **IAM Permissions:** `ses:SendEmail` and `ses:SendBulkEmail` granted to the parent scope's handler automatically
+- **IAM Permissions:** grants `ses:SendEmail` and `ses:SendBulkEmail` to the parent scope's handler automatically, on this account's SES identities and configuration sets
+- **VPC endpoint requirement:** declares the SES interface endpoint, which the shared VPC layer provisions when the app's compute runs in a VPC
+- **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). Nothing is checked at synth or deploy time.
+
+**Prerequisites (out of band):**
+
+- **Sender identity:** create and verify the `fromAddress` email address or its domain as an SES identity in the deployment account and region before sending. Domain-level verification is preferred for production but requires DNS access. Sends from an unverified identity fail with `DomainNotVerifiedException`.
+- **SES sandbox:** new AWS accounts start in the SES sandbox, where you can only send to verified recipient addresses (at a reduced sending rate) until you [request production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html).
+- **Configuration set (optional):** `configurationSet` names an existing SES configuration set; the block does not create one.
 
 No SNS topics for bounce/complaint handling, no SES templates, no dedicated IP pools.
 
@@ -60,6 +64,6 @@ The shared execution role gets `ses:SendEmail` (for `send()`) and `ses:SendBulkE
 | No actual email delivery | Emails are never sent; delivery issues only surface in AWS | No mitigation — mock is for development flow, not delivery testing. Sandbox testing covers real delivery |
 | No bounce/complaint handling | Bounces and complaints only occur with real email delivery | No mitigation — these are inherently production concerns |
 | No sending rate limits | Code that would be throttled in SES sandbox succeeds locally | No mitigation — the mock does not simulate SES rate limits. Recommend sandbox testing for throughput-sensitive flows |
-| No domain verification | `DomainNotVerifiedException` never thrown locally | No mitigation — verification is an infrastructure concern handled by CDK. Sandbox testing covers it |
+| No domain verification | `DomainNotVerifiedException` never thrown locally | No mitigation — the sender identity is created and verified in SES out of band (see Infrastructure). Sandbox testing covers it |
 | Per-message recipient limit (50) | A message exceeding 50 recipients (To + CC + BCC) would be rejected by SES | `send()` throws `InvalidInputException`; within `sendBatch()` the offending message is marked `failed` in the per-entry results (matching SES per-entry behavior) |
 | 40 MB message size limit | SES rejects messages over 40 MB | The mock and the AWS entry point both validate total message size and throw `EmailSendFailedException` when it exceeds 40 MB (see Input Validation) |
