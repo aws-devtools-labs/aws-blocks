@@ -2,7 +2,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -109,10 +109,18 @@ async function isAmplifyGen2Project(dir: string): Promise<boolean> {
 
 /**
  * Copies shared resources (maintained once in `resources/`) into the scaffolded project.
+ * A template's own `AGENTS.template.md` (e.g. the platform template's rules) is
+ * appended to the shared AGENTS.md and removed.
  */
 async function copySharedResources(targetDir: string): Promise<void> {
   const resourcesDir = join(__dirname, '../resources');
-  await cp(join(resourcesDir, 'AGENTS.md'), join(targetDir, 'AGENTS.md'));
+  const agents = join(targetDir, 'AGENTS.md');
+  await cp(join(resourcesDir, 'AGENTS.md'), agents);
+  const extra = join(targetDir, 'AGENTS.template.md');
+  if (await exists(extra)) {
+    await writeFile(agents, `${await readFile(agents, 'utf-8')}${await readFile(extra, 'utf-8')}`);
+    await rm(extra);
+  }
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
@@ -237,7 +245,7 @@ type TemplateInfo = {
   overlayOnly: boolean;
 };
 
-const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'platform', 'sql', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
 
 let templateCatalogCache: TemplateInfo[] | null = null;
 

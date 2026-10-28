@@ -74,6 +74,8 @@
   },
   "bin": {
     "blocks-generate-spec": "./dist/scripts/generate-spec-cli.js",
+    "blocks-iam-check": "./dist/scripts/iam-check-cli.js",
+    "blocks-iam-policies": "./dist/scripts/iam-policies-cli.js",
     "blocks-telemetry": "./dist/scripts/telemetry-cli.js"
   },
   "devDependencies": {

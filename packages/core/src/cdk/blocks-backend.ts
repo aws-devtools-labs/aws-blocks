@@ -29,6 +29,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { applyAppIdentity } from './app-identity.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
@@ -222,6 +223,9 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	// written at synth (after every block has granted) beside the template.
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
+	// Opt-in app identity on a shared app platform (`defaults.app`): the `app`
+	// tag on every resource and role; the report lists isolation violations.
+	applyAppIdentity(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,

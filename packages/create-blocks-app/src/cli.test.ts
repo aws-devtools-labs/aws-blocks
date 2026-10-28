@@ -41,7 +41,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, platform, sql, nextjs, auth-cognito, amplify, demo/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -122,6 +122,37 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.match(result.stderr, /amplify.*auto-selected/i);
       assert.match(result.stderr, /--template default/);
       assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('--template platform: appends the platform rules to AGENTS.md and sets the app identity', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-'));
+    const target = join(tmpDir, 'my-app');
+    try {
+      const result = run([target, '--template', 'platform', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const agents = readFileSync(join(target, 'AGENTS.md'), 'utf-8');
+      assert.match(agents, /^# Agent Guide/, 'the shared guide comes first');
+      assert.match(agents, /## Platform rules/);
+      assert.strictEqual(existsSync(join(target, 'AGENTS.template.md')), false);
+      const cdkEntry = readFileSync(join(target, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
+      assert.match(cdkEntry, /app: \{ id: appId, strict: true \}/);
+      assert.match(cdkEntry, /permissionsBoundary:/);
+      const pkg = JSON.parse(readFileSync(join(target, 'package.json'), 'utf-8'));
+      assert.match(pkg.scripts['check:iam'], /blocks-iam-check/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a template without AGENTS.template.md gets only the shared AGENTS.md', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-agents-'));
+    const target = join(tmpDir, 'my-app');
+    try {
+      assert.strictEqual(run([target, '--template', 'api-only', '--skip-install', '-y']).exitCode, 0);
+      assert.doesNotMatch(readFileSync(join(target, 'AGENTS.md'), 'utf-8'), /## Platform rules/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
