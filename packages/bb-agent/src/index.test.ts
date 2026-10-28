@@ -5,13 +5,16 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Scope, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
-import type { AgentStreamChunk } from './types.js';
+import type { AgentStreamChunk, ModelConfig } from './types.js';
+import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
+import { AgentBase } from './agent.js';
 import { checkModelHealth } from './model-factory.js';
 import { z } from 'zod';
 import { createStrandsModel } from './model-factory.js';
@@ -23,6 +26,148 @@ describe('AgentErrors', () => {
 		assert.strictEqual(AgentErrors.PersistenceRequired, 'PersistenceRequiredException');
 		assert.strictEqual(AgentErrors.InvalidModelConfig, 'InvalidModelConfigException');
 		assert.strictEqual(AgentErrors.BrowserNotSupported, 'BrowserNotSupportedException');
+	});
+});
+
+// ── classifyModelAccessError ────────────────────────────────────────────────
+
+describe('classifyModelAccessError', () => {
+	const FIRST_TIME_USE = 'Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model. If you have already filled out the form, try again in 15 minutes.';
+	const MARKETPLACE_NOT_SUBSCRIBED = 'Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe) to enable access to this model. Refer to the Amazon Bedrock documentation for further details. Your AWS Marketplace subscription for this model cannot be completed at this time. If you recently fixed this issue, try again after 15 minutes.';
+	const NOT_ENTITLED = 'Model access is denied. The model global.anthropic.claude-opus-4-8 is not available for this account. Please contact AWS Sales.';
+
+	/** Build an Error with a specific `name`, as the AWS SDK does for service exceptions. */
+	function named(name: string, message: string, cause?: unknown): Error {
+		const err = cause === undefined ? new Error(message) : new Error(message, { cause });
+		err.name = name;
+		return err;
+	}
+
+	test('recognises the Anthropic first-time-use refusal and names the model', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'global.anthropic.claude-sonnet-4-6');
+		assert.ok(message, 'should classify');
+		assert.match(message, /Bedrock model 'global\.anthropic\.claude-sonnet-4-6'/);
+		assert.match(message, /first-time-use form/);
+		assert.match(message, /PutUseCaseForModelAccess/);
+	});
+
+	test('recognises a missing one-time AWS Marketplace subscription before the entitlement check', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED), 'global.anthropic.claude-haiku-4-5');
+		assert.ok(message, 'should classify');
+		assert.match(message, /^Bedrock model 'global\.anthropic\.claude-haiku-4-5' has not had its one-time AWS Marketplace subscription activated/);
+		assert.match(message, /aws-marketplace:Subscribe, aws-marketplace:Unsubscribe and aws-marketplace:ViewSubscriptions/);
+		assert.doesNotMatch(message, /contact AWS/, 'not reported as an entitlement problem');
+		// Even when the same text also says the model is not available, the subscription fix wins.
+		const combined = classifyModelAccessError(named('AccessDeniedException', `${MARKETPLACE_NOT_SUBSCRIBED} The model is not available for this account.`));
+		assert.match(combined ?? '', /AWS Marketplace subscription/);
+	});
+
+	test('recognises the entitlement refusal in its full Bedrock wording', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', NOT_ENTITLED));
+		assert.ok(message, 'should classify');
+		assert.match(message, /not available for this AWS account/);
+		assert.match(message, /contact AWS/);
+		assert.doesNotMatch(message, /Marketplace/);
+	});
+
+	test('recognises a model that is not available for the account', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', 'global.anthropic.claude-opus-4-8 is not available for this account. Contact AWS Sales.'));
+		assert.ok(message, 'should classify');
+		assert.match(message, /^The selected Bedrock model is not available for this AWS account/);
+		assert.match(message, /different model or preset/);
+	});
+
+	test('recognises a Bedrock model-access AccessDeniedException', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', "You don't have access to the model with the specified model ID."), 'us.amazon.nova-pro-v1:0');
+		assert.ok(message, 'should classify');
+		assert.match(message, /^Access to Bedrock model 'us\.amazon\.nova-pro-v1:0' was denied/);
+	});
+
+	test('finds the refusal on a nested, non-enumerable cause chain', () => {
+		const raw = named('AccessDeniedException', FIRST_TIME_USE);
+		const wrapped = new Error('outer', { cause: new Error('Model stream failed', { cause: raw }) });
+		assert.strictEqual(Object.keys(wrapped).includes('cause'), false, 'precondition: cause is non-enumerable');
+		assert.match(classifyModelAccessError(wrapped) ?? '', /first-time-use form/);
+		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', NOT_ENTITLED) })) ?? '', /not available for this AWS account/);
+		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED) })) ?? '', /AWS Marketplace subscription/);
+	});
+
+	test('does not echo the raw provider message', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', `${FIRST_TIME_USE} requestId=abc-123`));
+		assert.ok(message && !message.includes('abc-123'), 'only the composed message is returned');
+	});
+
+	test('returns undefined for unrelated errors', () => {
+		assert.strictEqual(classifyModelAccessError(new Error('simulated mid-stream failure')), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ThrottlingException', 'Too many requests')), undefined);
+		// An IAM denial on a non-model action is not a model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'User is not authorized to perform: s3:GetObject')), undefined);
+		// A denial that merely mentions model access in passing is not Bedrock's model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'Not authorized to update model access settings for this project')), undefined);
+		assert.strictEqual(classifyModelAccessError(undefined), undefined);
+		assert.strictEqual(classifyModelAccessError('plain string'), undefined);
+	});
+	test('leaves an IAM denial of the Bedrock invoke action itself unclassified', () => {
+		const iamDenial = named('AccessDeniedException', 'User: arn:aws:sts::123456789012:assumed-role/Runtime/abc is not authorized to perform: bedrock:InvokeModelWithResponseStream on resource: arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-sonnet-4-6 because no identity-based policy allows the bedrock:InvokeModelWithResponseStream action');
+		assert.strictEqual(classifyModelAccessError(iamDenial, 'global.anthropic.claude-sonnet-4-6'), undefined);
+	});
+
+	test('requires a Bedrock access refusal (AccessDeniedException or HTTP 403) somewhere in the chain', () => {
+		// The same wording under another error name and no 403 is not a model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('ValidationException', 'Prompt caching is not available for this account')), undefined);
+		assert.strictEqual(classifyModelAccessError(new Error(FIRST_TIME_USE)), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ValidationException', MARKETPLACE_NOT_SUBSCRIBED)), undefined);
+		assert.strictEqual(classifyModelAccessError(new Error('outer', { cause: new Error("You don't have access to the model with the specified model ID.") })), undefined);
+		// A 403 status from the AWS SDK's `$metadata` qualifies whatever the error is named.
+		const forbidden = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 403 } });
+		assert.match(classifyModelAccessError(new Error('Model stream failed', { cause: forbidden })) ?? '', /first-time-use form/);
+		const otherStatus = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 400 } });
+		assert.strictEqual(classifyModelAccessError(otherStatus), undefined);
+	});
+
+	test('names only the resource part of an ARN model id, not the account id', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz');
+		assert.ok(message, 'should classify');
+		assert.match(message, /Bedrock model 'abc123xyz'/);
+		assert.ok(!message.includes('123456789012'), 'the account id is not published');
+		assert.ok(!message.includes('arn:'), 'the ARN is not published');
+	});
+
+	/** Wrap `innermost` so that it sits at 1-based level `level` of the cause chain. */
+	function nestAtLevel(innermost: Error, level: number): Error {
+		let current = innermost;
+		for (let i = 1; i < level; i++) current = new Error(`wrapper ${i}`, { cause: current });
+		return current;
+	}
+
+	test('walks at most five levels of the cause chain', () => {
+		assert.match(classifyModelAccessError(nestAtLevel(named('AccessDeniedException', FIRST_TIME_USE), 5)) ?? '', /first-time-use form/, 'found at level 5');
+		assert.strictEqual(classifyModelAccessError(nestAtLevel(named('AccessDeniedException', FIRST_TIME_USE), 6)), undefined, 'not found at level 6');
+	});
+
+	test('terminates on a self-referencing or cyclic cause chain', () => {
+		const selfRef = named('AccessDeniedException', FIRST_TIME_USE);
+		selfRef.cause = selfRef;
+		assert.match(classifyModelAccessError(selfRef) ?? '', /first-time-use form/);
+		assert.strictEqual(walkCauseChain(selfRef).length, 1, 'a level is visited once');
+		const a = new Error('a');
+		const b = new Error('b', { cause: a });
+		a.cause = b;
+		assert.strictEqual(classifyModelAccessError(a), undefined);
+		assert.deepStrictEqual(walkCauseChain(a), [a, b]);
+	});
+});
+
+describe('agentErrorFromChunk', () => {
+	test('maps a ModelUnavailable errorName to a branded ModelUnavailable error', () => {
+		const err = agentErrorFromChunk({ error: 'no access', errorName: AgentErrors.ModelUnavailable });
+		assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+		assert.match(err.message, /no access/);
+	});
+
+	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
+		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
+		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
 	});
 });
 
@@ -872,6 +1017,109 @@ describe('CannedProvider', () => {
 		});
 	});
 
+	/** The test-only 'throwing' provider; the public ModelConfig union deliberately omits it. */
+	function throwingModel(modelId?: string): ModelConfig {
+		const config: ModelConfig = modelId === undefined ? { provider: 'canned' } : { provider: 'canned', modelId };
+		// Deliberately bypasses the ModelConfig provider union (without a cast) to select the test-only provider.
+		Reflect.set(config, 'provider', 'throwing');
+		return config;
+	}
+
+	test("a Bedrock model-access refusal publishes an actionable error chunk tagged ModelUnavailable", async () => {
+		const scope = new Scope('test-model-access-chunk');
+		const agent = new Agent(scope, 'macc', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: true,
+		});
+		const chunks: AgentStreamChunk[] = [];
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		const ch = await result.channel;
+		const sub = ch.subscribe((chunk: AgentStreamChunk) => { chunks.push(chunk); });
+		await assert.rejects(() => result.complete());
+		sub.unsubscribe();
+		const errorChunk = chunks.find((c) => c.type === 'error');
+		assert.ok(errorChunk, 'should publish an error chunk');
+		assert.strictEqual(errorChunk.errorName, AgentErrors.ModelUnavailable);
+		assert.match(errorChunk.error ?? '', /first-time-use form/);
+		assert.ok(!(errorChunk.error ?? '').includes('Model stream failed'), 'raw wrapper message is not published');
+	});
+
+	test("complete() rejects with ModelUnavailable on a Bedrock model-access refusal", async () => {
+		const scope = new Scope('test-model-access-complete');
+		const agent = new Agent(scope, 'macc2', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: true,
+		});
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable), 'should reject with ModelUnavailable, not StreamFailed');
+			assert.ok(err instanceof Error && /PutUseCaseForModelAccess/.test(err.message));
+			return true;
+		});
+	});
+
+	test("complete() rejects with ModelUnavailable, prefixed once, when no model passes the health check", async () => {
+		const scope = new Scope('test-model-health-unavailable');
+		const unreachable: ModelConfig = { provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://127.0.0.1:1/v1', apiKey: 'sk-test' };
+		// AgentBase directly: the mock Agent appends a canned fallback, which always passes the health check.
+		const agent = new AgentBase(scope, 'mhu', { systemPrompt: 'test', inferenceOnly: true }, [unreachable], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const result = await agent.stream('hello', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable), 'should reject with ModelUnavailable, not StreamFailed');
+			assert.ok(err instanceof Error);
+			assert.match(err.message, /No model available/);
+			assert.strictEqual(err.message.split(AgentErrors.ModelUnavailable).length - 1, 1, 'the ModelUnavailableException prefix appears exactly once');
+			assert.ok(!err.message.includes(AgentErrors.StreamFailed));
+			return true;
+		});
+	});
+
+	test("a model-access refusal is persisted with its composed message and errorName, not the raw provider text", async () => {
+		const scope = new Scope('test-model-access-persist');
+		const agent = new Agent(scope, 'maccp', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: false,
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { conversationId: convId, userId: 'test-user' });
+		let composed = '';
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			composed = err.message.slice(`${AgentErrors.ModelUnavailable}: `.length);
+			return true;
+		});
+		const history = await agent.getConversation(convId);
+		const errorRow = history.find((m) => m.role === 'assistant' && m.metadata.error !== undefined);
+		assert.ok(errorRow, 'the error is persisted to the conversation');
+		assert.deepStrictEqual(errorRow.metadata, { error: composed, errorName: AgentErrors.ModelUnavailable });
+		const serialized = JSON.stringify(errorRow.metadata);
+		assert.ok(!serialized.includes('Model stream failed'), 'raw wrapper message is not persisted');
+		assert.ok(!serialized.includes('If you have already filled out the form'), 'raw provider message is not persisted');
+	});
+
+	test("a refusal names the model only when exactly one candidate is configured", async () => {
+		// AgentBase directly, so the candidate list is exactly the one given (the mock Agent appends a canned fallback).
+		const single = new AgentBase(new Scope('test-model-access-single'), 'maccs', { systemPrompt: 'test', inferenceOnly: true }, [throwingModel('model-a')], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const singleResult = await single.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => singleResult.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			assert.match(err.message, /Bedrock model 'model-a' requires Anthropic use case details/);
+			return true;
+		});
+
+		const agent = new AgentBase(new Scope('test-model-access-multi'), 'maccm', { systemPrompt: 'test', inferenceOnly: true }, [throwingModel('model-a'), throwingModel('model-b')], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			assert.match(err.message, /The selected Bedrock model requires Anthropic use case details/);
+			assert.doesNotMatch(err.message, /Bedrock model '|model-a|model-b/);
+			return true;
+		});
+	});
+
 	test("complete() resolves when a tool throws", async () => {
 		const scope = new Scope('test-tool-err');
 		const agent = new Agent(scope, 'terr', {
@@ -1589,6 +1837,33 @@ describe('useChat', () => {
 
 		assert.strictEqual(errorReceived, 'model throttled');
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
+	});
+
+	test('onError receives the branded error as cause for a classified error chunk', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const reports: Array<{ error: string; cause: unknown }> = [];
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-err-cause' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (error, cause) => { reports.push({ error, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'error', error: 'no model access', errorName: AgentErrors.ModelUnavailable });
+		assert.strictEqual(reports.length, 1);
+		assert.strictEqual(reports[0]?.error, 'no model access');
+		assert.ok(isBlocksError(reports[0]?.cause, AgentErrors.ModelUnavailable), 'cause is the branded ModelUnavailable error');
+
+		// An unclassified error chunk keeps the message-only report.
+		await chat.sendMessage('again');
+		cap.handler!({ type: 'error', error: 'boom' });
+		assert.strictEqual(reports.length, 2);
+		assert.strictEqual(reports[1]?.error, 'boom');
+		assert.strictEqual(reports[1]?.cause, undefined);
 	});
 
 	test('an error chunk before any text drops the empty assistant placeholder (mirrors createChat)', async () => {
@@ -2965,6 +3240,29 @@ describe('createChat', () => {
 		assert.strictEqual(chat.isLoading(), false, 'done should clear loading');
 		assert.deepStrictEqual(loadingStates, [true, false]);
 		assert.strictEqual(chat.getConversationId(), 'conv-1', 'first turn lazily creates the conversation');
+	});
+
+	test('a classified error chunk reports onError with a branded cause; an unclassified one without', async () => {
+		const reports: { message: string; cause: unknown }[] = [];
+		const make = (chunk: AgentStreamChunk) => createChat({
+			transport: fakeTransport([chunk]),
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-err' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: (message, cause) => reports.push({ message, cause }),
+		});
+
+		await make({ type: 'error', error: 'no model access', errorName: AgentErrors.ModelUnavailable }).sendMessage('hi');
+		await new Promise(r => setTimeout(r, 10));
+		await make({ type: 'error', error: 'boom' }).sendMessage('hi');
+		await new Promise(r => setTimeout(r, 10));
+
+		assert.strictEqual(reports.length, 2);
+		assert.strictEqual(reports[0].message, 'no model access');
+		assert.ok(isBlocksError(reports[0].cause, AgentErrors.ModelUnavailable), 'classified chunk carries a ModelUnavailable cause');
+		assert.strictEqual(reports[1].message, 'boom');
+		assert.strictEqual(reports[1].cause, undefined, 'unclassified chunk keeps the message-only report');
 	});
 
 	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {

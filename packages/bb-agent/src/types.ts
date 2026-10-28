@@ -423,6 +423,12 @@ export interface AgentStreamChunk {
 	input?: JSONValue;
 	usage?: TokenUsage;
 	error?: string;
+	/**
+	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
+	 * `ModelUnavailableException` for a Bedrock model the account cannot invoke). Absent for an
+	 * unclassified failure, which clients surface as `StreamFailed`.
+	 */
+	errorName?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
 
@@ -434,6 +440,11 @@ export interface MessageMetadata {
 	usage?: TokenUsage;
 	latencyMs?: number;
 	error?: string;
+	/**
+	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for
+	 * example `ModelUnavailableException`). Absent for an unclassified failure.
+	 */
+	errorName?: string;
 }
 
 export interface Message {
