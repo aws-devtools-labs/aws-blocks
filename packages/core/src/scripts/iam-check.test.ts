@@ -9,10 +9,14 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { stubComputeFactory } from '../cdk/__fixtures__/stub-lambda-compute.js';
 import { type BlocksDefaults, BlocksPresets } from '../cdk/blocks-defaults.js';
 import { BlocksStack } from '../cdk/index.js';
 import { checkCloudAssembly, IamCheckUsageError } from './iam-check.js';
+
+/** On a shared platform each app's bootstrap qualifier is its app id. */
+const QUALIFIER = { '@aws-cdk/core:bootstrapQualifier': 'appa' };
 
 before(() => {
 	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
@@ -28,16 +32,22 @@ after(() => {
 });
 
 /** Synthesize a one-stack app into a fresh cloud assembly; returns its directory. */
-async function synth(backend: string, defaults: BlocksDefaults, stackId = 'appa'): Promise<string> {
+async function synth(
+	backend: string,
+	defaults: BlocksDefaults,
+	stackId = 'appa',
+	extra?: (app: cdk.App) => void,
+): Promise<string> {
 	const dir = mkdtempSync(join(tmpdir(), 'blocks-iam-check-'));
 	dirs.push(dir);
-	const app = new cdk.App({ outdir: dir });
+	const app = new cdk.App({ outdir: dir, context: QUALIFIER });
 	await BlocksStack.create(app, stackId, {
 		backendHandlerPath: fixture('handler.js'),
 		backendCDKPath: fixture(backend),
 		defaults,
 		defaultComputeFactory: stubComputeFactory,
 	});
+	extra?.(app);
 	app.synth();
 	return dir;
 }
@@ -65,6 +75,32 @@ describe('blocks-iam-check', () => {
 		writeFileSync(file, JSON.stringify({ ...report, violations: [] }));
 		const rules = new Set(checkCloudAssembly(dir, 'appa').violations.map((v) => v.rule));
 		assert.ok(rules.has('grant-outside-app'), [...rules].join(', '));
+	});
+
+	test("a stack the report doesn't mention is still checked", async () => {
+		const dir = await synth('app-identity-backend.js', appDefaults, 'appa', (app) => {
+			const side = new cdk.Stack(app, 'sidecar');
+			const role = new iam.Role(side, 'Escape', { assumedBy: new iam.AccountPrincipal('222222222222') });
+			role.addToPolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: ['arn:aws:ssm:us-east-1:111111111111:parameter/appb-db-password'] }));
+		});
+		const rules = new Set(checkCloudAssembly(dir, 'appa').violations.map((v) => v.rule));
+		for (const rule of ['stack-name-outside-app', 'role-without-boundary', 'role-tag-mismatch', 'role-trust-not-service', 'grant-outside-app']) {
+			assert.ok(rules.has(rule as never), `${rule} missing from ${[...rules].join(', ')}`);
+		}
+	});
+
+	test('stacks in a Stage (a nested cloud assembly) and nested stacks are checked too', async () => {
+		const dir = await synth('app-identity-backend.js', appDefaults, 'appa', (app) => {
+			const stage = new cdk.Stage(app, 'Extra');
+			new iam.Role(new cdk.Stack(stage, 'appa-staged'), 'InStage', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+			const parent = new cdk.Stack(app, 'appa-parent');
+			new iam.Role(new cdk.NestedStack(parent, 'Child'), 'InNested', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
+		});
+		const untagged = checkCloudAssembly(dir, 'appa')
+			.violations.filter((v) => v.rule === 'role-tag-mismatch')
+			.map((v) => v.path ?? '');
+		assert.ok(untagged.some((p) => p.includes('InStage')), `Stage role not checked: ${untagged.join(', ')}`);
+		assert.ok(untagged.some((p) => p.includes('InNested')), `nested-stack role not checked: ${untagged.join(', ')}`);
 	});
 
 	test('an app that claims another id fails', async () => {

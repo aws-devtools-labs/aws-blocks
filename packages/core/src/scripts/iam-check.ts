@@ -20,13 +20,15 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import {
 	type AppViolation,
 	checkManagedPolicies,
+	checkResourcePolicy,
 	checkRole,
 	checkStackName,
 	checkStatement,
+	isResourcePolicyType,
 	type ResolvedStatement,
 } from '../cdk/app-isolation-rules.js';
 
@@ -52,17 +54,34 @@ export class IamCheckUsageError extends Error {}
 interface Report {
 	app?: { id?: string };
 	violations?: AppViolation[];
-	roles?: { stack?: string }[];
 	root?: string;
 }
 
-interface StackArtifact {
+interface Artifact {
 	type?: string;
-	properties?: { templateFile?: string; stackName?: string; tags?: Record<string, string> };
+	properties?: { templateFile?: string; stackName?: string; tags?: Record<string, string>; directoryName?: string };
 	displayName?: string;
 }
 
-type Template = { Resources?: Record<string, { Type?: string; Properties?: Record<string, unknown> }> };
+type Template = {
+	Parameters?: Record<string, unknown>;
+	Resources?: Record<
+		string,
+		{ Type?: string; Properties?: Record<string, unknown>; Metadata?: Record<string, unknown> }
+	>;
+};
+
+/** A stack template found in the assembly (top-level, in a nested assembly, or a nested stack). */
+interface FoundStack {
+	/** `<assembly dir relative to cdk.out>/<artifact id>`, or the nested-stack template's file name. */
+	label: string;
+	artifactId: string;
+	stackName: string;
+	/** Absolute path of the template file. */
+	file: string;
+	/** For a stack artifact: its manifest tags. A nested stack has no name of its own (`''`). */
+	tags?: Record<string, string>;
+}
 
 const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
@@ -70,42 +89,99 @@ function readJson<T>(file: string): T {
 	return JSON.parse(readFileSync(file, 'utf8')) as T;
 }
 
-/** Template rules: every role, every IAM policy, every managed-policy attachment. */
+/** Template rules: every role, every IAM policy, every managed-policy attachment, every resource policy. */
 function checkTemplate(template: Template, id: string, stackId: string): AppViolation[] {
 	const out: AppViolation[] = [];
+	const parameters = new Set(Object.keys(template.Parameters ?? {}));
 	for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
 		const where = `${stackId}/${logicalId}`;
 		const props = resource.Properties ?? {};
-		if (resource.Type === 'AWS::IAM::Role') {
-			out.push(...checkRole(props, id, where, true));
-		} else if (resource.Type === 'AWS::IAM::Policy' || resource.Type === 'AWS::IAM::ManagedPolicy') {
+		const type = resource.Type ?? '';
+		if (type === 'AWS::IAM::Role') {
+			out.push(...checkRole(props, id, where, true, parameters));
+		} else if (type === 'AWS::IAM::Policy' || type === 'AWS::IAM::ManagedPolicy' || type === 'AWS::IAM::RolePolicy') {
 			const doc = props.PolicyDocument as { Statement?: ResolvedStatement[] } | undefined;
-			for (const s of asArray(doc?.Statement)) out.push(...checkStatement(s, id, where));
-		} else if (resource.Type === 'AWS::IAM::RolePolicy') {
-			const doc = props.PolicyDocument as { Statement?: ResolvedStatement[] } | undefined;
-			for (const s of asArray(doc?.Statement)) out.push(...checkStatement(s, id, where));
-		} else if (resource.Type === 'AWS::IAM::User' || resource.Type === 'AWS::IAM::Group') {
+			for (const s of asArray(doc?.Statement)) out.push(...checkStatement(s, id, where, parameters));
+		} else if (type === 'AWS::IAM::User' || type === 'AWS::IAM::Group') {
 			out.push(...checkManagedPolicies(asArray(props.ManagedPolicyArns as unknown[] | undefined), where));
+		} else if (isResourcePolicyType(type)) {
+			out.push(...checkResourcePolicy(type, props, id, where, parameters));
 		}
 	}
 	return out;
 }
 
 /**
- * Check the cloud assembly in `dir` (see the module doc).
+ * Every stack template in the assembly at `dir`: its stack artifacts, those of
+ * nested cloud assemblies (`cdk:cloud-assembly`, e.g. a `Stage`), and every
+ * nested-stack template (`*.nested.template.json`). Anything it can't read is
+ * reported, not skipped.
+ */
+function findStacks(root: string, dir: string, unreadable: IamCheckViolation[]): FoundStack[] {
+	const manifestFile = join(dir, 'manifest.json');
+	const rel = relative(root, dir) || '.';
+	let manifest: { artifacts?: Record<string, Artifact> };
+	try {
+		manifest = readJson(manifestFile);
+	} catch {
+		unreadable.push({
+			source: join(rel, 'manifest.json'),
+			rule: 'unreadable-template',
+			message: `Can't read ${join(rel, 'manifest.json')}, so its stacks can't be checked.`,
+		});
+		return [];
+	}
+	const found: FoundStack[] = [];
+	for (const [artifactId, artifact] of Object.entries(manifest.artifacts ?? {})) {
+		if (artifact.type === 'cdk:cloud-assembly' && artifact.properties?.directoryName) {
+			found.push(...findStacks(root, join(dir, artifact.properties.directoryName), unreadable));
+		} else if (artifact.type === 'aws:cloudformation:stack') {
+			const templateFile = artifact.properties?.templateFile;
+			const stackName = artifact.properties?.stackName ?? artifact.displayName ?? artifactId;
+			if (!templateFile) {
+				unreadable.push({
+					source: join(rel, 'manifest.json'),
+					rule: 'unreadable-template',
+					message: `Stack ${artifactId} has no template file in the manifest, so it can't be checked.`,
+				});
+				continue;
+			}
+			found.push({
+				label: rel === '.' ? artifactId : `${rel}/${artifactId}`,
+				artifactId,
+				stackName,
+				file: join(dir, templateFile),
+				tags: artifact.properties?.tags,
+			});
+		}
+	}
+	// Nested stacks: CDK writes their templates into the same directory as
+	// `*.nested.template.json` (a file asset of the parent). Check every one,
+	// whatever the parent's metadata says.
+	const known = new Set(found.map((f) => f.file));
+	for (const file of readdirSync(dir).filter((f) => f.endsWith('.nested.template.json'))) {
+		const path = join(dir, file);
+		if (known.has(path)) continue;
+		const label = rel === '.' ? file : `${rel}/${file}`;
+		found.push({ label, artifactId: label, stackName: '', file: path });
+	}
+	return found;
+}
+
+/**
+ * Check the cloud assembly in `dir` (see the module doc). **Every** stack in the
+ * assembly is checked, not only the ones the IAM report names: the app's own code
+ * writes the report, and could add a stack it doesn't mention.
  *
  * @param dir the cloud assembly directory (`cdk.out`).
  * @param expectedApp the app id the pipeline expects (from its own registry, not
- *   the app's code). Without it, each report's own `app.id` is used.
+ *   the app's code). Without it, the id in the IAM report is used.
  * @throws IamCheckUsageError when `dir` has no manifest or no IAM report.
  */
 export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckResult {
-	const manifestFile = join(dir, 'manifest.json');
-	if (!existsSync(manifestFile)) {
+	if (!existsSync(join(dir, 'manifest.json'))) {
 		throw new IamCheckUsageError(`${dir} is not a cloud assembly (no manifest.json). Run \`cdk synth\` first.`);
 	}
-	const manifest = readJson<{ artifacts?: Record<string, StackArtifact> }>(manifestFile);
-	const stacks = Object.entries(manifest.artifacts ?? {}).filter(([, a]) => a.type === 'aws:cloudformation:stack');
 	const reports = readdirSync(dir).filter((f) => f.endsWith('.blocks-iam.json'));
 	if (reports.length === 0) {
 		throw new IamCheckUsageError(
@@ -115,12 +191,11 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 
 	const violations: IamCheckViolation[] = [];
 	const appIds = new Set<string>();
-	const checkedStacks = new Map<string, string>();
+	const stacks = findStacks(dir, dir, violations);
 
 	for (const file of reports) {
 		const report = readJson<Report>(join(dir, file));
 		const reported = report.app?.id;
-		const id = expectedApp ?? reported;
 		if (!reported) {
 			violations.push({
 				source: file,
@@ -134,49 +209,61 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 				message: `${file} says the app is "${reported}", but the pipeline expects "${expectedApp}".`,
 			});
 		}
+		const id = expectedApp ?? reported;
 		if (!id) continue;
 		appIds.add(id);
 		for (const v of report.violations ?? []) violations.push({ ...v, source: file });
 
-		// The stacks this report's roles live in, plus the report's own stack.
-		const stem = file.slice(0, -'.blocks-iam.json'.length);
-		const owned = new Set(asArray(report.roles).map((r) => r.stack).filter((s): s is string => !!s));
-		const own = stacks.find(([artifactId]) => artifactId === stem || stem.startsWith(`${artifactId}.`));
-		if (own) owned.add(own[0]);
-		for (const artifactId of owned) checkedStacks.set(artifactId, id);
-
 		// A BlocksStack's own stack carries the app tag (an embedded backend's stack is the app's own).
-		if (own && own[0] === stem) {
-			const tag = own[1].properties?.tags?.app;
+		const stem = file.slice(0, -'.blocks-iam.json'.length);
+		const own = stacks.find((s) => s.label === stem);
+		if (own) {
+			const tag = own.tags?.app;
 			if (tag !== id) {
 				violations.push({
 					source: 'manifest.json',
 					rule: 'stack-tag-mismatch',
-					path: own[0],
-					message: `Stack ${own[0]} is tagged app=${JSON.stringify(tag ?? null)}; expected "${id}".`,
+					path: own.artifactId,
+					message: `Stack ${own.artifactId} is tagged app=${JSON.stringify(tag ?? null)}; expected "${id}".`,
 				});
 			}
 		}
 	}
-
+	if (appIds.size > 1) {
+		violations.push({
+			source: 'manifest.json',
+			rule: 'app-id-mismatch',
+			message: `The assembly holds more than one app (${[...appIds].join(', ')}); deploy one app per pipeline run.`,
+		});
+	}
+	const id = expectedApp ?? [...appIds][0];
 	const templates: string[] = [];
-	for (const [artifactId, id] of checkedStacks) {
-		const artifact = stacks.find(([a]) => a === artifactId)?.[1];
-		const templateFile = artifact?.properties?.templateFile;
-		if (!templateFile) continue;
-		templates.push(templateFile);
-		const template = readJson<Template>(join(dir, templateFile));
-		for (const v of checkTemplate(template, id, artifactId)) violations.push({ ...v, source: templateFile });
-		const stackName = artifact.properties?.stackName ?? artifact.displayName ?? artifactId;
-		// Helper stacks AWS Blocks adds (us-east-1 edge / monitoring) are named by CDK, not the app.
-		const isHelper = /^edge-lambda-stack-|-CfMonitoring-/.test(stackName);
-		if (!isHelper) {
-			for (const v of checkStackName(stackName, id)) violations.push({ ...v, source: 'manifest.json' });
+	if (id) {
+		for (const stack of stacks) {
+			const source = relative(dir, stack.file);
+			let template: Template;
+			try {
+				template = readJson(stack.file);
+			} catch {
+				violations.push({
+					source,
+					rule: 'unreadable-template',
+					message: `Can't read the template of ${stack.label} (${source}), so it can't be checked.`,
+				});
+				continue;
+			}
+			templates.push(source);
+			for (const v of checkTemplate(template, id, stack.label)) violations.push({ ...v, source });
+			// Helper stacks AWS Blocks adds (the us-east-1 edge stack) are named by CDK, not the app.
+			const isHelper = /^edge-lambda-stack-/.test(stack.stackName);
+			if (!isHelper && stack.stackName !== '') {
+				for (const v of checkStackName(stack.stackName, id)) violations.push({ ...v, source: 'manifest.json' });
+			}
 		}
 	}
 
 	// The template's tag check and the report's can find the same untagged role;
-	// keep one line per (rule, message).
+	// keep one line per (source, rule, message).
 	const seen = new Set<string>();
 	const unique = violations.filter((v) => {
 		const key = `${v.source}|${v.rule}|${v.message}`;

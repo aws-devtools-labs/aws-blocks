@@ -19,7 +19,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
 
@@ -42,6 +42,8 @@ describe('defaults.app: every Building Block stays inside the app', () => {
         'cdk', 'synth', '--app', 'npx tsx -C cdk aws-blocks/index.cdk.ts', '--output', outdir, '--quiet',
         '--context', 'sandboxMode=true', '--context', 'blocksPermissionsBoundary=apps-boundary',
         '--context', `blocksAppId=${APP_ID}`,
+        // On a shared platform each app's bootstrap qualifier is its app id.
+        '--context', `@aws-cdk/core:bootstrapQualifier=${APP_ID}`,
       ],
       {
         cwd: APP_ROOT,
@@ -87,6 +89,41 @@ describe('defaults.app: every Building Block stays inside the app', () => {
     }
     assert.ok(checked >= 10, `expected the full app's roles, found only ${checked}`);
     assert.deepStrictEqual(missing, [], `roles without app=${APP_ID}:\n  ${missing.join('\n  ')}`);
+  });
+
+  test("every action a Building Block's roles are granted is allowed by the generated boundary's allow-list", async () => {
+    // `@aws-blocks/core` resolves to `<pkg>/dist/index.js`; the generator sits beside it.
+    const core = dirname(createRequire(import.meta.url).resolve('@aws-blocks/core'));
+    const { generateBoundaryPolicy } = (await import(pathToFileURL(join(core, 'scripts', 'iam-policies.js')).href)) as {
+      generateBoundaryPolicy: () => { Statement: { Effect: string; Action: string | string[] }[] };
+    };
+    const allowed = generateBoundaryPolicy()
+      .Statement.filter((s) => s.Effect === 'Allow')
+      .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    const glob = (pattern: string, value: string) =>
+      new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`, 'i').test(value);
+    const uncovered = new Set<string>();
+    for (const file of readdirSync(outdir).filter((f) => f.endsWith('.template.json'))) {
+      const { Resources = {} } = JSON.parse(readFileSync(join(outdir, file), 'utf8')) as {
+        Resources?: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
+      };
+      const docs: unknown[] = [];
+      for (const r of Object.values(Resources)) {
+        if (r.Type === 'AWS::IAM::Policy' || r.Type === 'AWS::IAM::ManagedPolicy') docs.push(r.Properties?.PolicyDocument);
+        if (r.Type === 'AWS::IAM::Role') {
+          for (const p of (r.Properties?.Policies as { PolicyDocument: unknown }[] | undefined) ?? []) docs.push(p.PolicyDocument);
+        }
+      }
+      for (const doc of docs as { Statement?: { Effect: string; Action?: string | string[] }[] }[]) {
+        for (const s of doc?.Statement ?? []) {
+          if (s.Effect !== 'Allow') continue;
+          for (const action of Array.isArray(s.Action) ? s.Action : s.Action ? [s.Action] : []) {
+            if (!allowed.some((a) => glob(a, action))) uncovered.add(action);
+          }
+        }
+      }
+    }
+    assert.deepStrictEqual([...uncovered].sort(), [], 'actions Building Blocks grant that the boundary would deny');
   });
 
   test('blocks-iam-check passes on the synthesized templates', () => {

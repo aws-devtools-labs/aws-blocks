@@ -16,7 +16,9 @@ import type { Construct, IConstruct } from 'constructs';
 import {
 	APP_ID_PATTERN,
 	type AppViolation,
+	checkResourcePolicy,
 	checkRole,
+	isResourcePolicyType,
 	checkScopeFullId,
 	checkStackName,
 	checkStatement,
@@ -29,7 +31,8 @@ import { findBackendRoot } from './root-registry.js';
 
 /**
  * Tag priority for the `app` tag: above `Tags.of(...).add()`'s default (100), so
- * an app's own tagging can't replace it on the resources AWS Blocks tags.
+ * an app's ordinary tagging doesn't replace it. An app can still raise its own
+ * priority or remove the tag; the platform's execution role rejects the result.
  */
 const APP_TAG_PRIORITY = 1000;
 
@@ -46,9 +49,10 @@ export function resolveAppIdentity(scope: Construct): BlocksAppIdentity | undefi
 	if (app === undefined) return undefined;
 	if (!app || typeof app.id !== 'string' || !APP_ID_PATTERN.test(app.id)) {
 		throw new Error(
-			`Invalid defaults.app.id: ${JSON.stringify(app?.id)}. An app id is 1–32 lowercase letters and digits, ` +
+			`Invalid defaults.app.id: ${JSON.stringify(app?.id)}. An app id is 1–10 lowercase letters and digits, ` +
 				'starting with a letter (e.g. "orders" or "app42"). No hyphens: the id is the name prefix ' +
-				'("<id>-…") that keeps one app away from another app\'s resources.',
+				'("<id>-…") that keeps one app away from another app\'s resources. At most 10 characters: the id is ' +
+				'also the app\'s CDK bootstrap qualifier, which CDK limits to 10.',
 		);
 	}
 	return app;
@@ -142,14 +146,35 @@ export function collectAppViolations(
 		violations.push(...checkScopeFullId(fullId, app.id, node.node.path));
 	}
 
-	// Roles: boundary, `app` tag, inline policies, managed policies.
+	// A `Ref` to a template parameter is a value the deployer supplies, not one of
+	// the app's own resources, so the rules treat it as unresolvable.
+	const parametersOf = (stack: cdk.Stack) =>
+		new Set(
+			stack.node
+				.findAll()
+				.filter((n): n is cdk.CfnParameter => n instanceof cdk.CfnParameter && cdk.Stack.of(n) === stack)
+				.map((n) => n.logicalId),
+		);
+
+	// Roles: trust policy, boundary, `app` tag, inline policies, managed policies.
 	const roleIdsByStack = new Map<cdk.Stack, Set<string>>();
 	for (const role of roles) {
 		const stack = cdk.Stack.of(role);
 		const ids = roleIdsByStack.get(stack) ?? new Set<string>();
 		ids.add(stack.resolve(role.logicalId) as string);
 		roleIdsByStack.set(stack, ids);
-		violations.push(...checkRole(render(role), app.id, role.node.path, boundary !== undefined));
+		violations.push(
+			...checkRole(render(role), app.id, role.node.path, boundary !== undefined, parametersOf(stack)),
+		);
+	}
+
+	// Resource policies under the root (Lambda permissions, queue / bucket / secret /
+	// topic policies) that open up a resource outside the app.
+	for (const node of root.node.findAll()) {
+		if (!cdk.CfnResource.isCfnResource(node) || !isResourcePolicyType(node.cfnResourceType)) continue;
+		const stack = cdk.Stack.of(node);
+		const found = checkResourcePolicy(node.cfnResourceType, render(node), app.id, node.node.path, parametersOf(stack));
+		violations.push(...found);
 	}
 
 	// Policies attached to any of those roles (the shared role's DefaultPolicy,
@@ -164,8 +189,9 @@ export function collectAppViolations(
 			if (!(node instanceof iam.CfnPolicy || node instanceof iam.CfnManagedPolicy)) continue;
 			if (!attached(node.roles)) continue;
 			const doc = stack.resolve(node.policyDocument) as { Statement?: ResolvedStatement[] } | undefined;
+			const parameters = parametersOf(stack);
 			for (const statement of asArray(doc?.Statement)) {
-				violations.push(...checkStatement(statement, app.id, node.node.path));
+				violations.push(...checkStatement(statement, app.id, node.node.path, parameters));
 			}
 		}
 	}
