@@ -91,16 +91,18 @@ class OidcProviderEnumTest : FunSpec({
         source shouldContain "else OidcClient.fromJson(result, client, \"$RELAY_TO\")"
     }
 
-    test("a provider name that is not an identifier becomes one, and a repeat is dropped") {
+    test("a provider name no identifier can hold becomes one, and a repeat is dropped") {
         val source = generate(
             spec(oidcResult(providerNames("login.gov", "my-sso", "okta:corp", "2fa", "login.gov", "☃"))),
         ).source()
 
+        // A name an identifier can't hold even backticked is rebuilt from its segments.
         source shouldContain "LoginGov(\"login.gov\")"
-        source shouldContain "MySso(\"my-sso\")"
         source shouldContain "OktaCorp(\"okta:corp\")"
-        source shouldContain "_2fa(\"2fa\")"
-        source shouldContain "Unnamed(\"☃\")"
+        // The rest keep the name the spec wrote, as every other generated enum does.
+        source shouldContain "MySso(\"my-sso\")"
+        source shouldContain "`2fa`(\"2fa\")"
+        source shouldContain "`☃`(\"☃\")"
         // The repeated provider is emitted once, so the enum has one constant per name.
         Regex("LoginGov\\(").findAll(source).count() shouldBe 1
     }

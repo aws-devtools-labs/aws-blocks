@@ -301,7 +301,9 @@ class KotlinCodeGenerator(
                     .initializer("providerName")
                     .build(),
             )
-        for ((constant, value) in providerConstants(providers.values)) {
+        // The provider name goes in the constructor rather than a serial name, so it is public API
+        // a caller can read, but the constants are named like any other generated enum's.
+        for ((constant, value) in enumConstantNames(providers.values)) {
             builder.addEnumConstant(
                 constant,
                 TypeSpec.anonymousClassBuilder()
@@ -310,36 +312,6 @@ class KotlinCodeGenerator(
             )
         }
         return builder.build()
-    }
-
-    /**
-     * Constant names and the provider names they carry: PascalCased, made a legal identifier, and
-     * numbered when another provider already took the name. A repeated provider is dropped.
-     */
-    private fun providerConstants(values: List<String>): List<Pair<String, String>> {
-        val taken = mutableSetOf<String>()
-        val constants = mutableListOf<Pair<String, String>>()
-        for (value in values.distinct()) {
-            // Every character an identifier can't hold separates segments, so a provider named
-            // login.gov is LoginGov rather than an identifier Kotlin can't spell.
-            val pascal = value.split(NON_IDENTIFIER_RUN)
-                .filter { it.isNotEmpty() }
-                .joinToString("") { toPascalCase(it) }
-            // A provider of only separators leaves nothing to name a constant with.
-            val base = when {
-                pascal.isEmpty() -> "Unnamed"
-                pascal.first().isDigit() -> "_$pascal"
-                else -> pascal
-            }
-            var name = base
-            var attempt = 2
-            while (!taken.add(name)) {
-                name = "$base$attempt"
-                attempt++
-            }
-            constants.add(name to value)
-        }
-        return constants
     }
 
     // ── Type index ───────────────────────────────────────────────────
@@ -744,8 +716,7 @@ class KotlinCodeGenerator(
             .enumBuilder(name)
             .addAnnotation(ClassNames.serializable)
 
-        for (literal in values) {
-            val entryName = toPascalCase(literal)
+        for ((entryName, literal) in enumConstantNames(values)) {
             val entryBuilder = TypeSpec.anonymousClassBuilder()
             if (entryName != literal) {
                 entryBuilder.addAnnotation(
@@ -758,6 +729,52 @@ class KotlinCodeGenerator(
         }
 
         return enumBuilder.build()
+    }
+
+    /**
+     * Constant names for a string enum's values, each paired with the literal it serializes as.
+     *
+     * A value whose PascalCase form can name a constant keeps it, backticked by KotlinPoet where
+     * it has to be, so a value like `cost$` still reads as the spec wrote it. The rest are values
+     * no identifier can hold even in backticks, which the generator would otherwise fail on: every
+     * character an identifier can't hold separates segments, so `v1.0` is `V10` and `okta:corp` is
+     * `OktaCorp`, and a value that leaves no segments at all is `Unnamed`. The serial name carries
+     * the literal either way.
+     *
+     * A repeated value is emitted once, and a name another value already took is numbered, since
+     * two constants of one name don't compile.
+     */
+    private fun enumConstantNames(values: List<String>): List<Pair<String, String>> {
+        val taken = mutableSetOf<String>()
+        val constants = mutableListOf<Pair<String, String>>()
+        for (literal in values.distinct()) {
+            val pascal = toPascalCase(literal)
+            val base = if (canNameConstant(pascal)) pascal else synthesizeConstantName(literal)
+            var name = base
+            var attempt = 2
+            while (!taken.add(name)) {
+                name = "$base$attempt"
+                attempt++
+            }
+            constants.add(name to literal)
+        }
+        return constants
+    }
+
+    /** Whether [name] can name a constant, as itself or backticked. */
+    private fun canNameConstant(name: String): Boolean =
+        name.isNotEmpty() && name.none { it in IDENTIFIER_ILLEGAL_CHARS }
+
+    private fun synthesizeConstantName(literal: String): String {
+        val segments = literal.split(NON_IDENTIFIER_RUN)
+            .filter { it.isNotEmpty() }
+            .joinToString("") { toPascalCase(it) }
+        return when {
+            segments.isEmpty() -> "Unnamed"
+            // A synthesized name is never backticked, so it can't open with a digit.
+            segments.first().isDigit() -> "_$segments"
+            else -> segments
+        }
     }
 
     // ── Sealed class generation ───────────────────────────────────────
@@ -2146,6 +2163,12 @@ class KotlinCodeGenerator(
 
         /** A run of characters a Kotlin identifier can't hold, which separates name segments. */
         private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
+
+        /**
+         * The characters no identifier can hold, even backticked, per the Kotlin grammar. Verified
+         * against KotlinPoet, which refuses to escape a name containing one of them.
+         */
+        private val IDENTIFIER_ILLEGAL_CHARS = charArrayOf('.', ';', '[', ']', '/', '<', '>', ':', '\\')
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

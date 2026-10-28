@@ -1,0 +1,88 @@
+package com.aws.blocks.kotlin
+
+import com.aws.blocks.kotlin.builder.CodegenModelBuilder
+import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
+import com.aws.blocks.kotlin.parser.OpenRpcParser
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+
+/** A method whose one parameter is a string enum of [values]. */
+private fun enumParamSpec(vararg values: String): String {
+    val literals = values.joinToString(", ") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+    return """
+    {
+      "openrpc": "1.3.2",
+      "info": { "title": "test", "version": "1.0.0" },
+      "methods": [
+        {
+          "name": "api.pick",
+          "params": [ { "name": "choice", "schema": { "type": "string", "enum": [$literals] } } ],
+          "result": { "name": "PickResult", "schema": { "type": "boolean" } }
+        }
+      ]
+    }
+    """.trimIndent()
+}
+
+private fun generate(spec: String): String =
+    KotlinCodeGenerator("com.example.app")
+        .generate(CodegenModelBuilder().build(OpenRpcParser.parse(spec)))
+        .files.joinToString("\n") { it.toString() }
+
+/**
+ * Enum constant naming for values no identifier can hold. Each of these previously failed code
+ * generation inside KotlinPoet, naming its own internals rather than the value responsible.
+ */
+class EnumConstantNamingTest : FunSpec({
+
+    test("a value an identifier can't hold even backticked is rebuilt from its segments") {
+        val source = generate(enumParamSpec("v1.0", "v2.0"))
+
+        source shouldContain "@SerialName(\"v1.0\")"
+        source shouldContain "V10"
+        source shouldContain "@SerialName(\"v2.0\")"
+        source shouldContain "V20"
+    }
+
+    test("every character an identifier can't hold separates segments") {
+        val source = generate(enumParamSpec("a.b", "c;d", "e[f", "g]h", "i/j", "k<l", "m>n", "o:p", "q\\r"))
+
+        for (name in listOf("AB", "CD", "EF", "GH", "IJ", "KL", "MN", "OP", "QR")) {
+            source shouldContain name
+        }
+    }
+
+    test("a value that leaves no segments is named rather than dropped") {
+        val source = generate(enumParamSpec("...", "-"))
+
+        source shouldContain "Unnamed"
+        // The second value leaves no segments either, so it takes a numbered name.
+        source shouldContain "Unnamed2"
+    }
+
+    test("a value keeps the name the spec wrote when an identifier can hold it") {
+        val source = generate(enumParamSpec("pending", "cost\$", "my-sso", "2fa", "é"))
+
+        source shouldContain "Pending"
+        source shouldContain "`Cost\$`"
+        source shouldContain "MySso"
+        source shouldContain "`2fa`"
+        source shouldContain "é"
+    }
+
+    test("two values that reduce to one name are numbered apart") {
+        val source = generate(enumParamSpec("my-sso", "my.sso"))
+
+        source shouldContain "MySso"
+        source shouldContain "MySso2"
+        source shouldContain "@SerialName(\"my.sso\")"
+    }
+
+    test("a repeated value is emitted once") {
+        val source = generate(enumParamSpec("pending", "pending"))
+
+        // Two constants of one name don't compile, so the repeat is dropped.
+        Regex("\\bPending\\b").findAll(source).count() shouldBe 1
+    }
+})
