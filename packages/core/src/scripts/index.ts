@@ -23,6 +23,12 @@ export {
 } from './dev-server.js';
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
+export {
+	BACKEND_TYPES_TSCONFIG,
+	type BackendTypesResult,
+	backendTypesTarget,
+	generateBackendTypes,
+} from './generate-types.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
 export {
 	NativeCatalogError,

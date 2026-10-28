@@ -21,7 +21,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
   const todos = await api.listTodos();          // typed, awaited call
   ```
 
-  At runtime that import resolves to an auto-generated **client proxy** (`aws-blocks/client.js`), not the server module — the types come from your backend, the transport is injected. **The JSON-RPC transport is invisible: never build request payloads by hand or `fetch()` the API directly** (only for one-off connectivity troubleshooting — see **Calling the API directly** below). Just import the namespace and call the method.
+  At runtime that import resolves to an auto-generated **client proxy** (`aws-blocks/client.js`), not the server module — the types come from your backend, the transport is injected. The types are declaration files generated from `aws-blocks/index.ts` into `aws-blocks/.types/` (gitignored) by `npm run dev` on every backend save and by `blocks-generate-client` before a build, so the frontend never typechecks backend code with its own tsconfig. If the frontend shows outdated API types, or the backend has a type error, run `npx blocks-generate-client` to regenerate and see the errors. **The JSON-RPC transport is invisible: never build request payloads by hand or `fetch()` the API directly** (only for one-off connectivity troubleshooting — see **Calling the API directly** below). Just import the namespace and call the method.
 - **Pitfall:** do not `import ... from '../aws-blocks/index.ts'` in a script/test to call the API — that gives you the *server* definition object, which behaves differently from the client. Import from `'aws-blocks'` (the package name) so you get the client, exactly as `src/` does.
 
 ### Methods are namespaced

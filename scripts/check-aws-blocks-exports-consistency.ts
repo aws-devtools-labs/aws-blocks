@@ -6,7 +6,12 @@
  * export conditions required for SSR (react-server, import).
  *
  * Required conditions in exports["."] :
- *   - types    → ./index.ts
+ *   - types    → ./.types/index.d.ts in create-blocks-app templates (the
+ *                backend's generated declarations, so a frontend never
+ *                typechecks the backend source with its own tsconfig);
+ *                ./index.ts or ./.types/index.d.ts in test-apps. Both stay
+ *                valid: apps scaffolded earlier point at the source, and a
+ *                missing .types/ file falls back to the source.
  *   - browser  → ./client.js
  *   - react-server → ./client.js
  *   - import   → ./client.js
@@ -21,8 +26,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = resolve(__dirname, "..");
 
+const GENERATED_TYPES = "./.types/index.d.ts";
+
 const REQUIRED_CONDITIONS: Record<string, string> = {
-  types: "./index.ts",
+  types: GENERATED_TYPES,
   browser: "./client.js",
   "react-server": "./client.js",
   import: "./client.js",
@@ -105,12 +112,14 @@ function checkFile(relPath: string): string[] {
     return errors;
   }
 
+  const isTemplate = relPath.startsWith("packages/create-blocks-app/templates/");
   for (const [condition, expectedValue] of Object.entries(REQUIRED_CONDITIONS)) {
+    const accepted = condition === "types" && !isTemplate ? [expectedValue, "./index.ts"] : [expectedValue];
     if (!(condition in dot)) {
       errors.push(`${relPath}: missing condition "${condition}"`);
-    } else if (dot[condition] !== expectedValue) {
+    } else if (!accepted.includes(dot[condition])) {
       errors.push(
-        `${relPath}: condition "${condition}" is "${dot[condition]}", expected "${expectedValue}"`
+        `${relPath}: condition "${condition}" is "${dot[condition]}", expected ${accepted.map((v) => `"${v}"`).join(" or ")}`
       );
     }
   }
