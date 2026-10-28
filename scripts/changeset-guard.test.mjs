@@ -593,7 +593,7 @@ describe("verify-scaffolder: the release PR, read from the version diff", () => 
 		const { status, output } = guard(dir, "verify-scaffolder");
 		assert.equal(status, 1, output);
 		assert.match(output, /move to a new release line, but @aws-blocks\/create-blocks-app keeps its version/);
-		assert.match(output, /@aws-blocks\/blocks {2}0\.1\.0 → 0\.2\.0/);
+		assert.match(output, /@aws-blocks\/blocks {2}0\.1\.0 -> 0\.2\.0/);
 	});
 
 	it("passes when the CLI is released in the same batch", (t) => {

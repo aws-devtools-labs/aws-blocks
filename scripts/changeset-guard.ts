@@ -491,7 +491,7 @@ function getVersionAtHead(dir: string): string {
 	return version;
 }
 
-/** The pre-1.0 release line a version belongs to: `0.8.3` → `0.8`, `1.2.0` → `1`. */
+/** The pre-1.0 release line a version belongs to: `0.8.3` -> `0.8`, `1.2.0` -> `1`. */
 function releaseLine(version: string): string {
 	const [major, minor] = version.split(".");
 	return major === "0" ? `0.${minor}` : (major ?? version);
@@ -522,7 +522,7 @@ function verifyScaffolder(): number {
 	if (lineChanges.length > 0 && !scaffolderMoved) {
 		console.error(`\n❌ These package(s) move to a new release line, but ${SCAFFOLDER_PKG} keeps its version:\n`);
 		for (const { pkg, from, to } of lineChanges) {
-			console.error(`   • ${pkg}  ${from} → ${to}`);
+			console.error(`   • ${pkg}  ${from} -> ${to}`);
 		}
 		console.error(
 			`\n${SCAFFOLDER_STALE_STAMP}` +
