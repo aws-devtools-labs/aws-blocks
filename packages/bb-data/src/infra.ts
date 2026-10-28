@@ -37,7 +37,15 @@ export interface AuroraInfraConfig {
   databaseName: string;
   /** Absolute path to migrations directory. If provided, migrations run on deploy. */
   migrationsPath?: string;
-  /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
+  /**
+   * CloudFormation removal policy for the Aurora cluster. @default RETAIN
+   *
+   * Resources the kept cluster still needs follow it: under `RETAIN` the
+   * cluster security group, the VPC this function creates (when no
+   * `vpcContext` is given) and the generated credentials secret are retained
+   * too; under `SNAPSHOT` the generated credentials secret is retained. Under
+   * `DESTROY` everything is deleted.
+   */
   removalPolicy?: cdk.RemovalPolicy;
   /**
    * Whether to enable RDS deletion protection. Resolved independently of
@@ -133,6 +141,10 @@ export interface AuroraInfraOutputs {
  *
  * Creates: VPC (2 AZs, isolated subnets, no NAT), Aurora cluster,
  * Secrets Manager credentials, security group, IAM grants, and CfnOutputs.
+ *
+ * When the cluster is retained (`removalPolicy` RETAIN, the default), the
+ * resources it depends on are retained with it so a stack delete completes and
+ * leaves a working cluster behind; see {@link AuroraInfraConfig.removalPolicy}.
  *
  * @param scope - CDK construct scope
  * @param name - Logical name used for resource naming and env var prefix
@@ -262,8 +274,10 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // the exact master username the aurora-postgres engine defaults to
     // ('postgres'). Note this is not a no-op swap of only the secret's KMS key:
     // supplying (or changing) a CMK gives the generated secret a new logical id,
-    // so CloudFormation mints a fresh secret with a NEW generated password, and
-    // that generated secret carries DeletionPolicy:Delete even under production.
+    // so CloudFormation mints a fresh secret with a NEW generated password. The
+    // generated secret's removal policy follows the cluster's: Retain when the
+    // cluster is retained or snapshotted (see applyDependantRemovalPolicies
+    // below), Delete only when the cluster itself is destroyed.
     // Without a CMK, credentials stay undefined so the default AWS-managed secret
     // encryption is unchanged.
     credentials: options.storageEncryptionKey
@@ -299,6 +313,18 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // value for direct materialize() callers that don't pass it).
     deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
     removalPolicy,
+  });
+
+  // Dependants are never less durable than the cluster (the same rule
+  // `applyKeyRemovalPolicy` in core's dynamodb-protection.ts applies to a
+  // table's dedicated CMK). CDK already propagates the cluster's policy to the
+  // writer instance and the DB subnet group; the resources below are created
+  // here, outside that propagation, and default to Delete.
+  applyDependantRemovalPolicies(cluster, removalPolicy, {
+    // Only a VPC this function created. A customer-provided VPC (vpcContext)
+    // is owned by the customer and keeps whatever policy they gave it.
+    ownedVpc: options.vpcContext ? undefined : vpc,
+    securityGroup,
   });
 
   const secret = cluster.secret;
@@ -403,6 +429,63 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     envVars,
     grantDataApi,
   };
+}
+
+/** CloudFormation types of the cluster's generated credentials (the secret and its cluster attachment). */
+const CREDENTIAL_RESOURCE_TYPES: ReadonlySet<string> = new Set([
+  'AWS::SecretsManager::Secret',
+  'AWS::SecretsManager::SecretTargetAttachment',
+]);
+
+/**
+ * Align the removal policy of the resources a retained (or snapshotted)
+ * cluster still needs with the cluster's own policy, so `cdk destroy` of a
+ * production stack completes instead of failing on resources the kept cluster
+ * still uses.
+ *
+ * - `RETAIN`: the cluster keeps running, attached to its subnets and security
+ *   group. Retain the security group and, when this module created it, the
+ *   whole VPC subtree (the VPC, subnets, route tables and their associations):
+ *   deleting them fails with "has dependencies" while the cluster's network
+ *   interfaces are still in them. Also retain the generated credentials so the
+ *   kept cluster stays usable.
+ * - `SNAPSHOT`: CloudFormation snapshots and deletes the cluster before its
+ *   dependencies, so the network can be deleted as usual. Retain only the
+ *   generated credentials, which a cluster restored from the snapshot needs.
+ *   Secrets Manager resources take no `Snapshot` policy, so they get `Retain`.
+ * - `DESTROY` (or any other policy): nothing changes; everything is deleted.
+ *
+ * Changing `DeletionPolicy`/`UpdateReplacePolicy` is a no-replacement update
+ * (logical ids are unchanged), so applying this to an existing stack does not
+ * touch the deployed resources.
+ */
+function applyDependantRemovalPolicies(
+  cluster: rds.DatabaseCluster,
+  removalPolicy: cdk.RemovalPolicy,
+  deps: { ownedVpc: ec2.IVpc | undefined; securityGroup: ec2.SecurityGroup },
+): void {
+  const retainCluster = removalPolicy === cdk.RemovalPolicy.RETAIN;
+  if (!retainCluster && removalPolicy !== cdk.RemovalPolicy.SNAPSHOT) return;
+
+  // The generated secret (DatabaseSecret) and its SecretTargetAttachment are
+  // created inside the cluster construct, so walk the cluster subtree for them.
+  // A secret passed in by the caller would not be in this subtree.
+  for (const child of cluster.node.findAll()) {
+    if (cdk.CfnResource.isCfnResource(child) && CREDENTIAL_RESOURCE_TYPES.has(child.cfnResourceType)) {
+      child.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    }
+  }
+
+  if (!retainCluster) return;
+  deps.securityGroup.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+  if (deps.ownedVpc) {
+    // Every CfnResource in the VPC subtree: the VPC, its subnets, route tables
+    // and route table associations (plus anything CDK adds there, e.g. the
+    // default-security-group restriction custom resource).
+    for (const child of deps.ownedVpc.node.findAll()) {
+      if (cdk.CfnResource.isCfnResource(child)) child.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    }
+  }
 }
 
 /** Hash all .sql files in a directory to detect changes. */

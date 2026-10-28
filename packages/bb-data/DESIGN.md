@@ -117,6 +117,31 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
 
+Dependants are never less durable than the cluster. CDK propagates the
+cluster's policy to the writer instance and the DB subnet group;
+`materialize()` (`infra.ts`, `applyDependantRemovalPolicies`) applies it to the
+resources it creates outside that propagation:
+
+| Cluster policy | Cluster security group | Own VPC subtree (VPC, subnets, route tables, associations) | Generated secret + target attachment |
+|---|---|---|---|
+| RETAIN | Retain | Retain | Retain |
+| SNAPSHOT | Delete | Delete | Retain |
+| DESTROY | Delete | Delete | Delete |
+
+Under RETAIN the kept cluster's network interfaces stay in its subnets and
+security group, so deleting those would fail the stack delete ("has
+dependencies"). Under SNAPSHOT CloudFormation deletes the cluster (after its
+snapshot) before its dependencies, so the network can go; the secret is kept so
+a restored cluster has its credentials (Secrets Manager takes no Snapshot
+policy, so it gets Retain). A customer-provided VPC (`vpcContext`) is never
+touched. Changing `DeletionPolicy`/`UpdateReplacePolicy` is a no-replacement
+update with unchanged logical ids, so existing stacks pick this up without
+touching the deployed resources.
+
+The destroy commands (core `runDestroyWithRetries`) list the resources a
+successful production destroy retained, and stop without retrying when a
+delete fails because a retained resource still uses what the stack deletes.
+
 ### Security posture (Aurora)
 
 - **Encryption at rest** is **opt-in**, gated so new projects are secure by
