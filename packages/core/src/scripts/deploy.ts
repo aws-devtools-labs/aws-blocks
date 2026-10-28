@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
@@ -9,7 +9,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDeploySignal, readAppStackOutputs } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
@@ -205,6 +205,13 @@ export function makeInvalidationProbe(
   };
 }
 
+/**
+ * Production deploy behind `npm run deploy`: provisions secrets, applies
+ * pending migrations, generates the client, then runs `cdk deploy --all` (see
+ * {@link buildCdkDeployArgs}), so every top-level stack of the app is deployed
+ * (not stacks inside a CDK `Stage`), and writes `.blocks-sandbox/config.json`
+ * from the outputs of the stack that carries `ApiUrl` (see {@link readAppStackOutputs}).
+ */
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     console.log('🏗️  Preparing deployment...');
@@ -313,14 +320,7 @@ export async function deploy(options: DeployOptions) {
     
     registerFrameworkFromSink(frameworkSink);
 
-    const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    // `--all` can write more than one stack's outputs (e.g. the us-east-1
-    // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
-    // — the main Blocks stack, which also holds the Hosting outputs — rather
-    // than relying on the write order of the outputs file. Falls back to the
-    // first group so a single-stack app is unchanged.
-    const stackGroups = Object.values(outputs) as Record<string, string>[];
-    const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+    const stackOutputs = readAppStackOutputs(join(options.projectRoot, '.blocks-sandbox', 'outputs.json')).outputs;
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME

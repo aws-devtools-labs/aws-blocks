@@ -48,8 +48,8 @@ npm run sandbox     # Deploy to AWS sandbox (Aurora Serverless v2)
 npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack
-npm run destroy          # Tear down the production stack
+npm run sandbox:destroy  # Tear down the AWS sandbox stacks (every top-level stack in the app)
+npm run destroy          # Tear down the production stacks (every top-level stack in the app)
 ```
 
 ### RPC endpoint (local dev)

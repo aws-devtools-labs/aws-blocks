@@ -11,7 +11,8 @@ const backendPath = process.argv[2];
 // exercise a full fresh deploy.
 console.log('🧹 Destroying stale stack (if any)...');
 try {
-  await destroy({ cdkAppPath: backendPath, projectRoot: process.cwd() });
+  // force: a local run in a terminal must not wait on the multi-stack confirmation.
+  await destroy({ cdkAppPath: backendPath, projectRoot: process.cwd(), force: true });
   console.log('   Stale stack destroyed.');
 } catch {
   console.log('   No stale stack found.');

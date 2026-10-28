@@ -13,6 +13,7 @@ import {
   buildSandboxDeployArgs,
   buildSandboxSynthArgs,
   findExpressUnsafeStacks,
+  quoteCdkAppPath,
   sandboxFailureRecoveryHint,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
@@ -67,7 +68,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
     assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), 'npm exec tsx -- -C cdk aws-blocks/index.ts');
+    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
   });
 
   it('interpolates the provided outDir and projectRoot', () => {

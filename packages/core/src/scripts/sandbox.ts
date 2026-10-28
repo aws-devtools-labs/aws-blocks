@@ -1,18 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
+import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
-import { formatDeploySignal } from './deploy-stream.js';
+import { formatDeploySignal, readAppStackOutputs } from './deploy-stream.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
@@ -72,7 +72,7 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: Sand
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -138,8 +138,83 @@ export function buildSandboxDeployArgs({
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
+}
+
+/**
+ * Build the `npx cdk watch ...` argv the sandbox loop runs after the first deploy.
+ *
+ * Kept pure (no I/O) so the argv contract can be asserted directly, like
+ * {@link buildSandboxDeployArgs}.
+ *
+ * - `stacks`: the stacks to watch, by construct path, placed right after
+ *   `watch`. The sandbox passes the top-level stacks of the assembly it just
+ *   deployed with `--all` (see {@link topLevelStackPaths}), so watch redeploys
+ *   the same set. Without a selector, `cdk watch` on an app with more than one
+ *   stack never deploys and prints no error. `--all` is not a declared option
+ *   of `cdk watch` (the CLI warns about it as unknown), and the `*` wildcard
+ *   misses a top-level stack whose construct path contains a `/`, so the
+ *   stacks are named exactly, a single stack too. An empty list passes no
+ *   selector (CDK then watches the app's only stack). The set is fixed when
+ *   the session starts: a stack added while it runs is not watched, and is
+ *   deployed by the next `npm run sandbox`. Removing or renaming a watched
+ *   stack can stop the watch from redeploying at all, so restart
+ *   `npm run sandbox` after it.
+ */
+export function buildSandboxWatchArgs({
+  outDir,
+  projectRoot,
+  backendPath,
+  stacks,
+}: Pick<SandboxDeployArgsOptions, 'outDir' | 'projectRoot' | 'backendPath'> & { stacks: readonly string[] }): string[] {
+  return [
+    "cdk", "watch",
+    ...stacks,
+    `--outputs-file`, `${outDir}/outputs.json`,
+    `--context`, `projectRoot=${projectRoot}`,
+    `--context`, `sandboxMode=true`,
+    `--app`, `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`
+  ];
+}
+
+/**
+ * The `cdk watch` argv for a sandbox session that just deployed the assembly
+ * at `assemblyDir` with `--all`: {@link buildSandboxWatchArgs} naming the
+ * stacks that {@link sandboxWatchStacks} picks from the assembly's top-level
+ * stacks ({@link topLevelStackPaths}).
+ */
+export function watchArgsForAssembly(
+  assemblyDir: string,
+  options: Pick<SandboxDeployArgsOptions, 'outDir' | 'projectRoot' | 'backendPath'>,
+): string[] {
+  return buildSandboxWatchArgs({ ...options, stacks: sandboxWatchStacks(topLevelStackPaths(assemblyDir)) });
+}
+
+/**
+ * Quote `backendPath` for the `--app` command string. CDK runs that string
+ * through a shell, so an unquoted path containing a space would split. cmd.exe
+ * (Windows) does not treat single quotes as quoting and would keep them in the
+ * path, so Windows gets double quotes; POSIX shells get single quotes.
+ */
+export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return `"${backendPath}"`;
+  return `'${backendPath.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The stack patterns the sandbox passes to `cdk watch` (see
+ * {@link buildSandboxWatchArgs}): every top-level stack path, a single one
+ * too, so a stack added during the session doesn't stop the watch from
+ * redeploying the ones it has. An unreadable assembly gives none (no
+ * selector). CDK reads each name as a glob pattern but matches an exact name
+ * first, so a path with glob characters such as `(`, `[`, `*` or `?` still
+ * selects its stack. Such a pattern can also match another top-level stack
+ * (`A{b,c}` matches `Ab`), which the watch redeploys anyway. A leading `!` is
+ * the exception: CDK reads it as "every stack but", so it is escaped as `\!`.
+ */
+export function sandboxWatchStacks(topLevelPaths: readonly string[]): string[] {
+  return topLevelPaths.map((path) => (path.startsWith('!') ? `\\${path}` : path));
 }
 
 /**
@@ -287,13 +362,7 @@ export async function startSandbox(options: SandboxOptions) {
 
   registerFrameworkFromSink(frameworkSink);
 
-  const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
-  // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
-  // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
-  // on the outputs file's write order; fall back to the first group so a
-  // single-stack app is unchanged.
-  const stackGroups = Object.values(outputs) as Record<string, string>[];
-  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+  const stackOutputs = readAppStackOutputs(`${outDir}/outputs.json`).outputs;
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -332,13 +401,11 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch",
-    `--outputs-file`, `${outDir}/outputs.json`,
-    `--context`, `projectRoot=${process.cwd()}`,
-    `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
-  ], {
+  const cdkWatch = spawnCommand("npx", watchArgsForAssembly(assemblyDir, {
+    outDir,
+    projectRoot: process.cwd(),
+    backendPath,
+  }), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
@@ -433,19 +500,72 @@ export function toDeleteObjects(listed: {
 
 /** Collect a stack's S3 bucket physical names (paginated — a large stack has
  * >100 resources, so a single page can miss the hosting bucket that blocks the
- * delete). Returns [] if the stack is already gone / not accessible. */
+ * delete). Throws if the stack is already gone / not accessible (the caller
+ * skips it).
+ *
+ * Only the buckets the stack's delete removes are returned, since only those
+ * can block it: a bucket whose `DeletionPolicy` in the DEPLOYED template is
+ * anything but `Delete` (CDK's `RemovalPolicy.RETAIN`, the production preset's
+ * default, or `RETAIN_ON_UPDATE_OR_DELETE`) is kept by CloudFormation, so it is
+ * skipped and its objects survive; so is a bucket already `DELETE_COMPLETE` or
+ * `DELETE_SKIPPED`. Of the buckets the delete removes, only those the stack
+ * empties itself are returned: a bucket named by a `Custom::S3AutoDeleteObjects`
+ * resource (CDK's `autoDeleteObjects: true`, which every block that sets
+ * `RemovalPolicy.DESTROY` on a bucket also sets). A bucket with
+ * `RemovalPolicy.DESTROY` and no `autoDeleteObjects` can't be deleted while it
+ * holds objects, and the app never asked for them to be deleted, so it is
+ * skipped and left in place with its data, as CloudFormation leaves it. The
+ * custom resource is in the template even when its Lambda never provisioned,
+ * which is the case the emptying exists for. The deployed template is what
+ * CloudFormation acts on, even if the app's code changed since the last
+ * deploy. Fails closed: when that template can't be read or parsed (reading it
+ * needs the `cloudformation:GetTemplate` permission), it warns and returns [],
+ * so no bucket of the stack is emptied. */
 export async function listStackBucketNames(cfn: CloudFormationClient, stackName: string): Promise<string[]> {
-	const { ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
-	const buckets: string[] = [];
+	const { GetTemplateCommand, ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
+	const buckets: Array<{ logicalId?: string; physicalId: string }> = [];
 	let token: string | undefined;
 	do {
 		const res = await cfn.send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
 		for (const r of res.StackResourceSummaries ?? []) {
-			if (r.ResourceType === 'AWS::S3::Bucket' && r.PhysicalResourceId) buckets.push(r.PhysicalResourceId);
+			if (r.ResourceType !== 'AWS::S3::Bucket' || !r.PhysicalResourceId) continue;
+			if (r.ResourceStatus === 'DELETE_COMPLETE' || r.ResourceStatus === 'DELETE_SKIPPED') continue;
+			buckets.push({ logicalId: r.LogicalResourceId, physicalId: r.PhysicalResourceId });
 		}
 		token = res.NextToken;
 	} while (token);
-	return buckets;
+	if (buckets.length === 0) return [];
+	type TemplateResource = { Type?: unknown; DeletionPolicy?: unknown; Properties?: { BucketName?: unknown } };
+	let resources: Record<string, TemplateResource>;
+	try {
+		const { TemplateBody } = await cfn.send(new GetTemplateCommand({ StackName: stackName, TemplateStage: 'Processed' }));
+		resources = (JSON.parse(TemplateBody ?? '') as { Resources?: Record<string, TemplateResource> }).Resources ?? {};
+	} catch (e) {
+		console.warn(
+			`  ⚠️  ${stackName}: could not read its deployed template (needs cloudformation:GetTemplate) to tell which ` +
+				`buckets it keeps, so none of its buckets are emptied: ${(e as Error).message}`,
+		);
+		return [];
+	}
+	// The buckets an autoDeleteObjects custom resource empties, by logical ID
+	// (CDK passes the bucket as `BucketName: { Ref: <bucket> }`).
+	const autoDeleted = new Set<unknown>();
+	for (const resource of Object.values(resources)) {
+		const bucketName = resource.Properties?.BucketName;
+		if (resource.Type === 'Custom::S3AutoDeleteObjects' && typeof bucketName === 'object' && bucketName !== null) {
+			autoDeleted.add((bucketName as { Ref?: unknown }).Ref);
+		}
+	}
+	return buckets
+		.filter(({ logicalId }) => {
+			const resource = logicalId === undefined ? undefined : resources[logicalId];
+			return (
+				resource !== undefined &&
+				(resource.DeletionPolicy === undefined || resource.DeletionPolicy === 'Delete') &&
+				autoDeleted.has(logicalId)
+			);
+		})
+		.map(({ physicalId }) => physicalId);
 }
 
 /**
@@ -463,28 +583,71 @@ export interface AssemblyStack {
 	region?: string;
 }
 
+/** A stack artifact in a cloud assembly's `manifest.json`. */
+type StackArtifact = {
+	type?: string;
+	environment?: string;
+	displayName?: string;
+	properties?: { templateFile?: string; stackName?: string };
+};
+
+/**
+ * The stack artifacts listed in `manifest.json` of the synthesized assembly at
+ * `assemblyDir`, as `[artifactId, artifact]`: the top-level stacks (a stack
+ * inside a CDK `Stage` lives in a nested assembly and is not listed). [] if the
+ * assembly can't be read.
+ */
+function readStackArtifacts(assemblyDir: string): Array<[string, StackArtifact]> {
+	let artifacts: Record<string, StackArtifact>;
+	try {
+		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, StackArtifact> })
+			.artifacts ?? {};
+	} catch {
+		return [];
+	}
+	return Object.entries(artifacts).filter(([, artifact]) => artifact.type === 'aws:cloudformation:stack');
+}
+
+/** The CloudFormation stack name and Region of a stack artifact. */
+function toAssemblyStack(id: string, artifact: StackArtifact): AssemblyStack {
+	const region = artifact.environment?.split('/')[3];
+	return {
+		stackName: artifact.properties?.stackName ?? id,
+		region: region && region !== 'unknown-region' ? region : undefined,
+	};
+}
+
+/**
+ * The top-level stacks of the synthesized assembly at `assemblyDir`, by
+ * CloudFormation stack name and Region: the stacks `cdk deploy --all` and
+ * `cdk destroy --all` select. Unlike `cdk ls`, which prints construct paths
+ * (`Parent/Nested`) and also lists stacks inside a CDK `Stage`, these are the
+ * names CloudFormation knows, each with its own Region (a Lambda@Edge
+ * `edge-lambda-stack-*` is always in us-east-1). [] if the assembly can't be read.
+ */
+export function topLevelStacks(assemblyDir: string): AssemblyStack[] {
+	return readStackArtifacts(assemblyDir).map(([id, artifact]) => toAssemblyStack(id, artifact));
+}
+
+/**
+ * The construct paths of the top-level stacks in the synthesized assembly at
+ * `assemblyDir`: the stacks `cdk deploy --all` selects, as CDK stack patterns
+ * (a stack's pattern is its construct path). Stacks inside a CDK `Stage` live
+ * in a nested assembly and are not listed. [] if the assembly can't be read.
+ */
+export function topLevelStackPaths(assemblyDir: string): string[] {
+	return readStackArtifacts(assemblyDir).map(([id, artifact]) => artifact.displayName ?? id);
+}
+
 /**
  * The stacks in the synthesized assembly at `assemblyDir` whose template
  * contains a resource in {@link EXPRESS_UNSAFE_RESOURCE_TYPES}. Reads
  * `manifest.json` + each stack's template; [] if the assembly can't be read.
  */
 export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyStack[] {
-	type Artifact = {
-		type?: string;
-		environment?: string;
-		displayName?: string;
-		properties?: { templateFile?: string; stackName?: string };
-	};
-	let artifacts: Record<string, Artifact>;
-	try {
-		artifacts = (JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as { artifacts?: Record<string, Artifact> })
-			.artifacts ?? {};
-	} catch {
-		return [];
-	}
 	const stacks: AssemblyStack[] = [];
-	for (const [id, artifact] of Object.entries(artifacts)) {
-		if (artifact.type !== 'aws:cloudformation:stack' || !artifact.properties?.templateFile) continue;
+	for (const [id, artifact] of readStackArtifacts(assemblyDir)) {
+		if (!artifact.properties?.templateFile) continue;
 		let template: { Resources?: Record<string, { Type?: string }> };
 		try {
 			template = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.templateFile), 'utf-8'));
@@ -493,11 +656,7 @@ export function stacksWithExpressUnsafeResources(assemblyDir: string): AssemblyS
 		}
 		const hasUnsafe = Object.values(template.Resources ?? {}).some((r) => EXPRESS_UNSAFE_RESOURCE_TYPES.has(r.Type ?? ''));
 		if (!hasUnsafe) continue;
-		const region = artifact.environment?.split('/')[3];
-		stacks.push({
-			stackName: artifact.properties.stackName ?? id,
-			region: region && region !== 'unknown-region' ? region : undefined,
-		});
+		stacks.push(toAssemblyStack(id, artifact));
 	}
 	return stacks;
 }
@@ -556,6 +715,55 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
 	}
 }
 
+/** Clients {@link emptySandboxBuckets} uses; injectable for tests. */
+export interface EmptyBucketsClients {
+	/** CloudFormation client for a Region (`undefined`: the default Region). */
+	cfnFor?: (region: string | undefined) => CloudFormationClient;
+	s3?: S3Client;
+}
+
+/**
+ * The AWS clients a destroy's retry uses, aimed at the account and Region CDK
+ * destroys in: SDK v3 clients don't read `cdk.json` or `AWS_DEFAULT_PROFILE`
+ * (see {@link resolveDeploymentTarget}), so default clients could look in
+ * another Region or account and find nothing. A stack pinned to a Region (the
+ * us-east-1 Lambda@Edge stack) is still looked up in its own Region.
+ */
+export async function destroyRetryClients(
+	projectRoot: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<Required<EmptyBucketsClients>> {
+	const target = await resolveDeploymentTarget({ env, projectRoot });
+	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+	const { S3Client } = await import('@aws-sdk/client-s3');
+	const region = target.region ?? undefined;
+	const cfnByRegion = new Map<string | undefined, CloudFormationClient>();
+	let warnedNoRegion = false;
+	return {
+		cfnFor: (stackRegion) => {
+			const key = stackRegion ?? region;
+			// CDK still deletes, in a Region it picks itself (the EC2 instance's,
+			// then us-east-1); a guess here could find a same-named stack in another
+			// Region and empty its buckets, so say why the retry can't help instead.
+			if (key === undefined && !warnedNoRegion) {
+				warnedNoRegion = true;
+				console.warn(
+					'  ⚠️  No AWS Region is configured (`region` in cdk.json, AWS_REGION or AWS_DEFAULT_REGION, or the ' +
+						"profile's region), so a failed delete's retry can't look up a stack without a Region of its " +
+						"own: its buckets aren't emptied and an AWS throttle isn't detected. Set a Region to enable them.",
+				);
+			}
+			let cfn = cfnByRegion.get(key);
+			if (!cfn) {
+				cfn = new CloudFormationClient({ region: key, profile: target.profile });
+				cfnByRegion.set(key, cfn);
+			}
+			return cfn;
+		},
+		s3: new S3Client({ region, profile: target.profile, followRegionRedirects: true }),
+	};
+}
+
 /**
  * Empty every versioned S3 bucket owned by the given stacks. `cdk destroy`
  * relies on each bucket's `autoDeleteObjects` custom-resource Lambda to empty
@@ -565,19 +773,31 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
  * the delete complete. Best-effort: any per-stack/per-bucket error is logged
  * and skipped so teardown still proceeds. Exported so the production destroy
  * path ({@link ./destroy.ts}) reuses the same bucket-emptying step.
+ *
+ * Each stack's resources are listed in that stack's own Region (see
+ * {@link topLevelStacks}), so a stack outside the default Region, such as a
+ * us-east-1 Lambda@Edge `edge-lambda-stack-*`, is not skipped as "not found".
+ * A bucket the stack's delete keeps (a `RETAIN` removal policy) is never
+ * emptied: see {@link listStackBucketNames}.
  */
-export async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
+export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: EmptyBucketsClients = {}): Promise<void> {
 	try {
 		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
 		const { S3Client } = await import('@aws-sdk/client-s3');
-		const cfn = new CloudFormationClient({});
+		const cfnFor = clients.cfnFor ?? ((region: string | undefined) => new CloudFormationClient(region ? { region } : {}));
+		const cfnByRegion = new Map<string | undefined, CloudFormationClient>();
 		// `followRegionRedirects` makes the client transparently retry against a
 		// bucket's real region on a PermanentRedirect, so a bucket that lives
 		// outside AWS_REGION (e.g. a us-east-1 Lambda@Edge stack's bucket) is still
 		// emptied instead of failing silently — closing the exact no-op this fix
 		// targets. It needs no GetBucketLocation permission.
-		const s3 = new S3Client({ followRegionRedirects: true });
-		for (const stackName of stackNames) {
+		const s3 = clients.s3 ?? new S3Client({ followRegionRedirects: true });
+		for (const { stackName, region } of stacks) {
+			let cfn = cfnByRegion.get(region);
+			if (!cfn) {
+				cfn = cfnFor(region);
+				cfnByRegion.set(region, cfn);
+			}
 			let buckets: string[] = [];
 			try {
 				buckets = await listStackBucketNames(cfn, stackName);
@@ -597,29 +817,21 @@ export async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 	}
 }
 
-/** Resolve the sandbox app's stack names via `cdk ls` (best-effort; [] on error). */
-function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): string[] {
-	try {
-		const out = execFileSync(
-			'npm',
-			// Single-quote backendPath: CDK re-runs the --app string through a shell,
-			// so an unquoted path containing a space would split.
-			['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', `npm exec tsx -- -C cdk '${backendPath}'`],
-			// Capture stderr so a genuine synth/`cdk ls` failure can be logged below
-			// rather than being indistinguishable from "app has zero stacks".
-			{ env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+/**
+ * The stacks of the assembly a `cdk destroy --output <assemblyDir>` attempt
+ * synthesized (see {@link topLevelStacks}): the set that `--all` deletes, by
+ * stack name and Region. Warns when the assembly can't be read (the synth
+ * failed), since an empty list skips the bucket-emptying before the retry.
+ */
+export function listDestroyedStacks(assemblyDir: string): AssemblyStack[] {
+	const stacks = topLevelStacks(assemblyDir);
+	if (stacks.length === 0) {
+		console.warn(
+			`  ⚠️  could not read the synthesized stacks in ${assemblyDir}; skipping bucket-emptying and the throttle and ` +
+				'Lambda@Edge checks',
 		);
-		return out
-			.split('\n')
-			.map((s) => s.trim())
-			.filter(Boolean);
-	} catch (e) {
-		// Warn (don't stay silent): if this returns [] on a real failure, the retry
-		// skips bucket-emptying — the exact silent-no-op this change exists to avoid.
-		const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
-		console.warn(`  ⚠️  could not list sandbox stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
-		return [];
 	}
+	return stacks;
 }
 
 /**
@@ -643,7 +855,7 @@ const MAX_EVENT_PAGES = 30;
 
 /**
  * Whether the delete attempt that began at `sinceMs` failed because AWS
- * throttled a resource delete in any of `stackNames`. Reads each stack's
+ * throttled a resource delete in any of `stacks`. Reads each stack's
  * events newest-first back to this attempt's own stack-level
  * `DELETE_IN_PROGRESS` and counts a throttle only if that start event is found
  * and is no older than `sinceMs` (less clock skew) nor than `notBeforeMs`
@@ -654,23 +866,30 @@ const MAX_EVENT_PAGES = 30;
  * every stack missing, e.g. stacks in another Region) is thrown after checking
  * the remaining stacks, so the caller can warn and fall back to the ordinary
  * retry schedule.
+ *
+ * `cfn` is one client for every stack, or a client per Region: then each
+ * stack given as an {@link AssemblyStack} is looked up in its own Region (the
+ * us-east-1 Lambda@Edge stack of an app deployed elsewhere).
  */
 export async function stackDeleteThrottled(
-	cfn: CloudFormationClient,
-	stackNames: string[],
+	cfn: CloudFormationClient | ((region: string | undefined) => CloudFormationClient),
+	stacks: Array<string | AssemblyStack>,
 	sinceMs: number,
 	notBeforeMs?: number,
 ): Promise<boolean> {
 	const { DescribeStackEventsCommand } = await import('@aws-sdk/client-cloudformation');
 	const oldest = Math.max(sinceMs - EVENT_CLOCK_SKEW_MS, notBeforeMs ?? Number.NEGATIVE_INFINITY);
+	const stackNames = stacks.map((st) => (typeof st === 'string' ? st : st.stackName));
 	let firstError: unknown;
 	let missing = 0;
-	for (const stackName of stackNames) {
+	for (const stack of stacks) {
+		const { stackName, region } = typeof stack === 'string' ? { stackName: stack, region: undefined } : stack;
+		const client = typeof cfn === 'function' ? cfn(region) : cfn;
 		try {
 			let nextToken: string | undefined;
 			let sawThrottle = false;
 			scan: for (let page = 0; page < MAX_EVENT_PAGES; page++) {
-				const res = await cfn.send(new DescribeStackEventsCommand({ StackName: stackName, NextToken: nextToken }));
+				const res = await client.send(new DescribeStackEventsCommand({ StackName: stackName, NextToken: nextToken }));
 				for (const ev of res.StackEvents ?? []) {
 					if (ev.Timestamp && ev.Timestamp.getTime() < oldest) break scan;
 					if (ev.ResourceType === 'AWS::CloudFormation::Stack') {
@@ -698,18 +917,22 @@ export async function stackDeleteThrottled(
 }
 
 /**
- * {@link stackDeleteThrottled} with a default-Region CloudFormation client:
- * the real `isThrottled` for both destroy paths (`destroySandbox` here and the
- * production `destroy` in `./destroy.ts`).
+ * {@link stackDeleteThrottled} with a CloudFormation client per Region: the
+ * real `isThrottled` for both destroy paths (`destroySandbox` here and the
+ * production `destroy` in `./destroy.ts`). `destroySandbox` passes the clients
+ * of {@link destroyRetryClients}; without `cfnFor`, each stack's own Region or
+ * else the SDK's default Region and credentials are used.
  */
 export async function destroyWasThrottled(
-	stackNames: string[],
+	stacks: AssemblyStack[],
 	sinceMs: number,
 	notBeforeMs?: number,
+	cfnFor?: (region: string | undefined) => CloudFormationClient,
 ): Promise<boolean> {
-	if (stackNames.length === 0) return false;
+	if (stacks.length === 0) return false;
 	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
-	return stackDeleteThrottled(new CloudFormationClient({}), stackNames, sinceMs, notBeforeMs);
+	const clientFor = cfnFor ?? ((region: string | undefined) => new CloudFormationClient(region ? { region } : {}));
+	return stackDeleteThrottled(clientFor, stacks, sinceMs, notBeforeMs);
 }
 
 /** Backoff for a destroy that failed on an AWS API throttle. */
@@ -744,21 +967,67 @@ export function throttleBackoffDelay(retry: number, backoff: ThrottleBackoff, ra
 	return Math.round(step / 2 + random() * (step / 2));
 }
 
+/** Whether `stackName` is the us-east-1 stack CDK adds for a Lambda@Edge function (`edge-lambda-stack-*`). */
+export function isEdgeLambdaStack(stackName: string): boolean {
+	return stackName.startsWith('edge-lambda-stack-');
+}
+
+/**
+ * The Lambda@Edge stacks (of `stacks`, see {@link isEdgeLambdaStack}) whose
+ * delete failed because CloudFront still replicates their function: a
+ * resource in `DELETE_FAILED` whose reason says it "is a replicated function",
+ * updated no earlier than `sinceMs` (epoch ms, less a minute of clock skew), so
+ * a failure left over from an earlier run is not counted. Each stack is looked
+ * up in its own Region. A stack that can't be listed (gone, no access,
+ * throttled) is not counted, so the caller falls back to its ordinary retries.
+ */
+export async function edgeStacksBlockedByReplicas(
+	stacks: AssemblyStack[],
+	sinceMs: number,
+	cfnFor?: (region: string | undefined) => CloudFormationClient,
+): Promise<string[]> {
+	const edgeStacks = stacks.filter((s) => isEdgeLambdaStack(s.stackName));
+	if (edgeStacks.length === 0) return [];
+	const { CloudFormationClient: Client, ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
+	const clientFor = cfnFor ?? ((region: string | undefined) => new Client(region ? { region } : {}));
+	const blocked: string[] = [];
+	for (const { stackName, region } of edgeStacks) {
+		try {
+			let token: string | undefined;
+			let replicated = false;
+			do {
+				const res = await clientFor(region).send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
+				replicated ||= (res.StackResourceSummaries ?? []).some(
+					(r) =>
+						r.ResourceStatus === 'DELETE_FAILED' &&
+						/replicated function/i.test(r.ResourceStatusReason ?? '') &&
+						(r.LastUpdatedTimestamp?.getTime() ?? Number.NEGATIVE_INFINITY) >= sinceMs - EVENT_CLOCK_SKEW_MS,
+				);
+				token = res.NextToken;
+			} while (token && !replicated);
+			if (replicated) blocked.push(stackName);
+		} catch {
+			// Not listable: leave it to the ordinary retries.
+		}
+	}
+	return blocked;
+}
+
 /** Injectable dependencies for {@link runDestroyWithRetries} — real ones in
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
 export interface DestroyRetryDeps {
 	/** Run one `cdk destroy` attempt; throws on failure. */
 	runDestroy: () => void;
-	/** Resolve the app's stack names (for bucket enumeration). */
-	listStackNames: () => string[];
+	/** Resolve the app's stacks, by stack name and Region (for bucket enumeration). */
+	listStacks: () => AssemblyStack[];
 	/** Empty the given stacks' versioned S3 buckets. */
-	emptyBuckets: (stackNames: string[]) => Promise<void>;
+	emptyBuckets: (stacks: AssemblyStack[]) => Promise<void>;
 	/** Backoff between retries (VPC-ENI detach, bucket-block clearing, DeleteRestApi 429 throttle). */
 	sleep: (ms: number) => Promise<void>;
 	/** Backoff between retries. Default: 1min, then 2min. */
 	retryDelays?: number[];
-	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stack'). */
+	/** What the resource is, for the success log. Default: 'Sandbox' (production passes 'Production stacks'). */
 	successLabel?: string;
 	/**
 	 * Whether the attempt that started at `attemptStartedAt` (epoch ms) failed
@@ -768,13 +1037,23 @@ export interface DestroyRetryDeps {
 	 * retried with {@link throttleBackoff} instead of `retryDelays`; a rejection
 	 * is logged and treated as "not throttled". Default: never throttled.
 	 */
-	isThrottled?: (stackNames: string[], attemptStartedAt: number, previousFailureAt?: number) => Promise<boolean>;
+	isThrottled?: (stacks: AssemblyStack[], attemptStartedAt: number, previousFailureAt?: number) => Promise<boolean>;
 	/** Backoff for throttled failures. Default: randomized waits of up to 1min, 2min, 4min, then 5min, within 20min of the first failure. */
 	throttleBackoff?: ThrottleBackoff;
 	/** Jitter source in [0, 1). Default: `Math.random`. */
 	random?: () => number;
 	/** Clock (epoch ms). Default: `Date.now`. */
 	now?: () => number;
+	/**
+	 * After a failed attempt that started at `attemptStartedAt` (epoch ms), the
+	 * Lambda@Edge stacks whose delete failed because CloudFront still
+	 * replicates their function (see {@link edgeStacksBlockedByReplicas}). When
+	 * there is one, the loop stops and says to run {@link rerunCommand} later,
+	 * instead of retrying. Default: not checked.
+	 */
+	edgeReplicaBlocked?: (stacks: AssemblyStack[], attemptStartedAt: number) => Promise<string[]>;
+	/** The command that re-runs this destroy, for the Lambda@Edge hint. Default: 'npm run sandbox:destroy'. */
+	rerunCommand?: string;
 }
 
 /**
@@ -784,7 +1063,8 @@ export interface DestroyRetryDeps {
  * failed, so the bucket blocks the delete and the stack (+ its IAM roles) leaks;
  * we empty them out-of-band — and (2) VPC ENIs that take 60-120s to detach (the
  * backoff). Stack names are resolved once and reused (topology is stable across
- * attempts). Deterministic auth/account failures never reach here: both callers
+ * attempts; an empty list, e.g. after a failed synth, is resolved again).
+ * Deterministic auth/account failures never reach here: both callers
  * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
  * retries a transient teardown blocker. Factored out with injectable deps so
  * this behavior is unit-testable.
@@ -802,6 +1082,13 @@ export interface DestroyRetryDeps {
  * throttle schedule too: it is retried later, not hidden, and still fails the
  * call once the budget is spent. With 5-minute attempts a call can run for
  * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
+ *
+ * A Lambda@Edge function can only be deleted once CloudFront has removed its
+ * replicas, which takes a few hours after its distribution is deleted. So when
+ * a failed attempt's Lambda@Edge stack failed on its replicated function,
+ * retrying within minutes cannot help (CDK would fail on that stack again and
+ * stop there): the loop prints that and tells the user to run
+ * {@link DestroyRetryDeps.rerunCommand} again later.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
 	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
@@ -810,7 +1097,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	const random = deps.random ?? Math.random;
 	const isThrottled = deps.isThrottled ?? (async () => false);
 	const { budgetMs } = { ...THROTTLE_BACKOFF_DEFAULTS, ...deps.throttleBackoff };
-	let stackNames: string[] | undefined;
+	let stacks: AssemblyStack[] | undefined;
 	let firstFailureAt: number | undefined;
 	let lastFailureAt: number | undefined;
 	let throttleRetries = 0;
@@ -825,10 +1112,20 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			const previousFailureAt = lastFailureAt;
 			lastFailureAt = now();
 			firstFailureAt ??= lastFailureAt;
-			if (stackNames === undefined) stackNames = deps.listStackNames();
+			if (!stacks?.length) stacks = deps.listStacks();
+			const edgeBlocked = await edgeStacksBlocked(deps, stacks, attemptStartedAt);
+			if (edgeBlocked.length > 0) {
+				console.error(
+					`\n❌ ${edgeBlocked.join(', ')} can't be deleted yet: CloudFront still holds replicas of its Lambda@Edge ` +
+						'function, which take a few hours to clear after the distribution is deleted, so retrying now cannot ' +
+						`help. Run \`${deps.rerunCommand ?? 'npm run sandbox:destroy'}\` again later; it also deletes any other ` +
+						'stack still left.',
+				);
+				throw error;
+			}
 			let throttled = false;
 			try {
-				throttled = await isThrottled(stackNames, attemptStartedAt, previousFailureAt);
+				throttled = await isThrottled(stacks, attemptStartedAt, previousFailureAt);
 			} catch (e) {
 				console.warn(
 					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
@@ -858,9 +1155,9 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				}
 				throw error;
 			}
-			if (stackNames.length > 0) {
+			if (stacks.length > 0) {
 				console.log('\n🧹 Emptying versioned S3 buckets before retry...');
-				await deps.emptyBuckets(stackNames);
+				await deps.emptyBuckets(stacks);
 			}
 			const delaySec = Math.round(delayMs / 1000);
 			if (throttled) {
@@ -878,6 +1175,23 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	}
 }
 
+/** {@link DestroyRetryDeps.edgeReplicaBlocked}, or [] when it is not given, there are no stacks, or it fails. */
+async function edgeStacksBlocked(deps: DestroyRetryDeps, stacks: AssemblyStack[], attemptStartedAt: number): Promise<string[]> {
+	if (!deps.edgeReplicaBlocked || stacks.length === 0) return [];
+	try {
+		return await deps.edgeReplicaBlocked(stacks, attemptStartedAt);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Where `sandbox:destroy` has CDK write the assembly it synthesizes (`--output`),
+ * relative to the project root. The retry reads the stack list from it. Its own
+ * directory, so a production `destroy` running at the same time can't clear it.
+ */
+const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
+
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
     console.log("🗑️  Destroying sandbox...");
@@ -893,30 +1207,53 @@ export async function destroySandbox(backendPath: string) {
       if (e.code !== 'ENOENT') throw e;
     }
 
+    // The destroy synthesizes into this directory; the retry reads the stacks
+    // it selected from there. Cleared first so a failed synth can't leave an
+    // earlier run's stack list behind, and removed after a successful destroy.
+    rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
-    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv));
+    const clients = await destroyRetryClients(process.cwd());
+    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients));
+    rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
   });
 }
 
 /**
  * The {@link runDestroyWithRetries} dependencies `destroySandbox` runs with.
  * A separate function so a test can pin the wiring (throttle detection, bucket
- * emptying) without spawning cdk.
+ * emptying, the Lambda@Edge stop) without spawning cdk. `clients` are the AWS
+ * clients the retry uses (see {@link destroyRetryClients}).
  */
-export function sandboxDestroyDeps(backendPath: string, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+export function sandboxDestroyDeps(
+  backendPath: string,
+  cdkEnv: NodeJS.ProcessEnv,
+  clients: Required<EmptyBucketsClients>,
+): DestroyRetryDeps {
   const cdkArgs = [
     "exec", "cdk", "--", "destroy",
+    // `--all`, like the deploy (see buildSandboxDeployArgs): without it CDK
+    // refuses an app with more than one stack (a Lambda@Edge
+    // `edge-lambda-stack-*` outside us-east-1, a VPC lookup stack), so the
+    // destroy can never succeed. CDK deletes dependent stacks first.
+    "--all",
     "--force",
+    "--output", SANDBOX_DESTROY_ASSEMBLY_DIR,
+    // sandboxMode=true is what makes the app name this sandbox's stacks;
+    // without it the app names its production stacks, and `--all --force`
+    // would delete those. projectRoot matches the sandbox deploy, so both
+    // resolve the same stack names.
     "--context", "sandboxMode=true",
-    // Single-quote backendPath: CDK re-runs the --app string through a shell,
-    // so an unquoted path containing a space would split.
-    "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+    "--context", `projectRoot=${process.cwd()}`,
+    // Quote backendPath (see quoteCdkAppPath): CDK re-runs the --app string
+    // through a shell, so an unquoted path containing a space would split.
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
   return {
     runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
-    listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
-    emptyBuckets: emptySandboxBuckets,
-    isThrottled: destroyWasThrottled,
+    listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),
+    emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
+    isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),
+    edgeReplicaBlocked: (stacks, since) => edgeStacksBlockedByReplicas(stacks, since, clients.cfnFor),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }

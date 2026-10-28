@@ -3,10 +3,22 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
-import { emptyBucket, listStackBucketNames, runDestroyWithRetries, toDeleteObjects } from './sandbox.js';
+import {
+	destroyRetryClients,
+	edgeStacksBlockedByReplicas,
+	emptyBucket,
+	emptySandboxBuckets,
+	listStackBucketNames,
+	runDestroyWithRetries,
+	toDeleteObjects,
+	topLevelStacks,
+} from './sandbox.js';
 
 // The teardown bucket-emptying must delete BOTH live versions and delete
 // markers — a versioned bucket left with either still blocks `cdk destroy`.
@@ -49,26 +61,124 @@ describe('toDeleteObjects', () => {
 // responses. Cast to the real client type — this is test plumbing, not customer code.
 type Send = (cmd: { constructor: { name: string }; input: any }) => Promise<any>;
 
+/** The custom resource `autoDeleteObjects: true` adds for a bucket: it empties the bucket when the stack deletes it. */
+const autoDelete = (bucketLogicalId: string) => ({
+	Type: 'Custom::S3AutoDeleteObjects',
+	Properties: { ServiceToken: { 'Fn::GetAtt': ['Provider', 'Arn'] }, BucketName: { Ref: bucketLogicalId } },
+});
+
 describe('listStackBucketNames', () => {
 	it('follows NextToken across pages and returns only S3 buckets', async () => {
 		const seen: Array<string | undefined> = [];
 		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') {
+				return {
+					TemplateBody: JSON.stringify({
+						Resources: {
+							B1: { Type: 'AWS::S3::Bucket' },
+							B1AutoDelete: autoDelete('B1'),
+							B2: { Type: 'AWS::S3::Bucket' },
+							B2AutoDelete: autoDelete('B2'),
+						},
+					}),
+				};
+			}
 			seen.push(cmd.input.NextToken);
 			if (cmd.input.NextToken === undefined) {
 				return {
 					StackResourceSummaries: [
-						{ ResourceType: 'AWS::S3::Bucket', PhysicalResourceId: 'b1' },
-						{ ResourceType: 'AWS::Lambda::Function', PhysicalResourceId: 'fn' },
+						{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B1', PhysicalResourceId: 'b1' },
+						{ ResourceType: 'AWS::Lambda::Function', LogicalResourceId: 'Fn', PhysicalResourceId: 'fn' },
 					],
 					NextToken: 't2',
 				};
 			}
-			return { StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', PhysicalResourceId: 'b2' }] };
+			return { StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B2', PhysicalResourceId: 'b2' }] };
 		};
 		const cfn = { send } as unknown as CloudFormationClient;
 		const buckets = await listStackBucketNames(cfn, 'stack');
 		assert.deepStrictEqual(buckets, ['b1', 'b2']);
 		assert.deepStrictEqual(seen, [undefined, 't2']); // paged exactly twice
+	});
+
+	// A bucket the stack's delete keeps (`RemovalPolicy.RETAIN`, the production
+	// preset's default, or any other non-Delete DeletionPolicy) never blocks the
+	// delete, so emptying it before a retry would only destroy the data the
+	// policy exists to keep. Read the policy from the DEPLOYED template: it is
+	// what CloudFormation acts on, even if the local code changed since.
+	// A bucket the stack deletes but doesn't empty (`RemovalPolicy.DESTROY`
+	// without `autoDeleteObjects`) is left in place, with its data, when it is
+	// not empty: the app never asked for its objects to be deleted, so the retry
+	// doesn't either. Only a bucket an `autoDeleteObjects` custom resource
+	// empties on delete is emptied before a retry, which is also the bucket that
+	// blocks the delete when that resource's Lambda never provisioned.
+	it('skips buckets the stack delete keeps or does not empty, and buckets already deleted or skipped', async () => {
+		const templateStages: unknown[] = [];
+		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') {
+				templateStages.push(cmd.input.TemplateStage);
+				return {
+					TemplateBody: JSON.stringify({
+						Resources: {
+							Hosting: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' },
+							HostingAutoDelete: autoDelete('Hosting'),
+							Scratch: { Type: 'AWS::S3::Bucket' },
+							ScratchAutoDelete: autoDelete('Scratch'),
+							UserFiles: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' },
+							// Not something CDK synthesizes (it rejects autoDeleteObjects without DESTROY), but the policy still wins.
+							UserFilesAutoDelete: autoDelete('UserFiles'),
+							Logs: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'RetainExceptOnCreate' },
+							// RemovalPolicy.DESTROY without autoDeleteObjects: CloudFormation can't delete it
+							// while it holds objects, and the app never asked for them to be deleted.
+							Plain: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' },
+							// A custom resource of another type that names a bucket doesn't count.
+							PlainNotifications: {
+								Type: 'Custom::S3BucketNotifications',
+								Properties: { BucketName: { Ref: 'Plain' } },
+							},
+							Gone: { Type: 'AWS::S3::Bucket' },
+							GoneAutoDelete: autoDelete('Gone'),
+							Skipped: { Type: 'AWS::S3::Bucket' },
+							SkippedAutoDelete: autoDelete('Skipped'),
+						},
+					}),
+				};
+			}
+			const bucket = (id: string, status = 'CREATE_COMPLETE') => ({
+				ResourceType: 'AWS::S3::Bucket',
+				LogicalResourceId: id,
+				PhysicalResourceId: id.toLowerCase(),
+				ResourceStatus: status,
+			});
+			return {
+				StackResourceSummaries: [
+					bucket('Hosting', 'DELETE_FAILED'),
+					bucket('Scratch'),
+					bucket('UserFiles'),
+					bucket('Logs'),
+					bucket('Plain', 'DELETE_FAILED'),
+					bucket('Gone', 'DELETE_COMPLETE'),
+					bucket('Skipped', 'DELETE_SKIPPED'),
+					bucket('NotInTemplate'),
+				],
+			};
+		};
+		const buckets = await listStackBucketNames({ send } as unknown as CloudFormationClient, 'stack');
+		assert.deepStrictEqual(buckets, ['hosting', 'scratch']);
+		assert.deepStrictEqual(templateStages, ['Processed']);
+	});
+
+	it('empties no bucket of a stack whose deployed template cannot be read', async (t) => {
+		const warn = t.mock.method(console, 'warn', () => {});
+		const send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'GetTemplateCommand') throw new Error('AccessDenied: cloudformation:GetTemplate');
+			return {
+				StackResourceSummaries: [{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B', PhysicalResourceId: 'b' }],
+			};
+		};
+		assert.deepStrictEqual(await listStackBucketNames({ send } as unknown as CloudFormationClient, 'stack'), []);
+		assert.strictEqual(warn.mock.callCount(), 1);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /stack.*AccessDenied/);
 	});
 });
 
@@ -132,12 +242,12 @@ describe('runDestroyWithRetries', () => {
 				events.push(`destroy#${attempts}`);
 				if (attempts === 1) throw new Error('bucket not empty');
 			},
-			listStackNames: () => {
+			listStacks: () => {
 				events.push('list');
-				return ['stackA', 'stackB'];
+				return [{ stackName: 'stackA' }, { stackName: 'stackB', region: 'us-east-1' }];
 			},
-			emptyBuckets: async (names) => {
-				events.push(`empty:${names.join(',')}`);
+			emptyBuckets: async (stacks) => {
+				events.push(`empty:${stacks.map((st) => st.stackName).join(',')}`);
 			},
 			sleep: async () => {
 				events.push('sleep');
@@ -149,13 +259,36 @@ describe('runDestroyWithRetries', () => {
 		assert.deepStrictEqual(events, ['destroy#1', 'list', 'empty:stackA,stackB', 'sleep', 'destroy#2']);
 	});
 
+	it('lists the stacks again while the list is empty (a failed synth leaves no assembly)', async () => {
+		let attempts = 0;
+		let lists = 0;
+		const emptied: string[] = [];
+		await runDestroyWithRetries({
+			runDestroy: () => {
+				attempts++;
+				if (attempts < 3) throw new Error('failed');
+			},
+			listStacks: () => {
+				lists++;
+				return lists === 1 ? [] : [{ stackName: 'stackA' }];
+			},
+			emptyBuckets: async (stacks) => {
+				emptied.push(stacks.map((st) => st.stackName).join(','));
+			},
+			sleep: async () => {},
+			retryDelays: [1, 1],
+		});
+		assert.strictEqual(lists, 2); // empty once, then resolved and kept
+		assert.deepStrictEqual(emptied, ['stackA']);
+	});
+
 	it('does not empty or sleep when the first destroy succeeds', async () => {
 		let emptied = false;
 		let slept = false;
 		let listed = false;
 		await runDestroyWithRetries({
 			runDestroy: () => {},
-			listStackNames: () => {
+			listStacks: () => {
 				listed = true;
 				return [];
 			},
@@ -179,7 +312,7 @@ describe('runDestroyWithRetries', () => {
 					attempts++;
 					throw new Error('still failing');
 				},
-				listStackNames: () => [],
+				listStacks: () => [],
 				emptyBuckets: async () => {},
 				sleep: async () => {},
 				retryDelays: [1, 1],
@@ -196,7 +329,7 @@ describe('runDestroyWithRetries', () => {
 		try {
 			await runDestroyWithRetries({
 				runDestroy: () => {},
-				listStackNames: () => [],
+				listStacks: () => [],
 				emptyBuckets: async () => {},
 				sleep: async () => {},
 			});
@@ -213,15 +346,333 @@ describe('runDestroyWithRetries', () => {
 		try {
 			await runDestroyWithRetries({
 				runDestroy: () => {},
-				listStackNames: () => [],
+				listStacks: () => [],
 				emptyBuckets: async () => {},
 				sleep: async () => {},
-				successLabel: 'Production stack',
+				successLabel: 'Production stacks',
 			});
 		} finally {
 			console.log = orig;
 		}
-		assert.ok(logs.some((l) => l.includes('✅ Production stack destroyed!')), logs.join('\n'));
+		assert.ok(logs.some((l) => l.includes('✅ Production stacks destroyed!')), logs.join('\n'));
 		assert.ok(!logs.some((l) => l.includes('Sandbox')), 'must not log the sandbox label for a production destroy');
+	});
+});
+
+// The retry's stack list must be the set `cdk destroy --all` deletes, by the
+// name CloudFormation knows and in the stack's own Region. `cdk ls` prints
+// construct paths (`Parent/Nested`) and also lists stacks inside a CDK Stage,
+// and one default-Region client misses the us-east-1 Lambda@Edge stack.
+describe('topLevelStacks', () => {
+	it('lists the top-level stacks by stack name and Region, not stacks inside a Stage', (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-top-stacks-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		mkdirSync(join(dir, 'assembly-Stage'));
+		const stack = (displayName: string, stackName: string, region: string) => ({
+			type: 'aws:cloudformation:stack',
+			environment: `aws://000000000000/${region}`,
+			displayName,
+			properties: { templateFile: `${stackName}.template.json`, stackName },
+		});
+		writeFileSync(
+			join(dir, 'manifest.json'),
+			JSON.stringify({
+				version: '22.0.0',
+				artifacts: {
+					'my-app': stack('my-app', 'my-app', 'eu-west-1'),
+					ParentNestedABCD1234: stack('Parent/Nested', 'ParentNestedABCD1234', 'eu-west-1'),
+					'edge-lambda-stack-x': stack('edge-lambda-stack-x', 'edge-lambda-stack-x', 'us-east-1'),
+					'agnostic-stack': {
+						type: 'aws:cloudformation:stack',
+						environment: 'aws://unknown-account/unknown-region',
+						properties: { templateFile: 'agnostic.template.json' },
+					},
+					'assembly-Stage': { type: 'cdk:cloud-assembly', properties: { directoryName: 'assembly-Stage' } },
+				},
+			}),
+		);
+		writeFileSync(
+			join(dir, 'assembly-Stage', 'manifest.json'),
+			JSON.stringify({ version: '22.0.0', artifacts: { 'Stage-Staged': stack('Stage/Staged', 'Stage-Staged', 'eu-west-1') } }),
+		);
+		assert.deepStrictEqual(topLevelStacks(dir), [
+			{ stackName: 'my-app', region: 'eu-west-1' },
+			{ stackName: 'ParentNestedABCD1234', region: 'eu-west-1' },
+			{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' },
+			{ stackName: 'agnostic-stack', region: undefined },
+		]);
+	});
+
+	it('returns [] when there is no assembly', () => {
+		assert.deepStrictEqual(topLevelStacks(join(tmpdir(), 'bb-no-such-assembly')), []);
+	});
+});
+
+describe('emptySandboxBuckets', () => {
+	it("lists each stack's buckets in that stack's own Region", async () => {
+		const lookups: string[] = [];
+		const emptied: string[] = [];
+		const cfnFor = (region: string | undefined) => {
+			const send: Send = async (cmd) => {
+				lookups.push(`${cmd.input.StackName}@${region ?? 'default'}`);
+				// Only the Region a stack lives in knows it.
+				const home: Record<string, string> = { 'my-app': 'eu-west-1', 'edge-lambda-stack-x': 'us-east-1' };
+				if (home[cmd.input.StackName] !== region) throw new Error(`Stack with id ${cmd.input.StackName} does not exist`);
+				if (cmd.constructor.name === 'GetTemplateCommand') {
+					return { TemplateBody: JSON.stringify({ Resources: { B: { Type: 'AWS::S3::Bucket' }, BAutoDelete: autoDelete('B') } }) };
+				}
+				return {
+					StackResourceSummaries: [
+						{ ResourceType: 'AWS::S3::Bucket', LogicalResourceId: 'B', PhysicalResourceId: `${cmd.input.StackName}-bucket` },
+					],
+				};
+			};
+			return { send } as unknown as CloudFormationClient;
+		};
+		const s3Send: Send = async (cmd) => {
+			if (cmd.constructor.name === 'ListObjectVersionsCommand') {
+				emptied.push(cmd.input.Bucket);
+				return {};
+			}
+			throw new Error(`unexpected ${cmd.constructor.name}`);
+		};
+		await emptySandboxBuckets(
+			[
+				{ stackName: 'my-app', region: 'eu-west-1' },
+				{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' },
+			],
+			{ cfnFor, s3: { send: s3Send } as unknown as S3Client },
+		);
+		assert.deepStrictEqual(lookups, [
+			'my-app@eu-west-1',
+			'my-app@eu-west-1',
+			'edge-lambda-stack-x@us-east-1',
+			'edge-lambda-stack-x@us-east-1',
+		]);
+		assert.deepStrictEqual(emptied, ['my-app-bucket', 'edge-lambda-stack-x-bucket']);
+	});
+});
+
+// A Lambda@Edge function can't be deleted until CloudFront removes its
+// replicas, hours after the distribution is gone. When the edge stack failed on
+// that, retrying within minutes can't help, so the loop says so and stops.
+describe('runDestroyWithRetries with a Lambda@Edge stack', () => {
+	const stacks = [
+		{ stackName: 'my-app', region: 'eu-west-1' },
+		{ stackName: 'edge-lambda-stack-c8abc', region: 'us-east-1' },
+	];
+
+	function captureErrors(t: { after: (fn: () => void) => void }): string[] {
+		const errors: string[] = [];
+		const orig = console.error;
+		console.error = (...a: unknown[]) => {
+			errors.push(a.join(' '));
+		};
+		t.after(() => {
+			console.error = orig;
+		});
+		return errors;
+	}
+
+	it('stops and says to re-run later when the edge stack failed on its replicated function', async (t) => {
+		const errors = captureErrors(t);
+		let attempts = 0;
+		let slept = false;
+		let emptied = false;
+		const checked: string[][] = [];
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					throw new Error('edge-lambda-stack-c8abc: destroy failed');
+				},
+				listStacks: () => stacks,
+				emptyBuckets: async () => {
+					emptied = true;
+				},
+				edgeReplicaBlocked: async (given, attemptStartedAt) => {
+					assert.ok(attemptStartedAt > 0 && attemptStartedAt <= Date.now());
+					checked.push(given.map((st) => st.stackName));
+					return ['edge-lambda-stack-c8abc'];
+				},
+				sleep: async () => {
+					slept = true;
+				},
+				retryDelays: [1, 1],
+			}),
+			/edge-lambda-stack-c8abc: destroy failed/,
+		);
+		assert.strictEqual(attempts, 1);
+		assert.strictEqual(slept, false);
+		assert.strictEqual(emptied, false);
+		assert.deepStrictEqual(checked, [['my-app', 'edge-lambda-stack-c8abc']]);
+		const hint = errors.join('\n');
+		assert.match(hint, /edge-lambda-stack-c8abc can't be deleted yet/);
+		assert.match(hint, /few hours/);
+		assert.match(hint, /Run `npm run sandbox:destroy` again later/);
+	});
+
+	it('names the given re-run command', async (t) => {
+		const errors = captureErrors(t);
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					throw new Error('failed');
+				},
+				listStacks: () => stacks,
+				emptyBuckets: async () => {},
+				edgeReplicaBlocked: async () => ['edge-lambda-stack-c8abc'],
+				sleep: async () => {},
+				rerunCommand: 'npm run destroy',
+			}),
+		);
+		assert.match(errors.join('\n'), /Run `npm run destroy` again later/);
+	});
+
+	it('keeps retrying when no edge stack is blocked by replicas, or when the check fails', async (t) => {
+		captureErrors(t);
+		for (const edgeReplicaBlocked of [
+			async (): Promise<string[]> => [],
+			async (): Promise<string[]> => {
+				throw new Error('throttled');
+			},
+		]) {
+			let attempts = 0;
+			await runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					if (attempts === 1) throw new Error('failed');
+				},
+				listStacks: () => stacks,
+				emptyBuckets: async () => {},
+				edgeReplicaBlocked,
+				sleep: async () => {},
+				retryDelays: [1],
+			});
+			assert.strictEqual(attempts, 2);
+		}
+	});
+});
+
+describe('edgeStacksBlockedByReplicas', () => {
+	const REPLICATED =
+		'Lambda was unable to delete arn:aws:lambda:us-east-1:000000000000:function:fn:1 because it is a replicated ' +
+		'function. Please see our documentation for Deleting Lambda@Edge Functions and Replicas.';
+
+	/** A fake CloudFormation client per Region; records `stack@region` per call. */
+	function fakeCfn(byStack: Record<string, unknown[] | Error>, calls: string[]) {
+		return (region: string | undefined) => {
+			const send: Send = async (cmd) => {
+				calls.push(`${cmd.input.StackName}@${region ?? 'default'}`);
+				const pages = byStack[cmd.input.StackName];
+				if (pages instanceof Error) throw pages;
+				const index = cmd.input.NextToken === undefined ? 0 : Number(cmd.input.NextToken);
+				return { StackResourceSummaries: pages[index], NextToken: index + 1 < pages.length ? String(index + 1) : undefined };
+			};
+			return { send } as unknown as CloudFormationClient;
+		};
+	}
+
+	const since = Date.parse('2026-10-23T12:00:00Z');
+	const failed = (reason: string, at: string) => ({
+		ResourceType: 'AWS::Lambda::Function',
+		ResourceStatus: 'DELETE_FAILED',
+		ResourceStatusReason: reason,
+		LastUpdatedTimestamp: new Date(at),
+	});
+
+	it('returns the edge stacks whose function delete failed as replicated, looked up in their own Region', async () => {
+		const calls: string[] = [];
+		const blocked = await edgeStacksBlockedByReplicas(
+			[
+				{ stackName: 'my-app', region: 'eu-west-1' },
+				{ stackName: 'edge-lambda-stack-a', region: 'us-east-1' },
+				{ stackName: 'edge-lambda-stack-b', region: 'us-east-1' },
+				{ stackName: 'edge-lambda-stack-c', region: 'us-east-1' },
+				{ stackName: 'edge-lambda-stack-d', region: 'us-east-1' },
+			],
+			since,
+			fakeCfn(
+				{
+					// second page carries the replicated failure, from this attempt
+					'edge-lambda-stack-a': [
+						[{ ResourceType: 'AWS::IAM::Role', ResourceStatus: 'DELETE_COMPLETE' }],
+						[failed(REPLICATED, '2026-10-23T12:03:00Z')],
+					],
+					// failed for another reason: the ordinary retries apply
+					'edge-lambda-stack-b': [[failed('Rate exceeded', '2026-10-23T12:03:00Z')]],
+					'edge-lambda-stack-c': new Error('Stack with id edge-lambda-stack-c does not exist'),
+					// a replicated failure left over from an earlier run: not this attempt's
+					'edge-lambda-stack-d': [[failed(REPLICATED, '2026-10-23T08:00:00Z')]],
+				},
+				calls,
+			),
+		);
+		assert.deepStrictEqual(blocked, ['edge-lambda-stack-a']);
+		// my-app is not an edge stack, so it is never looked up
+		assert.deepStrictEqual(calls, [
+			'edge-lambda-stack-a@us-east-1',
+			'edge-lambda-stack-a@us-east-1',
+			'edge-lambda-stack-b@us-east-1',
+			'edge-lambda-stack-c@us-east-1',
+			'edge-lambda-stack-d@us-east-1',
+		]);
+	});
+
+	it('returns [] without a call when there is no edge stack', async () => {
+		const calls: string[] = [];
+		assert.deepStrictEqual(await edgeStacksBlockedByReplicas([{ stackName: 'my-app' }], since, fakeCfn({}, calls)), []);
+		assert.deepStrictEqual(calls, []);
+	});
+});
+
+describe('destroyRetryClients', () => {
+	it("uses the Region CDK deploys to, and a stack's own Region when it has one", async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-retry-clients-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		// cdk.json's region comes first in CDK's lookup, before AWS_REGION.
+		writeFileSync(join(dir, 'cdk.json'), JSON.stringify({ app: 'x', region: 'eu-west-3' }));
+		const clients = await destroyRetryClients(dir);
+		const regionOf = (client: { config: { region: () => Promise<string> | string } }) =>
+			Promise.resolve(client.config.region());
+		assert.strictEqual(await regionOf(clients.cfnFor(undefined)), 'eu-west-3');
+		assert.strictEqual(await regionOf(clients.cfnFor('us-east-1')), 'us-east-1');
+		assert.strictEqual(clients.cfnFor('us-east-1'), clients.cfnFor('us-east-1')); // one client per Region
+		assert.strictEqual(await regionOf(clients.s3), 'eu-west-3');
+	});
+
+	// With no Region in cdk.json, the environment or a profile, CDK still picks
+	// one (the EC2 instance's, then us-east-1), but guessing it here could look
+	// up a same-named stack in another Region and empty its buckets. So a stack
+	// without its own Region gets a client with no Region, whose calls fail and
+	// are skipped, and the user is told once why the retry can't help.
+	it('warns once, when the retry first needs it, that no Region is configured', async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-retry-clients-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const env = {
+			HOME: dir,
+			USERPROFILE: dir,
+			AWS_CONFIG_FILE: join(dir, 'no-config'),
+			AWS_SHARED_CREDENTIALS_FILE: join(dir, 'no-credentials'),
+		};
+		const warn = t.mock.method(console, 'warn', () => {});
+		const clients = await destroyRetryClients(dir, env);
+		assert.strictEqual(warn.mock.callCount(), 0, 'nothing to say until a retry needs a client');
+		clients.cfnFor('us-east-1');
+		assert.strictEqual(warn.mock.callCount(), 0, 'a stack with its own Region is looked up there');
+		clients.cfnFor(undefined);
+		clients.cfnFor(undefined);
+		assert.strictEqual(warn.mock.callCount(), 1);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /No AWS Region is configured/);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /cdk\.json/);
+	});
+
+	it('does not warn when a Region is configured', async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-retry-clients-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const warn = t.mock.method(console, 'warn', () => {});
+		const clients = await destroyRetryClients(dir, { HOME: dir, USERPROFILE: dir, AWS_REGION: 'eu-central-1' });
+		clients.cfnFor(undefined);
+		assert.strictEqual(warn.mock.callCount(), 0);
 	});
 });
