@@ -21,6 +21,11 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 // synthesizes with it set to prove every Building Block's roles are covered.
 const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
 
+// Optional app identity for a shared app platform (`-c blocksAppId=<id>`).
+// test/app-identity-synth.test.ts synthesizes with it set to prove no Building
+// Block's own grants or roles count as reaching outside the app.
+const appId: string | undefined = app.node.tryGetContext('blocksAppId');
+
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
@@ -57,6 +62,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     ...BlocksPresets.sandbox,
     ...(sandboxMode ? {} : { secretsStore: 'secrets-manager' as const }),
     permissionsBoundary,
+    ...(appId ? { app: { id: appId } } : {}),
   },
 });
 

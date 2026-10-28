@@ -2,7 +2,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -185,12 +185,20 @@ function installDependencies(appDir: string, workspaceRoot: string | undefined):
  * `AGENTS.md` is written for the default template, so it is rewritten to the app's
  * dev port (`package.json#blocks.dev.port`) and, for a backend-only app, to say there
  * is no frontend.
+ * A template's own `AGENTS.template.md` (e.g. the platform template's rules) is
+ * appended to the tailored AGENTS.md and removed.
  */
 async function copySharedResources(targetDir: string): Promise<void> {
   const resourcesDir = join(__dirname, '../resources');
   const pkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
   const guide = await readFile(join(resourcesDir, 'AGENTS.md'), 'utf-8');
-  await writeFile(join(targetDir, 'AGENTS.md'), tailorAgentsGuide(guide, pkg.blocks?.dev));
+  const agents = join(targetDir, 'AGENTS.md');
+  await writeFile(agents, tailorAgentsGuide(guide, pkg.blocks?.dev));
+  const extra = join(targetDir, 'AGENTS.template.md');
+  if (await exists(extra)) {
+    await writeFile(agents, `${await readFile(agents, 'utf-8')}${await readFile(extra, 'utf-8')}`);
+    await rm(extra);
+  }
 }
 
 /** Rewrites the shared `AGENTS.md` for an app's `blocks.dev` settings. */
@@ -393,7 +401,7 @@ type TemplateInfo = {
   overlayOnly: boolean;
 };
 
-const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth', 'agent', 'cron', 'observability', 'amplify', 'demo'];
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'platform', 'sql', 'nextjs', 'auth', 'agent', 'cron', 'observability', 'amplify', 'demo'];
 
 // Former template names that still resolve to a template, so existing
 // `--template <old name>` invocations (docs, scripts, CI) keep working after a
