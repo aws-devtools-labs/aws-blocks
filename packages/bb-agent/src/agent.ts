@@ -15,7 +15,7 @@ import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
-import { AgentErrors, agentErrorFromChunk, blocksAgentError, classifyModelAccessError, InterruptError } from './errors.js';
+import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
@@ -91,8 +91,9 @@ function validateCap(name: string, value: number | false | undefined): void {
  */
 export function errorCauseShape(error: unknown): { name?: string; httpStatusCode?: number; requestId?: string } {
 	const shape: { name?: string; httpStatusCode?: number; requestId?: string } = {};
-	let current: unknown = error;
-	for (let depth = 0; current !== null && typeof current === 'object' && depth < 5; depth++) {
+	for (const current of walkCauseChain(error)) {
+		// The chain ends at the first non-object level, which carries no diagnostic fields.
+		if (current === null || typeof current !== 'object') break;
 		if ('name' in current && typeof current.name === 'string') {
 			shape.name = current.name;
 		}
@@ -101,7 +102,6 @@ export function errorCauseShape(error: unknown): { name?: string; httpStatusCode
 			if ('httpStatusCode' in metadata && typeof metadata.httpStatusCode === 'number') shape.httpStatusCode = metadata.httpStatusCode;
 			if ('requestId' in metadata && typeof metadata.requestId === 'string') shape.requestId = metadata.requestId;
 		}
-		current = 'cause' in current ? current.cause : undefined;
 	}
 	return shape;
 }
@@ -299,20 +299,22 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// model not entitled for the account) passes the health check and only fails at invoke. Replace
 			// the raw provider message with an actionable one and tag the chunk so the client rejects with
 			// ModelUnavailable rather than the generic StreamFailed. Only the composed message is published.
-			const modelAccessMessage = classifyModelAccessError(err, this.singleModelId());
+			// A ModelUnavailable the Agent BB raised itself (no model passed the health check) is already
+			// classified and its message is composed here, so it is published as-is, minus the name prefix
+			// the client adds back.
+			const modelAccessMessage = brandedModelUnavailableMessage(err) ?? classifyModelAccessError(err, this.singleModelId());
+			const errorName = modelAccessMessage ? AgentErrors.ModelUnavailable : undefined;
 			const clientMessage = modelAccessMessage ?? errorMessage;
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
-					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage }) });
+					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
 				}
 			} catch (persistErr) {
 				this.log.error('Failed to persist error to history', { error: persistErr });
 			}
 			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
-			const errorChunk: AgentStreamChunk = modelAccessMessage
-				? { type: 'error', error: modelAccessMessage, errorName: AgentErrors.ModelUnavailable }
-				: { type: 'error', error: errorMessage };
+			const errorChunk: AgentStreamChunk = { type: 'error', error: clientMessage, ...(errorName && { errorName }) };
 			await this.rt.publish('chunks', payload.channelId, errorChunk);
 		}
 	}

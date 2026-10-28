@@ -440,6 +440,11 @@ export interface MessageMetadata {
 	usage?: TokenUsage;
 	latencyMs?: number;
 	error?: string;
+	/**
+	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for
+	 * example `ModelUnavailableException`). Absent for an unclassified failure.
+	 */
+	errorName?: string;
 }
 
 export interface Message {

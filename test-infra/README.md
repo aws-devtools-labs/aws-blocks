@@ -141,8 +141,13 @@ Set the `BenchRoleArn` output as the `BENCH_ROLE_ARN` secret of the
 `agent-bench` GitHub environment (and as a Dependabot secret) and
 `BenchBucketName` as its `BENCH_BUCKET` variable. The bench calls Anthropic
 models on Bedrock, so submit the one-time Anthropic use case details form
-(Bedrock console model catalog, or `PutUseCaseForModelAccess`) in account 1 and
-check the Bedrock quotas for the bench model before its first run.
+(Bedrock console model catalog, or `PutUseCaseForModelAccess`) in account 1,
+activate each bench model's one-time AWS Marketplace subscription by invoking it
+once (for example, from the Bedrock console playground) as a principal with
+`aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and
+`aws-marketplace:ViewSubscriptions` (the bench role has only the Bedrock invoke
+actions, so it cannot subscribe), and check the Bedrock quotas for the bench
+model before its first run.
 
 Each role trusts only its own GitHub environment, so jobs in `agent-bench`
 can't assume `blocks-github-e2e` and jobs in `e2e` can't assume
