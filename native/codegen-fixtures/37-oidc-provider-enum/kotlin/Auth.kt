@@ -17,9 +17,6 @@ public class Auth(
   }
 
   public object GetClient {
-    /**
-     * The providers `auth.getClient` signs in with.
-     */
     public enum class Provider(
       override val providerName: String,
     ) : OidcProvider {

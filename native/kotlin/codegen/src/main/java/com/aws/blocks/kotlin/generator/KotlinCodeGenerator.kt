@@ -58,11 +58,6 @@ private data class TypeArgBinding(
     val constraint: ClassName? = null,
     /** The property such an enum carries its value in. */
     val valueName: String = "value",
-    /**
-     * KDoc for such an enum, taking the method name. Prose belongs to the tag, so a generated
-     * doc reads as the block's own rather than as the generator's wording for every tag.
-     */
-    val doc: String = "The values %L accepts.",
 )
 
 private data class TransferableBinding(
@@ -90,7 +85,6 @@ private val knownTransferableBindings = mapOf(
                 default = ClassNames.providerName,
                 constraint = ClassNames.oidcProvider,
                 valueName = "providerName",
-                doc = "The providers %L signs in with.",
             ),
         ),
     ),
@@ -329,14 +323,11 @@ class KotlinCodeGenerator(
      * through the binding's interface and a caller can read it directly.
      */
     private fun generateNarrowedTypeArgEnum(
-        operation: Operation,
-        namespace: String,
         values: ResolvedType.Enum,
         binding: TypeArgBinding,
     ): TypeSpec {
         val builder = TypeSpec
             .enumBuilder(values.name)
-            .addKdoc(binding.doc, "`${fullMethodName(operation, namespace)}`")
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addParameter(binding.valueName, String::class)
@@ -1268,7 +1259,6 @@ class KotlinCodeGenerator(
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
-                        namespace.name,
                         index,
                         serializerRegistry,
                         operationContexts[operation],
@@ -1339,7 +1329,6 @@ class KotlinCodeGenerator(
      */
     private fun generateOperationObject(
         operation: Operation,
-        namespace: String,
         index: TypeIndex,
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
@@ -1348,7 +1337,7 @@ class KotlinCodeGenerator(
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
         for ((values, argBinding) in narrowedTypeArgEnums(operation)) {
-            objectBuilder.addType(generateNarrowedTypeArgEnum(operation, namespace, values, argBinding))
+            objectBuilder.addType(generateNarrowedTypeArgEnum(values, argBinding))
         }
 
         for (node in operation.nestedTypes) {

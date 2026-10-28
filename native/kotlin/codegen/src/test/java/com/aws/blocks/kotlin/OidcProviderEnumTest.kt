@@ -70,7 +70,6 @@ class OidcProviderEnumTest : FunSpec({
         source shouldContain ") : OidcProvider {"
         source shouldContain "Google(\"google\")"
         source shouldContain "Github(\"github\")"
-        source shouldContain "The providers `auth.getClient` signs in with."
         source shouldContain "OidcClient.fromJson(result, client, \"$RELAY_TO\")"
         result.warnings shouldBe emptyList()
     }
