@@ -52,7 +52,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs Agent",
     "build": "tsc --build",
-    "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js && node --test dist/agentcore-bundle.test.js && node --test dist/user-agent.test.js && node --test dist/untrusted.test.js && node --conditions=aws-runtime --test dist/session-bucket.aws.test.js"
+    "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js && node --test dist/agentcore-bundle.test.js && node --test dist/user-agent.test.js && node --test dist/untrusted.test.js && node --test dist/mantle.test.js && node --conditions=aws-runtime --test dist/session-bucket.aws.test.js"
   },
   "dependencies": {
     "@aws-blocks/bb-distributed-table": "^0.2.2",
@@ -60,8 +60,8 @@
     "@aws-blocks/bb-logger": "^0.2.2",
     "@aws-blocks/bb-realtime": "^0.4.0",
     "@aws-blocks/core": "^0.7.0",
-    "@aws-sdk/client-bedrock": "^3.1153.0",
-    "@aws-sdk/client-bedrock-agentcore": "^3.1153.0",
+    "@aws-sdk/client-bedrock": "^3.1156.0",
+    "@aws-sdk/client-bedrock-agentcore": "^3.1156.0",
     "@opentelemetry/api": "^1.9.1",
     "@strands-agents/sdk": "^1.21.0",
     "bedrock-agentcore": "^0.4.6",

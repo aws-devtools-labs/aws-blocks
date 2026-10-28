@@ -374,6 +374,36 @@ User IDs are stable across engine switches — `userId = ${iss}:${sub}` is deriv
 
 The CDK layer auto-provisions the Cognito User Pool, App Client, domain, and identity provider registrations. No Cognito CDK code needed.
 
+### Callback and logout URLs
+
+The app client's callback / logout URLs are registered for you: the app's public origin (when it is `https://`) and the API Gateway URL, each with `/aws-blocks/auth/callback`, plus `http://localhost:3000` in sandbox mode. Cognito rejects non-localhost `http://` callback URLs, so a plain-http app origin is skipped with a `PlainHttpPublicOrigin` synth warning.
+
+Use `additionalCallbackUrls` / `additionalLogoutUrls` for redirect targets that can't be derived at synth:
+
+- browser PKCE SPA redirect pages (the SPA page URL is app-specific);
+- native app custom URI schemes (e.g. `myapp://auth/callback`) used as the `redirect_uri` of a direct, client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`) — the [relay flow](#relay-flow-for-native-sign-in) needs none, since its `redirect_uri` is the backend's HTTPS callback and the custom scheme is only the `relayTo` target;
+- custom-domain names beyond the primary one (only the primary app origin is registered automatically);
+- a sandbox dev server on a port other than `3000`.
+
+```typescript
+cognitoFederated({
+	name: 'google',
+	identityProvider: 'Google',
+	cognitoDomain: 'myapp',
+	region: 'us-east-1',
+	clientId:     googleClientId,
+	clientSecret: googleSecret,
+	additionalCallbackUrls: ['https://www.example.com/aws-blocks/auth/callback', 'myapp://auth/callback'],
+	additionalLogoutUrls:   ['https://www.example.com/'],
+}),
+```
+
+Entries from every `cognitoFederated()` provider are merged into the one shared app client and de-duplicated; each URL is validated at synth.
+
+Sign-out clears the session and revokes the refresh token; it doesn't redirect through Cognito's hosted `/logout` endpoint, so the logout URLs are registered for completeness but aren't used by the current sign-out path.
+
+**Upgrading.** The app client's callback and logout URLs are now managed by the Building Block. URLs added to the Cognito app client outside of CDK (for example, in the console as a workaround) are replaced on the next deploy — re-add any you still need through `additionalCallbackUrls` / `additionalLogoutUrls`.
+
 In local dev (`npm run dev`), `cognitoFederated` is **not available** — Cognito federation needs the deployed User Pool + app-client credentials, which only exist after `npm run sandbox` / `npm run deploy`. Declaring the provider doesn't block local dev, but a cognito-federated sign-in fails fast with a clear message. For local sign-in, add an explicit `stubIdp({ name })` provider (see [Local development](#local-development)); exercise the real Cognito flow in sandbox/deploy.
 
 ### When to use Cognito federation vs self-hosted

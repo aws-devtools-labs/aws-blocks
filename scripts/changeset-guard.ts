@@ -9,6 +9,10 @@
  *                   (vs origin/main) has no changeset entry. Prevents the root
  *                   cause of EINTEGRITY errors: a package changes but its version
  *                   isn't bumped because the changeset forgot to mention it.
+ *                   Skipped for the Version Packages PR, and for Dependabot PRs
+ *                   that only change package.json/package-lock.json files: the
+ *                   release job writes their changeset (see
+ *                   generate-dependency-changeset.ts).
  *
  *   block-major     Exit non-zero if any changeset declares a `major` bump.
  *                   A `major` (0.x → 1.0.0) means leaving pre-release, which
@@ -70,6 +74,12 @@ const UMBRELLA_PKG = "@aws-blocks/blocks";
 
 // changesets/action opens its "Version Packages" PR with this title.
 const RELEASE_PR_TITLE_PREFIX = "chore: version packages";
+
+// Dependabot opens its PRs as this user; GitHub sets the login, so a PR can't claim it.
+const DEPENDABOT_LOGIN = "dependabot[bot]";
+
+/** The files a Dependabot npm update writes: manifests and the lockfile. */
+const isManifestFile = (file: string): boolean => /(^|\/)package(-lock)?\.json$/.test(file);
 
 type BumpType = "major" | "minor" | "patch";
 
@@ -191,6 +201,17 @@ function verifyCoverage(): number {
 	const prTitle = process.env.PR_TITLE ?? "";
 	if (prTitle.startsWith(RELEASE_PR_TITLE_PREFIX)) {
 		console.log(`✓ Skipping coverage check for the release PR ("${prTitle}").`);
+		return 0;
+	}
+
+	// Dependabot can't write a changeset, so its manifest-only bumps merge without
+	// one and the release job adds it: publish-packages.yml runs
+	// generate-dependency-changeset.ts against the last release before
+	// `changeset version`. Any other file in the diff (a maintainer's fix pushed
+	// onto the branch, say) brings back the normal check.
+	const prAuthor = process.env.PR_AUTHOR ?? "";
+	if (prAuthor === DEPENDABOT_LOGIN && getChangedFiles().every(isManifestFile)) {
+		console.log("✓ Skipping coverage check for a Dependabot manifest bump; the release job writes its changeset.");
 		return 0;
 	}
 

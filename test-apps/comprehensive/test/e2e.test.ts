@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
+import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
 import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
@@ -25,9 +26,6 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { databaseBlockTests } from './database-block.test.js';
-import { asyncJobTests } from './async-job.test.js';
-import { asyncJobStatusTests } from './async-job-status.test.js';
-import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -41,6 +39,7 @@ import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
+import { backgroundSuites } from './background-suites.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -144,6 +143,10 @@ test.before(async () => {
 });
 
 test.after(async (t) => {
+  // Children started by the background suites test must not outlive the
+  // server or stack they call (see BackgroundSuites.settle()).
+  await background.settle();
+
   if (server) {
     console.log('\n🛑 Stopping local server...');
     // Kill the entire process group (npm + tsx grandchild)
@@ -220,6 +223,48 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
   }
 });
 
+// The full (no-argument) purge of delivered verification codes. It runs here,
+// before the background suites below start, because once they overlap a full
+// purge could delete a code one of them is waiting to read (basic-auth.test.ts
+// covers the per-user purge). Locally it also sweeps the records earlier runs
+// left in .bb-data/.
+test('AuthBasic - full purge clears every code record and leaves other keys alone', async () => {
+  const stamp = Date.now().toString(36);
+  const username = `purge-probe-${stamp}`;
+  const bystander = `kv-bystander-${stamp}`;
+  await api.kvPut(bystander, 'keep me');
+  await api.authSignUp(username, 'password123');
+  await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
+
+  const { deleted } = await api.authPurgeDeliveredCodes();
+  assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+
+  assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
+  const left = (await api.kvScan()).filter((e) => e.key.startsWith('__last-code:'));
+  assert.deepStrictEqual(left, [], 'no code record survives a full purge');
+  assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
+  await api.kvDelete(bystander);
+});
+
+// AuthOIDC tests (separate file). They run before the background suites start:
+// the stub IdP keeps each refresh token in the memory of the Lambda instance
+// that served its /token call, which is never the instance serving
+// /extras/exchange (that one is busy waiting on the call). A later refresh only
+// succeeds if its own /token call lands on the issuing instance again. Serial
+// traffic happens to route it back there; the background suites' load breaks
+// that routing and the bearer refresh test fails. The stub IdP itself needs
+// self-contained refresh tokens to fix this: see
+// https://github.com/aws-devtools-labs/aws-blocks/issues/988.
+oidcAuthTests(() => api);
+
+// Agent, AsyncJob and AsyncJob status spend most of their time waiting on
+// queues, Lambda and the model, so each runs in its own child process against
+// this server/stack while the suites below run here. They start now and are
+// awaited at the end of this file. See ./background-suites.ts for why a child
+// process and what a suite must not share to belong there.
+const background = backgroundSuites(['agent', 'async-job', 'async-job-status']);
+test('Background suites - start Agent, AsyncJob, AsyncJob status', () => background.start());
+
 // KVStore tests (separate file)
 kvStoreTests(() => api);
 
@@ -267,18 +312,6 @@ authCognitoSandboxTests(() => api);
 // AuthCognito admin-surface sandbox tests (separate file)
 authCognitoAdminTests(() => api);
 
-// AuthOIDC tests (separate file)
-oidcAuthTests(() => api);
-
-// Database tests (separate file)
-databaseTests(() => api);
-
-// AsyncJob tests (separate file)
-asyncJobTests(() => api);
-
-// AsyncJob status tracking tests (separate file)
-asyncJobStatusTests(() => api);
-
 // CronJob tests (separate file)
 cronJobTests(() => api);
 
@@ -312,9 +345,6 @@ cliClientTests();
 // Tracer tests (separate file)
 tracerTests(() => api);
 
-// Agent BB tests last — uses Realtime internally, may affect WS server state
-agentTests(() => api);
-
 test('Context - access headers', { timeout: 10_000 }, async () => {
   const headers = await api.echoHeaders();
   assert.ok(headers['content-type']);
@@ -335,3 +365,10 @@ test('Data types - serialization', { timeout: 10_000 }, async () => {
   assert.deepStrictEqual(await api.echoData([1, 2, 3]), [1, 2, 3]);
   assert.strictEqual(await api.echoData(null), null);
 });
+
+// Background suites started at the top of this file: one test per suite, each
+// failing with that suite's own exit status (its results are the prefixed
+// lines in the output).
+for (const suite of background.suites) {
+  test(`Background suite - ${suite.name}`, () => suite.done());
+}

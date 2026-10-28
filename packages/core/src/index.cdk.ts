@@ -51,6 +51,8 @@ export {
 	getConfigDeployment,
 	getConfigLocation,
 	getOrCreateOnRoot,
+	getRegisteredConfigValue,
+	getSharedGatewayUrl,
 	getVpcContext,
 	isSandboxContext,
 	registerConfig,
@@ -71,6 +73,7 @@ export {
 } from './common/config.js';
 export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
 export {
+	type ApiWafOptions,
 	type BlocksStackProps,
 	type BuildingBlockMeta,
 	buildingBlockParent,

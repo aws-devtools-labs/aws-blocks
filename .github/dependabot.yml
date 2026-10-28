@@ -20,6 +20,14 @@
 #     project-reference build in one grouped PR). So they are excluded from the
 #     dev-dependencies group (minor/patch arrive as their own PRs) and their
 #     major-version updates are ignored (bump them intentionally, by hand).
+#   - The dev-dependencies group takes minor and patch updates only. A major
+#     bump of a dev dependency (a framework in a test app, a test runner) can
+#     need code or config changes, and one grouped PR with many of them can't
+#     land. Majors are raised as their own PRs, but only on runs where this
+#     group has no open PR (dependabot/dependabot-core#14202). Check
+#     `npm outdated` (root and workspaces) for dev majors before each release.
+#     Majors of vite, @vitejs/* and @sveltejs/* are ignored: they move together
+#     with TypeScript 6 as one migration (issue #984).
 #   - Cooldown: version updates wait until a release is 3 days old. This is
 #     Dependabot's default; it is set explicitly so it can't silently change
 #     and nobody lowers it by accident. Security updates are not delayed.
@@ -33,6 +41,15 @@ updates:
       default-days: 3
     open-pull-requests-limit: 10
     ignore:
+      # SvelteKit 3 and the Vite 8 plugins peer-depend on Vite 8, and SvelteKit
+      # 3 on TypeScript 6, so single major PRs can't resolve: a deliberate
+      # migration (issue #984).
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@sveltejs/*"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/node"
@@ -44,6 +61,9 @@ updates:
           - "@smithy/*"
       dev-dependencies:
         dependency-type: development
+        update-types:
+          - "minor"
+          - "patch"
         exclude-patterns:
           - "typescript"
           - "@types/node"
@@ -51,7 +71,13 @@ updates:
   # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
   # each template's package.json, which is what scaffolded apps install from.
   # Minor and patch only, as the ncu job does (--target minor), in one grouped
-  # PR for all templates. A major is a deliberate migration.
+  # PR for all templates. A major is a deliberate migration; the "*"
+  # semver-major ignore below keeps majors out. The group must not set
+  # update-types: without a lockfile a range such as ^6.4.4 has no current
+  # version, so that filter can't classify the update and Dependabot opens it
+  # as its own PR, one per template. Ignore rules instead take the first x.y.z
+  # in the range, so keep each template range a single ^x.y.z, ~x.y.z or
+  # exact x.y.z (not ^6, 6.x or >=5 <6.0.0).
   - package-ecosystem: npm
     directories:
       - /packages/create-blocks-app/templates/*
@@ -89,9 +115,6 @@ updates:
       templates:
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
