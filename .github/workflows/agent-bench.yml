@@ -45,7 +45,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -56,7 +56,7 @@ jobs:
           npm run build
           npm run publish:local
       - name: Upload dist-registry
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-registry
           path: dist-registry/
@@ -67,7 +67,12 @@ jobs:
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Must cover the sum of all step budgets (agent 35 + build/test 12 + judge 20 + ~13 uncapped).
+    # Not the sum of the step caps: the capped steps add up to 125 min (Playwright install 25,
+    # agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3), plus the uncapped
+    # ones. Even the main path (install 25 + agent 35 + build/test 12 + judge 20 = 92) can
+    # exceed it, so a cell that runs long in an early step can hit this job timeout in a later
+    # step (the judge, the analysis or an upload) before that step's own cap fires. The caps
+    # bound each step on its own; only this line bounds the cell.
     timeout-minutes: 85
     permissions:
       id-token: write
@@ -124,7 +129,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # cache: npm so the per-cell root `npm ci` restores from the Actions cache.
           node-version-file: '.nvmrc'
@@ -181,7 +186,7 @@ jobs:
         id: oidc
         continue-on-error: true
         if: steps.initresult.outcome == 'success'
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -232,7 +237,7 @@ jobs:
       - name: 1a. Download prebuilt dist-registry
         continue-on-error: true
         if: steps.initresult.outcome == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-registry
           path: dist-registry/
@@ -251,12 +256,16 @@ jobs:
       # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
       # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
       # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      # The install retries an attempt that prints nothing for 8 min (a stalled apt mirror) and
+      # gives up after 23 min in all; timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
+      # That cap counts against the job's 85 min (see the note on timeout-minutes above).
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
         if: steps.init.outcome == 'success'
+        timeout-minutes: 25
         run: |
-          npx playwright@1.60.0 install --with-deps chromium
+          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
           # present on a stock runner (npx install above runs unprivileged and writes it there).
@@ -393,7 +402,7 @@ jobs:
       - name: 5. Upload result
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/result/result.json
@@ -407,7 +416,7 @@ jobs:
       - name: 6. Upload source
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/source
@@ -420,7 +429,7 @@ jobs:
       - name: 6b. Upload trace
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
           path: ${{ runner.temp }}/bench-stage/trace
@@ -441,7 +450,7 @@ jobs:
         id: oidc_s3
         if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -493,11 +502,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: scripts/agent-bench
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: '.nvmrc' }
       # Each result.json already carries its per-cell `analysis`, so the roll-up consumes these
       # directly — no re-download of bench-trace-* needed.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: results, pattern: bench-result-* }
 
       # OIDC for S3 (read/write the baseline). Best-effort: a creds failure degrades the overview
@@ -505,7 +514,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         id: oidc
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.BENCH_ROLE_ARN }}
           aws-region: us-east-1
@@ -622,7 +631,7 @@ jobs:
       - name: Upload analysis (best-effort)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-analysis
           path: ${{ github.workspace }}/bench-analysis.json
@@ -675,7 +684,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm

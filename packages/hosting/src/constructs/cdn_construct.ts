@@ -54,17 +54,20 @@ import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
+import { customErrorResponses } from './error_responses.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
-  buildKvsEntries,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
 import type { WebFunctionConstruct } from './web_function_construct.js';
 import {
@@ -99,16 +102,6 @@ const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 .c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
 <body><div class="c"><h1>Service Temporarily Unavailable</h1><p>We're working on it. Please try again in a few moments.</p></div></body></html>`;
 
-// Built-in default 404 page for multi-page static sites that ship no
-// 404.html of their own. Returned at HTTP 404 (not the SPA 200 fallback)
-// so crawlers and clients see a correct not-found status.
-const DEFAULT_NOT_FOUND_PAGE_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>404 — Page Not Found</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
-.c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
-<body><div class="c"><h1>404 — Page Not Found</h1><p>The page you're looking for doesn't exist.</p></div></body></html>`;
 
 // ---- Public types ----
 
@@ -178,9 +171,9 @@ export type CdnConstructProps = {
   skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
-  /** Geo-restriction configuration. */
+  /** Geo-restriction configuration (`'allowlist'` / `'denylist'`, or the legacy `'whitelist'` / `'blacklist'`). */
   geoRestriction?: {
-    type: 'whitelist' | 'blacklist';
+    type: 'allowlist' | 'denylist' | 'whitelist' | 'blacklist';
     countries: string[];
   };
   /** Custom error page HTML. */
@@ -402,13 +395,10 @@ export class CdnConstruct extends Construct {
     // are excluded (their miss correctly serves index.html at 200); SSR
     // sites already have SSR_ERROR_PAGE_HTML. Precedence:
     // user errorPages.notFound > framework errorPages[404] > this default.
-    const hasFrameworkNotFound = !!manifest.errorPages?.[404];
-    const hasUserNotFound = !!props.customErrorPages?.notFound;
-    const needsDefaultNotFound =
-      !hasCompute &&
-      !isSpaFallback &&
-      !hasFrameworkNotFound &&
-      !hasUserNotFound;
+    // The same decision every other door makes (see `default_not_found.ts`).
+    const needsDefaultNotFound = needsDefaultNotFoundPage(manifest, {
+      userNotFound: !!props.customErrorPages?.notFound,
+    });
     this.defaultNotFoundPageHtml = needsDefaultNotFound
       ? DEFAULT_NOT_FOUND_PAGE_HTML
       : undefined;
@@ -962,7 +952,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    const kvsEntries = buildKvsEntries({
+    // Build the service-agnostic HostingPlan (origins + route table +
+    // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
+    // single source of routing truth every front-door adapter shares; CloudFront
+    // is one renderer of it.
+    const plan = buildHostingPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -970,6 +964,8 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+    });
+    const kvsEntries = renderKvsEntries(plan, {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
@@ -1271,13 +1267,19 @@ export class CdnConstruct extends Construct {
         ? [
             // S3 with OAC returns 403 for missing keys — map to the
             // custom 404 page so deep links render the framework's
-            // not-found page instead of a raw CloudFront error.
-            {
-              httpStatus: 403,
-              responseHttpStatus: 404,
-              responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
-              ttl: Duration.seconds(0),
-            },
+            // not-found page instead of a raw CloudFront error. Skipped
+            // when the default page already maps 403 (a site that ships a
+            // 500 page but no 404 page): one response per error code.
+            ...(needsDefaultNotFound
+              ? []
+              : [
+                  {
+                    httpStatus: 403,
+                    responseHttpStatus: 404,
+                    responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
+                    ttl: Duration.seconds(0),
+                  },
+                ]),
             ...(manifest.errorPages?.[404]
               ? [
                   {
@@ -1334,28 +1336,10 @@ export class CdnConstruct extends Construct {
     ];
 
     // ---- Custom error pages (user-provided) ----
-    if (props.customErrorPages?.notFound) {
-      errorResponses.push({
-        httpStatus: 404,
-        responseHttpStatus: 404,
-        responsePagePath: `/builds/${buildId}/404.html`,
-        ttl: Duration.seconds(0),
-      });
-    }
-    if (props.customErrorPages?.serverError) {
-      // For compute (SSR) stacks, the default 502/503/504 error pages are
-      // already wired above; only add 500 with the custom page.
-      // For static/SPA stacks, add all server error statuses.
-      const serverErrorStatuses = hasCompute ? [500] : [500, 502, 503, 504];
-      for (const status of serverErrorStatuses) {
-        errorResponses.push({
-          httpStatus: status,
-          responseHttpStatus: status,
-          responsePagePath: `/builds/${buildId}/500.html`,
-          ttl: Duration.seconds(10),
-        });
-      }
-    }
+    // Shared with `cf.errorPages` (a bring-your-own door): see error_responses.ts.
+    // For compute (SSR) stacks, the default 502/503/504 error pages are
+    // already wired above; only 500 gets the custom page.
+    errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
 
 
     // ---- Distribution ----
@@ -1390,7 +1374,7 @@ export class CdnConstruct extends Construct {
       ...(props.geoRestriction
         ? {
             geoRestriction:
-              props.geoRestriction.type === 'whitelist'
+              props.geoRestriction.type === 'whitelist' || props.geoRestriction.type === 'allowlist'
                 ? GeoRestriction.allowlist(...props.geoRestriction.countries)
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }

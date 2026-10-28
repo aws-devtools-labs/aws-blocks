@@ -72,7 +72,10 @@ function changeset(entries, body = "A change.") {
  */
 function baseRepo(t, files = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "changeset-guard-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	// Retry the removal: a git child process can still be writing into `.git`
+	// when the test ends, and a single pass then fails with ENOTEMPTY / EBUSY
+	// in the hook (failing the test although its assertions passed).
+	t.after(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 
 	mkdirSync(join(dir, "scripts"), { recursive: true });
 	copyFileSync(GUARD_SRC, join(dir, "scripts", "changeset-guard.ts"));
@@ -403,6 +406,32 @@ describe("verify-coverage", () => {
 		});
 		assert.equal(status, 0, output);
 		assert.match(output, /Skipping coverage check for the release PR/);
+	});
+
+	it("ignores private packages, which are never published", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, { "packages/bb-private/src/index.ts": "export const a = 1;\n" });
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 0, output);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
+	});
+
+	it("still fails for a public package changed alongside a private one", (t) => {
+		const dir = baseRepo(t, {
+			"packages/bb-private/package.json": pkgJson("@aws-blocks/bb-private", { private: true }),
+		});
+		commitPr(dir, {
+			"packages/bb-private/src/index.ts": "export const a = 1;\n",
+			"packages/core/src/index.ts": "export const b = 1;\n",
+		});
+
+		const { status, output } = guard(dir, "verify-coverage");
+		assert.equal(status, 1, output);
+		assert.match(output, /@aws-blocks\/core/);
+		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
 	});
 
 	it("fails loudly when a changed package's package.json cannot be parsed", (t) => {

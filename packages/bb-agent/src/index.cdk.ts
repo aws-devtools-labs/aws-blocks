@@ -16,6 +16,8 @@ import { BB_NAME } from './version.js';
 
 export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
+export type { AgentTurnPayload } from './agent.js';
+export type { AgentConfig, AgentResult, AgentStreamChunk, AgentStreamResult, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, InterruptResponse, ToolCallRecord, ModelConfig, BedrockGuardrail, StreamOptions, Message, Conversation, JSONValue, TokenUsage } from './types.js';
 
 export class Agent extends BuildingBlockScope {
 	/**
@@ -35,8 +37,9 @@ export class Agent extends BuildingBlockScope {
 
 		// Session-snapshot bucket. Provisioned here (and granted to the shared execution role that the
 		// AgentCore Runtime runs as); the deployed loop re-derives its name from this bucket's `fullId`
-		// in-process — the same `'sn'` id → same fullId → same physical bucket — so no name needs to be
-		// injected into the container. Propagate `removalPolicy` so customers can opt sandbox stacks into
+		// in-process — the same `'sn'` id → same fullId → same physical bucket (FileBucket's
+		// `deriveBucketName`, which shortens a `fullId` over 63 characters; the runtime reads it back via
+		// `getSdkIdentifiers`, never the raw `fullId`) — so no name needs to be injected into the container. Propagate `removalPolicy` so customers can opt sandbox stacks into
 		// clean teardown (without it, CDK's RETAIN default applies). ID shortened to keep the S3 bucket
 		// name within the 63-char limit.
 		new FileBucket(this, 'sn', { removalPolicy: config?.removalPolicy });

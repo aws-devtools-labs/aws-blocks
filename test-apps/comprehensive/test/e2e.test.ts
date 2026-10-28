@@ -7,7 +7,7 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
@@ -16,6 +16,7 @@ import { distributedTableSecureDefaultsTests } from './distributed-table-secure-
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
+import { responseCookieTests } from './response-cookies.test.js';
 import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
@@ -38,6 +39,7 @@ import { cliClientTests } from './cli-client.test.js';
 import { tracerTests } from './tracer.test.js';
 import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
+import { multiComputeTests } from './multi-compute.test.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +47,7 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
+let isolatedApi: typeof isolatedApiType;
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -133,6 +136,7 @@ test.before(async () => {
   // Import API after config is written
   const module = await import('aws-blocks');
   api = module.api;
+  isolatedApi = module.isolatedApi;
   
   await waitForServer();
   console.log('✅ Server ready\n');
@@ -248,6 +252,9 @@ authCookieAttrsTests(() => api);
 // CORS preflight allow-list tests (separate file)
 corsPreflightTests(() => api);
 
+// Multiple Set-Cookie values from one API method (separate file)
+responseCookieTests(() => api);
+
 // AuthCognito tests (separate file)
 authCognitoTests(() => api);
 
@@ -280,6 +287,9 @@ knowledgeBaseTests(() => api);
 
 // Logging BB tests (separate file)
 loggingTests(() => api);
+
+// Multi-compute
+multiComputeTests(() => api, () => isolatedApi);
 
 // EmailClient tests (separate file)
 emailClientTests(() => api);

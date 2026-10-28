@@ -214,4 +214,32 @@ test.describe('Notes Manager — SPA Hosting', () => {
     await expect(statsLocator).not.toHaveText('0');
     await expect(statsLocator).toHaveText(/^[1-9]\d*$/);
   });
+
+  test('11. A raw route outside /aws-blocks/* answers same-origin, with an encoded query intact', async ({ request }) => {
+    const res = await request.get(`${hostingUrl}/hooks/echo?q=${encodeURIComponent('a b+c&d=é/%')}`);
+    expect(res.status()).toBe(200);
+    // (The path the backend sees carries its API stage prefix on the CloudFront door, so only the query is compared.)
+    expect((await res.json()).q).toBe('a b+c&d=é/%');
+  });
+
+  test('12. A namespace on its own compute is served by it through Hosting', async ({ request }) => {
+    test.skip(ENV === 'local', 'local dev runs every namespace in one process');
+    // The browser path: same origin as the page, per-namespace path, Hosting's
+    // front door → shared gateway → the namespace's compute.
+    const whereAmI = async (namespace: string) => {
+      const resp = await request.post(`${hostingUrl}/aws-blocks/api/${namespace}`, {
+        headers: { 'Content-Type': 'application/json' },
+        data: { jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 },
+      });
+      expect(resp.ok()).toBeTruthy();
+      return (await resp.json()).result as { functionName: string | null; memoryMb: string | null };
+    };
+
+    const onDefault = await whereAmI('api');
+    const onIsolated = await whereAmI('isolatedApi');
+    expect(onIsolated.functionName).toBeTruthy();
+    expect(onIsolated.functionName).not.toBe(onDefault.functionName);
+    expect(onIsolated.memoryMb).toBe('512');
+    expect(onDefault.memoryMb).not.toBe('512');
+  });
 });

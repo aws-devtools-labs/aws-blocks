@@ -8,6 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -16,6 +17,7 @@ import type { ApiFrontDoorTier } from '../common/index.js';
 import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
+	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
@@ -25,9 +27,9 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
-import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
+import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
@@ -348,6 +350,29 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 }
 
 /**
+ * The shared REST API's base URL (`restApi.url`,
+ * `https://{id}.execute-api.{region}.amazonaws.com/{stage}/` — trailing slash
+ * included) for the backend root that owns `scope`, or `undefined` when that
+ * root has no shared gateway yet (e.g. the backend module is still being
+ * imported, or the root is a bare `cdk.Stack` in a unit test). Read-only.
+ *
+ * Building Blocks are constructed while the backend module is imported, before
+ * `create()` builds the gateway, so they must call this from inside a
+ * `cdk.Lazy` producer, which runs at synth once the gateway exists. The gateway
+ * fronts every compute target the same way, so the URL is compute-agnostic.
+ *
+ * @internal First-party plumbing for Building Blocks that resolve late-built
+ * values from a `cdk.Lazy` producer; exported for them, not a stability-guaranteed
+ * public API.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getSharedGatewayUrl(scope: Construct): string | undefined {
+	const root = getBlocksRoot(scope) as { _sharedGateway?: SharedGateway };
+	return root._sharedGateway?.restApi.url;
+}
+
+/**
  * Attach the Lambda VPC-access managed policy (`AWSLambdaVPCAccessExecutionRole`,
  * ENI management) to the shared execution role when a VPC is active on `root` —
  * provided OR derived. The role is built eagerly in {@link setupBlocksInfra} and
@@ -407,6 +432,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (see {@link publishPublicOrigin}). @internal */
+	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 
@@ -418,6 +445,16 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * Record that a `Hosting` door publishes this backend's browser-facing origin
+	 * (`BLOCKS_PUBLIC_ORIGIN`), so the managed `cloudfront` distribution doesn't
+	 * overwrite it. See {@link publishPublicOrigin}.
+	 * @internal Framework-only.
+	 */
+	publishPublicOrigin(): void {
+		publishPublicOrigin(this);
 	}
 
 	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
@@ -530,6 +567,13 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left. Keyed
+		// by `fullId`, the backend's BLOCKS_STACK_NAME (resolved at validation).
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.fullId);
+
 		// The default compute (and thus handler/gateway) is created in create(),
 		// after construction — it derives BLOCKS_STACK_NAME from this.fullId.
 	}
@@ -551,6 +595,15 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
+		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {

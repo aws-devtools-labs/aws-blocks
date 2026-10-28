@@ -8,6 +8,7 @@
  */
 
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
+import { deployTimeLambdaEntry } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -80,8 +81,10 @@ export class DistributedDatabase extends BuildingBlockScope {
     // Also runs .sql migrations when migrationsPath is provided.
     const migrationFn = new lambda.NodejsFunction(stack, `${this.fullId}DsqlMigrationFn`, {
       // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
-      // Must NOT use ../src/migration-lambda.ts — src/ is excluded from the published package.
-      entry: join(import.meta.dirname ?? new URL('.', import.meta.url).pathname, 'migration-lambda.js'),
+      // Must NOT use ../src/migration-lambda.ts — an installed package runs from dist/. A vendorized
+      // copy (blocks-vendorize copies src/ only, no dist/) has just ./migration-lambda.ts next to this
+      // file, which deployTimeLambdaEntry falls back to.
+      entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './migration-lambda' }),
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
@@ -175,4 +178,4 @@ function readMigrationsDir(dir: string): Record<string, string> {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
-export type { DistributedDatabaseOptions } from './types.js';
+export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';

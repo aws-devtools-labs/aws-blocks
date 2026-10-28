@@ -17,6 +17,21 @@ import * as ts from 'typescript';
 import { dirname, resolve } from 'path';
 import { existsSync } from 'fs';
 
+/**
+ * The handler argument of `new ApiNamespace(scope, name, handler, options?)`: the
+ * first function expression after the scope, else the third argument. Not simply
+ * the last argument — with the optional fourth `options` argument that would be
+ * the options object, and the namespace's methods would be missed.
+ */
+function apiNamespaceHandlerArg(node: ts.NewExpression): ts.Expression | undefined {
+	const args = node.arguments ?? [];
+	return (
+		args.find((arg, i) => i >= 1 && (ts.isArrowFunction(arg) || ts.isFunctionExpression(arg))) ??
+		args[2] ??
+		args[args.length - 1]
+	);
+}
+
 // ── Public types ────────────────────────────────────────────────────────────
 
 export interface TransferableInfo {
@@ -100,9 +115,9 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 		if (ts.isNewExpression(node)) {
 			const callee = node.expression;
 			if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
-				const handler = node.arguments[node.arguments.length - 1];
+				const handler = apiNamespaceHandlerArg(node);
 				const nsName = enclosingBindingName(node);
-				if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
+				if (handler && (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler))) {
 					const body = handler.body;
 					if (ts.isParenthesizedExpression(body) && ts.isObjectLiteralExpression(body.expression)) {
 						visitObjectLiteral(body.expression, nsName);
@@ -200,8 +215,8 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 		if (ts.isNewExpression(node)) {
 			const fnName = node.expression;
 			if (ts.isIdentifier(fnName) && fnName.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
-				const handlerArg = node.arguments[node.arguments.length - 1];
-				extractMethodsFromHandler(handlerArg, checker, sourceFile!, result, enclosingBindingName(node));
+				const handlerArg = apiNamespaceHandlerArg(node);
+				if (handlerArg) extractMethodsFromHandler(handlerArg, checker, sourceFile!, result, enclosingBindingName(node));
 			}
 		}
 		ts.forEachChild(node, visit);

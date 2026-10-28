@@ -13,6 +13,7 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import {
 	assertCdkConditionActive,
 	BlocksBackend,
@@ -28,14 +29,16 @@ import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/defau
 import {
 	type ApiFrontDoorOwner,
 	claimApiFrontDoor,
+	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 } from './api-front-door.js';
-import { finalizeConfigRegistry } from './config-registry.js';
+import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata, recordBuildingBlock } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
@@ -48,6 +51,7 @@ export {
 	BlocksBackend,
 	type BlocksBackendProps,
 	type CoreBlocksBackendProps,
+	getSharedGatewayUrl,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
@@ -56,7 +60,14 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
+export {
+	finalizeConfigRegistry,
+	getConfigDeployment,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerConfig,
+} from './config-registry.js';
+export { isSandboxContext } from './stack-metadata.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -103,6 +114,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (see {@link publishPublicOrigin}). @internal */
+	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 
@@ -114,6 +127,16 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * Record that a `Hosting` door publishes this backend's browser-facing origin
+	 * (`BLOCKS_PUBLIC_ORIGIN`), so the managed `cloudfront` distribution doesn't
+	 * overwrite it. See {@link publishPublicOrigin}.
+	 * @internal Framework-only.
+	 */
+	publishPublicOrigin(): void {
+		publishPublicOrigin(this);
 	}
 
 	/** The stack's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
@@ -191,6 +214,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left.
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.id);
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
@@ -212,6 +240,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(stack) ? 'sandbox' : 'production';
+		registerConfig(stack, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -286,6 +323,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		return stack;
 	}
 }
+
+/** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
+const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
 
 export class Scope extends Construct {
 	public readonly id: string;
@@ -472,11 +512,37 @@ export class Scope extends Construct {
 	// Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
 	registerClientMiddleware(_packageSpecifier: string): void {}
 	registerDevAttachment(_packageSpecifier: string): void {}
+
+	/**
+	 * Claim a Lambda event key at synth, under the same one-handler-per-key rule
+	 * the Lambda runtime enforces (`Scope.registerLambdaEventHandler` in the
+	 * runtime layer): the key is `{eventSource}:{identifier}`, and a second claim
+	 * on the same backend root throws, naming both blocks.
+	 *
+	 * The runtime registers handlers when the handler module loads, so without
+	 * this a conflicting pair would pass `cdk synth` and deploy, and then every
+	 * request would fail on cold start. A Building Block whose runtime layer calls
+	 * `registerLambdaEventHandler(eventSource, identifier, …)` calls this from its
+	 * CDK constructor with the **same** `eventSource` and `identifier` (a CDK
+	 * token is fine — the same resource yields the same token). The handler is
+	 * not used at synth and may be omitted.
+	 *
+	 * @param eventSource - Event source prefix (e.g. `EventSourceMapping.SQS`, `'blocks.cronjob'`).
+	 * @param identifier - What the runtime registers under: the queue name, the block's `fullId`, the user pool id.
+	 * @param _handler - Ignored at synth; accepted so the call matches the runtime signature.
+	 * @throws {Error} When another block on the same backend root already claimed `{eventSource}:{identifier}`.
+	 */
 	registerLambdaEventHandler(
-		_eventSource: string,
-		_identifier: string,
-		_handler: (record: any) => Promise<void>,
-	): void {}
+		eventSource: string,
+		identifier: string,
+		_handler?: (record: any) => Promise<void>,
+	): void {
+		const claims = getOrCreateOnRoot(this, LAMBDA_EVENT_HANDLER_CLAIMS, () => new Map<string, string>());
+		const key = lambdaEventHandlerKey(eventSource, identifier);
+		const owner = claims.get(key);
+		if (owner !== undefined) throw duplicateLambdaEventHandlerError(key, this.fullId, owner);
+		claims.set(key, this.fullId);
+	}
 	get clientMiddleware(): readonly string[] {
 		return [];
 	}
