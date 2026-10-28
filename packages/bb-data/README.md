@@ -342,6 +342,42 @@ the transaction should continue.
 > credentials — or reset the master password on the old cluster — if you still
 > need access to the orphaned cluster.
 
+### Destroying a production stack
+
+Under the `production` defaults the cluster's removal policy is **retain**, so
+`npm run destroy` deletes the stack but keeps the database. Everything the kept
+cluster needs is kept with it, so the destroy completes and the cluster stays
+usable:
+
+| Removal policy | Kept on destroy |
+|---|---|
+| `retain` (production default) | Aurora cluster and writer instance, DB subnet group, cluster security group, the VPC Blocks created for the database (subnets, route tables), generated credentials secret |
+| `snapshot` | a final cluster snapshot and the generated credentials secret; the cluster and network are deleted |
+| `destroy` (sandbox default) | nothing |
+
+A VPC you passed in yourself is never retained by the Database; only the
+cluster's own security group is.
+
+After a successful destroy, `npm run destroy` lists every resource it kept (type,
+logical id, physical id). Kept resources keep running, and are billed, until you
+delete them, for example in the AWS console: delete the cluster first (turn off
+its deletion protection), then the security group, subnet group, VPC and secret.
+If a destroy stops because a kept resource still uses something the stack tries
+to delete (for example a cluster left in a VPC that is not retained), it says so
+right away instead of retrying, and lists the resources involved.
+
+To have destroy delete the database and its data instead, deploy with the
+per-block `removalPolicy: 'destroy'` and with deletion protection off, then run
+destroy:
+
+```typescript
+// Stack defaults: keep the production preset but allow deletes.
+defaults: { ...BlocksPresets.production, deletionProtection: false }
+
+// The database: delete it (and its data) with the stack.
+const db = new Database(scope, 'main', { removalPolicy: 'destroy' });
+```
+
 ## Local Development
 
 - **Engine:** PGlite (WASM PostgreSQL) — full Postgres compatibility

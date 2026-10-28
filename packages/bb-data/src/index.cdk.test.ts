@@ -343,3 +343,100 @@ test('Database: with no shared VPC at all, builds its own (unchanged baseline)',
   const template = Template.fromStack(stack);
   template.resourceCountIs('AWS::EC2::VPC', 1);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dependant removal policies (issue #998).
+//
+// A retained cluster keeps its network interfaces in its subnets and security
+// group, so those (and the VPC materialize() built for it) must be retained too,
+// or `cdk destroy` fails with "has dependencies". The generated credentials are
+// retained under RETAIN and SNAPSHOT so the kept / restored cluster stays usable.
+// Under SNAPSHOT the cluster is deleted (after its snapshot) before its
+// dependencies, so the network stays deletable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NETWORK_TYPES = [
+  'AWS::EC2::VPC',
+  'AWS::EC2::Subnet',
+  'AWS::EC2::RouteTable',
+  'AWS::EC2::SubnetRouteTableAssociation',
+  'AWS::EC2::SecurityGroup',
+];
+const CREDENTIAL_TYPES = ['AWS::SecretsManager::Secret', 'AWS::SecretsManager::SecretTargetAttachment'];
+
+/**
+ * Assert every resource of `type` (at least one) carries `policy` as both
+ * DeletionPolicy and UpdateReplacePolicy. An absent policy is CloudFormation's
+ * default, Delete.
+ */
+function assertPolicy(template: Template, type: string, policy: 'Retain' | 'Delete'): void {
+  const resources = Object.entries(template.findResources(type));
+  assert.ok(resources.length > 0, `expected at least one ${type}`);
+  for (const [id, r] of resources) {
+    assert.strictEqual(r.DeletionPolicy ?? 'Delete', policy, `${type} ${id} DeletionPolicy`);
+    assert.strictEqual(r.UpdateReplacePolicy ?? 'Delete', policy, `${type} ${id} UpdateReplacePolicy`);
+  }
+}
+
+test('CDK: RETAIN retains the owned VPC subtree, the security group and the generated credentials', () => {
+  const template = synthWithRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+  for (const type of [...NETWORK_TYPES, ...CREDENTIAL_TYPES]) assertPolicy(template, type, 'Retain');
+  // CDK already propagates the cluster's policy to these two.
+  assertPolicy(template, 'AWS::RDS::DBInstance', 'Retain');
+  assertPolicy(template, 'AWS::RDS::DBSubnetGroup', 'Retain');
+});
+
+test('CDK: the default (undefined) removal policy retains the dependants like RETAIN', () => {
+  const template = synthWithRemovalPolicy(undefined);
+  for (const type of [...NETWORK_TYPES, ...CREDENTIAL_TYPES]) assertPolicy(template, type, 'Retain');
+});
+
+test('CDK: SNAPSHOT retains the generated credentials but keeps the network deletable', () => {
+  const template = synthWithRemovalPolicy(cdk.RemovalPolicy.SNAPSHOT);
+  for (const type of CREDENTIAL_TYPES) assertPolicy(template, type, 'Retain');
+  for (const type of NETWORK_TYPES) assertPolicy(template, type, 'Delete');
+});
+
+test('CDK: DESTROY deletes the network and the generated credentials', () => {
+  const template = synthWithRemovalPolicy(cdk.RemovalPolicy.DESTROY);
+  for (const type of [...NETWORK_TYPES, ...CREDENTIAL_TYPES]) assertPolicy(template, type, 'Delete');
+});
+
+test('CDK: RETAIN with a CMK retains the generated (CMK-encrypted) credentials secret', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'CmkStack');
+  const key = cdk.aws_kms.Key.fromKeyArn(stack, 'Key', 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56');
+  materialize(stack, 'testdb', { databaseName: 'mydb', storageEncryptionKey: key });
+  const template = Template.fromStack(stack);
+  for (const type of CREDENTIAL_TYPES) assertPolicy(template, type, 'Retain');
+});
+
+test('CDK: RETAIN in a customer-provided VPC retains only the security group, never the customer network', () => {
+  const { stack, parent } = setupDatabaseStack();
+  const customerVpc = new ec2.Vpc(stack, 'CustomerVpc', { maxAzs: 2 });
+  initializeVpc(stack, { network: customerVpc });
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  for (const type of ['AWS::EC2::VPC', 'AWS::EC2::Subnet', 'AWS::EC2::RouteTable', 'AWS::EC2::SubnetRouteTableAssociation']) {
+    assertPolicy(template, type, 'Delete');
+  }
+  // The cluster's own security group is retained; any other security group in
+  // the stack (e.g. the compute one initializeVpc creates) is untouched.
+  const sgs = template.findResources('AWS::EC2::SecurityGroup');
+  const clusterSg = Object.entries(sgs).filter(([, r]) =>
+    String(r.Properties?.GroupDescription ?? '').includes('Aurora cluster'),
+  );
+  assert.strictEqual(clusterSg.length, 1, 'exactly one cluster security group');
+  assert.strictEqual(clusterSg[0][1].DeletionPolicy, 'Retain');
+  for (const [id, r] of Object.entries(sgs)) {
+    if (id !== clusterSg[0][0]) assert.notStrictEqual(r.DeletionPolicy, 'Retain', `${id} must not be retained`);
+  }
+});
+
+test('CDK: applying the dependant policies does not change any logical id', () => {
+  // Policies only add DeletionPolicy/UpdateReplacePolicy (a no-replacement
+  // update), so RETAIN and DESTROY synthesize the same set of logical ids.
+  const retained = Object.keys(synthWithRemovalPolicy(cdk.RemovalPolicy.RETAIN).toJSON().Resources).sort();
+  const destroyed = Object.keys(synthWithRemovalPolicy(cdk.RemovalPolicy.DESTROY).toJSON().Resources).sort();
+  assert.deepStrictEqual(retained, destroyed);
+});
