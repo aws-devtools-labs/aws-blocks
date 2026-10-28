@@ -28,6 +28,7 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
 	publishPublicOrigin,
 	publicApiUrl,
@@ -112,6 +113,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 	/** The validated `apiWaf` setting; set in the constructor. @internal */
 	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -121,6 +124,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
 	}
 
 	/**

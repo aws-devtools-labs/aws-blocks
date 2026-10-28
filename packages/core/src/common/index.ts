@@ -520,20 +520,37 @@ export interface BlocksStackProps extends StackProps {
    * The web ACL attaches to whichever front door clients reach the API through:
    *
    * - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the API Gateway
-   *   stage. Works in any region.
+   *   stage. Works in any region, and covers every caller of `ApiUrl`. When a
+   *   `Hosting` door also forwards browser traffic to the stage, the rate rule
+   *   adapts so browser users aren't counted as one client: a claiming
+   *   CloudFront `Hosting` marks its requests with a header the rate rule
+   *   exempts, and behind any other door (ALB, API Gateway, your own, or a
+   *   CloudFront edge over a router) the rate rule is left off and synth warns;
+   *   rate-limit those on the door's own WAF.
    * - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed
    *   distribution. AWS only creates CloudFront web ACLs in us-east-1, so outside
    *   us-east-1 pass the ARN of one you created there (`webAclArn`); `enabled:
-   *   true` fails synth in any other region. The gateway's own `execute-api`
-   *   endpoint stays reachable and is not covered.
-   * - When a CloudFront-backed `Hosting` fronts the API, the API is served from
-   *   Hosting's distribution: set the WAF there (`frontDoor.features.waf`).
-   *   `apiWaf` then creates nothing, and synth warns.
+   *   true` fails synth in any other region.
+   * - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting
+   *   the API: the API is served from Hosting's distribution, so set the WAF
+   *   there (`frontDoor.features.waf`). `apiWaf` then creates nothing, and synth
+   *   warns.
    *
-   * The Blocks-managed web ACL runs the AWS managed Common rule set (with its
-   * 8 KB request-body size rule set to count, since RPC bodies are routinely
-   * larger) and Known Bad Inputs rule set, plus a per-IP rate limit. WAF is
-   * billed per web ACL, per rule and per request.
+   * Not covered:
+   * - The gateway's own `execute-api` endpoint under `apiFrontDoor: 'cloudfront'`
+   *   (only the distribution has the web ACL), including browser traffic that a
+   *   non-CloudFront `Hosting` door forwards straight to `execute-api`.
+   * - `bb-realtime`'s WebSocket API: AWS WAF can't attach to API Gateway
+   *   WebSocket APIs.
+   *
+   * The Blocks-managed web ACL runs the AWS managed Common rule set and Known
+   * Bad Inputs rule set, plus a per-IP rate limit. The Common rule set's body
+   * rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`,
+   * `GenericRFI_BODY`) count instead of block, because RPC bodies routinely
+   * exceed 8 KB and carry user-written HTML, Markdown or paths as data; their
+   * query-string, URI and header variants still block. For a stricter or
+   * custom rule set, pass your own `webAclArn` (its scope and region are checked
+   * at synth). WAF is billed per web ACL, per rule and per request.
    *
    * @example
    * ```ts

@@ -17,10 +17,17 @@ import {
   type RouteBehavior,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
-import { App, Duration, Stack, Token } from 'aws-cdk-lib';
+import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
-import { claimApiFrontDoor, scheduleApiFrontDoor } from './cdk/api-front-door.js';
+import {
+  type ApiFrontDoorOwner,
+  apiFrontDoorMarker,
+  claimApiFrontDoor,
+  publishPublicOrigin,
+  scheduleApiFrontDoor,
+} from './cdk/api-front-door.js';
+import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
 import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
@@ -593,6 +600,70 @@ describe('Hosting', () => {
   });
 
   describe('apiWaf when Hosting fronts the API', () => {
+    // An owner wired like BlocksStack: the recorders Hosting calls write onto the
+    // same object the front-door aspect is scheduled on. Plumbing only.
+    function wafOwner(id: string, env?: { account: string; region: string }) {
+      const stack = new Stack(new App(), id, env ? { env } : undefined) as Stack & ApiFrontDoorOwner;
+      stack._apiWaf = { rateLimit: 1000 };
+      const restApi = new aws_apigateway.RestApi(stack, 'Api');
+      restApi.root.addMethod('ANY');
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        claimApiFrontDoor: (url) => claimApiFrontDoor(stack, url),
+        publishPublicOrigin: () => publishPublicOrigin(stack),
+        apiFrontDoorMarker: () => apiFrontDoorMarker(stack),
+      };
+      return { stack, api, stage: restApi.deploymentStage };
+    }
+
+    it('default apigateway tier + CloudFront Hosting: attaches the stage ACL and marks Hosting-proxied requests', () => {
+      createSpaBuildOutput(tmpDir);
+      const { stack, api, stage } = wafOwner('ApiWafDefaultTierHosting');
+      scheduleApiFrontDoor(stack, false, api.apiUrl, stage);
+      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+
+      const template = Template.fromStack(stack);
+      // Native and direct callers keep calling execute-api, so the stage is protected.
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
+      const [acl] = Object.values(template.findResources('AWS::WAFv2::WebACL'));
+      const rate = (acl.Properties.Rules as Array<Record<string, any>>).find((r) => r.Name === 'RateLimitRule');
+      const searchString = rate?.Statement.RateBasedStatement.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString;
+      assert.strictEqual(searchString, apiFrontDoorMarkerValue(stack));
+      // Hosting's API origin carries the same marker, so its edge-IP requests are exempt.
+      const distConfig = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0].Properties.DistributionConfig;
+      const markedOrigins = (distConfig.Origins as Array<{ OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }> }>)
+        .filter((o) => o.OriginCustomHeaders?.some((h) => h.HeaderName === API_FRONT_DOOR_MARKER_HEADER && h.HeaderValue === searchString));
+      assert.strictEqual(markedOrigins.length, 1, 'the API origin forwards the marker header');
+      assert.strictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('apiWaf')).length, 0);
+    });
+
+    it('default apigateway tier + a non-claiming door: stage ACL without the rate rule, and a warning', () => {
+      createSpaBuildOutput(tmpDir);
+      const { stack, api, stage } = wafOwner('ApiWafProxyDoor', { account: '111111111111', region: 'us-east-1' });
+      scheduleApiFrontDoor(stack, false, api.apiUrl, stage);
+      // A bring-your-own door: like the ALB and API Gateway doors, it serves the API
+      // to browsers through its own proxy and doesn't claim the front-door role.
+      const proxyDoor = defineFrontDoor({
+        service: 'my-proxy',
+        build(scope, input) {
+          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+            defaultBehavior: { origin: cf.origin(input.origins.assets) },
+            additionalBehaviors: cf.apiBehaviors(input.origins.api),
+          });
+          return { url: 'https://proxy.example.com' };
+        },
+      });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api, frontDoor: { kind: 'custom', door: proxyDoor } });
+
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
+      const [acl] = Object.values(template.findResources('AWS::WAFv2::WebACL'));
+      assert.ok(!(acl.Properties.Rules as Array<{ Name: string }>).some((r) => r.Name === 'RateLimitRule'));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('leaves the per-IP rate rule off'));
+      assert.strictEqual(warnings.length, 1);
+    });
+
+
     it('creates no API web ACL and warns to set the WAF on Hosting', () => {
       createSpaBuildOutput(tmpDir);
       const app = new App();

@@ -40,6 +40,8 @@ import type { Construct, IConstruct } from 'constructs';
 import type { ApiFrontDoorTier } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import {
+	API_FRONT_DOOR_MARKER_HEADER,
+	apiFrontDoorMarkerValue,
 	attachApiWafToStage,
 	type ResolvedApiWaf,
 	warnApiWafDeferredToHosting,
@@ -99,6 +101,8 @@ export interface ApiFrontDoorOwner {
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 	/** The validated `apiWaf` setting, recorded at construction; `undefined` when WAF is off. */
 	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header (see {@link apiFrontDoorMarker}). */
+	_apiFrontDoorMarked?: boolean;
 }
 
 /**
@@ -111,12 +115,28 @@ export interface ApiFrontDoorOwner {
  * in-template via `Fn::Split` rather than in JS — string methods here would
  * operate on the unresolved placeholder text.
  */
-export function httpOriginFromEndpoint(gatewayUrl: string): IOrigin {
+export function httpOriginFromEndpoint(gatewayUrl: string, customHeaders?: Record<string, string>): IOrigin {
 	const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, gatewayUrl));
 	const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
 	const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
 	const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
-	return new HttpOrigin(hostname, { originPath: `/${stage}` });
+	return new HttpOrigin(hostname, { originPath: `/${stage}`, ...(customHeaders ? { customHeaders } : {}) });
+}
+
+/**
+ * The header a claiming CloudFront `Hosting` distribution adds to its API origin
+ * so the backend's `apiWaf` rate rule can tell its (edge-IP) requests from
+ * direct callers. `undefined` unless the backend has a Blocks-managed web ACL
+ * (a caller-supplied `webAclArn` is attached as-is). Calling it records that the
+ * claiming distribution sends the header.
+ *
+ * @internal Framework-only; `Hosting` calls it (via `BlocksStackApi.apiFrontDoorMarker`).
+ */
+export function apiFrontDoorMarker(owner: Construct & ApiFrontDoorOwner): Record<string, string> | undefined {
+	const waf = owner._apiWaf;
+	if (!waf || !('rateLimit' in waf)) return undefined;
+	owner._apiFrontDoorMarked = true;
+	return { [API_FRONT_DOOR_MARKER_HEADER]: apiFrontDoorMarkerValue(owner) };
 }
 
 /**
@@ -229,19 +249,30 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 
 		const waf = this.owner._apiWaf;
 
-		// `Hosting` fronts the API itself, and has already published its origin
-		// (recorded on this same owner instance). Provisioning a second distribution
-		// would double the hops and split the domain. The API's WAF then belongs on
-		// Hosting's front door too.
-		if (this.owner._apiFrontDoorClaimedByHosting) {
-			if (waf) warnApiWafDeferredToHosting(this.owner);
+		// The `apigateway` tier: clients call the gateway directly, so there is no
+		// CloudFront distribution to build. A WAF attaches to the gateway stage even
+		// when a `Hosting` door also fronts the API, because `ApiUrl` (what native
+		// and direct callers use) stays the gateway's here; the door's traffic only
+		// changes how the rate rule counts (see `StageWafTraffic`).
+		if (!this.provision) {
+			if (waf && this.gatewayStage) {
+				const owner = this.owner;
+				const traffic = owner._apiFrontDoorMarked
+					? 'marked'
+					: owner._apiFrontDoorClaimedByHosting || owner._publicOriginPublishedByHosting
+						? 'proxied'
+						: 'direct';
+				attachApiWafToStage(owner, this.gatewayStage, waf, traffic);
+			}
 			return;
 		}
 
-		// The `apigateway` tier: clients call the gateway directly, so there is no
-		// CloudFront distribution to build; a WAF attaches to the gateway stage.
-		if (!this.provision) {
-			if (waf && this.gatewayStage) attachApiWafToStage(this.owner, this.gatewayStage, waf);
+		// `Hosting` fronts the API itself, and has already published its origin
+		// (recorded on this same owner instance). Provisioning a second distribution
+		// would double the hops and split the domain. Under this tier the claim also
+		// moves `ApiUrl` onto Hosting's distribution, so the API's WAF belongs there.
+		if (this.owner._apiFrontDoorClaimedByHosting) {
+			if (waf) warnApiWafDeferredToHosting(this.owner);
 			return;
 		}
 

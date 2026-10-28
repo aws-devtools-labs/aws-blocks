@@ -183,6 +183,14 @@ export interface BlocksStackApi {
    */
   publishPublicOrigin?(): void;
   /**
+   * The header (name → value) a claiming CloudFront distribution adds to its API
+   * origin so the backend's `apiWaf` rate rule can exempt its edge-IP requests;
+   * `undefined` when the backend has no Blocks-managed web ACL.
+   * `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  apiFrontDoorMarker?(): Record<string, string> | undefined;
+  /**
    * The RPC URL clients call: the managed `cloudfront` distribution's when it
    * fronts the API, else `apiUrl`. `BlocksStack`/`BlocksBackend` implement it.
    * @internal Framework-only.
@@ -1455,7 +1463,9 @@ export class Hosting extends Construct {
 
     // The REST API URL embeds its `/{stage}` prefix, which the origin carries as
     // `originPath` (see httpOriginFromEndpoint).
-    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
+    // When the backend has `apiWaf`, mark these requests so its rate rule doesn't
+    // count every browser user behind one CloudFront edge as a single client.
+    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl, api.apiFrontDoorMarker?.());
 
     // Attach the same security-headers / CSP policy the distribution's static,
     // SSR and image behaviors carry. Without it the API and auth responses go

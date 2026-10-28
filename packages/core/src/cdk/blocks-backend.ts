@@ -16,6 +16,7 @@ import type { ApiFrontDoorTier, ApiWafOptions } from '../common/index.js';
 import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
 	publishPublicOrigin,
 	publicApiUrl,
@@ -424,6 +425,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorTier?: ApiFrontDoorTier;
 	/** The validated `apiWaf` setting; set in the constructor. @internal */
 	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -433,6 +436,15 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
 	}
 
 	/**

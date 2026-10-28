@@ -12,10 +12,13 @@
  * - `apigateway` tier → a `REGIONAL` web ACL associated with the REST API stage.
  * - `cloudfront` tier → a `CLOUDFRONT` web ACL on the managed distribution
  *   (CloudFront web ACLs can only be created in us-east-1).
- * - claimed by `Hosting` → nothing; Hosting's own front-door WAF covers the
- *   distribution, and a synth warning says so.
+ *   When a `Hosting` door also forwards browser traffic to the stage, the rate
+ *   rule exempts (CloudFront claim) or leaves out (proxy doors) those requests.
+ * - `cloudfront` tier claimed by `Hosting` → nothing; the API is served from
+ *   Hosting's distribution, so its WAF belongs there, and a synth warning says so.
  */
 
+import { createHash } from 'node:crypto';
 import * as cdk from 'aws-cdk-lib';
 import type { Stage } from 'aws-cdk-lib/aws-apigateway';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
@@ -81,61 +84,191 @@ function visibility(metricName: string): CfnWebACL.VisibilityConfigProperty {
 }
 
 /**
+ * Header a CloudFront `Hosting` distribution that claims the API adds to every
+ * request it forwards to the gateway, carrying {@link apiFrontDoorMarkerValue}.
+ * The stage ACL's rate rule skips requests that carry it: those arrive from
+ * CloudFront edge IPs, so an IP rate limit would throttle every browser user
+ * behind one edge together. A viewer can't forge it, because a CloudFront
+ * origin custom header replaces any viewer header of the same name.
+ */
+export const API_FRONT_DOOR_MARKER_HEADER = 'x-blocks-front-door';
+
+/**
+ * The marker value for this backend. Deterministic (stack name + the owner's
+ * construct path + a version), like Hosting's origin-verify secret, so it
+ * doesn't churn the template on every synth; bump the version to rotate. It
+ * only exempts proxied requests from the rate rule — the managed rule groups
+ * still inspect them — so it is a rate-limit scope, not an authorization.
+ *
+ * @internal
+ */
+export function apiFrontDoorMarkerValue(owner: Construct): string {
+	return createHash('sha256')
+		.update(cdk.Stack.of(owner).stackName)
+		.update(owner.node.path)
+		.update('blocks-api-front-door-v1')
+		.digest('hex');
+}
+
+/**
+ * Who reaches the API stage, which decides how the stage ACL's rate rule works:
+ * - `direct` — clients call `execute-api` themselves: rate-limit per IP.
+ * - `marked` — a CloudFront `Hosting` that claims the API also forwards browser
+ *   traffic: rate-limit per IP, except requests carrying the marker header.
+ * - `proxied` — a `Hosting` door forwards browser traffic through a proxy
+ *   (ALB / API Gateway / bring-your-own doors, or a CloudFront edge over a
+ *   router): every browser request comes from the proxy's IPs, so no rate rule.
+ */
+export type StageWafTraffic = 'direct' | 'marked' | 'proxied';
+
+/** Synth-warning id emitted when `apiWaf` leaves the rate rule off the stage ACL. */
+export const API_WAF_NO_RATE_LIMIT_WARNING = 'blocks:api-waf:no-rate-limit-behind-door';
+
+/**
+ * Common rule set rules that inspect the request BODY and would reject normal
+ * RPC traffic, so the managed web ACL counts instead of blocking them:
+ * - `SizeRestrictions_BODY` blocks bodies over 8 KB (RPC arguments, uploads up
+ *   to API Gateway's 10 MB limit);
+ * - `CrossSiteScripting_BODY`, `GenericLFI_BODY` and `GenericRFI_BODY` match
+ *   user-written HTML, Markdown and file paths carried as JSON data.
+ * Their query-string, URI and header counterparts still block.
+ */
+const COUNTED_BODY_RULES = ['SizeRestrictions_BODY', 'CrossSiteScripting_BODY', 'GenericLFI_BODY', 'GenericRFI_BODY'];
+
+/**
  * Create the Blocks-managed web ACL.
  *
  * Same rule set as Hosting's WAF (AWS managed Common + Known Bad Inputs, then a
- * per-IP rate limit) with one difference: the Common rule set's
- * `SizeRestrictions_BODY` rule is set to count. It blocks request bodies over
- * 8 KB, which an API receives routinely (RPC arguments, uploads up to API
- * Gateway's 10 MB limit), so blocking on it would reject normal traffic.
+ * per-IP rate limit), except that the body rules in {@link COUNTED_BODY_RULES}
+ * count instead of block, and the rate rule follows {@link StageWafTraffic}.
  */
-function createWebAcl(owner: Construct, scope: 'REGIONAL' | 'CLOUDFRONT', rateLimit: number): CfnWebACL {
+function createWebAcl(
+	owner: Construct,
+	scope: 'REGIONAL' | 'CLOUDFRONT',
+	rateLimit: number,
+	traffic: StageWafTraffic = 'direct',
+): CfnWebACL {
+	const rules: CfnWebACL.RuleProperty[] = [
+		{
+			name: 'AWSManagedRulesCommonRuleSet',
+			priority: 1,
+			overrideAction: { none: {} },
+			statement: {
+				managedRuleGroupStatement: {
+					vendorName: 'AWS',
+					name: 'AWSManagedRulesCommonRuleSet',
+					ruleActionOverrides: COUNTED_BODY_RULES.map((name) => ({ name, actionToUse: { count: {} } })),
+				},
+			},
+			visibilityConfig: visibility('BlocksApiCommonRuleSet'),
+		},
+		{
+			name: 'AWSManagedRulesKnownBadInputsRuleSet',
+			priority: 2,
+			overrideAction: { none: {} },
+			statement: {
+				managedRuleGroupStatement: { vendorName: 'AWS', name: 'AWSManagedRulesKnownBadInputsRuleSet' },
+			},
+			visibilityConfig: visibility('BlocksApiKnownBadInputs'),
+		},
+	];
+	if (traffic !== 'proxied') {
+		rules.push({
+			name: 'RateLimitRule',
+			priority: 3,
+			action: { block: {} },
+			statement: {
+				rateBasedStatement: {
+					limit: rateLimit,
+					aggregateKeyType: 'IP',
+					...(traffic === 'marked'
+						? {
+							scopeDownStatement: {
+								notStatement: {
+									statement: {
+										byteMatchStatement: {
+											fieldToMatch: { singleHeader: { Name: API_FRONT_DOOR_MARKER_HEADER } },
+											positionalConstraint: 'EXACTLY',
+											searchString: apiFrontDoorMarkerValue(owner),
+											textTransformations: [{ priority: 0, type: 'NONE' }],
+										},
+									},
+								},
+							},
+						}
+						: {}),
+				},
+			},
+			visibilityConfig: visibility('BlocksApiRateLimit'),
+		});
+	}
 	return new CfnWebACL(owner, WEB_ACL_ID, {
 		scope,
 		defaultAction: { allow: {} },
 		visibilityConfig: visibility('BlocksApiWebAcl'),
-		rules: [
-			{
-				name: 'AWSManagedRulesCommonRuleSet',
-				priority: 1,
-				overrideAction: { none: {} },
-				statement: {
-					managedRuleGroupStatement: {
-						vendorName: 'AWS',
-						name: 'AWSManagedRulesCommonRuleSet',
-						ruleActionOverrides: [{ name: 'SizeRestrictions_BODY', actionToUse: { count: {} } }],
-					},
-				},
-				visibilityConfig: visibility('BlocksApiCommonRuleSet'),
-			},
-			{
-				name: 'AWSManagedRulesKnownBadInputsRuleSet',
-				priority: 2,
-				overrideAction: { none: {} },
-				statement: {
-					managedRuleGroupStatement: { vendorName: 'AWS', name: 'AWSManagedRulesKnownBadInputsRuleSet' },
-				},
-				visibilityConfig: visibility('BlocksApiKnownBadInputs'),
-			},
-			{
-				name: 'RateLimitRule',
-				priority: 3,
-				action: { block: {} },
-				statement: { rateBasedStatement: { limit: rateLimit, aggregateKeyType: 'IP' } },
-				visibilityConfig: visibility('BlocksApiRateLimit'),
-			},
-		],
+		rules,
 	});
 }
 
 /**
+ * Check a literal `webAclArn` against where it attaches, so a mismatch fails
+ * synth rather than the deploy. A token ARN (e.g. from another construct) is
+ * left to CloudFormation.
+ */
+function assertWebAclArnScope(owner: Construct, webAclArn: string, scope: 'REGIONAL' | 'CLOUDFRONT'): void {
+	if (cdk.Token.isUnresolved(webAclArn)) return;
+	const match = /^arn:aws[a-z-]*:wafv2:([a-z0-9-]+):\d{12}:(regional|global)\/webacl\//.exec(webAclArn);
+	if (!match) {
+		throw new Error(`apiWaf.webAclArn must be a WAFv2 web ACL ARN (arn:aws:wafv2:…:webacl/…), got ${webAclArn}.`);
+	}
+	const [, arnRegion, arnScope] = match;
+	if (scope === 'CLOUDFRONT') {
+		if (arnScope !== 'global' || arnRegion !== 'us-east-1') {
+			throw new Error(
+				`apiWaf.webAclArn under apiFrontDoor: 'cloudfront' must be a CLOUDFRONT-scoped web ACL in us-east-1 ` +
+					`(arn:aws:wafv2:us-east-1:…:global/webacl/…), got ${webAclArn}.`,
+			);
+		}
+		return;
+	}
+	const region = cdk.Stack.of(owner).region;
+	if (arnScope !== 'regional' || (!cdk.Token.isUnresolved(region) && arnRegion !== region)) {
+		throw new Error(
+			`apiWaf.webAclArn under apiFrontDoor: 'apigateway' must be a REGIONAL web ACL in this stack's region ` +
+				`(arn:aws:wafv2:${cdk.Token.isUnresolved(region) ? '<region>' : region}:…:regional/webacl/…), got ${webAclArn}.`,
+		);
+	}
+}
+
+/**
  * `apigateway` tier: associate a `REGIONAL` web ACL (Blocks-managed or the
- * caller's) with the shared REST API's stage.
+ * caller's) with the shared REST API's stage. `traffic` says whether a
+ * `Hosting` door also forwards browser traffic to the stage (see
+ * {@link StageWafTraffic}); a caller-supplied web ACL is attached as-is.
  *
  * @internal
  */
-export function attachApiWafToStage(owner: Construct, stage: Stage, waf: ResolvedApiWaf): void {
-	const webAclArn = 'webAclArn' in waf ? waf.webAclArn : createWebAcl(owner, 'REGIONAL', waf.rateLimit).attrArn;
+export function attachApiWafToStage(
+	owner: Construct,
+	stage: Stage,
+	waf: ResolvedApiWaf,
+	traffic: StageWafTraffic = 'direct',
+): void {
+	let webAclArn: string;
+	if ('webAclArn' in waf) {
+		assertWebAclArnScope(owner, waf.webAclArn, 'REGIONAL');
+		webAclArn = waf.webAclArn;
+	} else {
+		webAclArn = createWebAcl(owner, 'REGIONAL', waf.rateLimit, traffic).attrArn;
+		if (traffic === 'proxied') {
+			cdk.Annotations.of(owner).addWarningV2(
+				API_WAF_NO_RATE_LIMIT_WARNING,
+				'apiWaf leaves the per-IP rate rule off the API stage: a Hosting door forwards browser requests to it ' +
+					"through a proxy, so they'd all share the proxy's IPs. The managed rule groups still apply. Set a rate " +
+					"limit on the door's own WAF (frontDoor: { features: { waf: { enabled: true } } }).",
+			);
+		}
+	}
 	new CfnWebACLAssociation(owner, `${WEB_ACL_ID}Association`, { resourceArn: stage.stageArn, webAclArn });
 }
 
@@ -148,7 +281,10 @@ export function attachApiWafToStage(owner: Construct, stage: Stage, waf: Resolve
  * @internal
  */
 export function webAclArnForDistribution(owner: Construct, waf: ResolvedApiWaf): string {
-	if ('webAclArn' in waf) return waf.webAclArn;
+	if ('webAclArn' in waf) {
+		assertWebAclArnScope(owner, waf.webAclArn, 'CLOUDFRONT');
+		return waf.webAclArn;
+	}
 	const region = cdk.Stack.of(owner).region;
 	if (!cdk.Token.isUnresolved(region) && region !== 'us-east-1') {
 		throw new Error(
