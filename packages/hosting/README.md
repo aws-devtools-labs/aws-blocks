@@ -294,6 +294,42 @@ no recovery window — so `--force` changes nothing there and needs no `--yes`.)
 >    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
 >    constructs sharing a prefix are not isolated from each other.
 
+## Next.js: the OpenNext version
+
+The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
+(`@opennextjs/aws`). Declare it in your app so you control its version and the
+build doesn't download it:
+
+```bash
+npm install --save-dev @opennextjs/aws@~4.0.3
+```
+
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0`.
+  Outside that range the build warns and continues.
+- If the app doesn't declare OpenNext, the adapter builds with
+  `@opennextjs/aws@4.0.3` and prints a warning.
+- OpenNext declares the Next.js versions it supports as a `next` peer range
+  (4.0.3: `>=15.5.18 <16 || >=16.2.6`). When your `next` version is outside
+  it, the build prints a warning. Upgrade `next` within its major version to
+  one that range accepts.
+- A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
+  stack's region at synth time. Set `env` on the stack that holds `Hosting`:
+
+  ```ts
+  const blocksStack = await BlocksStack.create(app, stackName, {
+  	env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  	// …
+  });
+  ```
+
+  Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
+  `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
+  for the Lambda@Edge function, so bootstrap `us-east-1` too
+  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
+  has more than one stack is tracked in
+  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
+
 ## Architecture
 
 ```

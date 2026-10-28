@@ -33,7 +33,7 @@ import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
 import { createJiti } from 'jiti';
-import { getPackageInfoSync, isPackageExists } from 'local-pkg';
+import { getProjectPackageInfo, projectHasPackage } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
@@ -346,7 +346,7 @@ const assertAstroVersion = (projectDir: string): void => {
   //     legitimate users),
   //   - the installed version drifted from the spec range and the
   //     user is on an older Astro than the declaration claims.
-  const info = getPackageInfoSync('astro', { paths: [projectDir] });
+  const info = getProjectPackageInfo('astro', projectDir);
   const version = info?.version;
   if (!version || !semver.gte(version, '4.0.0')) {
     throw new HostingError('UnsupportedAstroVersionError', {
@@ -361,7 +361,7 @@ const assertAstroVersion = (projectDir: string): void => {
 };
 
 const userHasAstroJsNode = (projectDir: string): boolean =>
-  isPackageExists('@astrojs/node', { paths: [projectDir] });
+  projectHasPackage('@astrojs/node', projectDir);
 
 const installAstroBridge = (
   projectDir: string,

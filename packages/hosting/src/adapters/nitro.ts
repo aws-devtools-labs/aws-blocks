@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync, isPackageExists } from 'local-pkg';
+import { getProjectPackageInfo, projectHasPackage } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
@@ -166,7 +166,7 @@ export const VERIFIED_NITRO_RANGE = '>=2.10.0 <2.14.0';
  * @internal
  */
 export const warnIfNitroOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('nitropack', { paths: [projectDir] });
+  const info = getProjectPackageInfo('nitropack', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_NITRO_RANGE)) return;
@@ -1087,7 +1087,7 @@ const pruneImageOptBundle = (bundleDir: string): void => {
  * count.
  */
 const projectUsesNuxtImage = (projectDir: string): boolean => {
-  if (!isPackageExists('@nuxt/image', { paths: [projectDir] })) {
+  if (!projectHasPackage('@nuxt/image', projectDir)) {
     return false;
   }
   // The package is installed, but the user may have disabled the
