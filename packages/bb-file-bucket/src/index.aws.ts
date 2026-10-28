@@ -24,6 +24,7 @@ import type {
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
+import { deriveBucketName } from './bucket-name.js';
 
 // Re-export public types
 import { FileBucketErrors } from './errors.js';
@@ -72,7 +73,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
 		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
-		const bucketName = options?.bucket ? options.bucket.bucketName : this.fullId;
+		// Same name the CDK layer provisions: `fullId` when it fits S3's 63 characters, else shortened.
+		const bucketName = options?.bucket ? options.bucket.bucketName : deriveBucketName(this.fullId);
 		registerSdkIdentifiers(this.fullId, { bucketName });
 		this.s3 = new S3Client({
 			customUserAgent: this.buildUserAgentChain(),

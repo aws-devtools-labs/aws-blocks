@@ -10,7 +10,7 @@ import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
@@ -1548,6 +1548,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async setCookie(name: string, value: string) {
     context.response.headers.set('set-cookie', `${name}=${value}; HttpOnly; Secure; SameSite=None`);
     return { success: true };
+  },
+
+  // Sets two cookies in one response — `set` then `append`, the same pattern
+  // Auth uses for its session + auto-sign-in cookies. Every value must
+  // reach the browser on AWS too (API Gateway REST needs multiValueHeaders).
+  async setTwoCookies(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-a=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-b=2; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    return { success: true };
+  },
+
+  // Clears a cookie and then throws 401 — the `requireAuth`-on-a-dead-session
+  // shape. The client must receive both the error and the clearing cookie.
+  async clearCookieThenThrow(name: string) {
+    context.response.headers.set('set-cookie', `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+  },
+
+  // Sets a live cookie AND clears another, then throws — a method that changes
+  // cookies and then fails. Only the deletion may reach the client, with the
+  // error envelope (code, message, name) unchanged.
+  async setLiveAndClearCookieThenThrow(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-live=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-gone=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('rejected after changing cookies', 409, { name: 'CookieTestRejected' });
   },
   
   async getCookie(name: string) {

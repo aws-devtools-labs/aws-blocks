@@ -6,7 +6,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
+import { EventSourceMapping, registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { resolvePerInstanceConcurrency } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
@@ -156,8 +156,9 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// recommendation of 6x the function timeout plus the window (see D-AJ-1a).
 		const visibilityTimeout = SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds;
 
+		const queueName = `${this.fullId}`.substring(0, 80);
 		this.queue = new Queue(this, 'queue', {
-			queueName: `${this.fullId}`.substring(0, 80),
+			queueName,
 			visibilityTimeout: Duration.seconds(visibilityTimeout),
 			deadLetterQueue: {
 				// Batching does not change per-message retry accounting: SQS tracks
@@ -191,6 +192,10 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// every message in it (silent loss). The runtime handler already returns
 		// `{ batchItemFailures }`, so this is never configurable.
 		if (onLambda) {
+			// Claim the key the Lambda runtime registers this queue under (its name,
+			// `{fullId}` capped at 80 characters), so two jobs that map to one queue
+			// fail synth instead of every request failing on cold start.
+			this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName);
 			compute.fn.addEventSource(
 				new SqsEventSource(this.queue, {
 					batchSize,
