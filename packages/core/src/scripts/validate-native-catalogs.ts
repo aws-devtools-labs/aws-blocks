@@ -58,20 +58,37 @@ export type NativeValidation =
 	| { ok: true; sources: readonly NativeDeclarationSource[] }
 	| { ok: false; errors: SpecValidationError[] };
 
+/** Maven admits a group or artifact id by character class alone. */
+const MAVEN_ID = /^[A-Za-z0-9._-]+$/;
+
 /**
  * Platform package fields a generator interpolates into generated source, so a
  * value outside the grammar is a compile failure in the customer's app rather
  * than a problem the generator can report against the block that declared it.
- * A platform absent from this map constrains its fields to non-blank only.
+ * A field absent from its platform's record is constrained to non-blank only,
+ * as `swift.product` is: SwiftPM imposes no grammar on a product name.
  */
-const PLATFORM_FIELD_GRAMMARS: Partial<
-	Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>>
-> = {
+const PLATFORM_FIELD_GRAMMARS: Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>> = {
 	dart: {
 		name: { pattern: /^[a-z_][a-z0-9_]*$/, shape: 'a pub package name' },
 		library: {
 			pattern: /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/,
 			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+	swift: {
+		identity: {
+			pattern: /^([A-Za-z0-9]+(-[A-Za-z0-9]+)*\.)?[A-Za-z0-9]+([-_][A-Za-z0-9]+)*$/,
+			shape: 'a SwiftPM package identity',
+		},
+		module: { pattern: /^[\p{L}_][\p{L}\p{N}_]*$/u, shape: 'a Swift module name' },
+	},
+	android: {
+		group: { pattern: MAVEN_ID, shape: 'a Maven group id' },
+		artifact: { pattern: MAVEN_ID, shape: 'a Maven artifact id' },
+		kotlinPackage: {
+			pattern: /^[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*$/u,
+			shape: 'a Kotlin package name',
 		},
 	},
 };
@@ -314,7 +331,7 @@ function validatePlatformEntry(
 			});
 			continue;
 		}
-		const grammar = grammars?.[field];
+		const grammar = grammars[field];
 		if (grammar && !grammar.pattern.test(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
