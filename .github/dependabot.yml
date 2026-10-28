@@ -71,7 +71,13 @@ updates:
   # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
   # each template's package.json, which is what scaffolded apps install from.
   # Minor and patch only, as the ncu job does (--target minor), in one grouped
-  # PR for all templates. A major is a deliberate migration.
+  # PR for all templates. A major is a deliberate migration; the "*"
+  # semver-major ignore below keeps majors out. The group must not set
+  # update-types: without a lockfile a range such as ^6.4.4 has no current
+  # version, so that filter can't classify the update and Dependabot opens it
+  # as its own PR, one per template. Ignore rules instead take the first x.y.z
+  # in the range, so keep each template range a single ^x.y.z, ~x.y.z or
+  # exact x.y.z (not ^6, 6.x or >=5 <6.0.0).
   - package-ecosystem: npm
     directories:
       - /packages/create-blocks-app/templates/*
@@ -109,9 +115,6 @@ updates:
       templates:
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions

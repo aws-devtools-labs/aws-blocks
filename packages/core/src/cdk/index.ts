@@ -22,12 +22,14 @@ import {
 	requireSharedGateway,
 	setupBlocksInfra,
 } from './blocks-backend.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
 	publishPublicOrigin,
 	publicApiUrl,
@@ -46,6 +48,7 @@ import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
+export type { ApiWafOptions } from '../common/index.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
 	BlocksBackend,
@@ -118,6 +121,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -127,6 +134,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
 	}
 
 	/**
@@ -195,6 +211,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		// Validate and record the tier before the backend module is imported, so an
 		// invalid value fails before any app code runs.
 		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() can find this by walking the
 		// construct tree (see root-registry.ts). Set before any child Scope/BB is

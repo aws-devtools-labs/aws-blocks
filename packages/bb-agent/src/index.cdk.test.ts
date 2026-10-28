@@ -243,3 +243,69 @@ test('CDK: no guardrail configured means no ApplyGuardrail grant', async () => {
 	const json = JSON.stringify((await synth()).toJSON());
 	assert.ok(!json.includes('bedrock:ApplyGuardrail'));
 });
+
+/** Synthesizes an Agent with the given deployed models and returns its IAM policy statements (inline and managed). */
+async function deployedModelStatements(deployed: unknown): Promise<Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>> {
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'mantle', {
+		systemPrompt: 'You are a test agent.',
+		agentcoreAssetPath: ASSET_DIR,
+		model: { deployed: deployed as never },
+	});
+	const template = Template.fromStack(stack);
+	return [...Object.values(template.findResources('AWS::IAM::Policy')), ...Object.values(template.findResources('AWS::IAM::ManagedPolicy'))]
+		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>);
+}
+
+const actionsOf = (s: { Action: string | string[] }) => (Array.isArray(s.Action) ? s.Action : [s.Action]);
+
+test('CDK: a deployed openai-api model on a Mantle endpoint without apiKey grants region-scoped bedrock-mantle access', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.eu-west-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/openai/v1' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(inference)}`);
+	assert.deepStrictEqual(actionsOf(inference[0]).sort(), ['bedrock-mantle:CreateInference', 'bedrock-mantle:GetModel', 'bedrock-mantle:ListModels']);
+	const resources = JSON.stringify(inference[0].Resource);
+	assert.ok(Array.isArray(inference[0].Resource) && inference[0].Resource.length === 2, `one resource per distinct region: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:us-east-1:'), `us-east-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:eu-west-1:'), `eu-west-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':project/*'), `project-scoped ARN: ${resources}`);
+	assert.ok(!resources.includes('"*"'), 'inference actions are never granted on "*"');
+
+	const bearer = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken'));
+	assert.strictEqual(bearer.length, 1);
+	assert.deepStrictEqual(actionsOf(bearer[0]), ['bedrock-mantle:CallWithBearerToken']);
+	assert.strictEqual(bearer[0].Resource, '*');
+	assert.deepStrictEqual(bearer[0].Condition, { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } });
+});
+
+test('CDK: an empty apiKey on a Mantle endpoint counts as omitted and gets the bedrock-mantle grant', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: '' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(statements)}`);
+	assert.ok(JSON.stringify(inference[0].Resource).includes(':bedrock-mantle:us-east-1:'));
+	assert.strictEqual(statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken')).length, 1);
+});
+
+test('CDK: no bedrock-mantle grant for non-Mantle openai-api, explicit apiKey, or bedrock-only models', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://api.openai.com/v1' },
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: 'explicit-key' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: () => Promise.resolve('k') },
+		{ provider: 'bedrock', modelId: 'm1' },
+	]);
+	assert.ok(!JSON.stringify(statements).includes('bedrock-mantle:'), `unexpected bedrock-mantle grant: ${JSON.stringify(statements)}`);
+	assert.ok(!JSON.stringify((await synth()).toJSON()).includes('bedrock-mantle:'), 'the default Agent has no bedrock-mantle grant');
+});
