@@ -159,7 +159,8 @@ function makeJudgeAgent(): Agent {
 		systemPrompt: JUDGE_SYSTEM,
 		// Vended bash rooted at the spec-blinded copy (JUDGE_SRC); read-only grep use, disposable copy.
 		sandbox: new WorkspaceSandbox(JUDGE_SRC, 0, ISOLATE),
-		tools: [makeBash()],
+		// DIAGNOSTIC: BENCH_DIAG_JUDGE_BASH=none grades without the shell (see run-shell.ts for the rest).
+		tools: process.env.BENCH_DIAG_JUDGE_BASH === 'none' ? [] : [makeBash()],
 	});
 }
 
@@ -178,6 +179,7 @@ judgeSections.push(`<rubric>\n${judgeRubric()}\n</rubric>`);
 judgeSections.push(`<task>\n${taskPrompt}\n</task>`);
 const userText = `${judgeSections.join('\n\n')}\n\nInspect the workspace and score it.`;
 
+diagMark('before-invoke');
 const started = Date.now();
 let result: AgentResult | undefined;
 let lastErr: unknown;

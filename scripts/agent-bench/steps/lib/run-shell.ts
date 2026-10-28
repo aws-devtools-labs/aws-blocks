@@ -45,7 +45,13 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 		// Floor the vended bash's timeout (its 120s default would kill npm install/build) to
 		// minTimeoutSec; `undefined` means the caller opted out of a timeout — leave untouched.
 		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
-		const result = await runShell(command, cwd, timeout, options?.signal, options?.env, this.isolate);
+		// DIAGNOSTIC (temporary, not for merge; only the judge step sets BENCH_DIAG_JUDGE_BASH): echo each
+		// command, and `ulimit` caps the shell's processes (512) and data memory (4 GiB).
+		const diag = process.env.BENCH_DIAG_JUDGE_BASH ?? '';
+		if (diag) process.stderr.write(`[diag] bash (${diag}): ${redactSecrets(command).slice(0, 300)}\n`);
+		const run = diag === 'ulimit' ? `ulimit -u 512 -d 4194304 || exit 97; ${command}` : command;
+		const result = await runShell(run, cwd, timeout, options?.signal, options?.env, this.isolate);
+		if (diag) process.stderr.write(`[diag] bash exit=${result.exitCode} out=${result.stdout.length}B err=${result.stderr.length}B\n`);
 		// Persist each command's exit code + output — the Strands trace records tool
 		// CALLS but not shell OUTPUT. Opt-in via BENCH_CMD_LOG; best-effort so logging can't break a
 		// command. The log is uploaded as a public artifact, so every field is redacted BEFORE the
@@ -116,6 +122,7 @@ export function runShell(
 		// so escalate via `sudo kill`; a `setsid` server escapes the group and keeps running.
 		const killGroup = (): void => {
 			if (proc.pid === undefined) return;
+			if (process.env.BENCH_DIAG_JUDGE_BASH === 'no-group-kill') return; // DIAGNOSTIC: see executeStreaming
 			if (isolate) {
 				spawnSync('sudo', ['-n', 'kill', '-9', `-${proc.pid}`], { stdio: 'ignore', timeout: 5000 });
 				return;
