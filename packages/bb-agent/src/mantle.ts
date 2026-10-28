@@ -13,6 +13,7 @@
  * @internal
  */
 import { createHash, createHmac } from 'node:crypto';
+import { installClientUserAgent } from '@aws-blocks/core';
 
 /**
  * Matches a Mantle hostname and captures its AWS region (e.g. `us-east-1`, `us-gov-west-1`).
@@ -199,6 +200,7 @@ export function createMantleApiKeyResolver(
 			// by the SDK before the underlying credentials expire.
 			const { BedrockClient } = await import('@aws-sdk/client-bedrock');
 			const client = new BedrockClient({ region, customUserAgent });
+			installClientUserAgent(client);
 			credentialsProvider = () => client.config.credentials();
 		}
 		return credentialsProvider();
