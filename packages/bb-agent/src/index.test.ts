@@ -32,7 +32,8 @@ describe('AgentErrors', () => {
 
 describe('classifyModelAccessError', () => {
 	const FIRST_TIME_USE = 'Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model. If you have already filled out the form, try again in 15 minutes.';
-	const NOT_ENTITLED = 'Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions. The model is not available for this account. Please contact AWS Sales.';
+	const MARKETPLACE_NOT_SUBSCRIBED = 'Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe) to enable access to this model. Refer to the Amazon Bedrock documentation for further details. Your AWS Marketplace subscription for this model cannot be completed at this time. If you recently fixed this issue, try again after 15 minutes.';
+	const NOT_ENTITLED = 'Model access is denied. The model global.anthropic.claude-opus-4-8 is not available for this account. Please contact AWS Sales.';
 
 	/** Build an Error with a specific `name`, as the AWS SDK does for service exceptions. */
 	function named(name: string, message: string, cause?: unknown): Error {
@@ -47,6 +48,25 @@ describe('classifyModelAccessError', () => {
 		assert.match(message, /Bedrock model 'global\.anthropic\.claude-sonnet-4-6'/);
 		assert.match(message, /first-time-use form/);
 		assert.match(message, /PutUseCaseForModelAccess/);
+	});
+
+	test('recognises a missing one-time AWS Marketplace subscription before the entitlement check', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED), 'global.anthropic.claude-haiku-4-5');
+		assert.ok(message, 'should classify');
+		assert.match(message, /^Bedrock model 'global\.anthropic\.claude-haiku-4-5' has not had its one-time AWS Marketplace subscription activated/);
+		assert.match(message, /aws-marketplace:Subscribe, aws-marketplace:Unsubscribe and aws-marketplace:ViewSubscriptions/);
+		assert.doesNotMatch(message, /contact AWS/, 'not reported as an entitlement problem');
+		// Even when the same text also says the model is not available, the subscription fix wins.
+		const combined = classifyModelAccessError(named('AccessDeniedException', `${MARKETPLACE_NOT_SUBSCRIBED} The model is not available for this account.`));
+		assert.match(combined ?? '', /AWS Marketplace subscription/);
+	});
+
+	test('recognises the entitlement refusal in its full Bedrock wording', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', NOT_ENTITLED));
+		assert.ok(message, 'should classify');
+		assert.match(message, /not available for this AWS account/);
+		assert.match(message, /contact AWS/);
+		assert.doesNotMatch(message, /Marketplace/);
 	});
 
 	test('recognises a model that is not available for the account', () => {
@@ -68,6 +88,7 @@ describe('classifyModelAccessError', () => {
 		assert.strictEqual(Object.keys(wrapped).includes('cause'), false, 'precondition: cause is non-enumerable');
 		assert.match(classifyModelAccessError(wrapped) ?? '', /first-time-use form/);
 		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', NOT_ENTITLED) })) ?? '', /not available for this AWS account/);
+		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED) })) ?? '', /AWS Marketplace subscription/);
 	});
 
 	test('does not echo the raw provider message', () => {
@@ -80,6 +101,8 @@ describe('classifyModelAccessError', () => {
 		assert.strictEqual(classifyModelAccessError(named('ThrottlingException', 'Too many requests')), undefined);
 		// An IAM denial on a non-model action is not a model-access refusal.
 		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'User is not authorized to perform: s3:GetObject')), undefined);
+		// A denial that merely mentions model access in passing is not Bedrock's model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'Not authorized to update model access settings for this project')), undefined);
 		assert.strictEqual(classifyModelAccessError(undefined), undefined);
 		assert.strictEqual(classifyModelAccessError('plain string'), undefined);
 	});
@@ -947,6 +970,7 @@ describe('CannedProvider', () => {
 	/** The test-only 'throwing' provider; the public ModelConfig union deliberately omits it. */
 	function throwingModel(): ModelConfig {
 		const config: ModelConfig = { provider: 'canned' };
+		// Deliberately bypasses the ModelConfig provider union (without a cast) to select the test-only provider.
 		Reflect.set(config, 'provider', 'throwing');
 		return config;
 	}
@@ -1703,6 +1727,33 @@ describe('useChat', () => {
 
 		assert.strictEqual(errorReceived, 'model throttled');
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
+	});
+
+	test('onError receives the branded error as cause for a classified error chunk', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const reports: Array<{ error: string; cause: unknown }> = [];
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-err-cause' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (error, cause) => { reports.push({ error, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'error', error: 'no model access', errorName: AgentErrors.ModelUnavailable });
+		assert.strictEqual(reports.length, 1);
+		assert.strictEqual(reports[0]?.error, 'no model access');
+		assert.ok(isBlocksError(reports[0]?.cause, AgentErrors.ModelUnavailable), 'cause is the branded ModelUnavailable error');
+
+		// An unclassified error chunk keeps the message-only report.
+		await chat.sendMessage('again');
+		cap.handler!({ type: 'error', error: 'boom' });
+		assert.strictEqual(reports.length, 2);
+		assert.strictEqual(reports[1]?.error, 'boom');
+		assert.strictEqual(reports[1]?.cause, undefined);
 	});
 
 	test('an error chunk before any text drops the empty assistant placeholder (mirrors createChat)', async () => {

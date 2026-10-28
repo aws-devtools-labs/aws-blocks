@@ -21,6 +21,11 @@ const FAST_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
  * with the `PutUseCaseForModelAccess` API) before the model can be invoked; until then invocation
  * fails and the agent reports `AgentErrors.ModelUnavailable`. Models from other providers do not
  * require this step.
+ *
+ * Anthropic models are also sold through AWS Marketplace: each account activates a one-time
+ * Marketplace subscription by invoking the model once as a principal with the
+ * `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe` and
+ * `aws-marketplace:ViewSubscriptions` permissions.
  * @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html
  */
 export const BedrockModels = {
