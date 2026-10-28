@@ -97,6 +97,18 @@ assertNoSpecLeak(JUDGE_SRC);
 // originals. WORKSPACE is only read above (stageFilter/cpSync), never after.
 delete process.env.WORKSPACE;
 
+// DIAGNOSTIC (temporary, not for merge): every cell that reaches this step loses its runner. A
+// cell's BENCH_DIAG_JUDGE_STOP ends the judge at one point, so which cells finish shows where it dies.
+const DIAG_STOP = process.env.BENCH_DIAG_JUDGE_STOP ?? '';
+function diagMark(point: string): void {
+	process.stderr.write(`[judge][diag] reached: ${point}\n`);
+	if (DIAG_STOP !== point) return;
+	mergeAndWrite(builderResult, { ...EVIDENCE, judge_error: `diagnostic stop at ${point}`, judge_error_type: 'diag_stop' });
+	process.stderr.write(`[judge][diag] stopping at ${point} (BENCH_DIAG_JUDGE_STOP)\n`);
+	process.exit(0);
+}
+diagMark('before-isolation');
+
 // The judge's shell runs behind the same agent-user boundary as the builder (it reads agent-written
 // source, which can carry a prompt injection): the shell gets the scrubbed env, and only a distinct
 // uid stops it reading this harness's /proc/<pid>/environ, which holds the job credentials for the
@@ -117,6 +129,7 @@ if (phase.error) {
 process.stderr.write(
 	`[judge] judge shell isolation: ${ISOLATE ? `ACTIVE (runs as ${BENCH_AGENT_USER})` : 'BARE (local dev opt-in)'}\n`,
 );
+diagMark('after-isolation');
 
 function assertNoSpecLeak(dir: string): void {
 	// INDEPENDENT re-check (a find, not the JS filter). The -regex MUST mirror EXCLUDED_FILE_RE:
@@ -189,8 +202,10 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 	}
 }
 
+diagMark('after-invoke');
 // End of the judge phase: kill every agent-user process the judge's shell left behind.
 if (!reapAgentProcesses()) process.stderr.write(`[judge] WARNING: ${BENCH_AGENT_USER} processes survived the reap\n`);
+diagMark('after-reap');
 
 if (!result) {
 	// Record the failure honestly so the cell lands with a 0 judge term, not the step-0 baseline.

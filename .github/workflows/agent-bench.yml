@@ -87,18 +87,14 @@ jobs:
       max-parallel: 5
       # One cell per (task, template) pair: each task runs on the single template that best
       # exercises its Building Blocks — 10 cells cover 18 Blocks without a full cross-product.
+      # DIAGNOSTIC (temporary, not for merge): four fast cells, each stopping its judge at a later
+      # point, to find where the runner is lost. Restore the full matrix before anything merges.
       matrix:
         include:
-          - { task: auth-notes, template: demo } # AuthBasic + KVStore
-          - { task: file-gallery, template: bare } # FileBucket
-          - { task: async-word-counter, template: bare } # AsyncJob + KVStore
-          - { task: collab-presence-board, template: default } # Realtime + DistributedTable
-          - { task: cognito-profile, template: auth-cognito } # AuthCognito (email-OTP)
-          - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
-          - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase
-          - { task: oidc-dsql-notes, template: react } # AuthOIDC + DistributedDatabase
-          - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
-          - { task: kb-chat-agent, template: demo } # Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use
+          - { task: file-gallery, template: bare, judge_stop: before-freeze }
+          - { task: async-word-counter, template: bare, judge_stop: before-isolation }
+          - { task: observability-api, template: backend, judge_stop: after-isolation }
+          - { task: email-digest, template: demo, judge_stop: '' }
     env:
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
@@ -324,11 +320,15 @@ jobs:
         # for a few escalating retries on top of a single grade.
         timeout-minutes: 20
         run: |
+          echo "[judge][diag] reached: before-freeze"
+          if [ "$BENCH_DIAG_JUDGE_STOP" = before-freeze ]; then echo "[judge][diag] stopping at before-freeze"; exit 0; fi
           # Freeze the workspace read-only so the judge can't mutate the app it grades. Isolated
           # files are benchagent-owned, so freeze via sudo (covers both owners); never abort grading.
           sudo -n chmod -R a-w "$WORKSPACE" 2>/dev/null || chmod -R a-w "$WORKSPACE" || true
           npx tsx scripts/agent-bench/steps/4-judge.ts
         env:
+          # DIAGNOSTIC (temporary, not for merge): where this cell's judge stops (see 4-judge.ts).
+          BENCH_DIAG_JUDGE_STOP: ${{ matrix.judge_stop }}
           BUILDER_RESULT: /tmp/builder-result.json
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
           OUTPUT: /tmp/result.json

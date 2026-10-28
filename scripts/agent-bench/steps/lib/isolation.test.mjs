@@ -6,7 +6,7 @@
 // them on a real hosted runner (including against its real RUNNER_TEMP). Fakes are assembled at runtime.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
@@ -322,6 +322,39 @@ describe('the agent-user boundary on a real host', () => {
 			assert.doesNotMatch(acl.stdout, new RegExp(`user:${BENCH_AGENT_USER}:`));
 		} finally {
 			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// The bench's phase sequence on one runner: the builder (step 2), step 3's re-entry, the judge
+	// step's root freeze of the workspace, then the judge on a staged copy with the workspace as an
+	// extra agent dir. No CI run got past step 3 before #1037, so the judge never ran after the others.
+	it('phase sequence: builder, step 3 re-entry, freeze, then the judge on a staged copy', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		let judgeSrc;
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			const detached = `(setsid nohup sleep 300 </dev/null >/dev/null 2>&1 &)`;
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const built = asAgent(
+				`cd '${ws}' && mkdir -p src node_modules/dep && echo app > src/index.ts && echo dep > node_modules/dep/index.js && ${detached}`,
+			);
+			assert.equal(built.status, 0, built.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const served = asAgent(`cd '${ws}' && ${detached}`);
+			assert.equal(served.status, 0, served.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			sudo('/usr/bin/chmod', '-R', 'a-w', ws);
+			judgeSrc = mkdtempSync(join(tmpdir(), 'bench-judge-src-'));
+			cpSync(join(ws, 'src'), join(judgeSrc, 'src'), { recursive: true });
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(judgeSrc, { agentDirs: [ws] })), { isolated: true });
+			const { file, args } = buildAgentSpawn('cat src/index.ts', judgeSrc, true, { PATH: '/usr/bin:/bin' });
+			const r = spawnSync(file, args, { encoding: 'utf-8' });
+			assert.equal(r.status, 0, r.stderr);
+			assert.equal(r.stdout, 'app\n');
+			assert.equal(reapAgentProcesses(), true);
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws, ...(judgeSrc ? [judgeSrc] : [])]);
 		}
 	});
 
