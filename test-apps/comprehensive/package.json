@@ -52,7 +52,7 @@
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@types/node": "^20.19.43",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk-lib": "^2.274.0",
     "concurrently": "^8.2.2",
     "constructs": "^10.8.1",
     "tsx": "^4.23.15",
