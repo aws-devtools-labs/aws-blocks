@@ -8,6 +8,8 @@ import {
   CommitTransactionCommand,
   RollbackTransactionCommand,
   type Field,
+  type ArrayValue,
+  type ColumnMetadata,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { installClientUserAgent } from '@aws-blocks/core';
@@ -62,22 +64,103 @@ export function toField(value: unknown): Field {
 }
 
 /**
+ * Postgres `typeName` values (from `ColumnMetadata.typeName`) whose Data API
+ * `stringValue` is a JSON document that should be parsed back into a JS value,
+ * matching what the `pg` / PGlite drivers return natively. This Set holds only
+ * the scalar `json` / `jsonb` forms; the leading-underscore array-element forms
+ * (`_json` / `_jsonb`) are not members here — they are matched separately in
+ * {@link fromArrayValue} and parsed per element.
+ */
+const JSON_TYPE_NAMES = new Set(['json', 'jsonb']);
+
+/** Whether `typeName` names a scalar `json`/`jsonb` column (not its array form). */
+function isJsonTypeName(typeName: string | undefined): boolean {
+  return typeName !== undefined && JSON_TYPE_NAMES.has(typeName);
+}
+
+/**
+ * Parse a Data API `stringValue` for a `json`/`jsonb` column back into a JS
+ * value. On malformed JSON (should not happen for a value the server round-trips
+ * as json/jsonb) the raw string is returned unchanged rather than throwing, so a
+ * single odd row never fails the whole query.
+ */
+function parseJsonValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Unmarshal a Data API {@link ArrayValue} to a JS array, recursing through nested
+ * arrays. `elementTypeName` is the column's `typeName` (e.g. `_text`, `_jsonb`);
+ * when it names a `json`/`jsonb` array, each string element is JSON-parsed so an
+ * array column returns the same values as the `pg` / PGlite engines.
+ */
+function fromArrayValue(arrayValue: ArrayValue, elementTypeName?: string): unknown[] {
+  // Array element arrays are typed with nullable elements across SDK versions
+  // because a SQL array can hold NULL elements (e.g. '{a,NULL,b}'::text[]); a
+  // null element must round-trip as JS null, never be coerced.
+  if (arrayValue.stringValues !== undefined) {
+    // `_json` / `_jsonb` → an array whose non-null elements are JSON documents.
+    const isJsonArray = elementTypeName === '_json' || elementTypeName === '_jsonb';
+    return arrayValue.stringValues.map(v => (v === null ? null : isJsonArray ? parseJsonValue(v) : v));
+  }
+  if (arrayValue.longValues !== undefined) return arrayValue.longValues.map(v => (v === null ? null : Number(v)));
+  if (arrayValue.doubleValues !== undefined) return arrayValue.doubleValues.map(v => (v === null ? null : v));
+  if (arrayValue.booleanValues !== undefined) return arrayValue.booleanValues.map(v => (v === null ? null : v));
+  if (arrayValue.arrayValues !== undefined) return arrayValue.arrayValues.map(v => (v === null ? null : fromArrayValue(v, elementTypeName)));
+  return [];
+}
+
+/**
  * Unmarshal a Data API Field to a JS value.
  *
+ * Pass the column's `typeName` (from `ColumnMetadata.typeName`, available when the
+ * statement is run with `includeResultMetadata: true`) so the result matches what
+ * the `pg` / PGlite engines return for the same query:
+ *   - array columns (`text[]`, `int[]`, ...) arrive as `arrayValue` and become JS
+ *     arrays instead of `null`;
+ *   - `json` / `jsonb` columns arrive as `stringValue` and are parsed into objects
+ *     instead of being returned as raw strings.
+ * Called with no `typeName` it still unmarshals every scalar and array shape; only
+ * the json/jsonb string-parsing step needs the type.
+ *
  * @example
- * fromField({ stringValue: 'hi' })  // => 'hi'
- * fromField({ longValue: 99 })      // => 99
- * fromField({ booleanValue: true }) // => true
- * fromField({ isNull: true })       // => null
+ * fromField({ stringValue: 'hi' })                               // => 'hi'
+ * fromField({ longValue: 99 })                                   // => 99
+ * fromField({ booleanValue: true })                              // => true
+ * fromField({ isNull: true })                                    // => null
+ * fromField({ arrayValue: { stringValues: ['a', 'b'] } })        // => ['a', 'b']
+ * fromField({ stringValue: '{"estimate":3}' }, 'jsonb')          // => { estimate: 3 }
  */
-export function fromField(field: Field): unknown {
+export function fromField(field: Field, typeName?: string): unknown {
   if (field.isNull) return null;
-  if (field.stringValue !== undefined) return field.stringValue;
+  if (field.arrayValue !== undefined) return fromArrayValue(field.arrayValue, typeName);
+  if (field.stringValue !== undefined) {
+    return isJsonTypeName(typeName) ? parseJsonValue(field.stringValue) : field.stringValue;
+  }
   if (field.longValue !== undefined) return Number(field.longValue);
   if (field.doubleValue !== undefined) return field.doubleValue;
   if (field.booleanValue !== undefined) return field.booleanValue;
   if (field.blobValue !== undefined) return Buffer.from(field.blobValue);
   return null;
+}
+
+/**
+ * Map one Data API record (row) to a plain object, keyed by column name and
+ * unmarshalled with each column's `typeName` so values match the `pg` / PGlite
+ * engines. `columnMetadata` comes from `includeResultMetadata: true`.
+ */
+function mapRecord<T>(record: Field[], columnMetadata?: ColumnMetadata[]): T {
+  const row: Record<string, unknown> = {};
+  record.forEach((field, i) => {
+    const meta = columnMetadata?.[i];
+    const colName = meta?.name || `col${i}`;
+    row[colName] = fromField(field, meta?.typeName);
+  });
+  return row as T;
 }
 
 /**
@@ -182,14 +265,7 @@ export class DataApiEngine implements DatabaseEngine {
         parameters,
         includeResultMetadata: true,
       }));
-      return (result.records || []).map(record => {
-        const row: Record<string, unknown> = {};
-        record.forEach((field, i) => {
-          const colName = result.columnMetadata?.[i]?.name || `col${i}`;
-          row[colName] = fromField(field);
-        });
-        return row as T;
-      });
+      return (result.records || []).map(record => mapRecord<T>(record, result.columnMetadata));
     } catch (e) {
       translateError(e);
     }
@@ -265,14 +341,7 @@ export class DataApiEngine implements DatabaseEngine {
         transactionId: handle as string,
         includeResultMetadata: true,
       }));
-      return (result.records || []).map(record => {
-        const row: Record<string, unknown> = {};
-        record.forEach((field, i) => {
-          const colName = result.columnMetadata?.[i]?.name || `col${i}`;
-          row[colName] = fromField(field);
-        });
-        return row as T;
-      });
+      return (result.records || []).map(record => mapRecord<T>(record, result.columnMetadata));
     } catch (e) {
       translateError(e);
     }

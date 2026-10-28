@@ -40,7 +40,7 @@ import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfron
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
-import { registerConfig } from './cdk/config-registry.js';
+import { registerSharedConfig } from './cdk/config-registry.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
@@ -1212,7 +1212,7 @@ export class Hosting extends Construct {
       // reference (e.g. a cross-stack api handle that isn't a branded backend root).
       const configOwner = isBlocksBackendRoot(props.api) ? props.api : this;
       // BLOCKS_PUBLIC_ORIGIN: trusted public origin the app is served from. The
-      // auth BB (bb-auth-oidc) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
+      // auth BB (`Auth`, bb-auth) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
       // OIDC redirect_uris (config-derived, not from a forgeable request
       // header) so server-initiated sign-in lands back on the CloudFront/custom
       // domain — where the session cookie is scoped — instead of the raw
@@ -1223,7 +1223,7 @@ export class Hosting extends Construct {
       // `cloudfront` distribution's URL, or the request's own host, is the origin.
       if (props.frontDoor !== 'none') {
         props.api.publishPublicOrigin?.();
-        registerConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', publicUrl);
+        registerSharedConfig(configOwner, 'BLOCKS_PUBLIC_ORIGIN', publicUrl);
       }
       // CORS_HOSTING_ORIGINS: registered RAW (the unresolved front-door URL token —
       // the CloudFront domain, or the composed edge's) — never escaped here at synth.
@@ -1237,7 +1237,7 @@ export class Hosting extends Construct {
         (hosting.frontDoorKind === 'alb' || hosting.frontDoorKind === 'apiGateway') && !cfOverRouter
           ? [resolvedDomain?.domainName ?? []].flat().slice(1)
           : [];
-      registerConfig(
+      registerSharedConfig(
         configOwner,
         'CORS_HOSTING_ORIGINS',
         extraNames.length > 0 ? [publicUrl, ...extraNames.map((name) => `https://${name}`)].join(',') : publicUrl,
@@ -1476,7 +1476,7 @@ export class Hosting extends Construct {
     // route at synth — proxies the whole flow regardless of providers or
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
-    // AuthOIDC instances.
+    // `Auth` instances.
     distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     for (const { path, pattern } of rawRouteBehaviors(ownerRootId)) {

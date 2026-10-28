@@ -8,6 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -26,7 +27,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
-import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
+import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -349,6 +350,29 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 }
 
 /**
+ * The shared REST API's base URL (`restApi.url`,
+ * `https://{id}.execute-api.{region}.amazonaws.com/{stage}/` — trailing slash
+ * included) for the backend root that owns `scope`, or `undefined` when that
+ * root has no shared gateway yet (e.g. the backend module is still being
+ * imported, or the root is a bare `cdk.Stack` in a unit test). Read-only.
+ *
+ * Building Blocks are constructed while the backend module is imported, before
+ * `create()` builds the gateway, so they must call this from inside a
+ * `cdk.Lazy` producer, which runs at synth once the gateway exists. The gateway
+ * fronts every compute target the same way, so the URL is compute-agnostic.
+ *
+ * @internal First-party plumbing for Building Blocks that resolve late-built
+ * values from a `cdk.Lazy` producer; exported for them, not a stability-guaranteed
+ * public API.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getSharedGatewayUrl(scope: Construct): string | undefined {
+	const root = getBlocksRoot(scope) as { _sharedGateway?: SharedGateway };
+	return root._sharedGateway?.restApi.url;
+}
+
+/**
  * Attach the Lambda VPC-access managed policy (`AWSLambdaVPCAccessExecutionRole`,
  * ENI management) to the shared execution role when a VPC is active on `root` —
  * provided OR derived. The role is built eagerly in {@link setupBlocksInfra} and
@@ -543,6 +567,13 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left. Keyed
+		// by `fullId`, the backend's BLOCKS_STACK_NAME (resolved at validation).
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.fullId);
+
 		// The default compute (and thus handler/gateway) is created in create(),
 		// after construction — it derives BLOCKS_STACK_NAME from this.fullId.
 	}

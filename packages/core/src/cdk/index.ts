@@ -13,6 +13,7 @@ import {
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import {
 	assertCdkConditionActive,
 	BlocksBackend,
@@ -34,7 +35,8 @@ import {
 } from './api-front-door.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -49,6 +51,7 @@ export {
 	BlocksBackend,
 	type BlocksBackendProps,
 	type CoreBlocksBackendProps,
+	getSharedGatewayUrl,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
@@ -57,7 +60,13 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigDeployment, getConfigLocation, registerConfig } from './config-registry.js';
+export {
+	finalizeConfigRegistry,
+	getConfigDeployment,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerConfig,
+} from './config-registry.js';
 export { isSandboxContext } from './stack-metadata.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
@@ -205,6 +214,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left.
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.id);
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
@@ -309,6 +323,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		return stack;
 	}
 }
+
+/** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
+const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
 
 export class Scope extends Construct {
 	public readonly id: string;
@@ -495,11 +512,37 @@ export class Scope extends Construct {
 	// Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
 	registerClientMiddleware(_packageSpecifier: string): void {}
 	registerDevAttachment(_packageSpecifier: string): void {}
+
+	/**
+	 * Claim a Lambda event key at synth, under the same one-handler-per-key rule
+	 * the Lambda runtime enforces (`Scope.registerLambdaEventHandler` in the
+	 * runtime layer): the key is `{eventSource}:{identifier}`, and a second claim
+	 * on the same backend root throws, naming both blocks.
+	 *
+	 * The runtime registers handlers when the handler module loads, so without
+	 * this a conflicting pair would pass `cdk synth` and deploy, and then every
+	 * request would fail on cold start. A Building Block whose runtime layer calls
+	 * `registerLambdaEventHandler(eventSource, identifier, …)` calls this from its
+	 * CDK constructor with the **same** `eventSource` and `identifier` (a CDK
+	 * token is fine — the same resource yields the same token). The handler is
+	 * not used at synth and may be omitted.
+	 *
+	 * @param eventSource - Event source prefix (e.g. `EventSourceMapping.SQS`, `'blocks.cronjob'`).
+	 * @param identifier - What the runtime registers under: the queue name, the block's `fullId`, the user pool id.
+	 * @param _handler - Ignored at synth; accepted so the call matches the runtime signature.
+	 * @throws {Error} When another block on the same backend root already claimed `{eventSource}:{identifier}`.
+	 */
 	registerLambdaEventHandler(
-		_eventSource: string,
-		_identifier: string,
-		_handler: (record: any) => Promise<void>,
-	): void {}
+		eventSource: string,
+		identifier: string,
+		_handler?: (record: any) => Promise<void>,
+	): void {
+		const claims = getOrCreateOnRoot(this, LAMBDA_EVENT_HANDLER_CLAIMS, () => new Map<string, string>());
+		const key = lambdaEventHandlerKey(eventSource, identifier);
+		const owner = claims.get(key);
+		if (owner !== undefined) throw duplicateLambdaEventHandlerError(key, this.fullId, owner);
+		claims.set(key, this.fullId);
+	}
 	get clientMiddleware(): readonly string[] {
 		return [];
 	}

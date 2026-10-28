@@ -38,7 +38,7 @@ const result = await api.greet('World');
 
 #### Authentication — every method is a public endpoint
 
-Each method you define becomes a public, internet-reachable RPC endpoint. There is **no authentication by default** — a method is callable by anyone until you gate it. Auth is opt-in, per method, by calling an auth Building Block at the top of the handler:
+Each method you define becomes a public, internet-reachable RPC endpoint. There is **no authentication by default** — a method is callable by anyone until you gate it. Auth is opt-in, per method, by calling the `Auth` Building Block at the top of the handler:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -55,7 +55,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See your auth block's README (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
+The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See the `Auth` README (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+
+Only the methods your handler's object defines are callable — its own properties (including any spread in from another object), or methods its class defines. Members every object inherits (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …), properties hidden with `Object.defineProperty`, and the methods of a Building Block (exported, e.g. `export const notes = new KVStore(...)`, or returned by a handler) are never endpoints; calling one returns the same "Method not found" error as an unknown name.
 
 #### What the RPC endpoint can reach
 
@@ -91,7 +93,7 @@ Error responses use these JSON-RPC codes:
 |------|---------|---------------------|
 | `-32700` | Parse error | Request body is not valid JSON. |
 | `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
-| `-32601` | Method not found | The requested namespace or method is not exported by the backend. |
+| `-32601` | Method not found | The requested namespace is not exported by the backend, or the method is not one the API defines (inherited members such as `toString` don't count). |
 | `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
 | `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
 
@@ -105,6 +107,26 @@ curl -X POST http://localhost:3000/aws-blocks/api \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
 ```
+
+#### Closed connections and the single resend (Node clients)
+
+Node's `fetch` keeps idle connections open for reuse. A deployed API (API Gateway, a load balancer) can close an idle connection at any moment without warning, and if that close crosses your next call, Node's `fetch` fails it with `TypeError: fetch failed` (cause `SocketError: other side closed`, `ECONNRESET` or `EPIPE`) and does not resend it, even for a `GET`. This shows up in CLIs, SSR servers and scripts after a few idle seconds.
+
+The typed client handles it: when `fetch` fails with `TypeError: fetch failed` whose cause is an undici socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or `EPIPE`, **before the response headers arrived**, it resends the identical request **once** on a new connection. A partial status line followed by a close counts too, since the headers never arrived. In the idle-close race the first copy never reached the server. Node's `fetch` doesn't say whether the failed connection was a reused one, so the client matches on the error alone: the same failure on a fresh connection, such as a server that read the request and crashed before answering, is resent too, and in that rare case a method runs twice. Delivery is therefore **at-least-once**. The server can't tell a resend from a new call. Behind API Gateway or CloudFront a crashed backend answers with a `5xx` instead, which is never retried. Keep state-changing methods idempotent where a duplicate would matter. Nothing else is retried: not a second connection failure, not a timeout or abort, not a failure after the response headers arrived (while reading the body), not an HTTP or JSON-RPC error. Browsers already do this resend themselves, so frontend behaviour is unchanged.
+
+To turn the resend off (at-most-once delivery; the failure reaches your code instead), pass `retryStaleConnection: false`:
+
+```ts
+import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+
+const api = ApiNamespaceClient<typeof import('./aws-blocks/index.js').api>('api', {
+  retryStaleConnection: false,
+});
+```
+
+The generated client's `generateClient` takes the same options: `generateClient({ url, retryStaleConnection: false })`.
+
+Your own `fetch` calls (to a `RawRoute`, or the JSON-RPC endpoint called by hand) don't get this. In Node, resend a request yourself when it fails with one of those causes and is safe to repeat.
 
 #### How the server reads `params` (and what it rejects)
 
@@ -257,11 +279,11 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 ): state is T & { errorName: N }
 ```
 
-The auth blocks' recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+`Auth`'s recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
 
 ```typescript
 const next = await authApi.setAuthState({ action: 'signIn', username, password });
-if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+if (hasAuthError(next, AuthErrors.NotAuthorized)) {
   // unknown user or wrong password → offer sign-up
 }
 ```
@@ -429,7 +451,7 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 - `@aws-blocks/bb-kv-store` — Key-value storage
 - `@aws-blocks/bb-distributed-table` — Tables with Zod schemas and indexes
 - `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
-- `@aws-blocks/bb-auth-basic` — Username/password authentication
+- `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
 - `@aws-blocks/bb-data` — SQL database
 - `@aws-blocks/bb-realtime` — Real-time pub/sub
 
@@ -525,6 +547,16 @@ Multiple patterns are comma-separated. If a pattern is invalid regex, it falls b
 > **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
+
+## Committed baselines (`aws-blocks/baselines/`)
+
+Some Building Blocks refuse a destructive change at synth by comparing it with a **baseline file** they write into your app: `aws-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` is the first: it records the user-pool settings that Cognito cannot change after the pool exists.
+
+- **Commit these files.** The check only protects a synth that sees them; a fresh checkout without them starts a new baseline from whatever the configuration is now.
+- **Renaming or removing a block** whose baseline says it owns a stateful resource fails synth on every `BlocksStack` / `BlocksBackend`, even when the block's package is no longer imported. The message names what CloudFormation would delete and the re-baseline variable to set if the removal is intended.
+- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it. Every later release keeps reading every earlier version. A file with a higher version than this release knows fails synth with a message to upgrade `@aws-blocks/core` and `@aws-blocks/blocks`; a file whose `version` is not a whole number from 1 fails synth as invalid (restore it from version control). Neither is ever rewritten or deleted.
+
+Building Block authors: the protocol (`claimBaseline`, `baselineDir`, `hasOrphanedBaselines`, `BASELINE_FORMAT_VERSION`) is framework-internal and lives in `@aws-blocks/core/cdk/internal`; see `src/cdk/baselines.ts`.
 
 ## IAM: permissions boundary and the composed-policy report
 

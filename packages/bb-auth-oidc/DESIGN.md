@@ -177,6 +177,47 @@ parameter is never empty. Two consequences:
    the IdP with the current value. Trade-off: the resource shows as updated on
    every deploy; the `UpdateIdentityProvider` call is idempotent.
 
+### App client callback & logout URLs
+
+The shared Cognito app client's `callbackUrls` / `logoutUrls` are resolved at
+synth through `cdk.Lazy` producers (`cognitoClientUrls()` in `index.cdk.ts`):
+
+- the published app origin (`BLOCKS_PUBLIC_ORIGIN`) + the callback path
+  (`/aws-blocks/auth/callback`; its root for logout) — only when it is `https://`;
+- the API Gateway URL + the callback path (base URL for logout) — always;
+- `http://localhost:3000` + the callback path (`/` for logout) — sandbox mode only;
+- the caller-supplied `additionalCallbackUrls` / `additionalLogoutUrls` of every
+  `cognitoFederated()` provider, validated at synth, merged and de-duplicated.
+
+**Why `Lazy`.** `AuthOIDC` is constructed before Hosting / the managed
+CloudFront aspect register `BLOCKS_PUBLIC_ORIGIN`, so the origin is read inside
+the producer rather than in the constructor.
+
+**Why https only.** Cognito rejects `http://` callback URLs other than
+`localhost`. A non-https app origin is left off the client and emits the
+`@aws-blocks/bb-auth-oidc:PlainHttpPublicOrigin` synth warning; federated
+sign-in through that origin fails until the app is served over https. A
+whole-token origin that only resolves at deploy (a CloudFormation intrinsic)
+can't be scheme-checked at synth, so it is deliberately registered as-is and
+Cognito validates it at deploy.
+
+**When to add URLs.** Redirect targets that can't be derived at synth: browser
+PKCE SPA pages, native custom schemes used as the `redirect_uri` of a direct,
+client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`),
+custom-domain names other than the primary one, and a sandbox dev server on a
+port other than `3000`. The relay flow needs no extra entry: its `redirect_uri`
+is the backend's https callback (derived above) and the native custom scheme is
+only the `relayTo` target.
+
+**Logout URLs are not exercised yet.** `CognitoFederationEngine.signOut()` clears
+the session and best-effort revokes the refresh token (`/oauth2/revoke`); it
+does not redirect to Cognito's hosted `/logout` endpoint. `logoutUrls` are
+registered for completeness and forward compatibility.
+
+These URLs are a CDK-layer concern only: the mock runtime has no Cognito app
+client (`cognitoFederated` isn't available in `npm run dev`, see above), so
+there is nothing to mirror locally.
+
 ## Decisions
 
 ### D1 — `openid-client` over `oauth4webapi`
