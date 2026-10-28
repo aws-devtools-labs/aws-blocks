@@ -68,9 +68,9 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
 // becomes a `file:` path to the sibling package. From the published CLI it
 // becomes the caret range listed in create-blocks-app's own devDependencies,
 // which `changeset version` moves to each new release line. A scaffolded app
-// therefore starts on the line this CLI release was tested against, takes
-// non-breaking updates on reinstall, and never moves to a breaking line until
-// its owner edits the range.
+// therefore starts on the line this CLI release was tested against, takes later
+// releases on that line on reinstall, and never moves to a new (pre-1.0:
+// breaking) line until its owner edits the range.
 
 /**
  * Reads the range to stamp for each `@aws-blocks/*` package from
@@ -82,7 +82,8 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
  * @param cliPkg - create-blocks-app's parsed package.json.
  * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.8.0' }`.
  * @throws When no `@aws-blocks/*` devDependency is listed, or one is `*` or
- *   empty. Either is a packaging bug, so it fails before anything is written.
+ *   empty. Either is a packaging bug, so the CLI fails before it writes
+ *   anything.
  *
  * @example
  * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.8.0' } });
@@ -440,9 +441,15 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-$/, '') || 'blocks-app';
   
   // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
-  // is written (see the version stamping section above).
+  // is written (see the version stamping section above). Stamping a copy of
+  // the template's manifest here makes a placeholder with no range throw now,
+  // not after the template has been copied.
   const localMonorepo = await isLocalMonorepo();
   const stampedVersions = localMonorepo ? null : await loadStampedVersions();
+  if (stampedVersions) {
+    stampBlocksVersions({ ...templatePkg.dependencies }, stampedVersions);
+    stampBlocksVersions({ ...templatePkg.devDependencies }, stampedVersions);
+  }
 
   console.log(`Creating Blocks app in ${targetDir}...`);
 
@@ -534,22 +541,23 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   console.log('\n📦 Scaffolding Blocks...\n');
 
-  // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
-  // is written (see the version stamping section above).
-  const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
-
   // 1. Copy aws-blocks/ template. Its package.json declares its own
-  // `@aws-blocks/*` placeholders, which the published CLI stamps too.
+  // `@aws-blocks/*` placeholders, which the published CLI stamps too; they are
+  // stamped in memory before the copy, so a placeholder with no range throws
+  // before anything is written (see the version stamping section above).
   const templateDir = join(__dirname, '../templates/amplify');
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
-  await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
+  let workspacePkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   if (stampedVersions) {
-    const workspacePkgPath = join(awsBlocksDest, 'package.json');
-    const workspacePkg = JSON.parse(await readFile(workspacePkgPath, 'utf-8'));
-    stampBlocksVersions(workspacePkg.dependencies, stampedVersions);
-    stampBlocksVersions(workspacePkg.devDependencies, stampedVersions);
-    await writeFile(workspacePkgPath, `${JSON.stringify(workspacePkg, null, 2)}\n`);
+    workspacePkg = JSON.parse(await readFile(join(awsBlocksSrc, 'package.json'), 'utf-8'));
+    stampBlocksVersions(workspacePkg?.dependencies, stampedVersions);
+    stampBlocksVersions(workspacePkg?.devDependencies, stampedVersions);
+  }
+  await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  if (workspacePkg) {
+    await writeFile(join(awsBlocksDest, 'package.json'), `${JSON.stringify(workspacePkg, null, 2)}\n`);
   }
   console.log('  ✓ Created aws-blocks/');
 
@@ -957,6 +965,11 @@ if (entryArg) {
     entryUrl = pathToFileURL(entryArg).href;
   }
   if (import.meta.url === entryUrl) {
-    create().catch(console.error);
+    // Exit non-zero on an unhandled error, so a failed scaffold is visible to
+    // scripts and CI.
+    create().catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    });
   }
 }

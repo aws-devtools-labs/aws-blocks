@@ -119,9 +119,11 @@ const releaseLine = (major, minor) => (major === 0 ? `0.${minor}` : `${major}`);
 /**
  * Problems with the `@aws-blocks/*` ranges a scaffolded app declares. Each must
  * be a caret range `^x.y.z` on the release line of the version being published
- * and no newer than it, so the app installs what this run tests, takes
- * non-breaking updates, and never a breaking line. A stale or missing stamp in
- * the CLI (`*`, an older line) fails here, on the release PR too.
+ * and no newer than it, so the app installs the line this run tests and never
+ * a newer one. This catches a `*` or missing stamp on the published path. It
+ * cannot see a stamped package's new release line shipping without a CLI
+ * release: `changeset version` has already rewritten the range on disk, so
+ * `changeset-guard.ts verify-scaffolder` catches that case on the release PR.
  */
 function stampProblems(app, versions) {
 	const pkg = JSON.parse(readFileSync(join(app, 'package.json'), 'utf-8'));
@@ -133,13 +135,14 @@ function stampProblems(app, versions) {
 	const problems = [];
 	for (const [name, range] of deps) {
 		const published = versions.get(name);
-		const stamp = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range);
+		// An optional prerelease suffix keeps changesets pre mode (`^0.9.0-next.1`) working.
+		const stamp = /^\^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range);
 		if (!published) {
 			problems.push(`${name}: not a workspace package`);
 		} else if (!stamp) {
 			problems.push(`${name}: "${range}" is not a caret range; expected the ^${published} line`);
 		} else {
-			const [sMajor, sMinor, sPatch] = stamp.slice(1).map(Number);
+			const [sMajor, sMinor, sPatch] = stamp.slice(1, 4).map(Number);
 			const [pMajor, pMinor, pPatch] = published.split(/[.-]/).map(Number);
 			const newer = sMajor !== pMajor ? sMajor > pMajor : sMinor !== pMinor ? sMinor > pMinor : sPatch > pPatch;
 			if (releaseLine(sMajor, sMinor) !== releaseLine(pMajor, pMinor) || newer) {

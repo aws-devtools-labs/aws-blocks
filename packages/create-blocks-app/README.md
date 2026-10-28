@@ -147,7 +147,7 @@ Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into 
 }
 ```
 
-A reinstall picks up non-breaking updates on that line. Before 1.0, a new minor (`0.8.x` → `0.9.0`) is a breaking release, and your app moves to it only when you edit the range. If you add Blocks to an existing project that already declares one of these packages, your range is kept.
+A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.8.x` → `0.9.0`) is a new, breaking release line, and your app moves to it only when you edit the range. If you add Blocks to an existing project that already declares one of these packages, your range is kept.
 
 Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-blocks/*` package with a caret range for the version you have installed (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
 
@@ -161,7 +161,7 @@ Every folder under `templates/` is a self-registering template. Each `package.js
 npx @aws-blocks/create-blocks-app --help
 ```
 
-A template declares each `@aws-blocks/*` dependency as `"*"`, a placeholder. Inside this monorepo the CLI rewrites it to a `file:` path to the sibling package. From the published CLI it stamps the range listed for that package in create-blocks-app's own `devDependencies`, which `changeset version` keeps on the package's current release line. So when a template starts using another `@aws-blocks/*` package, add it to create-blocks-app's `devDependencies` too; the unit tests fail until you do. A `minor` (or `major`) changeset for a stamped package also needs a create-blocks-app changeset, because a devDependency bump never releases the CLI on its own. The `verify-scaffolder` changeset check enforces this.
+A template declares each `@aws-blocks/*` dependency as `"*"`, a placeholder. Inside this monorepo the CLI rewrites the placeholders in the app's root `package.json` to `file:` paths to the sibling packages. From the published CLI it stamps the range listed for that package in create-blocks-app's own `devDependencies`, which `changeset version` keeps on the package's current release line. So when a template starts using another `@aws-blocks/*` package, add it to create-blocks-app's `devDependencies` too; the unit tests fail until you do. A `minor` (or `major`) changeset for a stamped package also needs a create-blocks-app changeset, because a devDependency bump never releases the CLI on its own. The `verify-scaffolder` changeset check enforces this.
 
 ## Related Packages
 
