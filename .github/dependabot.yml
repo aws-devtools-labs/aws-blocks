@@ -4,6 +4,8 @@
 # under test-apps/* is installed from the single root package-lock.json (npm
 # workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
 # there is no per-package or per-test-app lockfile to configure separately.
+# The create-blocks-app templates are the exception: each has its own
+# package.json and no lockfile, so they get a second npm entry.
 #
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
@@ -45,6 +47,51 @@ updates:
         exclude-patterns:
           - "typescript"
           - "@types/node"
+
+  # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
+  # each template's package.json, which is what scaffolded apps install from.
+  # Minor and patch only, as the ncu job does (--target minor), in one grouped
+  # PR for all templates. A major is a deliberate migration.
+  - package-ecosystem: npm
+    directories:
+      - /packages/create-blocks-app/templates/*
+      # amplify's top-level package.json is an overlay with no dependencies and
+      # no workspaces; its dependencies live one level down.
+      - /packages/create-blocks-app/templates/amplify/aws-blocks
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
+    cooldown:
+      default-days: 3
+    versioning-strategy: increase
+    ignore:
+      # Published from this repo; the templates track them with "*".
+      - dependency-name: "@aws-blocks/*"
+      # Minor and patch only: template majors move by hand.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Named so the reason survives if the "*" rule goes: Vite 8 hard-depends
+      # on lightningcss (MPL-2.0), which the licence check can't see without a
+      # lockfile, and it would ship in every scaffolded app (issue #984).
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      # @vitejs/plugin-react 6 requires Vite 8 (issue #984).
+      - dependency-name: "@vitejs/*"
+        update-types: ["version-update:semver-major"]
+      # Toolchain foundations, as in the root entry.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      templates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions

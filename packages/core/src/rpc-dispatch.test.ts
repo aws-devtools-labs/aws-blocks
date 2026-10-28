@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { secret, config, isManagedValue as hostingIsManagedValue } from '@aws-blocks/hosting';
 import { ApiNamespace } from './api.js';
-import { isDispatchableExport, resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
+import { isApiNamespace, isDispatchableExport, isScopeLike, resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 const scope = { id: 'app' };
 
@@ -83,5 +83,31 @@ describe('resolveApiMethod', () => {
 
   it('rejects a non-function property', () => {
     assert.strictEqual(resolveApiMethod({ config: { key: 'x' } }, 'config'), undefined);
+  });
+
+  it('rejects a non-enumerable own property (hidden with defineProperty)', () => {
+    const methods = { async visible() { return 'ok'; } };
+    Object.defineProperty(methods, 'hidden', { value: async () => 'hidden', enumerable: false });
+    assert.strictEqual(resolveApiMethod(methods, 'hidden'), undefined);
+    assert.ok(resolveApiMethod(methods, 'visible'));
+  });
+
+  it('exposes no method of a Building Block instance a handler returns', () => {
+    class Block { readonly id = 'notes'; readonly fullId = 'app-notes'; async get() { return 'stored'; } }
+    assert.strictEqual(resolveApiMethod(new Block(), 'get'), undefined);
+  });
+});
+
+describe('isApiNamespace / isScopeLike (shared with generate-client)', () => {
+  it('recognises an ApiNamespace by its marker, not by shape', () => {
+    assert.strictEqual(isApiNamespace(new ApiNamespace(scope, 'api', () => ({}))), true);
+    assert.strictEqual(isApiNamespace(() => ({})), false);
+    assert.strictEqual(isApiNamespace(null), false);
+  });
+
+  it('treats an object with string id and fullId as a Building Block', () => {
+    assert.strictEqual(isScopeLike({ id: 'todos', fullId: 'app-todos' }), true);
+    assert.strictEqual(isScopeLike({ id: 'todos' }), false);
+    assert.strictEqual(isScopeLike('todos'), false);
   });
 });

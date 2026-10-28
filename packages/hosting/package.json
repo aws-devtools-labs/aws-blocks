@@ -59,7 +59,7 @@
   "scripts": {
     "build": "tsc --build && npm run bundle:handlers",
     "bundle:handlers": "node scripts/bundle-handlers.mjs",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test 'dist/**/*.test.js'",
     "dev": "tsc --build --watch"
   },
   "dependencies": {
