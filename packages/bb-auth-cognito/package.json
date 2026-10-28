@@ -59,13 +59,13 @@
     "aws-jwt-verify": "^5.2.1"
   },
   "devDependencies": {
-    "@aws-crypto/client-node": "^4.2.4",
-    "@aws-sdk/client-cloudwatch-logs": "^3.1153.0",
+    "@aws-crypto/client-node": "^5.0.2",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1156.0",
     "@aws-sdk/client-dynamodb": "^3.1156.0",
     "@aws-sdk/client-iam": "^3.1156.0",
-    "@aws-sdk/client-kms": "^3.1153.0",
-    "@aws-sdk/client-lambda": "^3.1153.0",
-    "@aws-sdk/client-ses": "^3.1153.0",
+    "@aws-sdk/client-kms": "^3.1156.0",
+    "@aws-sdk/client-lambda": "^3.1156.0",
+    "@aws-sdk/client-ses": "^3.1156.0",
     "@aws-sdk/client-sts": "^3.1156.0",
     "@types/node": "^20.19.43",
     "asn1.js": "^5.4.1",

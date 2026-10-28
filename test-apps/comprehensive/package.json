@@ -53,10 +53,10 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@types/node": "^20.19.43",
     "aws-cdk-lib": "^2.273.0",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.6",
     "constructs": "^10.8.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vite": "^6.4.4"
+    "vite": "^8.3.5"
   }
 }

@@ -26,15 +26,15 @@
     "@aws-blocks/blocks": "*"
   },
   "devDependencies": {
-    "@sveltejs/adapter-node": "^5.5.7",
-    "@sveltejs/kit": "^2.70.3",
-    "@sveltejs/vite-plugin-svelte": "^5.1.1",
+    "@sveltejs/adapter-node": "^6.0.0",
+    "@sveltejs/kit": "^3.1.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "svelte": "^5.57.2",
-    "vite": "^6.4.4",
+    "vite": "^8.3.5",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.6",
     "aws-cdk-lib": "^2.273.0",
     "constructs": "^10.8.1",
     "@playwright/test": "^1.64.1"

@@ -124,13 +124,13 @@
     "check:api": "bash scripts/update-api-reports.sh && npx tsx scripts/check-api-reports.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
-    "@changesets/changelog-github": "^0.7.0",
+    "@biomejs/biome": "2.6.3",
+    "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
-    "@mermaid-js/mermaid-cli": "^11.17.0",
+    "@mermaid-js/mermaid-cli": "^12.0.0",
     "@microsoft/api-extractor": "^7.59.4",
     "@types/node": "^20.19.43",
-    "aws-cdk": "^2.1145.0",
+    "aws-cdk": "^2.1146.1",
     "aws-cdk-lib": "^2.273.0",
     "constructs": "^10.8.1",
     "esbuild": "^0.28.2",

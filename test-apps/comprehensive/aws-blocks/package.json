@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.1156.0",
-    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0"
+    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
+    "concurrently": "^10.0.6",
+    "vite": "^8.3.5"
   }
 }
