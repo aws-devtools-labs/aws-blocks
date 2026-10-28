@@ -10,6 +10,9 @@ kotlin {
         // This module declares InternalBlocksApi. The guarantee it withholds is one this
         // module makes to its consumers, so it does not constrain the module's own sources.
         optIn.add("com.aws.blocks.kotlin.InternalBlocksApi")
+        // OidcSignInPlatformOptions is a different type on every target, which is what an
+        // expect/actual class is for. Suppresses the Beta notice the declaration emits.
+        freeCompilerArgs.add("-Xexpect-actual-classes")
     }
 
     jvm()
