@@ -136,12 +136,15 @@ returns a client typed by it:
 val client = blocks.authApi.getClient()        // OidcClient<AuthApi.GetClient.Provider>
 val user = client.signIn(AuthApi.GetClient.Provider.Google)
 
-// Every provider the backend configured, for a sign-in screen
-AuthApi.GetClient.Provider.entries.forEach { provider ->
-    Button(onClick = { scope.launch { client.signIn(provider) } }) {
-        Text("Sign in with ${provider.providerName}")
+// A sign-in screen. `entries` is what the spec named when it was generated; `client.providers` is
+// what the deployed backend reports now, so the screen shows the providers both agree on.
+AuthApi.GetClient.Provider.entries
+    .filter { it.providerName in client.providers }
+    .forEach { provider ->
+        Button(onClick = { scope.launch { client.signIn(provider) } }) {
+            Text("Sign in with ${provider.providerName}")
+        }
     }
-}
 ```
 
 A provider name that is not a legal identifier is still spelled as one, and keeps the name it

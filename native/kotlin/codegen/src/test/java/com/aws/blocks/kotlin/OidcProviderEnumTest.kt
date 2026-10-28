@@ -129,6 +129,32 @@ class OidcProviderEnumTest : FunSpec({
             "auth.getClient generates Auth.GetClient.ResultProvider rather than Provider"
     }
 
+    test("a component schema the operation names keeps its own type") {
+        // The generator resolves an operation's types by name as well as by identity, so an enum
+        // sharing a name with a schema the operation references would be handed back in its place.
+        val result = generate(
+            spec(
+                oidcResult(providerNames("google")),
+                params = """[ { "name": "hint", "schema": { "${'$'}ref": "#/components/schemas/Provider" } } ]""",
+                components = """,
+      "components": {
+        "schemas": {
+          "Provider": {
+            "type": "object",
+            "properties": { "label": { "type": "string" } },
+            "required": ["label"]
+          }
+        }
+      }""",
+            ),
+        )
+        val source = result.source()
+
+        source shouldContain "public suspend fun getClient(hint: Provider): OidcClient<GetClient.ResultProvider>"
+        source shouldContain "public data class Provider("
+        result.warnings.single() shouldContain "rather than Provider"
+    }
+
     test("a client nested in another type gets no providers and no enum") {
         val source = generate(
             spec(

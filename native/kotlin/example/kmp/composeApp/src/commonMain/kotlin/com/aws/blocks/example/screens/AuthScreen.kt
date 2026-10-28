@@ -82,19 +82,23 @@ fun AuthScreen(
                     }
                 }) { Text("Sign Out") }
             } else {
-                AuthApi.GetClient.Provider.entries.forEach { provider ->
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                runCatching { client.signIn(provider) }
-                                    .onSuccess { output = "Signed in as: ${it.username}" }
-                                    .onFailure { output = "Error: ${it.message}" }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Sign in with ${provider.providerName}") }
-                    Spacer(Modifier.height(8.dp))
-                }
+                // `entries` is what the spec named when it was generated; `client.providers` is
+                // what the deployed backend reports now, so show the ones both agree on.
+                AuthApi.GetClient.Provider.entries
+                    .filter { it.providerName in client.providers }
+                    .forEach { provider ->
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    runCatching { client.signIn(provider) }
+                                        .onSuccess { output = "Signed in as: ${it.username}" }
+                                        .onFailure { output = "Error: ${it.message}" }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Sign in with ${provider.providerName}") }
+                        Spacer(Modifier.height(8.dp))
+                    }
             }
         }
 

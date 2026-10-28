@@ -16,6 +16,7 @@ import com.aws.blocks.kotlin.model.PrimitiveKind
 import com.aws.blocks.kotlin.model.ResolvedField
 import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.ServerDefinition
+import com.aws.blocks.kotlin.model.TransferableTypeArg
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.UnionVariant
 import com.aws.blocks.kotlin.model.narrowsTypeArg
@@ -44,21 +45,27 @@ data class GeneratorResult(
 )
 
 /**
- * One type argument of a runtime type, in the order it takes them. Its direction, and so whether
- * it can be narrowed at all, is declared alongside the tag in
- * [com.aws.blocks.kotlin.model.transferableTypeArg]; this carries what Kotlin needs to write it.
+ * One type argument of a runtime type, in the order it takes them. Whether an argument can be
+ * narrowed is declared alongside the tag in [com.aws.blocks.kotlin.model.transferableTypeArg];
+ * this carries what Kotlin needs to write it.
  */
-private data class TypeArgBinding(
+private sealed interface TypeArgBinding {
     /** The type this argument falls back to when the spec didn't resolve it. */
-    val default: TypeName,
+    val default: TypeName
+
+    /** An argument generated from the spec's schema. */
+    data class Decoded(override val default: TypeName) : TypeArgBinding
+
     /**
-     * The interface a narrowed enum implements, through which the runtime reads [valueName] off a
-     * value. A narrowed argument the runtime reads some other way has none.
+     * An argument narrowed to a generated enum, which implements [constraint] so the runtime can
+     * read [valueName] off one of its constants.
      */
-    val constraint: ClassName? = null,
-    /** The property such an enum carries its value in. */
-    val valueName: String = "value",
-)
+    data class Narrowed(
+        override val default: TypeName,
+        val constraint: ClassName,
+        val valueName: String,
+    ) : TypeArgBinding
+}
 
 private data class TransferableBinding(
     val type: ClassName,
@@ -73,14 +80,14 @@ private data class TransferableBinding(
 private val knownTransferableBindings = mapOf(
     "realtime/channel" to TransferableBinding(
         ClassNames.realtimeChannel,
-        typeArgs = listOf(TypeArgBinding(default = JsonElement::class.asTypeName())),
+        typeArgs = listOf(TypeArgBinding.Decoded(default = JsonElement::class.asTypeName())),
     ),
     "file-bucket/download" to TransferableBinding(ClassNames.fileDownloadHandle),
     "file-bucket/upload" to TransferableBinding(ClassNames.fileUploadHandle),
     "oidc/client" to TransferableBinding(
         ClassNames.oidcClient,
         typeArgs = listOf(
-            TypeArgBinding(
+            TypeArgBinding.Narrowed(
                 // A spec that didn't resolve its provider names signs in by name.
                 default = ClassNames.providerName,
                 constraint = ClassNames.oidcProvider,
@@ -274,45 +281,50 @@ class KotlinCodeGenerator(
     private fun isStubbed(operation: Operation): Boolean =
         stubOidc && containsOidcTransferable(operation.result.type)
 
-    /** A narrowed type argument that something named, which is an enum to emit, by position. */
+    /** A narrowed type argument that something named, which is an enum to emit. */
     private fun namedTypeArg(arg: ResolvedType): ResolvedType.Enum? =
         (arg as? ResolvedType.Enum)?.takeIf { it.name.isNotEmpty() }
 
+    /** An enum an operation's own result narrows a type argument to, and how to write it. */
+    private data class NarrowedTypeArg(
+        val values: ResolvedType.Enum,
+        val binding: TypeArgBinding.Narrowed,
+        /** The tag's own name for the argument, which the enum takes unless something held it. */
+        val preferredName: String,
+    )
+
     /**
-     * The enums of values an operation's own result narrows its type arguments to, by position,
-     * which the generator emits in the operation's object. An argument the spec didn't resolve to
-     * string literals, and a transferable in any other position, have none.
+     * The enums of values an operation's own result narrows its type arguments to, in position
+     * order. An argument the spec didn't resolve to string literals, a transferable in any other
+     * position, and a method replaced by the unconfigured-OIDC stub have none.
      */
-    private fun narrowedTypeArgEnums(operation: Operation): List<Pair<ResolvedType.Enum, TypeArgBinding>> {
+    private fun narrowedTypeArgs(operation: Operation): List<NarrowedTypeArg> {
         if (isStubbed(operation)) return emptyList()
         val transferable = unwrapNullableTransferable(operation.result.type) ?: return emptyList()
         val binding = knownTransferableBindings[transferable.transferableName] ?: return emptyList()
         return transferable.typeArgs.mapIndexedNotNull { position, arg ->
-            if (!narrowsTypeArg(transferable.transferableName, position)) return@mapIndexedNotNull null
+            val declared = transferableTypeArg(transferable.transferableName, position)
+            if (declared !is TransferableTypeArg.Narrowed) return@mapIndexedNotNull null
+            val argBinding = binding.typeArgs.getOrNull(position) as? TypeArgBinding.Narrowed
+                ?: return@mapIndexedNotNull null
             val values = namedTypeArg(arg) ?: return@mapIndexedNotNull null
-            val argBinding = binding.typeArgs.getOrNull(position) ?: return@mapIndexedNotNull null
-            values to argBinding
+            NarrowedTypeArg(values, argBinding, declared.name)
         }
     }
 
-    /** Names an enum when the tag's own name for it was taken by something in the operation's object. */
+    /** Names an enum that couldn't take the tag's own name, since the operation already uses it. */
     private fun narrowedTypeArgWarnings(
         operation: Operation,
         namespace: String,
         className: String,
-    ): List<String> {
-        val transferable = unwrapNullableTransferable(operation.result.type) ?: return emptyList()
-        return transferable.typeArgs.mapIndexedNotNull { position, arg ->
-            if (!narrowsTypeArg(transferable.transferableName, position)) return@mapIndexedNotNull null
-            if (isStubbed(operation)) return@mapIndexedNotNull null
-            val values = namedTypeArg(arg) ?: return@mapIndexedNotNull null
-            val preferred = transferableTypeArg(transferable.transferableName, position).name
-            if (values.name == preferred) return@mapIndexedNotNull null
+    ): List<String> = narrowedTypeArgs(operation)
+        .filter { it.values.name != it.preferredName }
+        .map {
             "kotlin: ${fullMethodName(operation, namespace)} generates " +
-                "$className.${toPascalCase(operation.name)}.${values.name} rather than $preferred, " +
-                "since its operation already uses that name."
+                "$className.${toPascalCase(operation.name)}.${it.values.name} rather than " +
+                "${it.preferredName}, since the operation already names a " +
+                "${it.preferredName} of its own."
         }
-    }
 
     private fun fullMethodName(operation: Operation, namespace: String): String =
         if (namespace == "_default") operation.name else "$namespace.${operation.name}"
@@ -324,7 +336,7 @@ class KotlinCodeGenerator(
      */
     private fun generateNarrowedTypeArgEnum(
         values: ResolvedType.Enum,
-        binding: TypeArgBinding,
+        binding: TypeArgBinding.Narrowed,
     ): TypeSpec {
         val builder = TypeSpec
             .enumBuilder(values.name)
@@ -333,13 +345,13 @@ class KotlinCodeGenerator(
                     .addParameter(binding.valueName, String::class)
                     .build(),
             )
-        val property = PropertySpec.builder(binding.valueName, String::class)
-            .initializer(binding.valueName)
-        binding.constraint?.let {
-            builder.addSuperinterface(it)
-            property.addModifiers(KModifier.OVERRIDE)
-        }
-        builder.addProperty(property.build())
+        builder.addSuperinterface(binding.constraint)
+        builder.addProperty(
+            PropertySpec.builder(binding.valueName, String::class)
+                .addModifiers(KModifier.OVERRIDE)
+                .initializer(binding.valueName)
+                .build(),
+        )
         // Named like any other generated enum's constants.
         for ((constant, value) in enumConstantNames(values.values)) {
             builder.addEnumConstant(
@@ -1255,7 +1267,7 @@ class KotlinCodeGenerator(
 
         // Add nested operation objects for operations that have nested types
         for (operation in namespace.operations) {
-            if (operation.nestedTypes.isNotEmpty() || narrowedTypeArgEnums(operation).isNotEmpty()) {
+            if (operation.nestedTypes.isNotEmpty() || narrowedTypeArgs(operation).isNotEmpty()) {
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
@@ -1276,7 +1288,7 @@ class KotlinCodeGenerator(
      * serializers emitted in a separate top-level file.
      */
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
-        val narrowed = narrowedTypeArgEnums(operation).map { (values, _) -> values }
+        val narrowed = narrowedTypeArgs(operation).map { it.values }
         if (operation.nestedTypes.isEmpty() && narrowed.isEmpty()) return null
         val opObjectName = toPascalCase(operation.name)
         val context = OperationTypeContext(opObjectName)
@@ -1336,8 +1348,8 @@ class KotlinCodeGenerator(
         val objectName = toPascalCase(operation.name)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
-        for ((values, argBinding) in narrowedTypeArgEnums(operation)) {
-            objectBuilder.addType(generateNarrowedTypeArgEnum(values, argBinding))
+        for (narrowed in narrowedTypeArgs(operation)) {
+            objectBuilder.addType(generateNarrowedTypeArgEnum(narrowed.values, narrowed.binding))
         }
 
         for (node in operation.nestedTypes) {
@@ -2223,10 +2235,15 @@ class KotlinCodeGenerator(
         private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
 
         /**
-         * The characters no identifier can hold, even backticked, per the Kotlin grammar. Verified
-         * against KotlinPoet, which refuses to escape a name containing one of them.
+         * The characters a generated constant name can't hold.
+         *
+         * The first nine are KotlinPoet's own: it refuses to escape a name containing one. The
+         * last three it escapes instead, which the Kotlin grammar excludes from a quoted
+         * identifier, so a name carrying one compiles to nothing — a backtick closes the quoting
+         * early, and a line break ends the name.
          */
-        private val IDENTIFIER_ILLEGAL_CHARS = charArrayOf('.', ';', '[', ']', '/', '<', '>', ':', '\\')
+        private val IDENTIFIER_ILLEGAL_CHARS =
+            charArrayOf('.', ';', '[', ']', '/', '<', '>', ':', '\\', '`', '\r', '\n')
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

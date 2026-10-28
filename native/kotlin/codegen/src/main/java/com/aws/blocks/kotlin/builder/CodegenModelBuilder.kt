@@ -18,12 +18,12 @@ import com.aws.blocks.kotlin.model.ResolvedField
 import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.RpcModel
 import com.aws.blocks.kotlin.model.ServerDefinition
+import com.aws.blocks.kotlin.model.TransferableTypeArg
 import com.aws.blocks.kotlin.model.TypeDefinition
-import com.aws.blocks.kotlin.model.TypeArgDirection
 import com.aws.blocks.kotlin.model.TypeRef
+import com.aws.blocks.kotlin.model.UnionVariant
 import com.aws.blocks.kotlin.model.narrowsTypeArg
 import com.aws.blocks.kotlin.model.transferableTypeArg
-import com.aws.blocks.kotlin.model.UnionVariant
 
 /** Where the local dev server listens, for a spec that declares no server of its own. */
 private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
@@ -32,10 +32,11 @@ private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
 
 /**
- * What a narrowed type argument resolves to until something names it: it holds the argument's
- * position, and the generator reads an unnamed one as the runtime type's own default there.
+ * What a narrowed type argument resolves to until something names it: the values the spec permits,
+ * with no name yet. The generator reads an unnamed one as the runtime type's own default.
  */
-private val NARROWED_PLACEHOLDER = ResolvedType.Enum(name = "", values = emptyList())
+private fun narrowedPlaceholder(arg: TypeRef): ResolvedType.Enum =
+    ResolvedType.Enum(name = "", values = (arg as? TypeRef.UnionLiteral)?.values ?: emptyList())
 
 
 /**
@@ -106,7 +107,7 @@ class CodegenModelBuilder {
             val returnType = resolveType(method.result?.schema ?: TypeRef.Primitive("void"), collector, explicitName = method.result?.name)
             val nestedTypes = collector.buildNestedTypesForMethod(method.name)
             val result = OperationResult(
-                type = withNarrowedTypeArgs(returnType, method.result?.schema, nestedTypes),
+                type = withNarrowedTypeArgs(returnType, parameters, nestedTypes),
                 description = method.result?.description
             )
 
@@ -126,41 +127,39 @@ class CodegenModelBuilder {
     // ── Narrowed type arguments ──────────────────────────────────────
 
     /**
-     * Names the values each narrowed ([TypeArgDirection.IN]) type argument of an operation's own
-     * result permits, as an enum the generator emits in the operation's object.
+     * Names the values each narrowed ([TransferableTypeArg.Narrowed]) type argument of an
+     * operation's own result permits, as an enum the generator emits in the operation's object.
      *
      * Only an operation's own result is narrowed: a transferable in any other position doesn't
      * hydrate, so nothing could reference the enum. An argument the spec didn't resolve to string
-     * literals keeps the placeholder it resolved to, which the generator reads as the runtime
-     * type's own default for that position.
+     * literals stays unnamed, which the generator reads as the runtime type's own default.
      */
     private fun withNarrowedTypeArgs(
         resolved: ResolvedType,
-        schema: TypeRef?,
+        parameters: List<OperationParameter>,
         nestedTypes: List<NestedTypeNode>,
     ): ResolvedType {
-        val transferable = directTransferable(schema) ?: return resolved
-        val taken = takenTypeNames(nestedTypes).toMutableSet()
+        val transferable = unwrapTransferable(resolved) ?: return resolved
+        val taken = takenTypeNames(resolved, parameters, nestedTypes).toMutableSet()
         var narrowed = resolved
         for ((position, arg) in transferable.typeArgs.withIndex()) {
-            if (!narrowsTypeArg(transferable.transferableName, position)) continue
-            val values = (arg as? TypeRef.UnionLiteral)?.values ?: continue
-            val name = narrowedTypeName(
-                transferableTypeArg(transferable.transferableName, position).name,
-                taken,
-            )
-            // Two narrowed arguments can't both be the tag's preferred name.
+            val declared = transferableTypeArg(transferable.transferableName, position)
+            if (declared !is TransferableTypeArg.Narrowed) continue
+            val values = (arg as? ResolvedType.Enum)?.takeIf { it.name.isEmpty() && it.values.isNotEmpty() }
+                ?: continue
+            val name = narrowedTypeName(declared.name, taken)
+            // Two narrowed arguments can't both take the tag's preferred name.
             taken.add(name)
-            narrowed = replaceTypeArg(narrowed, position, ResolvedType.Enum(name = name, values = values))
+            narrowed = replaceTypeArg(narrowed, position, values.copy(name = name))
         }
         return narrowed
     }
 
-    /** The transferable an operation returns directly, or inside a nullable. */
-    private fun directTransferable(schema: TypeRef?): TypeRef.Transferable? {
-        var typeRef = schema
-        while (typeRef is TypeRef.Nullable) typeRef = typeRef.inner
-        return typeRef as? TypeRef.Transferable
+    /** The transferable a type is, or wraps in a nullable. */
+    private fun unwrapTransferable(type: ResolvedType): ResolvedType.Transferable? = when (type) {
+        is ResolvedType.Nullable -> unwrapTransferable(type.inner)
+        is ResolvedType.Transferable -> type
+        else -> null
     }
 
     /** Replaces one type argument, leaving every other position where the spec put it. */
@@ -174,8 +173,8 @@ class CodegenModelBuilder {
         }
 
     /**
-     * The tag's own name for the argument, unless the operation's object already holds a type by
-     * that name or reaches one the enum would shadow.
+     * The tag's own name for the argument, unless something in the operation already answers to
+     * that name.
      */
     private fun narrowedTypeName(preferred: String, taken: Set<String>): String {
         if (preferred !in taken) return preferred
@@ -189,20 +188,22 @@ class CodegenModelBuilder {
     }
 
     /**
-     * The names an operation's object already uses: the types it declares at the top of the
-     * object, which a provider enum would sit beside, and every named type they reach, which it
-     * would shadow inside the object.
+     * The names a narrowed enum can't take: the types the operation's object declares, which it
+     * would sit beside, and the ones its own signature names, which it would displace.
+     *
+     * The generator resolves a type in an operation by name as well as by identity, so an enum
+     * sharing a name with a component schema the operation references would be handed back in its
+     * place — the parameter or field would take the enum's type rather than the schema's.
      */
-    private fun takenTypeNames(nestedTypes: List<NestedTypeNode>): Set<String> {
+    private fun takenTypeNames(
+        result: ResolvedType,
+        parameters: List<OperationParameter>,
+        nestedTypes: List<NestedTypeNode>,
+    ): Set<String> {
         val taken = mutableSetOf<String>()
-        fun walk(nodes: List<NestedTypeNode>) {
-            for (node in nodes) {
-                taken.add(node.name)
-                collectNamedTypes(node.type, taken)
-                walk(node.children)
-            }
-        }
-        walk(nestedTypes)
+        for (node in nestedTypes) taken.add(node.name)
+        for (parameter in parameters) collectNamedTypes(parameter.type, taken)
+        collectNamedTypes(result, taken)
         return taken
     }
 
@@ -294,7 +295,7 @@ class CodegenModelBuilder {
                 // with the enum, and the generator reads the rest as the runtime type's default.
                 // Dropping it instead would shift every argument after it out of position.
                 typeArgs = typeRef.typeArgs.mapIndexed { position, arg ->
-                    if (narrowsTypeArg(typeRef.transferableName, position)) NARROWED_PLACEHOLDER
+                    if (narrowsTypeArg(typeRef.transferableName, position)) narrowedPlaceholder(arg)
                     else resolveType(arg, collector)
                 },
             )

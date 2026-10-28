@@ -6,10 +6,17 @@ import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 
 /** A method whose one parameter is a string enum of [values]. */
 private fun enumParamSpec(vararg values: String): String {
-    val literals = values.joinToString(", ") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+    val literals = values.joinToString(", ") {
+        val escaped = it.replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        "\"$escaped\""
+    }
     return """
     {
       "openrpc": "1.3.2",
@@ -59,6 +66,24 @@ class EnumConstantNamingTest : FunSpec({
         source shouldContain "Unnamed"
         // The second value leaves no segments either, so it takes a numbered name.
         source shouldContain "Unnamed2"
+    }
+
+    test("a value an identifier can only appear to hold is rebuilt too") {
+        // KotlinPoet escapes these rather than refusing them, and the escape doesn't compile: a
+        // backtick closes the quoting early and a line break ends the name.
+        val source = generate(enumParamSpec("ab`", "c\nd", "e\rf", "`g`"))
+
+        source shouldContain "Ab"
+        source shouldContain "@SerialName(\"ab`\")"
+        source shouldContain "CD"
+        source shouldContain "@SerialName(\"c\\nd\")"
+        source shouldContain "EF"
+        // A carriage return has to survive as itself: %S would emit it as a line feed.
+        source shouldContain "@SerialName(\"e\\rf\")"
+        // A value the spec already wrote in backticks keeps them as its serial name, not its name.
+        source shouldContain "G"
+        source shouldContain "@SerialName(\"`g`\")"
+        source shouldNotContain "`Ab`"
     }
 
     test("a value keeps the name the spec wrote when an identifier can hold it") {
