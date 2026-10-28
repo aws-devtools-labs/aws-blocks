@@ -20,6 +20,7 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -37,6 +38,8 @@ class OidcClientTest {
         authorizeParamsErrorResponse: String = "{}",
         onIssuedState: ((String) -> Unit)? = null,
         onAuthorizeParamsBody: ((String) -> Unit)? = null,
+        /** Stands in for a transport that never produced a response at all. */
+        onExchange: (() -> Nothing)? = null,
     ): HttpClient {
         return HttpClient(MockEngine) {
             install(HttpCookies)
@@ -68,6 +71,7 @@ class OidcClientTest {
                             }
                         }
                         request.url.encodedPath.endsWith("/auth/exchange") -> {
+                            onExchange?.invoke()
                             respond(
                                 content = ByteReadChannel(exchangeResponse),
                                 status = exchangeStatus,
@@ -163,7 +167,7 @@ class OidcClientTest {
                 override suspend fun awaitRedirect(authorizeUrl: String): String =
                     onAwaitRedirect(authorizeUrl)
 
-                override fun reportOutcome(outcome: OidcSignInOutcome) {
+                override suspend fun reportOutcome(outcome: OidcSignInOutcome) {
                     reportedOutcome = outcome
                 }
 
@@ -607,6 +611,49 @@ class OidcClientTest {
 
         shouldThrow<OidcExchangeException> { client.signIn("google") }
 
+        launcher.closeCount shouldBe 1
+        // The callback was fine; saying otherwise would send an app's error page down the
+        // wrong branch.
+        launcher.reportedOutcome shouldBe
+            OidcSignInOutcome.Failed("exchange_failed", "Exchange failed: HTTP 500")
+    }
+
+    @Test
+    fun `signIn reports an exchange that failed before it reached the backend`() = runTest {
+        var issuedState: String? = null
+        val httpClient = createMockClient(
+            onIssuedState = { issuedState = it },
+            onExchange = { throw IllegalStateException("Connection refused: /10.0.0.1:443") },
+        )
+        val element = Json.parseToJsonElement(testDescriptor)
+        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val launcher = FakeLauncher { "myapp://auth/callback?code=c&state=$issuedState" }
+        client.platformLauncher = launcher
+
+        shouldThrow<IllegalStateException> { client.signIn("google") }
+
+        // An unreachable backend is still an exchange failure, and the transport's own message
+        // is written for a developer: it would otherwise reach the landing page and the query
+        // of a configured redirect.
+        launcher.reportedOutcome shouldBe OidcSignInOutcome.Failed("exchange_failed", null)
+    }
+
+    @Test
+    fun `signIn reports a cancelled outcome when the caller stops waiting`() = runTest {
+        var issuedState: String? = null
+        val httpClient = createMockClient(
+            onIssuedState = { issuedState = it },
+            onExchange = { throw CancellationException("screen left composition") },
+        )
+        val element = Json.parseToJsonElement(testDescriptor)
+        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val launcher = FakeLauncher { "myapp://auth/callback?code=c&state=$issuedState" }
+        client.platformLauncher = launcher
+
+        shouldThrow<CancellationException> { client.signIn("google") }
+
+        // The user abandoned the flow; the callback was not bad.
+        launcher.reportedOutcome shouldBe OidcSignInOutcome.Failed("cancelled", null)
         launcher.closeCount shouldBe 1
     }
 

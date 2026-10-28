@@ -16,10 +16,13 @@ import io.ktor.http.Url
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.io.encoding.Base64
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
@@ -100,12 +103,22 @@ class OidcClient internal constructor(
 
             // Steps 4-6 decide the outcome, and the session cannot know it before they run:
             // a callback carrying a `code` still fails if the state or CSRF value does not
-            // match, or if the exchange is rejected.
-            val user = try {
-                completeSignIn(resultUri, params, csrf, verifier, provider, callbackUrl)
-            } catch (failure: Throwable) {
-                session.reportOutcome(failureOutcome(failure, resultUri))
-                throw failure
+            // match, or if the exchange is rejected. They report separately, so the browser
+            // is told which of the two it was.
+            val callback = reportingFailure(session, resultUri, INVALID_CALLBACK) {
+                validateCallback(resultUri, params, csrf)
+            }
+            val user = reportingFailure(session, resultUri, EXCHANGE_FAILED) {
+                // Step 6: Exchange the code for tokens.
+                exchange(
+                    code = callback.code,
+                    verifier = verifier,
+                    state = params.state,
+                    nonce = params.nonce ?: "",
+                    provider = provider,
+                    callbackUrl = callbackUrl,
+                    iss = callback.iss,
+                )
             }
             session.reportOutcome(OidcSignInOutcome.Succeeded)
             return user
@@ -114,14 +127,14 @@ class OidcClient internal constructor(
         }
     }
 
-    private suspend fun completeSignIn(
+    /** What the callback carried, once it has been checked over. */
+    private class ValidatedCallback(val code: String, val iss: String?)
+
+    private fun validateCallback(
         resultUri: String,
         params: AuthorizeParamsResponse,
         csrf: String,
-        verifier: String,
-        provider: String,
-        callbackUrl: String,
-    ): OidcUser {
+    ): ValidatedCallback {
         // Step 4: Validate the callback.
         val resultParams = Url(resultUri).parameters
 
@@ -143,31 +156,55 @@ class OidcClient internal constructor(
         // Step 5: Verify the CSRF value inside the state envelope matches what we sent.
         verifyCsrf(returnedState, csrf)
 
-        // Step 6: Exchange the code for tokens.
-        return exchange(
-            code = code,
-            verifier = verifier,
-            state = params.state,
-            nonce = params.nonce ?: "",
-            provider = provider,
-            callbackUrl = callbackUrl,
-            iss = resultParams["iss"]
-        )
+        return ValidatedCallback(code, resultParams["iss"])
+    }
+
+    /**
+     * Runs [block], reporting what went wrong to [session] before letting a failure out, so
+     * the browser is shown the real outcome rather than one inferred from the callback query.
+     *
+     * [code] names the step, so a sign-in that got as far as the exchange is not described to
+     * the user as a bad callback. A cancellation is the caller's own doing and gets its own
+     * code; reporting it has to outlive the cancellation, or the browser would sit on the
+     * callback until the session gives up waiting for an outcome.
+     */
+    private suspend fun <T> reportingFailure(
+        session: OidcRedirectSession,
+        resultUri: String,
+        code: String,
+        block: suspend () -> T,
+    ): T = try {
+        block()
+    } catch (cancellation: CancellationException) {
+        withContext(NonCancellable) {
+            session.reportOutcome(OidcSignInOutcome.Failed(CANCELLED, null))
+        }
+        throw cancellation
+    } catch (failure: Throwable) {
+        session.reportOutcome(failureOutcome(failure, resultUri, code))
+        throw failure
     }
 
     /**
      * Describes [failure] for the user. The identity provider's own values are preferred when
-     * it reported the failure; anything rejected locally gets a short code of ours instead,
-     * since the provider said nothing about it.
+     * it reported the failure; anything rejected locally gets [code] instead, since the
+     * provider said nothing about it.
+     *
+     * Only our own exceptions supply a description. A message from anywhere else — a socket
+     * error, a deserialization failure — is written for a developer, and the description
+     * reaches the landing page and the query of a configured redirect.
      */
-    private fun failureOutcome(failure: Throwable, resultUri: String): OidcSignInOutcome.Failed {
+    private fun failureOutcome(
+        failure: Throwable,
+        resultUri: String,
+        code: String,
+    ): OidcSignInOutcome.Failed {
         val resultParams = runCatching { Url(resultUri).parameters }.getOrNull()
         val idpError = resultParams?.get("error")
         return if (idpError != null) {
             OidcSignInOutcome.Failed(idpError, resultParams["error_description"])
         } else {
-            val code = if (failure is OidcExchangeException) "exchange_failed" else "invalid_callback"
-            OidcSignInOutcome.Failed(code, failure.message)
+            OidcSignInOutcome.Failed(code, (failure as? OidcException)?.message)
         }
     }
 
@@ -272,6 +309,12 @@ class OidcClient internal constructor(
     }
 
     companion object {
+        // Reported to the session when the identity provider named no error of its own, so
+        // these are what an app's error page branches on. Each one names a step of the flow.
+        private const val INVALID_CALLBACK = "invalid_callback"
+        private const val EXCHANGE_FAILED = "exchange_failed"
+        private const val CANCELLED = "cancelled"
+
         fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient {
             return fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
         }

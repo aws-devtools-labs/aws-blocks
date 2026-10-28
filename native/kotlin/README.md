@@ -128,8 +128,8 @@ The factory a declared package must expose is specified in [the schema generatio
 ## Signing In with OIDC
 
 ```kotlin
-val auth = AuthApi()
-val client = auth.getClient()
+val blocks = Blocks()
+val client = blocks.authApi.getClient()
 val user = client.signIn("google")
 ```
 
@@ -165,6 +165,18 @@ A `Redirect` is sent a clean URL: the callback query is dropped on success, so t
 authorization code and `state` are not appended to it, and on failure only `error` and
 `error_description` are. An `Html` page receives nothing, so use `Redirect` if you need the
 provider's reason.
+
+`error` is the provider's own code when the provider reported the failure. When it did not,
+it names the step that failed instead, so a page can tell the cases apart:
+
+| `error` | Meaning |
+|---|---|
+| `invalid_callback` | The callback arrived but was rejected — a missing or mismatched `state`, or a bad CSRF value. |
+| `exchange_failed` | The code could not be exchanged, including a backend that could not be reached. |
+| `cancelled` | The caller stopped waiting, such as a screen that was closed mid-flow. |
+
+`error_description` is only set for failures the runtime itself describes; a message from a
+transport or parser is omitted rather than shown to the user.
 
 `BuiltIn` and `Html` are served as the response to the callback itself, so the callback query
 stays in the address bar and in `document.location` while that page is open. Markup you supply
