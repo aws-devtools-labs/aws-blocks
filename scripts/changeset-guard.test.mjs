@@ -434,6 +434,42 @@ describe("verify-coverage", () => {
 		assert.doesNotMatch(output, /@aws-blocks\/bb-private/);
 	});
 
+	describe("Dependabot manifest bumps, whose changeset the release job writes", () => {
+		const bump = {
+			"packages/core/package.json": pkgJson(SIBLING, { dependencies: { "aws-cdk-lib": "^2.1.0" } }),
+			"packages/create-blocks-app/templates/react/package.json": pkgJson("template-react"),
+			"package-lock.json": "{}\n",
+		};
+
+		it("skips a Dependabot PR that only changes package.json and package-lock.json files", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, bump);
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "dependabot[bot]" });
+			assert.equal(status, 0, output);
+			assert.match(output, /Skipping coverage check for a Dependabot manifest bump/);
+		});
+
+		it("checks a Dependabot PR once any other file changes", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, { ...bump, "packages/core/src/index.ts": "export const a = 1;\n" });
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "dependabot[bot]" });
+			assert.equal(status, 1, output);
+			assert.match(output, /@aws-blocks\/core/);
+		});
+
+		it("checks the same manifest bump from anyone else", (t) => {
+			const dir = baseRepo(t);
+			commitPr(dir, bump);
+
+			const { status, output } = guard(dir, "verify-coverage", { PR_AUTHOR: "octocat" });
+			assert.equal(status, 1, output);
+			assert.match(output, /@aws-blocks\/core/);
+			assert.match(output, /@aws-blocks\/create-blocks-app/);
+		});
+	});
+
 	it("fails loudly when a changed package's package.json cannot be parsed", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, { "packages/core/package.json": "{ not json\n" });
