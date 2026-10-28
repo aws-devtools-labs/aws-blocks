@@ -8,6 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
@@ -28,7 +29,7 @@ import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './b
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
@@ -543,6 +544,13 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left. Keyed
+		// by `fullId`, the backend's BLOCKS_STACK_NAME (resolved at validation).
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.fullId);
+
 		// The default compute (and thus handler/gateway) is created in create(),
 		// after construction — it derives BLOCKS_STACK_NAME from this.fullId.
 	}
@@ -564,6 +572,15 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
+		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {

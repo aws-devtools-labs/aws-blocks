@@ -52,7 +52,8 @@ provider's issuer the same way the AWS runtime does (`resolveProviderIssuerUrl`,
 shared via `utils.ts`): real providers (`google`, `customOidc`, …) resolve to
 their configured `issuerUrl` and hit the real IdP locally, while only
 `kind === 'stub'` resolves to the in-process stub IdP. Each provider logs its
-resolved issuer at startup so the path is never silent.
+resolved issuer at startup so the path is never silent. Stub providers are
+limited to local and sandbox deployments (D13).
 
 A `cognitoFederated` provider builds `CognitoFederationEngine` in the mock too
 (matching the AWS runtime), but Cognito federation needs a **deployed** Cognito
@@ -377,3 +378,40 @@ removal in `_exchangeCallback`: the pending PKCE entry is consumed *before* the
 network round-trip, so a late duplicate in a fresh page load (after the in-flight
 guard is gone) finds no pending entry and resolves `null` rather than replaying the
 code.
+
+### D13 — Stub IdP is local/sandbox only, with a per-deployment code-signing key
+
+**Status:** Accepted.
+
+**Rationale.** `stubIdp()` auto-approves sign-ins with deterministic users. That
+is what local dev, sandbox, and E2E need, and it has no place in any other
+deployment. The restriction is applied at both ends so it holds even when synth
+output and deployed code drift apart:
+
+- **Synth.** `index.cdk.ts` rejects any `stubIdp()` provider unless
+  `isSandboxContext()` (CDK context `sandboxMode`) is true, before provisioning
+  anything. The error points at `getDeploymentType()` for selecting providers.
+- **Runtime.** `BlocksStack` / `BlocksBackend` propagate the synth-time
+  deployment type to compute as `BLOCKS_DEPLOYMENT_TYPE`. `index.aws.ts` mounts
+  the stub IdP routes only when `getDeploymentType()` is `'sandbox'`; for
+  `'production'` it logs a warning and skips them. It never throws, because the
+  AWS entry is also imported during client code generation outside compute,
+  where the type is `'local'`. The mock runtime (`npm run dev`) always mounts
+  them.
+
+`getDeploymentType()` reports the same value at synth and runtime, so an app
+that branches on it (`'production'` → real providers, otherwise `stubIdp()`)
+gets one provider set per deployment on both sides. That contract holds inside
+the backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun
+importing it) and at runtime on deployed compute. Wherever Blocks config and
+context are not present (before `create()`, plain scripts, non-Blocks compute)
+it returns `'local'`.
+
+**Code signing.** Stub authorization codes are self-contained HMAC-SHA256
+payloads, so any container can verify a code minted by another. The HMAC key is
+derived per provider from the instance's cookie-signing secret
+(`HMAC(cookieSecret, 'aws-blocks/stub-idp/code/v1/' + providerName)`, see
+`deriveStubCodeKey`), replacing the former fixed constant. The label keeps the
+key separate from cookie signing, the provider name binds a code to the provider
+that issued it, and determinism per deployment keeps multi-container
+verification working. Verification uses a constant-time comparison.

@@ -117,6 +117,8 @@ const scoped = db.withRLS({ userId: 'user-123', role: 'authenticated' });
 const myPosts = await scoped.query<Post>(sql`SELECT * FROM posts`);
 ```
 
+`request.jwt.claims` always carries `sub` = `userId` and `role` = the `role` you pass. Extra `claims` are merged in, but they can't override those two: a `sub` or `role` key in `claims` is ignored. Policies can therefore trust both, for example `USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')`. When you forward claims from an identity provider, put provider-specific values under their own keys (for example `claims: { idp_sub: token.sub }`).
+
 > **Prerequisite (local and AWS):** `withRLS` issues `SET LOCAL ROLE <role>` (default `authenticated`). The role must exist, and the database user must be a member of it. On PostgreSQL 16 and later, which Aurora runs, the user that creates a role gets only `ADMIN` on it, not `SET`, so grant the roles explicitly. Add to your migrations:
 >
 > ```sql

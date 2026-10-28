@@ -17,6 +17,13 @@ const CONFIG_KEY = 'blocks-config.json';
 
 interface ConfigRegistryState {
 	entries: Map<string, unknown>;
+	/**
+	 * Who registered each entry, so a second, conflicting registration of the same
+	 * key by another construct fails synth instead of silently replacing the first
+	 * (see {@link registerConfig}). Absent for keys registered through
+	 * {@link registerSharedConfig}, which keep last-one-wins.
+	 */
+	owners: Map<string, Construct>;
 	finalized: boolean;
 	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
@@ -39,7 +46,7 @@ interface ConfigRegistryState {
 function getRegistry(root: Construct): ConfigRegistryState {
 	let state = (root as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
 	if (!state) {
-		state = { entries: new Map(), finalized: false };
+		state = { entries: new Map(), owners: new Map(), finalized: false };
 		(root as any)[REGISTRY_KEY] = state;
 	}
 	return state;
@@ -68,13 +75,66 @@ function getRegistry(root: Construct): ConfigRegistryState {
  * Config is stored as plain JSON in a private S3 bucket; use `AppSetting` with
  * `secret: true` for secrets.
  *
+ * **One value per key.** Registering a key again from the same construct
+ * replaces the value. Registering it again from another construct with the same
+ * value is allowed; with a different value it throws at synth, naming the key and
+ * both constructs, because the runtime would read only one of them. The usual
+ * cause is two blocks whose ids map to one key (`orders-a` and `orders_a`).
+ *
  * @param scope - The CDK construct (used to find the owning backend root)
  * @param key - The config key (same string the runtime will use to look it up)
  * @param value - The config value (can be a CDK token that resolves at deploy time)
+ * @throws {Error} When another construct already registered `key` for this backend with a different value.
  */
 export function registerConfig(scope: Construct, key: string, value: unknown): void {
 	const registry = getRegistry(getBlocksRoot(scope));
+	const owner = registry.owners.get(key);
+	if (owner !== undefined && owner !== scope && !sameConfigValue(registry.entries.get(key), value)) {
+		throw new Error(
+			`registerConfig: config key "${key}" is already registered by '${describeOwner(owner)}' with a different ` +
+				`value, and '${describeOwner(scope)}' registered it again. The runtime reads one value per key, so one ` +
+				'of the two would silently read the other\'s resource. Config keys derived from a block id typically map ' +
+				'non-alphanumerics to "_" (and some fold case), so ids such as `orders-a` and `orders_a` (or `Orders` and ' +
+				'`orders`) can collide: rename one of the blocks.',
+		);
+	}
 	registry.entries.set(key, value);
+	if (owner === undefined) registry.owners.set(key, scope);
+}
+
+/**
+ * Register a config entry several constructs may each set for one backend, where
+ * the last registration wins — the behaviour {@link registerConfig} had before it
+ * refused conflicting registrations. Only for framework keys that are shared by
+ * design (`Hosting`'s `BLOCKS_PUBLIC_ORIGIN` / `CORS_HOSTING_ORIGINS`, which every
+ * distribution fronting the backend sets).
+ *
+ * @internal
+ */
+export function registerSharedConfig(scope: Construct, key: string, value: unknown): void {
+	const registry = getRegistry(getBlocksRoot(scope));
+	registry.entries.set(key, value);
+}
+
+/**
+ * Whether two config values are the same registration: the same object or token,
+ * equal strings (an unresolved CDK token is a string, and the same token yields the
+ * same string), or equal plain JSON.
+ */
+function sameConfigValue(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) return true;
+	if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') return false;
+	try {
+		return JSON.stringify(a) === JSON.stringify(b);
+	} catch {
+		return false;
+	}
+}
+
+/** A construct as the user knows it: a Building Block's `fullId`, else its construct path. */
+function describeOwner(scope: Construct): string {
+	const fullId = (scope as { fullId?: unknown }).fullId;
+	return typeof fullId === 'string' && fullId !== '' ? fullId : scope.node.path;
 }
 
 /**

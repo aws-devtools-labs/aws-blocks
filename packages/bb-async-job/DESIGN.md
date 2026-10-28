@@ -86,7 +86,7 @@ Two distinct failure kinds feed `.failed[]`. An *entry-level* failure (SQS accep
 
 ### D-AJ-5: Event routing via queue name
 
-**Decision:** In AWS, the handler is registered with `registerLambdaEventHandler(EventSourceMapping.SQS, queueName, ...)`. The shared Lambda routes an incoming SQS record to the matching AsyncJob by the queue name parsed from the queue URL. The queue URL is injected via the `BLOCKS_QUEUE_URL_{FULLID}` environment variable.
+**Decision:** In AWS, the handler is registered with `registerLambdaEventHandler(EventSourceMapping.SQS, queueName, ...)`. The shared Lambda routes an incoming SQS record to the matching AsyncJob by the queue name parsed from the queue URL. The queue URL is injected via the `BLOCKS_QUEUE_URL_{FULLID}` environment variable. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
 
 **Rationale:** Routing by queue name keeps dispatch consistent with the rest of the framework (CronJob routes by `source` + `jobName`) and needs no extra infrastructure. When the env var is absent (e.g. during codegen, not a real Lambda invocation), handler registration is skipped so synthesis does not fail.
 

@@ -29,7 +29,7 @@
  */
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { AppSetting, SECRETS_BULK_CONSTRUCT_ID } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -104,6 +104,21 @@ export class AuthOIDC<
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] } });
+
+		// `stubIdp()` providers are a local/sandbox development aid. Reject them
+		// at synth for any non-sandbox deployment, before provisioning anything.
+		// The runtime entry applies the matching check when mounting routes.
+		const stubProviderNames = options.providers.filter((p) => p.kind === 'stub').map((p) => p.name);
+		if (stubProviderNames.length > 0 && !isSandboxContext(this)) {
+			const quoted = stubProviderNames.map((n) => `'${n}'`).join(', ');
+			const label = stubProviderNames.length === 1 ? `provider ${quoted} is` : `providers ${quoted} are`;
+			throw new Error(
+				`AuthOIDC '${id}': stubIdp ${label} only available in sandbox deployments ` +
+					'(run `npm run sandbox`, i.e. CDK context sandboxMode=true). ' +
+					'Configure a real provider (google, github, customOidc, customOauth2) for other deployments, ' +
+					'or select providers with getDeploymentType() so the stub is used only for local and sandbox.',
+			);
+		}
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;
