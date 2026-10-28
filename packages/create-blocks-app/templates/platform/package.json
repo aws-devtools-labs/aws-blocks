@@ -28,7 +28,7 @@
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize",
-    "check:iam": "cdk synth --quiet && blocks-iam-check cdk.out"
+    "check:iam": "cdk synth --quiet && blocks-iam-check cdk.out --app \"$APP_ID\""
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

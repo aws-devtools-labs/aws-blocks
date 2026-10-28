@@ -123,6 +123,41 @@ async function copySharedResources(targetDir: string): Promise<void> {
   }
 }
 
+/** `defaults.app.id`: lowercase letters and digits, starting with a letter, at most 10 (CDK's qualifier limit). */
+const APP_ID = /^[a-z][a-z0-9]{0,9}$/;
+
+/**
+ * For the platform template: when `APP_ID` is set, write the app's bootstrap
+ * qualifier and toolkit stack name into cdk.json; otherwise say how to.
+ */
+async function pinPlatformBootstrap(targetDir: string): Promise<void> {
+  const appId = process.env.APP_ID;
+  if (!appId || !APP_ID.test(appId)) {
+    console.log(
+      '\nPlatform app: set APP_ID (1–10 lowercase letters and digits) and re-run, or add ' +
+        '"@aws-cdk/core:bootstrapQualifier": "<id>" to cdk.json\'s context and "toolkitStackName": "CDKToolkit-<id>".',
+    );
+    return;
+  }
+  const cdkJsonPath = join(targetDir, 'cdk.json');
+  const cdkJson = JSON.parse(await readFile(cdkJsonPath, 'utf-8'));
+  cdkJson.context = { ...cdkJson.context, '@aws-cdk/core:bootstrapQualifier': appId };
+  cdkJson.toolkitStackName = `CDKToolkit-${appId}`;
+  await writeFile(cdkJsonPath, `${JSON.stringify(cdkJson, null, 2)}\n`);
+}
+
+/** The dev-server port of a template with no frontend (no `src/` or `index.html`), or `undefined`. */
+async function apiOnlyDevPort(templateDir: string): Promise<number | undefined> {
+  if ((await exists(join(templateDir, 'src'))) || (await exists(join(templateDir, 'index.html')))) return undefined;
+  try {
+    const server = await readFile(join(templateDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+    const port = /port:\s*(\d+)/.exec(server)?.[1];
+    return port ? Number(port) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ─── Shared workspace helper ─────────────────────────────────────────────────
 
 /**
@@ -359,6 +394,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Overlay shared resources (AGENTS.md — maintained once, not per-template)
   await copySharedResources(targetDir);
 
+  // The platform template: pin this app's own CDK bootstrap (qualifier = app id)
+  // in cdk.json, which AWS Blocks' deploy scripts read for their bootstrap check.
+  if (templateName === 'platform') await pinPlatformBootstrap(targetDir);
+
   // Rename gitignore to .gitignore
   await rename(join(targetDir, 'gitignore'), join(targetDir, '.gitignore'));
   
@@ -410,7 +449,13 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.log(`  npm install`);
   }
   console.log(`  npm run dev`);
-  console.log(`\nThen open http://localhost:3000`);
+  // A template with no frontend serves only the API, on the port its dev server sets.
+  const apiOnlyPort = await apiOnlyDevPort(templateDir);
+  console.log(
+    apiOnlyPort
+      ? `\nThis template has no UI: the API runs at http://localhost:${apiOnlyPort}/aws-blocks/api`
+      : `\nThen open http://localhost:3000`,
+  );
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 

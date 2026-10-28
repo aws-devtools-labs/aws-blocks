@@ -141,7 +141,23 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.match(cdkEntry, /app: \{ id: appId, strict: true \}/);
       assert.match(cdkEntry, /permissionsBoundary:/);
       const pkg = JSON.parse(readFileSync(join(target, 'package.json'), 'utf-8'));
-      assert.match(pkg.scripts['check:iam'], /blocks-iam-check/);
+      assert.match(pkg.scripts['check:iam'], /blocks-iam-check cdk\.out --app "\$APP_ID"/);
+      assert.match(result.stdout, /no UI: the API runs at http:\/\/localhost:3001/);
+      assert.match(result.stdout, /set APP_ID/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('--template platform with APP_ID set pins the app\'s bootstrap qualifier and toolkit stack in cdk.json', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-id-'));
+    const target = join(tmpDir, 'my-app');
+    try {
+      const result = run([target, '--template', 'platform', '--skip-install', '-y'], undefined, { APP_ID: 'orders' });
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const cdkJson = JSON.parse(readFileSync(join(target, 'cdk.json'), 'utf-8'));
+      assert.strictEqual(cdkJson.context['@aws-cdk/core:bootstrapQualifier'], 'orders');
+      assert.strictEqual(cdkJson.toolkitStackName, 'CDKToolkit-orders');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

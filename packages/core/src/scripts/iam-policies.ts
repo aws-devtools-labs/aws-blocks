@@ -197,20 +197,62 @@ const byName = (sid: string, action: string | string[], resources: string[]): Re
 	Resource: resources,
 });
 
-const byTag = (sid: string, action: string | string[], id: string, resource = '*'): Record<string, unknown>[] => [
+/** One tag-scoped service rule: what creates, what manages, and how tags are written. */
+interface TaggedService {
+	/** The service prefix, e.g. `secretsmanager`. */
+	service: string;
+	/** Actions that create a top-level resource, and the ARNs they act on (collections, not children). */
+	create: { actions: string[]; resources: string[] };
+	/** Actions on existing resources (children included), and the ARNs they act on. */
+	manage: { actions: string[]; resources: string[] };
+	/** Actions that add / remove tags. */
+	tag: { add: string[]; remove: string[] };
+}
+
+/**
+ * Statements for a service whose resources are named by id, scoped by the `app`
+ * tag. A request tag alone is never trusted for an existing resource:
+ * - **Create** only top-level resources, and only tagged `app=<id>`;
+ * - **Manage** only resources (and their children, which inherit the tag) already
+ *   tagged `app=<id>` — tag writes included, so an untagged resource can't be claimed;
+ * - **Deny** anything on a resource tagged as another app, and any tag write that
+ *   sets `app` to another value or removes it.
+ */
+const byTag = (sid: string, id: string, t: TaggedService): Record<string, unknown>[] => [
 	{
 		Sid: `${sid}Create`,
 		Effect: 'Allow',
-		Action: action,
-		Resource: resource,
+		Action: t.create.actions,
+		Resource: t.create.resources,
 		Condition: { StringEquals: { 'aws:RequestTag/app': id } },
 	},
 	{
 		Sid: `${sid}Manage`,
 		Effect: 'Allow',
-		Action: action,
-		Resource: resource,
+		Action: [...t.manage.actions, ...t.tag.add, ...t.tag.remove],
+		Resource: t.manage.resources,
 		Condition: { StringEquals: { 'aws:ResourceTag/app': id } },
+	},
+	{
+		Sid: `${sid}NotAnotherApps`,
+		Effect: 'Deny',
+		Action: `${t.service}:*`,
+		Resource: '*',
+		Condition: { StringNotEquals: { 'aws:ResourceTag/app': id }, Null: { 'aws:ResourceTag/app': 'false' } },
+	},
+	{
+		Sid: `${sid}NoRetagging`,
+		Effect: 'Deny',
+		Action: t.tag.add,
+		Resource: '*',
+		Condition: { StringNotEquals: { 'aws:RequestTag/app': id }, 'ForAnyValue:StringEquals': { 'aws:TagKeys': ['app'] } },
+	},
+	{
+		Sid: `${sid}NoUntagging`,
+		Effect: 'Deny',
+		Action: t.tag.remove,
+		Resource: '*',
+		Condition: { 'ForAnyValue:StringEquals': { 'aws:TagKeys': ['app'] } },
 	},
 ];
 
@@ -257,17 +299,60 @@ const RULES: Record<string, Rule> = {
 			`arn:${p}:ssm:*:${acct}:parameter/${id}/*`,
 		]),
 	],
-	'AWS::SecretsManager::': ({ id }) => byTag('Secrets', 'secretsmanager:*', id),
+	'AWS::SecretsManager::': ({ id, p, acct }) =>
+		byTag('Secrets', id, {
+			service: 'secretsmanager',
+			create: { actions: ['secretsmanager:CreateSecret'], resources: ['*'] },
+			manage: { actions: ['secretsmanager:*'], resources: [`arn:${p}:secretsmanager:*:${acct}:secret:*`] },
+			tag: { add: ['secretsmanager:TagResource'], remove: ['secretsmanager:UntagResource'] },
+		}),
 	// REST (`AWS::ApiGateway::*`) and HTTP/WebSocket (`AWS::ApiGatewayV2::*`) APIs:
 	// API ids aren't names, so these are scoped by the `app` tag.
 	'AWS::ApiGateway': ({ id, p }) =>
-		byTag('Apis', ['apigateway:GET', 'apigateway:POST', 'apigateway:PUT', 'apigateway:PATCH', 'apigateway:DELETE'], id, `arn:${p}:apigateway:*::/*`),
+		byTag('Apis', id, {
+			service: 'apigateway',
+			// Only the API collections: a stage, deployment or route is a child of an API,
+			// so it's created under Manage, against the API's (inherited) tag.
+			create: {
+				actions: ['apigateway:POST', 'apigateway:TagResource'],
+				resources: [`arn:${p}:apigateway:*::/restapis`, `arn:${p}:apigateway:*::/apis`],
+			},
+			manage: {
+				actions: ['apigateway:GET', 'apigateway:POST', 'apigateway:PUT', 'apigateway:PATCH', 'apigateway:DELETE'],
+				resources: [`arn:${p}:apigateway:*::/restapis/*`, `arn:${p}:apigateway:*::/apis/*`, `arn:${p}:apigateway:*::/tags/*`],
+			},
+			tag: { add: ['apigateway:TagResource', 'apigateway:PUT'], remove: ['apigateway:UntagResource', 'apigateway:DELETE'] },
+		}),
 	'AWS::Scheduler::': ({ id, p, acct }) => [
 		byName('Schedules', 'scheduler:*', [`arn:${p}:scheduler:*:${acct}:schedule/*/${id}-*`]),
 	],
 	'AWS::Events::': ({ id, p, acct }) => [byName('Rules', 'events:*', [`arn:${p}:events:*:${acct}:rule/${id}-*`])],
-	'AWS::Cognito::': ({ id }) => byTag('UserPools', 'cognito-idp:*', id),
-	'AWS::KMS::': ({ id }) => byTag('Keys', 'kms:*', id),
+	'AWS::Cognito::': ({ id, p, acct }) =>
+		byTag('UserPools', id, {
+			service: 'cognito-idp',
+			create: { actions: ['cognito-idp:CreateUserPool'], resources: ['*'] },
+			manage: { actions: ['cognito-idp:*'], resources: [`arn:${p}:cognito-idp:*:${acct}:userpool/*`] },
+			tag: { add: ['cognito-idp:TagResource'], remove: ['cognito-idp:UntagResource'] },
+		}),
+	'AWS::KMS::': ({ id, p, acct }) => [
+		...byTag('Keys', id, {
+			service: 'kms',
+			create: { actions: ['kms:CreateKey'], resources: ['*'] },
+			manage: { actions: ['kms:*'], resources: [`arn:${p}:kms:*:${acct}:key/*`] },
+			tag: { add: ['kms:TagResource'], remove: ['kms:UntagResource'] },
+		}),
+		byName('KeyAliases', ['kms:CreateAlias', 'kms:DeleteAlias', 'kms:UpdateAlias'], [`arn:${p}:kms:*:${acct}:alias/${id}-*`]),
+	],
+	'AWS::StepFunctions::': ({ id, p, acct }) =>
+		byTag('StateMachines', id, {
+			service: 'states',
+			create: { actions: ['states:CreateStateMachine'], resources: ['*'] },
+			manage: {
+				actions: ['states:*'],
+				resources: [`arn:${p}:states:*:${acct}:stateMachine:*`, `arn:${p}:states:*:${acct}:execution:*`],
+			},
+			tag: { add: ['states:TagResource'], remove: ['states:UntagResource'] },
+		}),
 	'AWS::ResourceGroups::': ({ id, p, acct }) => [
 		byName('ResourceGroups', 'resource-groups:*', [`arn:${p}:resource-groups:*:${acct}:group/${id}-*`]),
 		byName('ResourceGroupsStackQuery', ['cloudformation:DescribeStacks', 'cloudformation:ListStackResources', 'tag:GetResources'], ['*']),
@@ -486,4 +571,25 @@ export const MANAGED_POLICY_MAX_CHARS = 6144;
 /** A policy's size as IAM counts it (JSON without white space). */
 export function policySize(doc: PolicyDocument): number {
 	return JSON.stringify(doc).replace(/\s/g, '').length;
+}
+
+/**
+ * Split a policy into as few documents as fit IAM's managed-policy size, keeping
+ * statements whole and in order. `cdk bootstrap --cloudformation-execution-policies`
+ * takes a comma-separated list, so an execution policy can span several.
+ */
+export function splitPolicy(doc: PolicyDocument, max = MANAGED_POLICY_MAX_CHARS): PolicyDocument[] {
+	const parts: PolicyDocument[] = [];
+	let current: PolicyDocument = { Version: '2012-10-17', Statement: [] };
+	for (const statement of doc.Statement) {
+		const next: PolicyDocument = { Version: '2012-10-17', Statement: [...current.Statement, statement] };
+		if (current.Statement.length > 0 && policySize(next) > max) {
+			parts.push(current);
+			current = { Version: '2012-10-17', Statement: [statement] };
+		} else {
+			current = next;
+		}
+	}
+	if (current.Statement.length > 0) parts.push(current);
+	return parts;
 }
