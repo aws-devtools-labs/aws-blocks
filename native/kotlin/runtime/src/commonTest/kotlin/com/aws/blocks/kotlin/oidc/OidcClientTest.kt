@@ -36,6 +36,7 @@ class OidcClientTest {
         authorizeParamsErrorResponse: String = "{}",
         onIssuedState: ((String) -> Unit)? = null,
         onAuthorizeParamsBody: ((String) -> Unit)? = null,
+        onAuthorizeParamsPath: ((String) -> Unit)? = null,
     ): HttpClient {
         return HttpClient(MockEngine) {
             install(HttpCookies)
@@ -45,6 +46,7 @@ class OidcClientTest {
                     when {
                         request.url.encodedPath.contains("/auth/authorize-params/") &&
                             request.method == HttpMethod.Post -> {
+                            onAuthorizeParamsPath?.invoke(request.url.encodedPath)
                             if (authorizeParamsStatus != HttpStatusCode.OK) {
                                 respond(
                                     content = ByteReadChannel(authorizeParamsErrorResponse),
@@ -528,5 +530,100 @@ class OidcClientTest {
         client.signIn("google")
 
         capturedRelayTo shouldBe "http://127.0.0.1:9999/oidc/callback"
+    }
+
+    // --- typed providers ---
+
+    /** Stands in for the enum a spec that named its providers generates. */
+    private enum class GeneratedProvider(val providerName: String) {
+        Google("google"),
+        MySso("my-sso"),
+        Unconfigured("not-a-provider"),
+    }
+
+    private val typedDescriptor = testDescriptor.replace(
+        """"providers": ["google"]""",
+        """"providers": ["google", "my-sso"]""",
+    )
+
+    @Test
+    fun `a typed client signs in with the name its provider carries`() = runTest {
+        var capturedPath: String? = null
+        var issuedState: String? = null
+        val httpClient = createMockClient(
+            onIssuedState = { issuedState = it },
+            onAuthorizeParamsPath = { capturedPath = it },
+        )
+        val element = Json.parseToJsonElement(typedDescriptor)
+        val client = OidcClient.fromJson<GeneratedProvider>(
+            element,
+            httpClient,
+            localServer,
+            "myapp://auth/callback",
+        ) { it.providerName }
+        client.platformLauncher = FakeLauncher {
+            "myapp://auth/callback?code=test-code&state=$issuedState"
+        }
+
+        val user = client.signIn(GeneratedProvider.MySso)
+
+        capturedPath shouldBe "/auth/authorize-params/my-sso"
+        client.authState.value shouldBe OidcAuthState.SignedIn(user)
+    }
+
+    @Test
+    fun `a typed client rejects a provider the backend does not configure`() = runTest {
+        val httpClient = createMockClient()
+        val element = Json.parseToJsonElement(typedDescriptor)
+        val client = OidcClient.fromJson<GeneratedProvider>(
+            element,
+            httpClient,
+            localServer,
+            "myapp://auth/callback",
+        ) { it.providerName }
+        client.platformLauncher = FakeLauncher { "" }
+
+        val exception = shouldThrow<OidcUnknownProviderException> {
+            client.signIn(GeneratedProvider.Unconfigured)
+        }
+        exception.provider shouldBe "not-a-provider"
+    }
+
+    @Test
+    fun `a typed client exchanges with the name its provider carries`() = runTest {
+        var capturedProvider: String? = null
+        val httpClient = HttpClient(MockEngine) {
+            install(HttpCookies)
+            install(ContentNegotiation) { json() }
+            engine {
+                addHandler { request ->
+                    capturedProvider = Json.parseToJsonElement((request.body as TextContent).text)
+                        .jsonObject["provider"]?.jsonPrimitive?.content
+                    respond(
+                        content = ByteReadChannel("""{"user":{"userId":"my-sso:1","username":"alice"}}"""),
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+        }
+        val element = Json.parseToJsonElement(typedDescriptor)
+        val client = OidcClient.fromJson<GeneratedProvider>(
+            element,
+            httpClient,
+            localServer,
+            "myapp://auth/callback",
+        ) { it.providerName }
+
+        client.exchange(
+            code = "auth-code-123",
+            verifier = "test-verifier",
+            state = "test-state",
+            nonce = "test-nonce",
+            provider = GeneratedProvider.MySso,
+            callbackUrl = "http://localhost:3001/auth/callback",
+        )
+
+        capturedProvider shouldBe "my-sso"
     }
 }

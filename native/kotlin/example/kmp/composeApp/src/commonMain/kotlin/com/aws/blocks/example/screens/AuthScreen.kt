@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
@@ -38,7 +39,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AuthScreen(
-    client: OidcClient?,
+    client: OidcClient<AuthApi.GetClient.Provider>?,
     loadError: String?,
     restoredState: AuthState?,
     modifier: Modifier = Modifier
@@ -81,7 +82,7 @@ fun AuthScreen(
                     }
                 }) { Text("Sign Out") }
             } else {
-                client.providers.forEach { provider ->
+                AuthApi.GetClient.Provider.entries.forEach { provider ->
                     Button(
                         onClick = {
                             scope.launch {
@@ -91,7 +92,7 @@ fun AuthScreen(
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("Sign in with $provider") }
+                    ) { Text("Sign in with ${provider.providerName}") }
                     Spacer(Modifier.height(8.dp))
                 }
             }

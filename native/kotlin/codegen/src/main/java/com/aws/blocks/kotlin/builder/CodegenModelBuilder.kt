@@ -28,6 +28,12 @@ private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 /** The path a Blocks backend serves RPC on. */
 private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
 
+/** The transferable tag of an OIDC client, whose type argument names its providers. */
+private const val OIDC_CLIENT_TAG = "oidc/client"
+
+/** What an operation's provider enum is called when nothing else in its object claims the name. */
+private const val PROVIDER_ENUM_NAME = "Provider"
+
 /**
  * Transforms an [RpcModel] into a language-independent [CodegenModel].
  *
@@ -94,12 +100,11 @@ class CodegenModelBuilder {
             }
 
             val returnType = resolveType(method.result?.schema ?: TypeRef.Primitive("void"), collector, explicitName = method.result?.name)
+            val nestedTypes = collector.buildNestedTypesForMethod(method.name)
             val result = OperationResult(
-                type = returnType,
+                type = withOidcProviders(returnType, method.result?.schema, nestedTypes),
                 description = method.result?.description
             )
-
-            val nestedTypes = collector.buildNestedTypesForMethod(method.name)
 
             val operation = Operation(
                 name = localName,
@@ -112,6 +117,107 @@ class CodegenModelBuilder {
             grouped.getOrPut(groupName) { mutableListOf() }.add(operation)
         }
         return grouped.map { (name, ops) -> ApiNamespace(name = name, operations = ops) }
+    }
+
+    // ── OIDC provider names ──────────────────────────────────────────
+
+    /**
+     * Gives an operation's own `oidc/client` result the enum of providers it signs in with, which
+     * the generator emits in the operation's object. The names come from the spec's type args; a
+     * result whose providers didn't resolve to string literals keeps none, and so does a client
+     * nested inside another type, since only an operation's own client hydrates.
+     */
+    private fun withOidcProviders(
+        resolved: ResolvedType,
+        schema: TypeRef?,
+        nestedTypes: List<NestedTypeNode>,
+    ): ResolvedType {
+        val values = oidcProviderValues(schema) ?: return resolved
+        val enumName = providerEnumName(takenTypeNames(nestedTypes))
+        return attachProviderEnum(resolved, ResolvedType.Enum(name = enumName, values = values))
+    }
+
+    /** The providers a direct or optional `oidc/client` result names, if the spec resolved them. */
+    private fun oidcProviderValues(schema: TypeRef?): List<String>? {
+        var typeRef = schema
+        while (typeRef is TypeRef.Nullable) typeRef = typeRef.inner
+        val transferable = typeRef as? TypeRef.Transferable ?: return null
+        if (transferable.transferableName != OIDC_CLIENT_TAG) return null
+        return (transferable.typeArgs.firstOrNull() as? TypeRef.UnionLiteral)?.values
+    }
+
+    private fun attachProviderEnum(resolved: ResolvedType, providers: ResolvedType.Enum): ResolvedType =
+        when (resolved) {
+            is ResolvedType.Nullable -> ResolvedType.Nullable(attachProviderEnum(resolved.inner, providers))
+            is ResolvedType.Transferable -> resolved.copy(typeArgs = listOf(providers))
+            else -> resolved
+        }
+
+    /**
+     * `Provider`, unless the operation's object already holds a type by that name or reaches one
+     * the enum would shadow.
+     */
+    private fun providerEnumName(taken: Set<String>): String {
+        if (PROVIDER_ENUM_NAME !in taken) return PROVIDER_ENUM_NAME
+        var candidate = "Result$PROVIDER_ENUM_NAME"
+        var attempt = 2
+        while (candidate in taken) {
+            candidate = "Result$PROVIDER_ENUM_NAME$attempt"
+            attempt++
+        }
+        return candidate
+    }
+
+    /**
+     * The names an operation's object already uses: the types it declares at the top of the
+     * object, which a provider enum would sit beside, and every named type they reach, which it
+     * would shadow inside the object.
+     */
+    private fun takenTypeNames(nestedTypes: List<NestedTypeNode>): Set<String> {
+        val taken = mutableSetOf<String>()
+        fun walk(nodes: List<NestedTypeNode>) {
+            for (node in nodes) {
+                taken.add(node.name)
+                collectNamedTypes(node.type, taken)
+                walk(node.children)
+            }
+        }
+        walk(nestedTypes)
+        return taken
+    }
+
+    private fun collectNamedTypes(type: ResolvedType, into: MutableSet<String>) {
+        when (type) {
+            // A name already seen stops the walk, so a schema that reaches itself terminates. An
+            // inline type can have no name, which says nothing about where the walk has been.
+            is ResolvedType.Record -> {
+                if (type.name.isNotEmpty() && !into.add(type.name)) return
+                type.fields.forEach { collectNamedTypes(it.type, into) }
+                type.additionalPropertiesType?.let { collectNamedTypes(it, into) }
+            }
+            is ResolvedType.Union -> {
+                if (type.name.isNotEmpty() && !into.add(type.name)) return
+                for (variant in type.variants) {
+                    into.add(variant.name)
+                    variant.payloadTypeName?.let { into.add(it) }
+                    variant.fields.forEach { collectNamedTypes(it.type, into) }
+                    variant.additionalPropertiesType?.let { collectNamedTypes(it, into) }
+                    variant.embeddedUnion?.let { collectNamedTypes(it, into) }
+                    variant.nestedTypes.forEach { collectNamedTypes(it.type, into) }
+                }
+            }
+            is ResolvedType.Enum -> into.add(type.name)
+            is ResolvedType.TypeReference -> into.add(type.name)
+            is ResolvedType.TupleType -> {
+                into.add(type.name)
+                type.elements.forEach { collectNamedTypes(it, into) }
+            }
+            is ResolvedType.ListType -> collectNamedTypes(type.elementType, into)
+            is ResolvedType.MapType -> collectNamedTypes(type.valueType, into)
+            is ResolvedType.Nullable -> collectNamedTypes(type.inner, into)
+            is ResolvedType.Transferable -> type.typeArgs.forEach { collectNamedTypes(it, into) }
+            is ResolvedType.Primitive, is ResolvedType.FormattedType -> Unit
+        }
     }
 
     // ── Type resolution (used after collection is complete) ───────────
@@ -161,9 +267,15 @@ class CodegenModelBuilder {
                 elements = typeRef.elements.map { resolveType(it, collector) },
             )
             is TypeRef.Nullable -> ResolvedType.Nullable(resolveType(typeRef.inner, collector))
+            // An oidc/client's type argument names its providers, not a type to generate. The
+            // operation's own result gets them back as an enum in [withOidcProviders].
             is TypeRef.Transferable -> ResolvedType.Transferable(
                 transferableName = typeRef.transferableName,
-                typeArgs = typeRef.typeArgs.map { resolveType(it, collector) },
+                typeArgs = if (typeRef.transferableName == OIDC_CLIENT_TAG) {
+                    emptyList()
+                } else {
+                    typeRef.typeArgs.map { resolveType(it, collector) }
+                },
             )
             is TypeRef.ObjectWithOneOf -> {
                 val name = collector.nameForTypeRef(typeRef) ?: ""
@@ -647,9 +759,12 @@ class CodegenModelBuilder {
                 }
 
                 is TypeRef.Transferable -> {
-                    // Recurse into type args to collect any referenced types
-                    for (arg in typeRef.typeArgs) {
-                        collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                    // Recurse into type args to collect any referenced types. An oidc/client's
+                    // argument names providers, which never become a type of their own here.
+                    if (typeRef.transferableName != OIDC_CLIENT_TAG) {
+                        for (arg in typeRef.typeArgs) {
+                            collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
+                        }
                     }
                 }
 

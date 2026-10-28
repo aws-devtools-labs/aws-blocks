@@ -27,10 +27,19 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
-class OidcClient internal constructor(
+/**
+ * Signs a user in with one of the backend's OIDC providers.
+ *
+ * [P] names the providers this client signs in with. A spec that resolves its provider names to
+ * string literals generates an enum for them, so `signIn` takes only those providers; one that
+ * doesn't leaves the client an `OidcClient<String>`, whose `signIn` takes any provider name.
+ * [providerName] maps a provider to the name the backend knows it by.
+ */
+class OidcClient<P> internal constructor(
     private val config: OidcClientConfig,
     private val httpClient: HttpClient,
-    private val server: BlocksServer
+    private val server: BlocksServer,
+    private val providerName: (P) -> String,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
@@ -51,10 +60,11 @@ class OidcClient internal constructor(
         if (!httpClient.isActive) throw BlocksException(CLOSED_MESSAGE)
     }
 
-    suspend fun signIn(provider: String): OidcUser {
+    suspend fun signIn(provider: P): OidcUser {
         ensureOpen()
-        if (provider !in config.providers) {
-            throw OidcUnknownProviderException(provider)
+        val name = providerName(provider)
+        if (name !in config.providers) {
+            throw OidcUnknownProviderException(name)
         }
 
         val csrf = Pkce.generateRandom()
@@ -66,7 +76,7 @@ class OidcClient internal constructor(
         val session = platformLauncher.openSession(config.relayTo)
         try {
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
-            val params = fetchAuthorizeParams(provider, csrf, session.relayTo)
+            val params = fetchAuthorizeParams(name, csrf, session.relayTo)
 
             // Step 2: Build the full authorize URL. redirect_uri points to the BACKEND's callback (HTTPS).
             val callbackUrl = server.rawRoute(config.callbackPath)
@@ -117,13 +127,14 @@ class OidcClient internal constructor(
         verifier: String,
         state: String,
         nonce: String,
-        provider: String,
+        provider: P,
         callbackUrl: String,
         iss: String? = null
     ): OidcUser {
         ensureOpen()
-        if (provider !in config.providers) {
-            throw OidcUnknownProviderException(provider)
+        val name = providerName(provider)
+        if (name !in config.providers) {
+            throw OidcUnknownProviderException(name)
         }
 
         val body = buildJsonObject {
@@ -131,7 +142,7 @@ class OidcClient internal constructor(
             put("verifier", verifier)
             put("state", state)
             put("nonce", nonce)
-            put("provider", provider)
+            put("provider", name)
             put("callbackUrl", callbackUrl)
             if (iss != null) put("iss", iss)
         }
@@ -213,19 +224,38 @@ class OidcClient internal constructor(
     }
 
     companion object {
-        fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient {
-            return fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
-        }
+        /** A client whose providers the spec didn't name, so sign-in takes any provider name. */
+        fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient<String> =
+            fromJson(element, blocksClient, relayTo) { it }
+
+        /**
+         * A client typed by the providers the spec named; [providerName] maps one to the name the
+         * backend knows it by. Generated code passes the enum it emitted for those names.
+         */
+        fun <P> fromJson(
+            element: JsonElement,
+            blocksClient: BlocksClient,
+            relayTo: String,
+            providerName: (P) -> String,
+        ): OidcClient<P> = fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo, providerName)
 
         internal fun fromJson(
             element: JsonElement,
             httpClient: HttpClient,
             server: BlocksServer,
             relayTo: String
-        ): OidcClient {
+        ): OidcClient<String> = fromJson(element, httpClient, server, relayTo) { it }
+
+        internal fun <P> fromJson(
+            element: JsonElement,
+            httpClient: HttpClient,
+            server: BlocksServer,
+            relayTo: String,
+            providerName: (P) -> String,
+        ): OidcClient<P> {
             val config = BlocksJson.decodeFromJsonElement<OidcClientConfig>(element)
                 .copy(relayTo = relayTo)
-            return OidcClient(config, httpClient, server)
+            return OidcClient(config, httpClient, server, providerName)
         }
     }
 }

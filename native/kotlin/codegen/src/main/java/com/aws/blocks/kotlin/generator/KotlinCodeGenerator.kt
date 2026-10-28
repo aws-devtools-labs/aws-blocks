@@ -41,18 +41,35 @@ data class GeneratorResult(
     val warnings: List<String>,
 )
 
-private data class TransferableBinding(val type: ClassName, val isGeneric: Boolean)
+private data class TransferableBinding(
+    val type: ClassName,
+    val isGeneric: Boolean,
+    /** What a generic binding's argument is when the spec names none. */
+    val defaultTypeArgument: TypeName? = null,
+)
 
 /**
  * The concrete runtime type each known tag maps to; isGeneric wraps the first type argument
- * (RealtimeChannel<T>). The tag set and type resolution derive from this.
+ * (RealtimeChannel<T>, OidcClient<P>). The tag set and type resolution derive from this.
  */
 private val knownTransferableBindings = mapOf(
-    "realtime/channel" to TransferableBinding(ClassNames.realtimeChannel, isGeneric = true),
+    "realtime/channel" to TransferableBinding(
+        ClassNames.realtimeChannel,
+        isGeneric = true,
+        defaultTypeArgument = JsonElement::class.asTypeName(),
+    ),
     "file-bucket/download" to TransferableBinding(ClassNames.fileDownloadHandle, isGeneric = false),
     "file-bucket/upload" to TransferableBinding(ClassNames.fileUploadHandle, isGeneric = false),
-    "oidc/client" to TransferableBinding(ClassNames.oidcClient, isGeneric = false),
+    "oidc/client" to TransferableBinding(
+        ClassNames.oidcClient,
+        isGeneric = true,
+        // A spec that didn't resolve its provider names signs in with any string.
+        defaultTypeArgument = String::class.asTypeName(),
+    ),
 )
+
+/** The transferable tag of an OIDC client, whose type argument is the enum of its providers. */
+private const val OIDC_CLIENT_TAG = "oidc/client"
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
 
@@ -201,6 +218,8 @@ class KotlinCodeGenerator(
                         )
                     )
                 }
+                oidcProviderRenameWarning(operation, namespace.name, apiClassName(namespace))
+                    ?.let(warnings::add)
             }
         }
 
@@ -225,9 +244,100 @@ class KotlinCodeGenerator(
         apiNamespaces.any { ns -> ns.operations.any { containsOidcTransferable(it.result.type) } }
 
     private fun containsOidcTransferable(type: ResolvedType): Boolean = when (type) {
-        is ResolvedType.Transferable -> type.transferableName == "oidc/client"
+        is ResolvedType.Transferable -> type.transferableName == OIDC_CLIENT_TAG
         is ResolvedType.Nullable -> containsOidcTransferable(type.inner)
         else -> false
+    }
+
+    /**
+     * The providers an operation's own `oidc/client` result signs in with, which become an enum in
+     * the operation's object. A spec that didn't name them, and a client nested inside another
+     * type, have none.
+     */
+    private fun oidcProviderEnum(operation: Operation): ResolvedType.Enum? {
+        if (stubOidc) return null
+        val transferable = unwrapNullableTransferable(operation.result.type) ?: return null
+        if (transferable.transferableName != OIDC_CLIENT_TAG) return null
+        return transferable.typeArgs.firstOrNull() as? ResolvedType.Enum
+    }
+
+    /** Names the enum when it isn't `Provider`, since the operation's object already uses that name. */
+    private fun oidcProviderRenameWarning(
+        operation: Operation,
+        namespace: String,
+        className: String,
+    ): String? {
+        val providers = oidcProviderEnum(operation) ?: return null
+        if (providers.name == "Provider") return null
+        return "kotlin: ${fullMethodName(operation, namespace)} names its providers " +
+            "$className.${toPascalCase(operation.name)}.${providers.name}, since its operation " +
+            "already uses the name Provider."
+    }
+
+    private fun fullMethodName(operation: Operation, namespace: String): String =
+        if (namespace == "_default") operation.name else "$namespace.${operation.name}"
+
+    /**
+     * `enum class Provider(val providerName: String)`, whose constants carry the names the backend
+     * knows its providers by. The generated client's `signIn` takes one of these.
+     */
+    private fun generateOidcProviderEnum(
+        operation: Operation,
+        namespace: String,
+        providers: ResolvedType.Enum,
+    ): TypeSpec {
+        val builder = TypeSpec
+            .enumBuilder(providers.name)
+            .addKdoc("The providers `%L` signs in with.", fullMethodName(operation, namespace))
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter("providerName", String::class)
+                    .build(),
+            )
+            .addProperty(
+                PropertySpec.builder("providerName", String::class)
+                    .initializer("providerName")
+                    .build(),
+            )
+        for ((constant, value) in providerConstants(providers.values)) {
+            builder.addEnumConstant(
+                constant,
+                TypeSpec.anonymousClassBuilder()
+                    .addSuperclassConstructorParameter("%L", kotlinStringLiteral(value))
+                    .build(),
+            )
+        }
+        return builder.build()
+    }
+
+    /**
+     * Constant names and the provider names they carry: PascalCased, made a legal identifier, and
+     * numbered when another provider already took the name. A repeated provider is dropped.
+     */
+    private fun providerConstants(values: List<String>): List<Pair<String, String>> {
+        val taken = mutableSetOf<String>()
+        val constants = mutableListOf<Pair<String, String>>()
+        for (value in values.distinct()) {
+            // Every character an identifier can't hold separates segments, so a provider named
+            // login.gov is LoginGov rather than an identifier Kotlin can't spell.
+            val pascal = value.split(NON_IDENTIFIER_RUN)
+                .filter { it.isNotEmpty() }
+                .joinToString("") { toPascalCase(it) }
+            // A provider of only separators leaves nothing to name a constant with.
+            val base = when {
+                pascal.isEmpty() -> "Unnamed"
+                pascal.first().isDigit() -> "_$pascal"
+                else -> pascal
+            }
+            var name = base
+            var attempt = 2
+            while (!taken.add(name)) {
+                name = "$base$attempt"
+                attempt++
+            }
+            constants.add(name to value)
+        }
+        return constants
     }
 
     // ── Type index ───────────────────────────────────────────────────
@@ -1088,10 +1198,11 @@ class KotlinCodeGenerator(
 
         // Add nested operation objects for operations that have nested types
         for (operation in namespace.operations) {
-            if (operation.nestedTypes.isNotEmpty()) {
+            if (operation.nestedTypes.isNotEmpty() || oidcProviderEnum(operation) != null) {
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
+                        namespace.name,
                         index,
                         serializerRegistry,
                         operationContexts[operation],
@@ -1109,9 +1220,20 @@ class KotlinCodeGenerator(
      * serializers emitted in a separate top-level file.
      */
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
-        if (operation.nestedTypes.isEmpty()) return null
+        val providers = oidcProviderEnum(operation)
+        if (operation.nestedTypes.isEmpty() && providers == null) return null
         val opObjectName = toPascalCase(operation.name)
         val context = OperationTypeContext(opObjectName)
+
+        // The provider enum isn't a nested type of the result, so register it directly; the
+        // result's type argument then resolves to it like any other type in the object.
+        if (providers != null) {
+            context.register(
+                providers,
+                ClassName("", opObjectName, providers.name),
+                ClassName(packageName, apiClassName, opObjectName, providers.name),
+            )
+        }
 
         fun walkNodes(
             nodes: List<NestedTypeNode>,
@@ -1151,12 +1273,17 @@ class KotlinCodeGenerator(
      */
     private fun generateOperationObject(
         operation: Operation,
+        namespace: String,
         index: TypeIndex,
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ): TypeSpec {
         val objectName = toPascalCase(operation.name)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
+
+        oidcProviderEnum(operation)?.let { providers ->
+            objectBuilder.addType(generateOidcProviderEnum(operation, namespace, providers))
+        }
 
         for (node in operation.nestedTypes) {
             objectBuilder.addType(
@@ -1565,7 +1692,7 @@ class KotlinCodeGenerator(
         val typeArgs = if (type.typeArgs.isNotEmpty()) {
             type.typeArgs.map { resolveResolvedType(it, index, opContext, qualified) }
         } else {
-            listOf(JsonElement::class.asTypeName())
+            listOfNotNull(binding.defaultTypeArgument)
         }
         return binding.type.parameterizedBy(typeArgs)
     }
@@ -1978,8 +2105,16 @@ class KotlinCodeGenerator(
                 CodeBlock.of("%T.fromJson(%L)", ClassNames.fileUploadHandle, expr)
             }
 
-            "oidc/client" -> {
-                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
+            OIDC_CLIENT_TAG -> {
+                val providers = type.typeArgs.firstOrNull() as? ResolvedType.Enum
+                if (providers != null) {
+                    CodeBlock.of(
+                        "%T.fromJson(%L, client, %S) { it.providerName }",
+                        ClassNames.oidcClient, expr, relayTo ?: "",
+                    )
+                } else {
+                    CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
+                }
             }
 
             else -> {
@@ -2012,6 +2147,9 @@ class KotlinCodeGenerator(
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
         fun toCamelCase(name: String): String = NamingUtils.toCamelCase(name)
+
+        /** A run of characters a Kotlin identifier can't hold, which separates name segments. */
+        private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

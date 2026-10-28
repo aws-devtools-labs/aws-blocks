@@ -125,6 +125,32 @@ A nullable built-in result now returns null for a JSON-null body as well, where 
 
 The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
+### Typed OIDC Providers
+
+`OidcClient` is generic over the providers it signs in with. When the spec names an OIDC client's
+providers, the method's object gets a `Provider` enum whose constants carry the names the backend
+knows them by, and `getClient()` returns a client typed by it:
+
+```kotlin
+val client = blocks.authApi.getClient()        // OidcClient<AuthApi.GetClient.Provider>
+val user = client.signIn(AuthApi.GetClient.Provider.Google)
+
+// Every provider the backend configured, for a sign-in screen
+AuthApi.GetClient.Provider.entries.forEach { provider ->
+    Button(onClick = { scope.launch { client.signIn(provider) } }) {
+        Text("Sign in with ${provider.providerName}")
+    }
+}
+```
+
+A provider name that is not a legal identifier is still spelled as one, and keeps the name it
+signs in with: `login.gov` becomes `LoginGov("login.gov")`.
+
+When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
+`OidcClient<String>` and `signIn` takes a provider name, as before. When the method's object
+already uses the name `Provider`, the enum is `ResultProvider` and codegen prints a `kotlin:`
+warning that names it.
+
 ## Gradle Tasks
 
 | Task | Description |
