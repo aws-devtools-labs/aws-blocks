@@ -656,7 +656,8 @@ npx blocks-iam-policies cdk.out --out iam --app appa --account 111122223333
   ```
 
   and set the same `@aws-cdk/core:bootstrapQualifier` and `toolkitStackName` in the app's `cdk.json`.
-- `iam/deploy-guard-appa.json` is the **deploy guard**. CDK's default bootstrap deploy role may change or delete *any* stack, and CloudFormation reuses a stack's previous service role when a request omits one, so without the guard App A's pipeline could deploy into — or delete — App B's stack as App B's execution role. The guard denies stack changes outside `appa`, `appa-…` and `CDKToolkit-appa`, and denies creating or changing a stack without naming App A's own execution role. Attach it to the app's deploy role (`cdk-appa-deploy-role-<account>-<region>`), or put the same statements in a custom bootstrap template.
+- `iam/deploy-guard-appa.json` is the **deploy guard**. CDK's default bootstrap deploy role may change or delete *any* stack, and CloudFormation reuses a stack's previous service role when a request omits one, so without the guard App A's pipeline could deploy into — or delete — App B's stack as App B's execution role. The guard denies stack changes outside `appa` and `appa-…` — not the app's own bootstrap stack, which only the platform re-bootstraps — and denies creating or changing a stack without naming App A's own execution role. **Prefer putting its statements in a custom bootstrap template** (`cdk bootstrap --show-template`, add them to the deploy role, `cdk bootstrap --template <file>`), so CloudFormation owns them; attaching it to the existing deploy role (`cdk-appa-deploy-role-<account>-<region>`) works, but it's drift outside CloudFormation that a re-bootstrap won't restore.
+- **Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.app` set, AWS Blocks names it `<id>-edge`, so the guard and the check treat it as the app's own. Bootstrap the app in `us-east-1` too (same qualifier, same execution policy) and attach the guard there.
 
 **5. The pipeline check.** After synth, and before the deploy job gets AWS credentials:
 
@@ -670,6 +671,12 @@ npx blocks-iam-check cdk.out --app "$APP_ID"   # exit 0: clean · 1: violations 
 
 - **It isolates apps from each other, not handlers inside one app.** Every handler in an app still runs as the same role, under the same boundary.
 - **Allow-list coverage.** A service the boundary has no rule for is denied at runtime (`AccessDenied`). Add rules for any service your apps use beyond AWS Blocks' own. A few rules are scoped by resource tag rather than name (Cognito, Step Functions, Secrets Manager, KMS and others); check them on a deployed app.
-- **Exceptions.** WebSocket connections (`execute-api:ManageConnections`) can't be scoped (API ids aren't names, and `execute-api` has no resource tags). AgentCore runtimes log to AWS-named log groups, which the boundary allows for writing only. CDK's own Lambda layers get names that can't be scoped, so the execution policy allows layer versions by any name.
+- **Exceptions — cross-app reach the boundary still allows.**
+  - `execute-api:ManageConnections` and `execute-api:Invoke` on `*`: API ids aren't names and `execute-api` has no resource tags, so App A could post to, or drop, App B's WebSocket clients if it learns their connection ids.
+  - `ses:SendEmail` / `SendRawEmail` / `SendBulkEmail` on `*`: App A can send as an identity App B verified. Scope SES by identity if your apps send email.
+  - `ec2:DeleteNetworkInterface` on `*` (for VPC Lambdas): App A could delete another app's network interfaces.
+  - AgentCore runtimes log to AWS-named log groups, which the boundary allows for writing only.
+  - CDK's own Lambda layers get names that can't be scoped, so the execution policy allows layer versions by any name (versions are immutable; deployed functions keep working).
+- **Transforms.** A template with a `Transform` (a macro, `AWS::Include`, `AWS::Serverless`) or an `Fn::Transform` fails the check: CloudFormation expands it at deploy time, after the check ran.
 - **Account quotas are shared.** Each app adds roles and a bootstrap stack; at thousands of apps, spread them across several accounts.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.

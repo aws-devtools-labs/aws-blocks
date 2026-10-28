@@ -168,6 +168,15 @@ export type HostingConstructProps = {
   skipRegionValidation?: boolean;
 
   /**
+   * Construct id (and so the name) of the `us-east-1` stack Lambda@Edge
+   * functions are hoisted into when this stack is in another region. Default:
+   * CDK's `edge-lambda-stack-<hash>`. AWS Blocks' `Hosting` sets `<app id>-edge`
+   * when the fronted backend has `defaults.app`, so a shared platform's deploy
+   * guard and checks see it as the app's own stack.
+   */
+  edgeStackId?: string;
+
+  /**
    * Custom domain configuration.
    * @deprecated Use `frontDoor.features.domain` (CloudFront, API Gateway, custom doors).
    */
@@ -856,6 +865,7 @@ export class HostingConstruct extends Construct {
           logRetention: props.compute?.logRetention,
           skipRegionValidation: props.skipRegionValidation,
           environment: props.compute?.environment,
+          edgeStackId: props.edgeStackId,
         });
         this.computeFunctions.set(name, edgeConstruct.function);
         continue;

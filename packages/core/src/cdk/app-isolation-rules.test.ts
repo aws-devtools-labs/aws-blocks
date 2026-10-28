@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { APP_ID_PATTERN, checkResourcePolicy, checkRole, checkStatement } from './app-isolation-rules.js';
+import { APP_ID_PATTERN, checkResourcePolicy, checkRole, checkStatement, checkTransforms } from './app-isolation-rules.js';
 
 const rules = (violations: { rule: string }[]) => violations.map((v) => v.rule);
 const ssmArn = (name: string) => ({
@@ -54,6 +54,42 @@ describe('app-isolation rules — statements fail closed', () => {
 		assert.deepStrictEqual(rules(checkStatement(s, 'appa', 'p')), ['wildcard-data-grant']);
 		const tagged = { ...s, Condition: { StringEquals: { 'aws:ResourceTag/app': 'appa' } } };
 		assert.deepStrictEqual(checkStatement(tagged, 'appa', 'p'), []);
+	});
+
+	test("a condition for everything except this app, or for another app, doesn't exempt a wildcard", () => {
+		for (const Condition of [
+			{ StringNotEquals: { 'aws:ResourceTag/app': 'appa' } },
+			{ StringEquals: { 'aws:ResourceTag/app': 'appb' } },
+			{ StringEquals: { 'aws:ResourceTag/app': ['appa', 'appb'] } },
+			{ StringLike: { 'aws:ResourceTag/app': '*' } },
+		]) {
+			const s = { Effect: 'Allow', Action: 'dynamodb:GetItem', Resource: '*', Condition };
+			assert.deepStrictEqual(rules(checkStatement(s, 'appa', 'p')), ['wildcard-data-grant'], JSON.stringify(Condition));
+		}
+		const variable = { StringEquals: { 'aws:ResourceTag/app': '$' + '{aws:PrincipalTag/app}' } };
+		assert.deepStrictEqual(checkStatement({ Effect: 'Allow', Action: 'states:*', Resource: '*', Condition: variable }, 'appa', 'p'), []);
+	});
+
+	test('kms:ViaService exempts a KMS wildcard only for fenced services, and only for KMS actions', () => {
+		const region = { 'Fn::Join': ['', ['ssm.', { Ref: 'AWS::Region' }, '.amazonaws.com']] };
+		const kms = (via: unknown, Action: string | string[] = ['kms:Decrypt']) => ({
+			Effect: 'Allow',
+			Action,
+			Resource: '*',
+			Condition: { StringEquals: { 'kms:ViaService': via } },
+		});
+		assert.deepStrictEqual(checkStatement(kms(region), 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement(kms('ec2.us-east-1.amazonaws.com'), 'appa', 'p')), ['wildcard-data-grant']);
+		assert.deepStrictEqual(rules(checkStatement(kms(region, ['kms:Decrypt', 'dynamodb:GetItem']), 'appa', 'p')), ['wildcard-data-grant']);
+	});
+
+	test('a template transform or Fn::Transform is flagged', () => {
+		assert.deepStrictEqual(rules(checkTransforms({ Transform: 'AWS::Serverless-2016-10-31' }, 't')), ['template-transform']);
+		assert.deepStrictEqual(
+			rules(checkTransforms({ Resources: { X: { Properties: { 'Fn::Transform': { Name: 'AWS::Include' } } } } }, 't')),
+			['template-transform'],
+		);
+		assert.deepStrictEqual(checkTransforms({ Resources: { X: { Type: 'AWS::SQS::Queue' } } }, 't'), []);
 	});
 
 	test("lambda:UpdateFunctionCode and GetFunction on another app's function are flagged", () => {

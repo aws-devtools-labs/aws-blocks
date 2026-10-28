@@ -204,11 +204,15 @@ export function coverHosting(
 	);
 	for (const helper of helperStacks) coverScope(coverage, helper);
 
-	const edgeStacks = stack.dependencies.filter((s) => s.node.id.startsWith('edge-lambda-stack-'));
-	for (const fn of edgeFunctions) {
-		for (const edgeStack of edgeStacks) {
-			const peer = edgeStack.node.tryFindChild(fn.node.id);
-			if (peer) coverScope(coverage, peer);
+	// The edge stack is CDK's `edge-lambda-stack-<hash>`, or `<app id>-edge` under
+	// `defaults.app`; it's whichever dependency holds a peer of an edge function.
+	const edgeStacks: cdk.Stack[] = [];
+	for (const dependency of stack.dependencies) {
+		for (const fn of edgeFunctions) {
+			const peer = dependency.node.tryFindChild(fn.node.id);
+			if (!peer) continue;
+			coverScope(coverage, peer);
+			if (!edgeStacks.includes(dependency)) edgeStacks.push(dependency);
 		}
 	}
 

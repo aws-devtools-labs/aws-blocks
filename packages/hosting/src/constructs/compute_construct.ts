@@ -118,6 +118,13 @@ export type ComputeConstructProps = {
    * `'streaming'` (the adapter's `response_stream` mode).
    */
   responseMode?: 'streaming' | 'buffered';
+  /**
+   * Construct id (and so the name) of the `us-east-1` stack an edge compute is
+   * hoisted into when the stack is in another region. Default: CDK's
+   * `edge-lambda-stack-<hash>`. AWS Blocks sets `<app id>-edge` for an app with
+   * `defaults.app`, so the edge stack carries the app's name prefix.
+   */
+  edgeStackId?: string;
 };
 
 // ---- Construct ----
@@ -327,6 +334,7 @@ export class ComputeConstruct extends Construct {
           memorySize,
           timeout: Duration.seconds(Math.min(requestedTimeout, edgeMaxTimeout)),
           logGroup,
+          ...(props.edgeStackId ? { stackId: props.edgeStackId } : {}),
         },
       );
       // Note: EdgeFunction auto-deploys to us-east-1 regardless of stack region

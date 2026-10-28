@@ -45,6 +45,7 @@ export type AppViolationRule =
 	| 'broad-managed-policy'
 	| 'resource-policy-outside-app'
 	| 'unreadable-template'
+	| 'template-transform'
 	| 'app-id-mismatch';
 
 /** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
@@ -204,12 +205,36 @@ function touchesData(actions: string[]): boolean {
 	return actions.some((a) => a === '*' || DATA_SERVICES.has(a.split(':')[0].toLowerCase()));
 }
 
+/** Services whose own resources are fenced, so KMS through them stays inside the app. */
+const VIA_SERVICE = /^(ssm|secretsmanager|dynamodb|s3|sqs)\.([a-z0-9-]+|\*)\.amazonaws\.com$/;
+
 /**
- * A `Condition` that scopes a wildcard to one app's resources: by the resource's
- * tag, or (for KMS) to calls made through a service whose own resources are fenced.
+ * Whether a `Condition` scopes a wildcard to this app's resources. Exactly two
+ * shapes count, and nothing else does (an "everything except this app"
+ * condition, or one naming another app, is not a scope):
+ * - `StringEquals` on `aws:ResourceTag/app` equal to the app id (or the
+ *   `${aws:PrincipalTag/app}` policy variable);
+ * - for KMS actions only, `StringEquals`/`StringLike` on `kms:ViaService` naming
+ *   only services whose own resources are fenced.
  */
-function scopesWildcard(condition: unknown): boolean {
-	return condition !== undefined && /ResourceTag\/|kms:ViaService/.test(JSON.stringify(condition));
+function scopesWildcard(condition: unknown, actions: string[], id: string): boolean {
+	if (!condition || typeof condition !== 'object') return false;
+	const c = condition as Record<string, Record<string, unknown>>;
+	const values = (v: unknown) => (Array.isArray(v) ? v : [v]);
+	// biome-ignore lint/suspicious/noTemplateCurlyInString: an IAM policy variable, resolved by IAM at request time
+	const ownTag = new Set([id, '${aws:PrincipalTag/app}']);
+	const tag = c.StringEquals?.['aws:ResourceTag/app'];
+	if (tag !== undefined && values(tag).every((v) => typeof v === 'string' && ownTag.has(v))) return true;
+	if (actions.every((a) => a.toLowerCase().startsWith('kms:'))) {
+		const via = c.StringEquals?.['kms:ViaService'] ?? c.StringLike?.['kms:ViaService'];
+		// A region in the value is a pseudo parameter (`ssm.${AWS::Region}.amazonaws.com`): render it to `*`.
+		const rendered = (v: unknown) => {
+			const r = renderResource(v);
+			return r.kind === 'arn' ? r.arn : undefined;
+		};
+		if (via !== undefined && values(via).every((v) => VIA_SERVICE.test(rendered(v) ?? ''))) return true;
+	}
+	return false;
 }
 
 /**
@@ -298,7 +323,7 @@ export function checkStatement(
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: a placeholder shown in messages, not a template
 		const label = arn.replaceAll(TOKEN, '${…}');
 		if (literal.replace(/^\//, '').startsWith('*')) {
-			if (!scopesWildcard(statement.Condition) && !isKnownExemption(actions, '*')) {
+			if (!scopesWildcard(statement.Condition, actions, id) && !isKnownExemption(actions, '*')) {
 				out.push({
 					rule: 'wildcard-data-grant',
 					path: where,
@@ -489,6 +514,33 @@ export function checkScopeFullId(fullId: string, id: string, where: string): App
 			message:
 				`Building Block "${fullId}" isn't under the app id "${id}": its resource names derive from its fullId, ` +
 				`which starts with the stack's id. Name the stack "${id}" or "${id}-…", and build every block under it.`,
+		},
+	];
+}
+
+/** Whether `value` contains an `Fn::Transform` anywhere. */
+function hasFnTransform(value: unknown): boolean {
+	if (Array.isArray(value)) return value.some(hasFnTransform);
+	if (!value || typeof value !== 'object') return false;
+	return Object.entries(value).some(([k, v]) => k === 'Fn::Transform' || hasFnTransform(v));
+}
+
+/**
+ * `template-transform` when a template has a top-level `Transform` (a macro,
+ * `AWS::Include`, `AWS::Serverless`) or an `Fn::Transform`: CloudFormation
+ * expands them at deploy time, after the check ran, so what's checked isn't what
+ * gets deployed.
+ */
+export function checkTransforms(template: { Transform?: unknown; Resources?: unknown }, where: string): AppViolation[] {
+	const transforms = template.Transform === undefined ? [] : Array.isArray(template.Transform) ? template.Transform : [template.Transform];
+	if (transforms.length === 0 && !hasFnTransform(template.Resources)) return [];
+	return [
+		{
+			rule: 'template-transform',
+			path: where,
+			message:
+				`${where} uses a CloudFormation transform (${transforms.length > 0 ? transforms.join(', ') : 'Fn::Transform'}), ` +
+				"which adds resources at deploy time that the check can't see. Remove it.",
 		},
 	];
 }
