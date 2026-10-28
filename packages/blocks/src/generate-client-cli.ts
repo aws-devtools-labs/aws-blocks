@@ -27,13 +27,19 @@
  * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
  * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
  * depends on, by absolute URL, so that the worker finds it from any app.
+ *
+ * After `client.js`, it also writes the backend's declaration files
+ * (`aws-blocks/.types/`) when the workspace's `exports["."].types` points at
+ * them, using the app's own `typescript`. Type errors in the backend fail the
+ * command so a build never continues with stale types.
  */
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { generateBackendTypes } from '@aws-blocks/core/scripts/generate-types';
 
 const [foundationArg, outputArg] = process.argv.slice(2);
 const foundationPath = resolvePath(foundationArg ?? './aws-blocks/index.ts');
@@ -98,10 +104,23 @@ worker.on('error', (error) => {
 	process.exit(1);
 });
 
-worker.on('exit', (code, signal) => {
+worker.on('exit', async (code, signal) => {
 	for (const name of SIGNALS) process.off(name, forward);
 	// End as the worker did: by its signal, so the caller sees the interruption, or with its exit code.
-	if (signal) process.kill(process.pid, signal);
-	else if (code !== 0) process.exit(code ?? 1);
-	else console.log(`blocks-generate-client: wrote ${outputPath}`);
+	if (signal) return process.kill(process.pid, signal);
+	if (code !== 0) return process.exit(code ?? 1);
+	console.log(`blocks-generate-client: wrote ${outputPath}`);
+
+	// Backend declaration files for the frontend's typed import (see
+	// `generateBackendTypes`). Only after the client succeeded, and a failure
+	// exits non-zero: this runs as `prebuild`/`pretypecheck`, and a build must
+	// not continue with missing or stale types.
+	const types = await generateBackendTypes(dirname(foundationPath));
+	if (types.status === 'failed') {
+		console.error(`blocks-generate-client: backend types not written: ${types.message}`);
+		if (types.diagnostics) console.error(types.diagnostics);
+		process.exit(1);
+	}
+	if (types.status === 'written') console.log(`blocks-generate-client: wrote ${types.outFile}`);
+	if (types.status === 'up-to-date') console.log(`blocks-generate-client: ${types.outFile} is up to date`);
 });

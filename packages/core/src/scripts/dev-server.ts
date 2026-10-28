@@ -3,13 +3,14 @@
 
 import { Agent, createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
-import { resolve, dirname, join } from 'node:path';
+import { resolve, dirname, join, relative } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
+import { type BackendTypesResult, generateBackendTypes } from './generate-types.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
@@ -148,6 +149,22 @@ export interface DevServerOptions {
    * (a failure only logs a warning). Set `false` to disable. Default: enabled.
    */
   typegen?: boolean;
+}
+
+/**
+ * Report a {@link generateBackendTypes} run. A failure is a warning, not fatal:
+ * the frontend keeps the last generated types (or, if there are none, falls back
+ * to typechecking the backend source), and the backend itself still runs.
+ */
+function logBackendTypes(result: BackendTypesResult): void {
+  if (result.status === 'written') {
+    console.log(`🧾 Backend types written to ${relative(process.cwd(), result.outFile)} (${result.durationMs} ms)`);
+  } else if (result.status === 'up-to-date') {
+    console.log(`🧾 Backend types already current (${result.durationMs} ms)`);
+  } else if (result.status === 'failed') {
+    console.warn(`⚠️  Backend types not updated: ${result.message}`);
+    if (result.diagnostics) console.warn(result.diagnostics);
+  }
 }
 
 /**
@@ -1065,8 +1082,9 @@ export async function startDevServer(options: DevServerOptions) {
   // Generate client code — skip in sandbox mode because sandbox.ts already
   // generated it with --conditions=aws-runtime (correct aws-middleware).
   // Re-generating here without that condition would overwrite with mock-middleware.
+  const awsBlocksDir = dirname(resolvedPath);
+
   if (!isSandbox) {
-    const awsBlocksDir = dirname(resolvedPath);
     const clientPath = join(awsBlocksDir, 'client.js');
     log.progress('📝 Generating client code...');
     await writeClientCode(resolvedPath, clientPath);
@@ -1077,6 +1095,14 @@ export async function startDevServer(options: DevServerOptions) {
   // one `npm run dev`. Auto-detected (no-op unless the app uses secret()/config())
   // and non-fatal.
   const stopTypegen = options.typegen === false ? undefined : await startTypegenWatch();
+
+  // Backend declaration files (`aws-blocks/.types/`) for the frontend's typed
+  // import. `tsx watch` restarts this process on every backend save, so one run
+  // per start keeps them current without a separate watcher. Not awaited: the
+  // dev server must not wait on `tsc`. Runs in sandbox mode too — the types
+  // don't depend on export conditions.
+  const backendTypes = new AbortController();
+  void generateBackendTypes(awsBlocksDir, { signal: backendTypes.signal }).then(logBackendTypes);
 
   // ── Startup reclaim ──────────────────────────────────────────────────────
   // Free any port left bound by a crashed / SIGKILL'd predecessor before we bind
@@ -1171,6 +1197,7 @@ export async function startDevServer(options: DevServerOptions) {
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
     stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
+    backendTypes.abort(); // stop an in-flight `tsc` so a restart doesn't race two writers
     // Keep the listeners until we exit. A Ctrl-C or a group SIGTERM reaches us
     // directly and again as `tsx watch` relays it; tsx's preflight exits the
     // process on a signal that has no other listener, which would cut this

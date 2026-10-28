@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
 import { trackCommand } from './telemetry.js';
+import { excludeBackendFromFrontendTsconfigs } from './tsconfig-exclude.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -207,6 +208,48 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
+
+/**
+ * The frontend reads the backend's generated types (`aws-blocks/.types/`)
+ * through the `aws-blocks` package. A frontend tsconfig whose `include` also
+ * covers `aws-blocks/` (Next.js's `**\/*.ts`, or no `include` at all) would
+ * still typecheck the backend source with frontend settings, so exclude it.
+ * Edits the user's file in place, keeping its comments; prints a manual step
+ * when it can't.
+ */
+function excludeBackendFromFrontend(targetDir: string): void {
+  for (const result of excludeBackendFromFrontendTsconfigs(targetDir)) {
+    const name = relative(targetDir, result.file) || result.file;
+    if (result.status === 'updated') {
+      console.log(`  ✓ Excluded aws-blocks/ in ${name}`);
+    } else if (result.status === 'manual') {
+      console.log(`  ⚠ Could not edit ${name} (${result.reason}).`);
+      console.log('    Add "aws-blocks" to its "exclude" so the frontend uses the generated backend types.');
+    }
+  }
+}
+
+/**
+ * Writes `aws-blocks/.types/` once, right after install, so the generated
+ * declarations exist before anything first resolves `aws-blocks`.
+ *
+ * Without this the directory is absent until the first `npm run dev` or
+ * `npm run build`, and `exports["."].types` pointing at a missing file does not
+ * fail loudly — TypeScript falls through to the `default` condition and
+ * typechecks the backend *source* with the frontend's tsconfig, which is the
+ * problem the generated types exist to avoid. An editor opened straight after
+ * scaffolding, or a bare `tsc --noEmit`, would see that silent fallback.
+ *
+ * Non-fatal: the app is already usable, `pretypecheck`/`prebuild` regenerate,
+ * and the fallback above means a miss degrades rather than breaks.
+ */
+function generateBackendTypesOnce(targetDir: string): void {
+  try {
+    execSync('npx --no-install blocks-generate-client', { cwd: targetDir, stdio: 'pipe' });
+  } catch {
+    console.log('  ⚠ Could not pre-generate aws-blocks/.types/ — `npm run dev` will write it.');
+  }
+}
 
 /**
  * Adds the aws-blocks workspace to an existing project's package.json.
@@ -493,8 +536,11 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  if (!skipInstall) installDependencies(targetDir, workspaceRoot);
-  
+  if (!skipInstall) {
+    installDependencies(targetDir, workspaceRoot);
+    generateBackendTypesOnce(targetDir);
+  }
+
   // The local server port the template's `cdk-blocks dev` listens on: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
   console.log('\n✓ Blocks app created!');
@@ -532,6 +578,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -598,6 +645,8 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     }
   }
 
+  excludeBackendFromFrontend(targetDir);
+
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
     deps: { '@aws-blocks/blocks': '*' },
@@ -619,7 +668,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
     blocksConfig: { dev: { port: 3001, frontend: false } },
-    gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
+    gitignoreEntries: ['.blocks-sandbox', '.bb-data/', 'aws-blocks/.types/'],
     skipInstall,
     workspaceRoot,
   });
@@ -740,6 +789,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
@@ -783,6 +833,8 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     console.log('  ⚠ cdk.json already exists, skipping');
   }
 
+  excludeBackendFromFrontend(targetDir);
+
   // 3. Add Blocks workspace (package.json, .gitignore, deps, install).
   // Source devDeps versions from the template's package.json — single source of truth.
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
@@ -807,7 +859,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'dev:stop': 'cdk-blocks dev stop',
     },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/.types/', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });

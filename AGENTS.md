@@ -1,6 +1,6 @@
 # AGENTS.md — AWS Blocks (contributor guide)
 
-> **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `aws-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types directly — no client generation step. Everything runs locally with no AWS account; deploy with `cdk deploy`.
+> **AWS Blocks** is an Infrastructure-from-Code TypeScript monorepo. One `aws-blocks/` directory defines an entire backend; each **Building Block (BB)** bundles a CDK construct + an AWS-runtime SDK client + a local mock behind one strongly-typed API. Frontends import the backend's types through declaration files generated from it (`aws-blocks/.types/`, written by the dev server and `blocks-generate-client`), so a frontend whose tsconfig excludes `aws-blocks/` never typechecks backend source with its own settings. Everything runs locally with no AWS account; deploy with `cdk deploy`.
 
 ## How to work here
 You're an engineer working **on AWS Blocks itself** — the framework and its Building Blocks. (If the task is building an app *with* AWS Blocks, this is the wrong doc → run `npm create @aws-blocks/blocks-app@latest my-app`.) You serve the project, its users, and its maintainers — not only the request in front of you.
@@ -84,7 +84,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // aws-blocks/index.handler.ts — Lambda entry (lazy import so config loads first)
 export const handler = createLambdaHandler(() => import('./index.js'));
 
-// frontend — typed import of the backend, no codegen
+// frontend — typed import of the backend (types from the generated aws-blocks/.types/)
 import { api } from 'aws-blocks';
 await api.addNote('hello');
 ```
@@ -191,6 +191,20 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 5. Confirm your test now passes: `npm run test:e2e:local` (e2e) or `cd packages/<affected> && npm test` (unit)
 6. Run full integration tests: `npm run test:e2e:local` from root
 7. Verify no regressions in related packages
+
+### Debugging a type resolution problem
+When a frontend reports errors inside backend source, or a BB resolves to the
+wrong layer, ask `tsc` instead of guessing — two flags answer most of it:
+
+- `npx tsc -p <tsconfig> --explainFiles` — why each file is in the program. This
+  is how you tell "my tsconfig globs `aws-blocks/`" apart from "an import pulled
+  it in". `include`/`exclude` only pick the program's *roots*: TypeScript still
+  follows imports into excluded files and checks them under the importing
+  config, which is why `aws-blocks/.types/` exists at all.
+- `npx tsc -p <tsconfig> --traceResolution | grep <specifier>` — which `exports`
+  branch a BB resolved through. A condition only redirects types when it carries
+  its own `types` key (`cdk` does); a bare-string condition like `aws-runtime` is
+  skipped for types and resolution falls through to the top-level `types`.
 
 ### Understanding Architecture
 1. `docs/reference/ARCHITECTURE-LAYERS.md` — the four-export layer model

@@ -8,7 +8,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { generateClientCode } from '@aws-blocks/blocks/scripts';
+import { generateBackendTypes, generateClientCode } from '@aws-blocks/blocks/scripts';
 
 const awsBlocksDir = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const foundationPath = join(awsBlocksDir, 'index.ts');
@@ -59,3 +59,12 @@ registerMiddleware({
 mkdirSync(dirname(clientPath), { recursive: true });
 writeFileSync(clientPath, preamble + codeFromImports);
 console.log(`✅ Generated ${clientPath}`);
+
+// Backend declaration files (aws-blocks/.types/) for the frontend's typed import.
+const types = await generateBackendTypes(awsBlocksDir);
+if (types.status === 'failed') {
+	console.error(`❌ Backend types not written: ${types.message}`);
+	if (types.diagnostics) console.error(types.diagnostics);
+	process.exit(1);
+}
+if (types.status === 'written') console.log(`✅ Generated ${types.outFile}`);

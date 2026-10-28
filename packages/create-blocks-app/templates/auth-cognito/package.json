@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "pretypecheck": "cdk-blocks generate client",
     "spec": "cdk-blocks generate spec",
     "dev:server": "cdk-blocks dev",
     "dev": "cdk-blocks dev",
