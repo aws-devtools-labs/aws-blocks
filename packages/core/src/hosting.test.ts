@@ -628,11 +628,11 @@ describe('Hosting', () => {
       const [acl] = Object.values(template.findResources('AWS::WAFv2::WebACL'));
       const rate = (acl.Properties.Rules as Array<Record<string, any>>).find((r) => r.Name === 'RateLimitRule');
       const searchString = rate?.Statement.RateBasedStatement.ScopeDownStatement.NotStatement.Statement.ByteMatchStatement.SearchString;
-      assert.strictEqual(searchString, apiFrontDoorMarkerValue(stack));
+      assert.deepStrictEqual(searchString, stack.resolve(apiFrontDoorMarkerValue(stack)));
       // Hosting's API origin carries the same marker, so its edge-IP requests are exempt.
       const distConfig = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0].Properties.DistributionConfig;
       const markedOrigins = (distConfig.Origins as Array<{ OriginCustomHeaders?: Array<{ HeaderName: string; HeaderValue: string }> }>)
-        .filter((o) => o.OriginCustomHeaders?.some((h) => h.HeaderName === API_FRONT_DOOR_MARKER_HEADER && h.HeaderValue === searchString));
+        .filter((o) => o.OriginCustomHeaders?.some((h) => h.HeaderName === API_FRONT_DOOR_MARKER_HEADER && JSON.stringify(h.HeaderValue) === JSON.stringify(searchString)));
       assert.strictEqual(markedOrigins.length, 1, 'the API origin forwards the marker header');
       assert.strictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('apiWaf')).length, 0);
     });

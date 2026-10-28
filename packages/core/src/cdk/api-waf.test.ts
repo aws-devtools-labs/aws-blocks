@@ -171,7 +171,7 @@ describe('apiWaf placement (front-door aspect)', () => {
 		const { stack, stage } = owner({ rateLimit: 1000 });
 		claimApiFrontDoor(stack, 'https://d111.cloudfront.net');
 		const marker = apiFrontDoorMarker(stack);
-		assert.deepStrictEqual(marker, { [API_FRONT_DOOR_MARKER_HEADER]: apiFrontDoorMarkerValue(stack) });
+		assert.deepStrictEqual(Object.keys(marker ?? {}), [API_FRONT_DOOR_MARKER_HEADER]);
 		scheduleApiFrontDoor(stack, false, GATEWAY_URL, stage);
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 1);
@@ -183,7 +183,7 @@ describe('apiWaf placement (front-door aspect)', () => {
 					ByteMatchStatement: {
 						FieldToMatch: { SingleHeader: { Name: API_FRONT_DOOR_MARKER_HEADER } },
 						PositionalConstraint: 'EXACTLY',
-						SearchString: apiFrontDoorMarkerValue(stack),
+						SearchString: stack.resolve(apiFrontDoorMarkerValue(stack)),
 						TextTransformations: [{ Priority: 0, Type: 'NONE' }],
 					},
 				},
@@ -216,11 +216,15 @@ describe('apiWaf placement (front-door aspect)', () => {
 		assert.strictEqual(apiFrontDoorMarker(owner({ webAclArn: REGIONAL_ACL }).stack), undefined);
 	});
 
-	test('the marker value is stable across synths and differs per backend', () => {
-		assert.strictEqual(apiFrontDoorMarkerValue(owner(undefined).stack), apiFrontDoorMarkerValue(owner(undefined).stack));
-		const a = new cdk.Stack(new cdk.App(), 'A');
-		const b = new cdk.Stack(new cdk.App(), 'B');
-		assert.notStrictEqual(apiFrontDoorMarkerValue(a), apiFrontDoorMarkerValue(b));
+	test('the marker is the stack unique ID, not a value computable from names in the code', () => {
+		// Anyone can hash a stack name and a construct path; the UUID in the stack
+		// ARN is assigned by CloudFormation and isn't part of the public endpoint.
+		const { stack } = owner(undefined);
+		const value = apiFrontDoorMarkerValue(stack);
+		assert.ok(cdk.Token.isUnresolved(value), 'the marker resolves at deploy time');
+		assert.deepStrictEqual(stack.resolve(value), {
+			'Fn::Select': [2, { 'Fn::Split': ['/', { Ref: 'AWS::StackId' }] }],
+		});
 	});
 
 	test('a literal webAclArn must match the scope and region it attaches to', () => {

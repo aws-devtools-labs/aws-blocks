@@ -18,7 +18,6 @@
  *   Hosting's distribution, so its WAF belongs there, and a synth warning says so.
  */
 
-import { createHash } from 'node:crypto';
 import * as cdk from 'aws-cdk-lib';
 import type { Stage } from 'aws-cdk-lib/aws-apigateway';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
@@ -94,20 +93,19 @@ function visibility(metricName: string): CfnWebACL.VisibilityConfigProperty {
 export const API_FRONT_DOOR_MARKER_HEADER = 'x-blocks-front-door';
 
 /**
- * The marker value for this backend. Deterministic (stack name + the owner's
- * construct path + a version), like Hosting's origin-verify secret, so it
- * doesn't churn the template on every synth; bump the version to rotate. It
+ * The marker value for this backend: the UUID part of its stack's
+ * `AWS::StackId` (`arn:aws:cloudformation:<region>:<account>:stack/<name>/<uuid>`).
+ * CloudFormation assigns it when the stack is created, so it is stable across
+ * deploys (the template doesn't change on every synth) but isn't derivable
+ * from anything public — stack names, construct paths and this code all are.
+ * Both the origin custom header and the WAF byte match take it as a token. It
  * only exempts proxied requests from the rate rule — the managed rule groups
  * still inspect them — so it is a rate-limit scope, not an authorization.
  *
  * @internal
  */
 export function apiFrontDoorMarkerValue(owner: Construct): string {
-	return createHash('sha256')
-		.update(cdk.Stack.of(owner).stackName)
-		.update(owner.node.path)
-		.update('blocks-api-front-door-v1')
-		.digest('hex');
+	return cdk.Fn.select(2, cdk.Fn.split('/', cdk.Stack.of(owner).stackId));
 }
 
 /**
