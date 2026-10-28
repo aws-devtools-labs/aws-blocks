@@ -34,6 +34,8 @@ type Request = {
 	resourceApp?: string;
 	/** The `app` value the request itself sets as a tag (a create or tag call), if any. */
 	requestApp?: string;
+	/** The tag keys the request adds or removes (`aws:TagKeys`); defaults to `['app']` when it sets `requestApp`. */
+	tagKeys?: string[];
 	viaService?: string;
 	roleArn?: string;
 };
@@ -54,6 +56,11 @@ function matches(s: Statement, r: Request): boolean {
 	const notTag = c?.StringNotEquals?.['aws:ResourceTag/app'];
 	if (notTag !== undefined && c?.Null?.['aws:ResourceTag/app'] === 'false') {
 		if (r.resourceApp === undefined || r.resourceApp === notTag) return false;
+	}
+	const tagKeysCondition = (c as Record<string, Record<string, unknown>> | undefined)?.['ForAnyValue:StringEquals']?.['aws:TagKeys'];
+	if (tagKeysCondition !== undefined) {
+		const keys = r.tagKeys ?? (r.requestApp !== undefined ? ['app'] : []);
+		if (!list(tagKeysCondition as string[]).some((k) => keys.includes(k))) return false;
 	}
 	const reqTag = c?.StringEquals?.['aws:RequestTag/app'];
 	if (reqTag !== undefined && r.requestApp !== reqTag) return false;
@@ -221,6 +228,24 @@ describe('blocks-iam-policies — the per-app execution policy', () => {
 		assert.strictEqual(r('states:StartExecution', `${A}:states:us-east-1:${acct}:stateMachine:Gsi-x`, 'appa'), true);
 		assert.strictEqual(r('states:StartExecution', `${A}:states:us-east-1:${acct}:stateMachine:Gsi-y`, 'appb'), false);
 		assert.strictEqual(r('secretsmanager:GetSecretValue', `${A}:secretsmanager:us-east-1:${acct}:secret:db-x`, 'appb'), false);
+	});
+
+	test('pinned to the app\'s own API ids (--api-id): another API is denied even if it claims the app\'s tag', () => {
+		const pinned = generateExecutionPolicy(['AWS::ApiGateway::RestApi'], { appId: 'appa', account: acct, apiIds: ['own123'] }).document;
+		const r = (action: string, path: string, resourceApp: string, requestApp?: string) =>
+			allowed(pinned, { action, arn: `${A}:apigateway:us-east-1::${path}`, principalApp: 'appa', resourceApp, requestApp });
+		assert.strictEqual(r('apigateway:POST', '/restapis/own123/stages', 'appa'), true, 'a stage on its own API');
+		assert.strictEqual(r('apigateway:PATCH', '/restapis/own123/stages/prod', 'appa'), true, 'update its own stage');
+		assert.strictEqual(r('apigateway:DELETE', '/restapis/own123/resources/r1', 'appa'), true, 'delete its own resource');
+		for (const [action, path] of [
+			['apigateway:POST', '/restapis/other99/stages'],
+			['apigateway:POST', '/restapis/other99/resources/root'],
+			['apigateway:PATCH', '/restapis/other99/stages/prod'],
+			['apigateway:DELETE', '/restapis/other99'],
+			['apigateway:PUT', '/tags/arn%3Aaws%3Aapigateway%3Aus-east-1%3A%3A%2Frestapis%2Fother99'],
+		]) {
+			assert.strictEqual(r(action, path, 'appa', 'appa'), false, `${action} ${path} on an API tagged as this app but not pinned`);
+		}
 	});
 
 	test("manages only the app's own layers", () => {

@@ -9,7 +9,7 @@
  *
  * Usage:
  *   blocks-iam-policies [cdk.out] [--out <dir>] [--boundary-name <name>]
- *                       [--app <id> --account <12 digits> [--execute-api <api id>]...] [--partition <p>]
+ *                       [--app <id> --account <12 digits> [--api-id <api id>]...] [--partition <p>]
  *
  * Always writes `<out>/boundary.json`, the permissions boundary shared by every
  * app in the account. With `--app` and `--account`, also writes
@@ -17,9 +17,11 @@
  * from the resource types in the synthesized templates in `cdk.out` (it lists
  * any resource type it has no scoped rule for), and `<out>/deploy-guard-<id>.json`,
  * the policy to attach to the app's CDK bootstrap deploy role. With
- * `--execute-api` (once per API id, e.g. a Realtime WebSocket API), also writes
- * `<out>/boundary-<id>.json`, a boundary for that one app that allows
- * `execute-api` on exactly those APIs; the app's execution policy then requires it.
+ * `--api-id` (once per API id of the app's own, deployed APIs, e.g. its REST API
+ * and a Realtime WebSocket API), also writes `<out>/boundary-<id>.json`, a boundary
+ * for that one app that allows `execute-api` on exactly those APIs, and pins the
+ * execution policy's API Gateway management to them; the execution policy then
+ * requires that boundary.
  *
  * Exit codes: 0 written · 2 usage error.
  */
@@ -42,7 +44,7 @@ function usage(message?: string): never {
 	if (message) process.stderr.write(`blocks-iam-policies: ${message}\n`);
 	process.stderr.write(
 		'Usage: blocks-iam-policies [cdk.out] [--out <dir>] [--boundary-name <name>] ' +
-			'[--app <id> --account <12 digits> [--execute-api <api id>]...] [--partition <p>]\n',
+			'[--app <id> --account <12 digits> [--api-id <api id>]...] [--partition <p>]\n',
 	);
 	process.exit(2);
 }
@@ -63,7 +65,13 @@ for (let i = 0; i < args.length; i++) {
 	else if (arg === '--app') options.appId = take(++i, arg);
 	else if (arg === '--account') options.account = take(++i, arg);
 	else if (arg === '--partition') options.partition = take(++i, arg);
-	else if (arg === '--execute-api') options.executeApiIds = [...(options.executeApiIds ?? []), take(++i, arg)];
+	else if (arg === '--api-id') {
+		// One flag for both uses of the app's own API ids: the per-app boundary's
+		// execute-api access, and pinning the execution policy's API Gateway rule.
+		const api = take(++i, arg);
+		options.executeApiIds = [...(options.executeApiIds ?? []), api];
+		options.apiIds = [...(options.apiIds ?? []), api];
+	}
 	else if (arg === '--help' || arg === '-h') usage();
 	else if (arg.startsWith('-')) usage(`unknown option ${arg}.`);
 	else assembly = arg;
@@ -81,7 +89,7 @@ process.stdout.write('blocks-iam-policies (EXPERIMENTAL) wrote:\n');
 const executeApiIds = options.executeApiIds ?? [];
 write(join(out, 'boundary.json'), generateBoundaryPolicy({ ...options, executeApiIds: [] }));
 if (executeApiIds.length > 0) {
-	if (!options.appId) usage('--execute-api needs --app: it makes a boundary for that one app.');
+	if (!options.appId) usage('--api-id needs --app: it makes a boundary for that one app.');
 	// A per-app boundary: the shared statements plus `execute-api` on this app's own APIs.
 	options.boundaryName = `${options.boundaryName ?? 'apps-boundary'}-${options.appId}`;
 	write(join(out, `boundary-${options.appId}.json`), generateBoundaryPolicy(options));

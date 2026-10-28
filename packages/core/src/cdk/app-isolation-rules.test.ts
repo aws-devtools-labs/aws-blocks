@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import {
 	APP_ID_PATTERN,
+	checkApiChild,
 	checkLayer,
 	checkResourcePolicy,
 	checkRole,
@@ -133,6 +134,24 @@ describe('app-isolation rules — layers and APIs', () => {
 		);
 		const own = { 'Fn::Join': ['', ['arn:aws:execute-api:us-east-1:111111111111:', { Ref: 'WsApi' }, '/prod/POST/@connections/*']] };
 		assert.deepStrictEqual(checkStatement(s(own), 'appa', 'p'), []);
+	});
+
+	test('an API Gateway child on a literal or unresolvable API id is flagged; one on an own API is fine', () => {
+		assert.deepStrictEqual(rules(checkApiChild('AWS::ApiGateway::Stage', { RestApiId: 'bbb222', StageName: 'x' }, 'appa', 'p')), [
+			'api-outside-app',
+		]);
+		assert.deepStrictEqual(rules(checkApiChild('AWS::ApiGatewayV2::Route', { ApiId: { 'Fn::ImportValue': 'b-api' } }, 'appa', 'p')), [
+			'api-outside-app',
+		]);
+		assert.deepStrictEqual(checkApiChild('AWS::ApiGateway::Deployment', { RestApiId: { Ref: 'Api' } }, 'appa', 'p'), []);
+	});
+
+	test('an apigateway grant on a literal API id, or on *, is flagged', () => {
+		const s = (Resource: string) => ({ Effect: 'Allow', Action: 'apigateway:POST', Resource });
+		assert.deepStrictEqual(rules(checkStatement(s('arn:aws:apigateway:us-east-1::/restapis/bbb222/stages'), 'appa', 'p')), [
+			'grant-outside-app',
+		]);
+		assert.deepStrictEqual(rules(checkStatement(s('*'), 'appa', 'p')), ['wildcard-data-grant']);
 	});
 
 	test('execute-api on * is a wildcard grant', () => {

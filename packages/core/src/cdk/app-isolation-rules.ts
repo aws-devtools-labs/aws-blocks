@@ -47,6 +47,7 @@ export type AppViolationRule =
 	| 'unreadable-template'
 	| 'template-transform'
 	| 'layer-outside-app'
+	| 'api-outside-app'
 	| 'app-id-mismatch';
 
 /** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
@@ -80,6 +81,7 @@ const DATA_SERVICES = new Set([
 	'scheduler',
 	'kms',
 	'execute-api',
+	'apigateway',
 ]);
 
 /** Placeholder for a reference to one of the template's own resources inside a rendered ARN. */
@@ -178,6 +180,13 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 		case 'scheduler':
 			name = rest.startsWith('schedule/') ? rest.split('/')[2] : undefined;
 			break;
+		case 'apigateway': {
+			// `/restapis/<api id>/…` or `/apis/<api id>/…`: like execute-api, an API id is
+			// never a name under the app's prefix. Other paths (`/account`, …) aren't per-app.
+			const m = /^\/(restapis|apis)\/([^/]+)/.exec(rest);
+			name = m ? m[2] : undefined;
+			break;
+		}
 		case 'execute-api':
 			// `<api id>/<stage>/<method>/<path>`: an API id is never a name under the app's
 			// prefix, so a literal one is always outside the app — reference the API instead.
@@ -351,7 +360,7 @@ export function checkStatement(
 			: isUnderAppPrefix(bare, id);
 		if (!within) {
 			const asset = parsed.service === 's3' && /^cdk-[^-]+-assets-/.test(bare);
-			const api = parsed.service === 'execute-api';
+			const api = parsed.service === 'execute-api' || parsed.service === 'apigateway';
 			out.push({
 				rule: 'grant-outside-app',
 				path: where,
@@ -570,6 +579,35 @@ export function checkLayer(props: Record<string, unknown>, id: string, where: st
 			rule: 'layer-outside-app',
 			path: where,
 			message: `${where} is a Lambda layer named ${JSON.stringify(props.LayerName ?? null)}, which isn't under this app's prefix "${id}-".`,
+		},
+	];
+}
+
+/**
+ * `api-outside-app` for an API Gateway child resource (a stage, deployment,
+ * route, resource, method, integration, …) whose parent API isn't a reference to
+ * an API in the app's own template: a literal API id, or one the check can't
+ * resolve, can be another app's API — a deployment-control and traffic-routing
+ * escape even without any `execute-api` access.
+ */
+export function checkApiChild(
+	type: string,
+	props: Record<string, unknown>,
+	id: string,
+	where: string,
+	parameters: ReadonlySet<string> = new Set(),
+): AppViolation[] {
+	if (!type.startsWith('AWS::ApiGateway::') && !type.startsWith('AWS::ApiGatewayV2::')) return [];
+	const parent = props.RestApiId ?? props.ApiId;
+	if (parent === undefined) return [];
+	if (renderResource(parent, parameters).kind === 'own') return [];
+	return [
+		{
+			rule: 'api-outside-app',
+			path: where,
+			message:
+				`${where} (${type}) attaches to API ${JSON.stringify(parent)}, which isn't an API in this app's own template. ` +
+				"Reference the app's own API instead of an API id.",
 		},
 	];
 }

@@ -58,6 +58,12 @@ export interface IamPolicyOptions {
 	 * `execute-api` on exactly these APIs. Without them, `execute-api` is denied.
 	 */
 	executeApiIds?: string[];
+	/**
+	 * The ids of the app's own API Gateway APIs, once deployed. When given,
+	 * {@link generateExecutionPolicy} pins API Gateway management to exactly these
+	 * APIs (and their children) instead of relying on the APIs' `app` tag alone.
+	 */
+	apiIds?: string[];
 }
 
 /** An IAM policy document. */
@@ -188,7 +194,7 @@ export function generateBoundaryPolicy(options: IamPolicyOptions = {}): PolicyDo
 }
 
 /** CloudFormation resource types → the scoped statements the execution role needs to manage them. */
-type Rule = (ctx: { id: string; p: string; acct: string }) => Record<string, unknown>[];
+type Rule = (ctx: { id: string; p: string; acct: string; apiIds?: string[] }) => Record<string, unknown>[];
 
 const byName = (sid: string, action: string | string[], resources: string[]): Record<string, unknown> => ({
 	Sid: sid,
@@ -308,7 +314,7 @@ const RULES: Record<string, Rule> = {
 		}),
 	// REST (`AWS::ApiGateway::*`) and HTTP/WebSocket (`AWS::ApiGatewayV2::*`) APIs:
 	// API ids aren't names, so these are scoped by the `app` tag.
-	'AWS::ApiGateway': ({ id, p }) =>
+	'AWS::ApiGateway': ({ id, p, apiIds }) =>
 		byTag('Apis', id, {
 			service: 'apigateway',
 			// Only the API collections: a stage, deployment or route is a child of an API,
@@ -319,7 +325,18 @@ const RULES: Record<string, Rule> = {
 			},
 			manage: {
 				actions: ['apigateway:GET', 'apigateway:POST', 'apigateway:PUT', 'apigateway:PATCH', 'apigateway:DELETE'],
-				resources: [`arn:${p}:apigateway:*::/restapis/*`, `arn:${p}:apigateway:*::/apis/*`, `arn:${p}:apigateway:*::/tags/*`],
+				// Pinned to the app's own API ids once known (`--api-id`); before the
+				// first deploy, children are authorized against their API's `app` tag.
+				resources:
+					apiIds && apiIds.length > 0
+						? apiIds.flatMap((api) => [
+								`arn:${p}:apigateway:*::/restapis/${api}`,
+								`arn:${p}:apigateway:*::/restapis/${api}/*`,
+								`arn:${p}:apigateway:*::/apis/${api}`,
+								`arn:${p}:apigateway:*::/apis/${api}/*`,
+								`arn:${p}:apigateway:*::/tags/*${api}*`,
+							])
+						: [`arn:${p}:apigateway:*::/restapis/*`, `arn:${p}:apigateway:*::/apis/*`, `arn:${p}:apigateway:*::/tags/*`],
 			},
 			tag: { add: ['apigateway:TagResource', 'apigateway:PUT'], remove: ['apigateway:UntagResource', 'apigateway:DELETE'] },
 		}),
@@ -494,7 +511,7 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 		}
 		if (applied.has(key)) continue;
 		applied.add(key);
-		statements.push(...RULES[key]({ id, p, acct }));
+		statements.push(...RULES[key]({ id, p, acct, apiIds: options.apiIds }));
 	}
 	return { document: { Version: '2012-10-17', Statement: statements }, unscoped: [...unscoped].sort() };
 }
