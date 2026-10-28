@@ -400,6 +400,11 @@ export interface ScopeOptions {
     bbName?: string;
     // (undocumented)
     bbVersion?: string;
+    compute?: {
+        resolve(): {
+            readonly type: 'serverless' | 'container';
+        };
+    };
     // (undocumented)
     parent?: ScopeParent;
 }

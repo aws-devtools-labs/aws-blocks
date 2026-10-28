@@ -14,6 +14,10 @@ import { Scope } from '@aws-blocks/core';
 const scope = new Scope('my-app');
 ```
 
+Pass `compute` to place everything created under a scope, and in its child
+scopes, on one `Compute` (`new Scope('reports', { parent: scope, compute })`);
+see the `@aws-blocks/bb-compute` README for what follows it.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
