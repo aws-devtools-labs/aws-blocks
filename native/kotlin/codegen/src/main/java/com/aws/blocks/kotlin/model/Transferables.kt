@@ -1,46 +1,56 @@
 package com.aws.blocks.kotlin.model
 
 /**
- * What a transferable's `x-blocks-type-args[0]` means, which decides whether it becomes a type.
+ * Which way a transferable's type argument crosses the wire.
  *
- * The spec carries both meanings in the same field, so the role can't be read off a type argument
- * itself: a realtime channel of string-literal messages and an OIDC client's provider names are
- * both a string enum in the spec.
+ * This decides both the conversion a generated type needs and how faithful it has to be. An
+ * argument the runtime decodes has to represent anything the backend might send, so narrowing it
+ * drops payloads. One the runtime only encodes has to express just what a caller may send, so it
+ * can be narrowed to the values the spec permits.
  */
-enum class TypeArgRole {
-    /**
-     * A payload that crosses the wire, generated as a type the runtime decodes into. A nested
-     * transferable hydrates too, so its argument is generated wherever it appears.
-     */
-    DATA,
+enum class TypeArgDirection {
+    /** Decoded from the wire, so generated as a type the runtime deserializes into. */
+    OUT,
 
-    /**
-     * The values a hydrated client accepts for a parameter, generated as an enum of them that
-     * types the client. Only generated for an operation's own result: a transferable in any other
-     * position doesn't hydrate, so nothing could reference the enum.
-     */
-    PARAMETER_VALUES,
+    /** Encoded to the wire, so it may be narrowed to the values the spec permits. */
+    IN,
+
+    /** Both decoded and encoded, which needs everything [OUT] does. */
+    IN_OUT,
 }
 
 /**
- * How a transferable tag's type argument is treated, independent of target language.
+ * One of a transferable's type arguments, by position.
  *
- * [typeArgName] names the generated type for a [TypeArgRole.PARAMETER_VALUES] argument, since the
- * spec gives it no name of its own.
+ * Direction is a fact about the runtime type's own API — which of its members take the argument
+ * and which return it — rather than anything the spec says, so it is declared here per tag.
+ *
+ * [name] names a narrowed type, which the generator has to name itself because the spec gives the
+ * values no name of their own. An [TypeArgDirection.OUT] argument is named from where it appears.
  */
 data class TransferableTypeArg(
-    val role: TypeArgRole,
-    val typeArgName: String,
+    val direction: TypeArgDirection,
+    val name: String,
 )
 
 /**
- * Tags whose type argument isn't a payload. A tag absent here is [TypeArgRole.DATA], which is the
- * behaviour for a transferable that declares no type argument at all.
+ * The declared type arguments of each tag, in the order the runtime type takes them.
+ *
+ * A tag absent here, including one a spec declares for a third-party binding, carries only
+ * [TypeArgDirection.OUT] arguments — the treatment a transferable with no narrowing gets.
  */
-private val typeArgRoles: Map<String, TransferableTypeArg> = mapOf(
-    "oidc/client" to TransferableTypeArg(TypeArgRole.PARAMETER_VALUES, typeArgName = "Provider"),
+private val declaredTypeArgs: Map<String, List<TransferableTypeArg>> = mapOf(
+    // RealtimeChannel<T> deserializes T out of the socket; nothing sends one yet.
+    "realtime/channel" to listOf(TransferableTypeArg(TypeArgDirection.OUT, name = "Message")),
+    // OidcClient<P> only ever sends a P, which is why its values can be narrowed to an enum.
+    "oidc/client" to listOf(TransferableTypeArg(TypeArgDirection.IN, name = "Provider")),
 )
 
-/** How [transferableName]'s type argument is treated. */
-fun transferableTypeArg(transferableName: String): TransferableTypeArg =
-    typeArgRoles[transferableName] ?: TransferableTypeArg(TypeArgRole.DATA, typeArgName = "Result")
+/** How [transferableName] uses the type argument at [position]. */
+fun transferableTypeArg(transferableName: String, position: Int): TransferableTypeArg =
+    declaredTypeArgs[transferableName]?.getOrNull(position)
+        ?: TransferableTypeArg(TypeArgDirection.OUT, name = "Result")
+
+/** Whether [transferableName] narrows the type argument at [position] to the spec's values. */
+fun narrowsTypeArg(transferableName: String, position: Int): Boolean =
+    transferableTypeArg(transferableName, position).direction == TypeArgDirection.IN

@@ -19,8 +19,9 @@ import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.RpcModel
 import com.aws.blocks.kotlin.model.ServerDefinition
 import com.aws.blocks.kotlin.model.TypeDefinition
-import com.aws.blocks.kotlin.model.TypeArgRole
+import com.aws.blocks.kotlin.model.TypeArgDirection
 import com.aws.blocks.kotlin.model.TypeRef
+import com.aws.blocks.kotlin.model.narrowsTypeArg
 import com.aws.blocks.kotlin.model.transferableTypeArg
 import com.aws.blocks.kotlin.model.UnionVariant
 
@@ -29,6 +30,12 @@ private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 
 /** The path a Blocks backend serves RPC on. */
 private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
+
+/**
+ * What a narrowed type argument resolves to until something names it: it holds the argument's
+ * position, and the generator reads an unnamed one as the runtime type's own default there.
+ */
+private val NARROWED_PLACEHOLDER = ResolvedType.Enum(name = "", values = emptyList())
 
 
 /**
@@ -99,7 +106,7 @@ class CodegenModelBuilder {
             val returnType = resolveType(method.result?.schema ?: TypeRef.Primitive("void"), collector, explicitName = method.result?.name)
             val nestedTypes = collector.buildNestedTypesForMethod(method.name)
             val result = OperationResult(
-                type = withParameterValues(returnType, method.result?.schema, nestedTypes),
+                type = withNarrowedTypeArgs(returnType, method.result?.schema, nestedTypes),
                 description = method.result?.description
             )
 
@@ -116,25 +123,37 @@ class CodegenModelBuilder {
         return grouped.map { (name, ops) -> ApiNamespace(name = name, operations = ops) }
     }
 
-    // ── Parameter-value type arguments ───────────────────────────────
+    // ── Narrowed type arguments ──────────────────────────────────────
 
     /**
-     * Gives an operation's own result the enum of values its [TypeArgRole.PARAMETER_VALUES] type
-     * argument permits, which the generator emits in the operation's object. The values come from
-     * the spec's type args; an argument that didn't resolve to string literals contributes none,
-     * and neither does a transferable nested inside another type, which doesn't hydrate.
+     * Names the values each narrowed ([TypeArgDirection.IN]) type argument of an operation's own
+     * result permits, as an enum the generator emits in the operation's object.
+     *
+     * Only an operation's own result is narrowed: a transferable in any other position doesn't
+     * hydrate, so nothing could reference the enum. An argument the spec didn't resolve to string
+     * literals keeps the placeholder it resolved to, which the generator reads as the runtime
+     * type's own default for that position.
      */
-    private fun withParameterValues(
+    private fun withNarrowedTypeArgs(
         resolved: ResolvedType,
         schema: TypeRef?,
         nestedTypes: List<NestedTypeNode>,
     ): ResolvedType {
         val transferable = directTransferable(schema) ?: return resolved
-        val typeArg = transferableTypeArg(transferable.transferableName)
-        if (typeArg.role != TypeArgRole.PARAMETER_VALUES) return resolved
-        val values = (transferable.typeArgs.firstOrNull() as? TypeRef.UnionLiteral)?.values ?: return resolved
-        val name = parameterValuesName(typeArg.typeArgName, takenTypeNames(nestedTypes))
-        return attachTypeArg(resolved, ResolvedType.Enum(name = name, values = values))
+        val taken = takenTypeNames(nestedTypes).toMutableSet()
+        var narrowed = resolved
+        for ((position, arg) in transferable.typeArgs.withIndex()) {
+            if (!narrowsTypeArg(transferable.transferableName, position)) continue
+            val values = (arg as? TypeRef.UnionLiteral)?.values ?: continue
+            val name = narrowedTypeName(
+                transferableTypeArg(transferable.transferableName, position).name,
+                taken,
+            )
+            // Two narrowed arguments can't both be the tag's preferred name.
+            taken.add(name)
+            narrowed = replaceTypeArg(narrowed, position, ResolvedType.Enum(name = name, values = values))
+        }
+        return narrowed
     }
 
     /** The transferable an operation returns directly, or inside a nullable. */
@@ -144,10 +163,13 @@ class CodegenModelBuilder {
         return typeRef as? TypeRef.Transferable
     }
 
-    private fun attachTypeArg(resolved: ResolvedType, typeArg: ResolvedType.Enum): ResolvedType =
+    /** Replaces one type argument, leaving every other position where the spec put it. */
+    private fun replaceTypeArg(resolved: ResolvedType, position: Int, typeArg: ResolvedType): ResolvedType =
         when (resolved) {
-            is ResolvedType.Nullable -> ResolvedType.Nullable(attachTypeArg(resolved.inner, typeArg))
-            is ResolvedType.Transferable -> resolved.copy(typeArgs = listOf(typeArg))
+            is ResolvedType.Nullable -> ResolvedType.Nullable(replaceTypeArg(resolved.inner, position, typeArg))
+            is ResolvedType.Transferable -> resolved.copy(
+                typeArgs = resolved.typeArgs.mapIndexed { i, existing -> if (i == position) typeArg else existing },
+            )
             else -> resolved
         }
 
@@ -155,7 +177,7 @@ class CodegenModelBuilder {
      * The tag's own name for the argument, unless the operation's object already holds a type by
      * that name or reaches one the enum would shadow.
      */
-    private fun parameterValuesName(preferred: String, taken: Set<String>): String {
+    private fun narrowedTypeName(preferred: String, taken: Set<String>): String {
         if (preferred !in taken) return preferred
         var candidate = "Result$preferred"
         var attempt = 2
@@ -265,13 +287,15 @@ class CodegenModelBuilder {
                 elements = typeRef.elements.map { resolveType(it, collector) },
             )
             is TypeRef.Nullable -> ResolvedType.Nullable(resolveType(typeRef.inner, collector))
-            // A parameter-value argument permits values rather than naming a type to generate.
-            // The operation's own result gets them back as an enum in [withParameterValues].
             is TypeRef.Transferable -> ResolvedType.Transferable(
                 transferableName = typeRef.transferableName,
-                typeArgs = when (transferableTypeArg(typeRef.transferableName).role) {
-                    TypeArgRole.PARAMETER_VALUES -> emptyList()
-                    TypeArgRole.DATA -> typeRef.typeArgs.map { resolveType(it, collector) }
+                // A narrowed argument names values rather than a type to generate, so it resolves
+                // to an unnamed placeholder: [withNarrowedTypeArgs] replaces an operation's own
+                // with the enum, and the generator reads the rest as the runtime type's default.
+                // Dropping it instead would shift every argument after it out of position.
+                typeArgs = typeRef.typeArgs.mapIndexed { position, arg ->
+                    if (narrowsTypeArg(typeRef.transferableName, position)) NARROWED_PLACEHOLDER
+                    else resolveType(arg, collector)
                 },
             )
             is TypeRef.ObjectWithOneOf -> {
@@ -756,12 +780,11 @@ class CodegenModelBuilder {
                 }
 
                 is TypeRef.Transferable -> {
-                    // Recurse into type args to collect any referenced types. A parameter-value
-                    // argument names no type of its own, so it collects nothing here.
-                    if (transferableTypeArg(typeRef.transferableName).role == TypeArgRole.DATA) {
-                        for (arg in typeRef.typeArgs) {
-                            collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
-                        }
+                    // Recurse into type args to collect any referenced types. A narrowed argument
+                    // names no type of its own, so it collects nothing here.
+                    for ((position, arg) in typeRef.typeArgs.withIndex()) {
+                        if (narrowsTypeArg(typeRef.transferableName, position)) continue
+                        collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
                     }
                 }
 
