@@ -45,6 +45,22 @@
  *                   versioning-policy question, separate from the publish
  *                   failure this guard exists to prevent.
  *
+ *   verify-scaffolder Exit non-zero if this PR moves a package that
+ *                   `@aws-blocks/create-blocks-app` stamps into new apps (each
+ *                   `@aws-blocks/*` devDependency of the CLI) to a new release
+ *                   line, a `minor` or `major` changeset, without any pending
+ *                   changeset releasing create-blocks-app. The CLI stamps the
+ *                   caret range from its own devDependencies, and a
+ *                   devDependency bump never releases it (changesets assigns
+ *                   bump type `none`), so the published CLI would keep
+ *                   scaffolding apps on the previous line. A `patch` needs
+ *                   nothing: the caret range already admits it. Withdrawing a
+ *                   create-blocks-app entry is checked like verify-umbrella.
+ *                   The release PR has no changesets left, so there the same
+ *                   rule is read from the version diff instead: a stamped
+ *                   package whose release line changes needs a
+ *                   create-blocks-app version change alongside it.
+ *
  * Guards fail loudly. When one cannot read what it asserts against (a missing
  * or malformed package.json, say) it exits non-zero with the reason instead of
  * printing a green line it did not earn.
@@ -59,6 +75,7 @@
  *   node --experimental-strip-types scripts/changeset-guard.ts block-major
  *   node --experimental-strip-types scripts/changeset-guard.ts validate-structure
  *   node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
+ *   node --experimental-strip-types scripts/changeset-guard.ts verify-scaffolder
  */
 
 import { execFileSync } from "node:child_process";
@@ -71,6 +88,7 @@ const CHANGESET_DIR = join(ROOT, ".changeset");
 const NATIVE_DIR = join(ROOT, "native");
 const SCOPE = "@aws-blocks/";
 const UMBRELLA_PKG = "@aws-blocks/blocks";
+const SCAFFOLDER_PKG = "@aws-blocks/create-blocks-app";
 
 // changesets/action opens its "Version Packages" PR with this title.
 const RELEASE_PR_TITLE_PREFIX = "chore: version packages";
@@ -319,14 +337,14 @@ function parseChangesetAtMergeBase(file: string): Entry[] {
 }
 
 /**
- * Changesets this PR takes the umbrella entry away from: they declared
- * `@aws-blocks/blocks` at the merge base and no longer do, whether the line was
+ * Changesets this PR takes the `pkg` entry away from (the umbrella, say): they
+ * declared `pkg` at the merge base and no longer do, whether the line was
  * deleted or the whole file was. Coverage can be withdrawn as easily as it can
  * be forgotten, and the release aborts either way.
  */
-function getWithdrawnUmbrellaFiles(pending: Entry[]): string[] {
+function getWithdrawnFiles(pending: Entry[], pkg: string): string[] {
 	const stillDeclaring = new Set(
-		pending.filter((e) => e.pkg === UMBRELLA_PKG).map((e) => e.file),
+		pending.filter((e) => e.pkg === pkg).map((e) => e.file),
 	);
 	const atMergeBase = getChangesetsAtMergeBase();
 	return [...getChangedChangesetFiles()]
@@ -334,7 +352,7 @@ function getWithdrawnUmbrellaFiles(pending: Entry[]): string[] {
 			(file) =>
 				!stillDeclaring.has(file) &&
 				atMergeBase.has(file) &&
-				parseChangesetAtMergeBase(file).some((e) => e.pkg === UMBRELLA_PKG),
+				parseChangesetAtMergeBase(file).some((e) => e.pkg === pkg),
 		)
 		.sort();
 }
@@ -351,7 +369,7 @@ function verifyUmbrella(): number {
 	const siblings = getUmbrellaSiblings();
 	const pending = parseChangesets();
 	const touched = getChangedChangesetFiles();
-	const withdrawnFrom = getWithdrawnUmbrellaFiles(pending);
+	const withdrawnFrom = getWithdrawnFiles(pending, UMBRELLA_PKG);
 
 	const siblingReleases = (entries: Entry[]) =>
 		[...new Set(entries.filter((e) => siblings.has(e.pkg)).map((e) => e.pkg))].sort();
@@ -406,6 +424,171 @@ function verifyUmbrella(): number {
 		`\nNothing bumps ${UMBRELLA_PKG}. ${UMBRELLA_PUBLISH_FAILURE}` +
 		`Add this line to your changeset:\n\n` +
 		`   "${UMBRELLA_PKG}": patch\n`,
+	);
+	return 1;
+}
+
+/**
+ * The `@aws-blocks/*` packages create-blocks-app stamps into the apps it
+ * scaffolds, read from its own devDependencies (the CLI reads the same list at
+ * scaffold time, so the two cannot drift).
+ *
+ * An unreadable, malformed or empty list fails the guard: an empty set would
+ * pass every PR while printing the green line.
+ */
+function getStampedPackages(): Set<string> {
+	const pkgJsonPath = join(PACKAGES_DIR, "create-blocks-app", "package.json");
+	const devDeps = readJson(pkgJsonPath, `${SCAFFOLDER_PKG}'s package.json`).devDependencies;
+
+	const stamped = new Set(
+		devDeps !== null && typeof devDeps === "object"
+			? Object.keys(devDeps as Record<string, unknown>).filter(
+					(name) => name.startsWith(SCOPE) && name !== SCAFFOLDER_PKG,
+				)
+			: [],
+	);
+
+	if (stamped.size === 0) {
+		throw new GuardError(
+			`${SCAFFOLDER_PKG}'s package.json (${pkgJsonPath}) declares no ${SCOPE}* devDependencies.\n` +
+			`Those are the packages the CLI stamps into scaffolded apps, so either that file was\n` +
+			`edited by mistake or the stamping moved and this guard needs updating. Passing every\n` +
+			`PR on an empty set would be worse than failing here.`,
+		);
+	}
+	return stamped;
+}
+
+/** A package's version from its package.json at the merge base, or null if it did not exist there. */
+function getVersionAtMergeBase(dir: string): string | null {
+	let raw: string;
+	try {
+		raw = execFileSync("git", ["show", `${getMergeBase()}:packages/${dir}/package.json`], {
+			cwd: ROOT,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+	} catch {
+		return null;
+	}
+	try {
+		const { version } = JSON.parse(raw);
+		return typeof version === "string" ? version : null;
+	} catch (err) {
+		throw new GuardError(`Cannot parse packages/${dir}/package.json at the merge base: ${(err as Error).message}`);
+	}
+}
+
+/** A package's version from its package.json at HEAD. */
+function getVersionAtHead(dir: string): string {
+	const { version } = readJson(join(PACKAGES_DIR, dir, "package.json"), `packages/${dir}/package.json`);
+	if (typeof version !== "string") {
+		throw new GuardError(`packages/${dir}/package.json has no "version" string.`);
+	}
+	return version;
+}
+
+/** The pre-1.0 release line a version belongs to: `0.8.3` → `0.8`, `1.2.0` → `1`. */
+function releaseLine(version: string): string {
+	const [major, minor] = version.split(".");
+	return major === "0" ? `0.${minor}` : (major ?? version);
+}
+
+/** Why a stamped package's new release line needs a create-blocks-app release too. */
+const SCAFFOLDER_STALE_STAMP =
+	`${SCAFFOLDER_PKG} stamps a caret range for each of these packages into every app it\n` +
+	`scaffolds, read from its own devDependencies. \`changeset version\` moves that range,\n` +
+	`but a devDependency bump never releases the CLI (changesets assigns it bump type\n` +
+	`\`none\`), so the published CLI would keep scaffolding new apps on the previous release\n` +
+	`line. Patches need nothing: the caret range already admits them.\n\n`;
+
+function verifyScaffolder(): number {
+	const stamped = getStampedPackages();
+
+	// The release PR has consumed every changeset, so read the rule from the
+	// version diff there. On any other PR no version moves and this is a no-op.
+	const scaffolderMoved = getVersionAtMergeBase("create-blocks-app") !== getVersionAtHead("create-blocks-app");
+	const lineChanges = [...stamped]
+		.sort()
+		.map((pkg) => {
+			const dir = pkg.slice(SCOPE.length);
+			return { pkg, from: getVersionAtMergeBase(dir), to: getVersionAtHead(dir) };
+		})
+		.filter(({ from, to }) => from !== null && releaseLine(from) !== releaseLine(to));
+
+	if (lineChanges.length > 0 && !scaffolderMoved) {
+		console.error(`\n❌ These package(s) move to a new release line, but ${SCAFFOLDER_PKG} keeps its version:\n`);
+		for (const { pkg, from, to } of lineChanges) {
+			console.error(`   • ${pkg}  ${from} → ${to}`);
+		}
+		console.error(
+			`\n${SCAFFOLDER_STALE_STAMP}` +
+			`A changeset moved them without a ${SCAFFOLDER_PKG} entry. Merge a changeset releasing\n` +
+			`${SCAFFOLDER_PKG} to main, then let the release PR regenerate.\n`,
+		);
+		return 1;
+	}
+
+	const pending = parseChangesets();
+	const touched = getChangedChangesetFiles();
+	const withdrawnFrom = getWithdrawnFiles(pending, SCAFFOLDER_PKG);
+
+	const lineMoves = (entries: Entry[]) =>
+		[...new Set(entries.filter((e) => stamped.has(e.pkg) && e.type !== "patch").map((e) => e.pkg))].sort();
+
+	// As in verifyUmbrella: only this PR's own changesets trigger the check,
+	// unless this PR withdrew a create-blocks-app entry, which makes every
+	// pending line move its problem.
+	const moved =
+		withdrawnFrom.length > 0
+			? lineMoves(pending)
+			: lineMoves(pending.filter((e) => touched.has(e.file)));
+
+	if (moved.length === 0) {
+		if (lineChanges.length > 0) {
+			console.log(
+				`✓ ${lineChanges.length} stamped package(s) move to a new release line, and ${SCAFFOLDER_PKG} is released alongside them.`,
+			);
+		} else {
+			console.log(`✓ No changeset here moves a package ${SCAFFOLDER_PKG} stamps to a new release line.`);
+		}
+		return 0;
+	}
+
+	// Coverage from any pending changeset counts: what matters is whether the
+	// next release republishes the CLI, not which PR asked for it.
+	if (pending.some((e) => e.pkg === SCAFFOLDER_PKG)) {
+		console.log(
+			`✓ ${moved.length} stamped package(s) move to a new release line, and ${SCAFFOLDER_PKG} is released alongside them.`,
+		);
+		return 0;
+	}
+
+	if (withdrawnFrom.length > 0) {
+		console.error(`\n❌ This PR removes the ${SCAFFOLDER_PKG} entry from:\n`);
+		for (const file of withdrawnFrom) {
+			console.error(`   • .changeset/${file}`);
+		}
+		console.error("\nwhile these stamped package(s) are still pending a new release line:\n");
+		for (const pkg of moved) {
+			console.error(`   • ${pkg}`);
+		}
+		console.error(
+			`\nNothing releases ${SCAFFOLDER_PKG} any more. ${SCAFFOLDER_STALE_STAMP}` +
+			`Keep the entry, or move it to another pending changeset:\n\n` +
+			`   "${SCAFFOLDER_PKG}": patch\n`,
+		);
+		return 1;
+	}
+
+	console.error(`\n❌ This PR moves package(s) that ${SCAFFOLDER_PKG} stamps into new apps to a new release line:\n`);
+	for (const pkg of moved) {
+		console.error(`   • ${pkg}`);
+	}
+	console.error(
+		`\nNothing releases ${SCAFFOLDER_PKG}. ${SCAFFOLDER_STALE_STAMP}` +
+		`Add this line to your changeset:\n\n` +
+		`   "${SCAFFOLDER_PKG}": patch\n`,
 	);
 	return 1;
 }
@@ -599,11 +782,13 @@ function main(): number {
 			return validateStructure();
 		case "verify-umbrella":
 			return verifyUmbrella();
+		case "verify-scaffolder":
+			return verifyScaffolder();
 		default:
 			console.error(
 				`Unknown command: ${command ?? "(none)"}\n` +
 				"Usage: node --experimental-strip-types scripts/changeset-guard.ts " +
-				"<verify-coverage|block-major|validate-structure|verify-umbrella>",
+				"<verify-coverage|block-major|validate-structure|verify-umbrella|verify-scaffolder>",
 			);
 			return 2;
 	}
