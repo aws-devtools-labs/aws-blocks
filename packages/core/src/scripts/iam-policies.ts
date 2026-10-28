@@ -2,25 +2,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks-iam-policies`: generate the two IAM policies a shared app platform
- * needs for apps that set `defaults.app` — **EXPERIMENTAL**: review the output
- * and test it on a deployed app before relying on it.
+ * `blocks-iam-policies`: generate the IAM policies a shared app platform needs
+ * for apps that set `defaults.app` — **EXPERIMENTAL**: review the output and test
+ * it on a deployed app before relying on it.
  *
  * 1. **The permissions boundary** — one managed policy for every app in the
- *    account. Attach it to every role an app creates (`defaults.permissionsBoundary`).
- *    It allows everything except reaching another app's resources, keyed on the
- *    role's `app` tag (`${aws:PrincipalTag/app}`): parameters, tables, queues and
- *    buckets by name prefix (`<id>-…`, which AWS Blocks guarantees for an app that
- *    sets `defaults.app`), secrets and Lambda functions by the `app` tag on the
- *    resource. It also denies IAM, Organizations and `sts:AssumeRole`.
+ *    account, attached to every role an app creates (`defaults.permissionsBoundary`).
+ *    It is an **allow-list**: it allows only the services AWS Blocks uses, each
+ *    on the calling role's own app's resources — by name prefix (`<id>-…`, which
+ *    AWS Blocks guarantees for an app that sets `defaults.app`) or by the
+ *    resource's `app` tag, keyed on `${aws:PrincipalTag/app}` — plus the few
+ *    actions that only take `*` (X-Ray, metrics, VPC network interfaces). A
+ *    service nobody wrote a rule for is denied by default. IAM, Organizations and
+ *    STS role assumption are never allowed.
  * 2. **The per-app CloudFormation execution policy** — attached to the app's own
- *    CDK bootstrap execution role (`cdk bootstrap --qualifier <q>
+ *    CDK bootstrap execution role (`cdk bootstrap --qualifier <id>
  *    --cloudformation-execution-policies <arn>`). It can only create roles that
  *    carry the boundary, are named `<id>-…` and are tagged `app=<id>`, can never
- *    remove the boundary, edit it, or re-tag a role, and can manage only the
- *    resource types the app's templates use, each scoped to the app's names or
- *    its `app` tag. Resource types it has no scoped rule for are listed in
- *    `unscoped` for the platform team to add by hand.
+ *    remove the boundary, edit it, re-tag a role or attach a broad AWS managed
+ *    policy, and can manage only the resource types the app's templates use, each
+ *    scoped to the app's names or its `app` tag. Resource types it has no scoped
+ *    rule for are listed in `unscoped`.
+ * 3. **The deploy guard** — attached to the app's CDK bootstrap **deploy** role.
+ *    CDK's default deploy role may change and delete *any* stack, and
+ *    CloudFormation reuses a stack's existing service role when an update omits
+ *    one, so without this an app's pipeline could deploy into — or delete —
+ *    another app's stack as that app's execution role. The guard confines the
+ *    deploy role to the app's own stacks and to its own execution role.
+ *
+ * The app's bootstrap qualifier is the app id itself (an app id is at most 10
+ * characters, CDK's qualifier limit), so every app has its own bootstrap and no
+ * two apps can share one.
  *
  * The generator only writes JSON; it never calls AWS.
  */
@@ -33,8 +45,6 @@ export interface IamPolicyOptions {
 	account?: string;
 	/** The boundary policy's name (default `apps-boundary`). */
 	boundaryName?: string;
-	/** The app's CDK bootstrap qualifier (default: the app id, truncated to 10 characters). */
-	qualifier?: string;
 	/** The AWS partition (default `aws`). */
 	partition?: string;
 }
@@ -49,80 +59,110 @@ export interface PolicyDocument {
 const APP = '${aws:PrincipalTag/app}';
 const DEFAULT_BOUNDARY = 'apps-boundary';
 
-/** The resource-tag condition "the resource belongs to the calling role's app". */
-const notThisAppsResource = { StringNotEquals: { 'aws:ResourceTag/app': APP } };
+/** The condition "the resource is tagged as the calling role's app". */
+const thisAppsResource = { StringEquals: { 'aws:ResourceTag/app': APP } };
 
 /**
- * The shared permissions boundary (see the module doc). One document for every
- * app in the account: it reads the calling role's `app` tag at request time.
+ * The shared permissions boundary (see the module doc): an allow-list. One
+ * document for every app in the account; it reads the calling role's `app` tag
+ * at request time.
  */
 export function generateBoundaryPolicy(options: IamPolicyOptions = {}): PolicyDocument {
 	const p = options.partition ?? 'aws';
+	const named = (service: string, ...resources: string[]) => resources.map((r) => `arn:${p}:${service}:${r}`);
+	const allow = (Sid: string, Action: string | string[], Resource: string | string[], Condition?: unknown) => ({
+		Sid,
+		Effect: 'Allow',
+		Action,
+		Resource,
+		...(Condition ? { Condition } : {}),
+	});
 	return {
 		Version: '2012-10-17',
 		Statement: [
-			// A boundary only removes: this allows everything the role's own policies
-			// grant, and the Deny statements below carve other apps out. Narrow it to the
-			// services the platform's apps use.
-			{ Sid: 'Ceiling', Effect: 'Allow', Action: '*', Resource: '*' },
-			{
-				Sid: 'OnlyOwnAppParameters',
-				Effect: 'Deny',
-				Action: 'ssm:*',
-				NotResource: [
-					`arn:${p}:ssm:*:*:parameter/${APP}`,
-					`arn:${p}:ssm:*:*:parameter/${APP}-*`,
-					`arn:${p}:ssm:*:*:parameter/${APP}/*`,
-					// Cross-region references Hosting creates (`/cdk/exports/<consumer stack>/…`).
-					`arn:${p}:ssm:*:*:parameter/cdk/exports/${APP}*`,
+			// By name prefix: AWS Blocks names these from the stack name, which starts with the app id.
+			allow('OwnParameters', 'ssm:*', [
+				...named('ssm', `*:*:parameter/${APP}`, `*:*:parameter/${APP}-*`, `*:*:parameter/${APP}/*`),
+				// Cross-region references Hosting creates (`/cdk/exports/<consumer stack>/…`).
+				...named('ssm', `*:*:parameter/cdk/exports/${APP}`, `*:*:parameter/cdk/exports/${APP}-*`, `*:*:parameter/cdk/exports/${APP}/*`),
+			]),
+			allow('OwnTables', 'dynamodb:*', named('dynamodb', `*:*:table/${APP}-*`, `*:*:table/${APP}-*/*`)),
+			allow('OwnQueues', 'sqs:*', named('sqs', `*:*:${APP}-*`)),
+			allow('OwnBuckets', 's3:*', [`arn:${p}:s3:::${APP}-*`, `arn:${p}:s3:::${APP}-*/*`]),
+			// BucketDeployment reads the app's assets from its own bootstrap's asset bucket (qualifier = app id).
+			allow('ReadOwnCdkAssets', ['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket', 's3:GetBucketLocation'], [
+				`arn:${p}:s3:::cdk-${APP}-assets-*`,
+				`arn:${p}:s3:::cdk-${APP}-assets-*/*`,
+			]),
+			allow('OwnFunctions', 'lambda:*', named('lambda', `*:*:function:${APP}-*`)),
+			allow('OwnLogs', 'logs:*', named('logs', `*:*:log-group:${APP}-*`, `*:*:log-group:/aws/lambda/${APP}-*`)),
+			// Exception: AgentCore runtimes log to AWS-named groups that can't carry the app's prefix — write only.
+			allow(
+				'AgentCoreRuntimeLogsWriteOnly',
+				['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
+				named('logs', '*:*:log-group:/aws/bedrock-agentcore/runtimes/*'),
+			),
+			// A table's index manager reads its own stack.
+			allow(
+				'OwnStacksRead',
+				['cloudformation:DescribeStacks', 'cloudformation:GetTemplate'],
+				named('cloudformation', `*:*:stack/${APP}/*`, `*:*:stack/${APP}-*/*`),
+			),
+			allow('OwnSchedules', 'scheduler:*', named('scheduler', `*:*:schedule/*/${APP}-*`)),
+			allow('OwnEvents', 'events:*', named('events', `*:*:rule/${APP}-*`, `*:*:event-bus/${APP}-*`)),
+			allow('OwnDatabases', ['rds-data:*', 'rds:*'], named('rds', `*:*:cluster:${APP}-*`, `*:*:db:${APP}-*`)),
+			// By the resource's `app` tag: these are named by id, not by a name the app controls.
+			allow(
+				'OwnTaggedResources',
+				[
+					'secretsmanager:*',
+					'states:*',
+					'cognito-idp:*',
+					'kms:*',
+					'bedrock:*',
+					'bedrock-agentcore:*',
+					'dsql:*',
+					's3vectors:*',
+					'cloudfront:*',
+					'cloudfront-keyvaluestore:*',
 				],
-			},
-			{
-				Sid: 'OnlyOwnAppTables',
-				Effect: 'Deny',
-				Action: 'dynamodb:*',
-				NotResource: [`arn:${p}:dynamodb:*:*:table/${APP}-*`, `arn:${p}:dynamodb:*:*:table/${APP}-*/*`],
-			},
-			{ Sid: 'OnlyOwnAppQueues', Effect: 'Deny', Action: 'sqs:*', NotResource: `arn:${p}:sqs:*:*:${APP}-*` },
-			{
-				Sid: 'OnlyOwnAppBuckets',
-				Effect: 'Deny',
-				Action: 's3:*',
-				NotResource: [
-					`arn:${p}:s3:::${APP}-*`,
-					`arn:${p}:s3:::${APP}-*/*`,
-					// CDK asset buckets: BucketDeployment reads the app's assets from them.
-					`arn:${p}:s3:::cdk-*-assets-*`,
-					`arn:${p}:s3:::cdk-*-assets-*/*`,
+				'*',
+				thisAppsResource,
+			),
+			// AWS-managed keys (aws/ssm, aws/secretsmanager, …) carry no tag: only through the service.
+			allow('ManagedKeysViaService', ['kms:Decrypt', 'kms:Encrypt', 'kms:GenerateDataKey*', 'kms:DescribeKey'], '*', {
+				StringLike: {
+					'kms:ViaService': ['ssm.*.amazonaws.com', 'secretsmanager.*.amazonaws.com', 'dynamodb.*.amazonaws.com', 's3.*.amazonaws.com', 'sqs.*.amazonaws.com'],
+				},
+			}),
+			// Actions that take no resource, or only `*`.
+			allow(
+				'ResourcelessActions',
+				[
+					'xray:PutTraceSegments',
+					'xray:PutTelemetryRecords',
+					'xray:GetSamplingRules',
+					'xray:GetSamplingTargets',
+					'cloudwatch:PutMetricData',
+					'logs:DescribeLogGroups',
+					'ec2:CreateNetworkInterface',
+					'ec2:DescribeNetworkInterfaces',
+					'ec2:DeleteNetworkInterface',
+					'ec2:AssignPrivateIpAddresses',
+					'ec2:UnassignPrivateIpAddresses',
+					'ec2:DescribeSubnets',
+					'ec2:DescribeVpcs',
+					'ec2:DescribeSecurityGroups',
+					'bedrock:InvokeModel',
+					'bedrock:InvokeModelWithResponseStream',
+					'ses:SendEmail',
+					'ses:SendRawEmail',
+					'ses:SendBulkEmail',
 				],
-			},
-			{
-				Sid: 'ReadOnlyCdkAssets',
-				Effect: 'Deny',
-				Action: ['s3:Put*', 's3:Delete*', 's3:Restore*', 's3:Replicate*'],
-				Resource: [`arn:${p}:s3:::cdk-*-assets-*`, `arn:${p}:s3:::cdk-*-assets-*/*`],
-			},
-			{ Sid: 'OnlyOwnAppSecrets', Effect: 'Deny', Action: 'secretsmanager:*', Resource: '*', Condition: notThisAppsResource },
-			{
-				Sid: 'OnlyOwnAppFunctions',
-				Effect: 'Deny',
-				Action: ['lambda:InvokeFunction', 'lambda:InvokeFunctionUrl', 'lambda:InvokeAsync'],
-				Resource: '*',
-				Condition: notThisAppsResource,
-			},
-			{
-				Sid: 'UntaggedRolesReachNoAppData',
-				Effect: 'Deny',
-				Action: ['ssm:*', 'dynamodb:*', 'sqs:*', 's3:*', 'secretsmanager:*', 'lambda:Invoke*'],
-				Resource: '*',
-				Condition: { Null: { 'aws:PrincipalTag/app': 'true' } },
-			},
-			{
-				Sid: 'NoIamFromApps',
-				Effect: 'Deny',
-				Action: ['iam:*', 'organizations:*', 'account:*', 'sts:AssumeRole'],
-				Resource: '*',
-			},
+				'*',
+			),
+			// WebSocket (Realtime) and API calls: API ids aren't names, and execute-api has no resource tags.
+			allow('ApiConnections', ['execute-api:ManageConnections', 'execute-api:Invoke'], named('execute-api', '*:*:*')),
 		],
 	};
 }
@@ -157,7 +197,11 @@ const byTag = (sid: string, action: string | string[], id: string, resource = '*
 const RULES: Record<string, Rule> = {
 	'AWS::Lambda::': ({ id, p, acct }) => [
 		byName('Functions', 'lambda:*', [`arn:${p}:lambda:*:${acct}:function:${id}-*`]),
-		byName('Layers', ['lambda:PublishLayerVersion', 'lambda:DeleteLayerVersion', 'lambda:GetLayerVersion'], [
+		// Exception: CDK's own layers (e.g. the AWS CLI layer `BucketDeployment` uses) get
+		// CloudFormation-generated names that don't start with the stack name, so layers
+		// can't be scoped by name. Layer versions are immutable, so the exposure is
+		// publishing or deleting versions under another app's layer name.
+		byName('LayersUnscopedNames', ['lambda:PublishLayerVersion', 'lambda:DeleteLayerVersion', 'lambda:GetLayerVersion'], [
 			`arn:${p}:lambda:*:${acct}:layer:*`,
 		]),
 		{
@@ -242,7 +286,7 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 	if (!acct || !/^\d{12}$/.test(acct)) throw new Error('The execution policy needs the 12-digit AWS account (--account).');
 	const p = options.partition ?? 'aws';
 	const boundaryArn = `arn:${p}:iam::${acct}:policy/${options.boundaryName ?? DEFAULT_BOUNDARY}`;
-	const qualifier = options.qualifier ?? id.slice(0, 10);
+	const qualifier = id;
 	const role = `arn:${p}:iam::${acct}:role/${id}-*`;
 
 	const statements: Record<string, unknown>[] = [
@@ -350,6 +394,66 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 		statements.push(...RULES[key]({ id, p, acct }));
 	}
 	return { document: { Version: '2012-10-17', Statement: statements }, unscoped: [...unscoped].sort() };
+}
+
+/** CloudFormation actions that change a stack, or read its template. */
+const STACK_ACTIONS = [
+	'cloudformation:CreateChangeSet',
+	'cloudformation:ExecuteChangeSet',
+	'cloudformation:DeleteChangeSet',
+	'cloudformation:CreateStack',
+	'cloudformation:UpdateStack',
+	'cloudformation:DeleteStack',
+	'cloudformation:CancelUpdateStack',
+	'cloudformation:ContinueUpdateRollback',
+	'cloudformation:RollbackStack',
+	'cloudformation:SetStackPolicy',
+	'cloudformation:UpdateTerminationProtection',
+	'cloudformation:SignalResource',
+	'cloudformation:GetTemplate',
+];
+
+/**
+ * The deploy guard for app `appId` (see the module doc): attach it to the app's
+ * CDK bootstrap deploy role (`cdk-<id>-deploy-role-<account>-<region>`). It
+ * denies stack changes outside the app's own stacks (`<id>`, `<id>-…`, and its
+ * toolkit stack `CDKToolkit-<id>`), and denies creating or changing a stack
+ * without naming the app's own execution role — so CloudFormation can't fall back
+ * to another stack's role.
+ *
+ * @throws Error when `appId` or `account` is missing.
+ */
+export function generateDeployGuardPolicy(options: IamPolicyOptions): PolicyDocument {
+	const { appId: id, account: acct } = options;
+	if (!id) throw new Error('The deploy guard needs the app id (--app).');
+	if (!acct || !/^\d{12}$/.test(acct)) throw new Error('The deploy guard needs the 12-digit AWS account (--account).');
+	const p = options.partition ?? 'aws';
+	return {
+		Version: '2012-10-17',
+		Statement: [
+			{
+				Sid: 'OnlyThisAppsStacks',
+				Effect: 'Deny',
+				Action: STACK_ACTIONS,
+				NotResource: [
+					`arn:${p}:cloudformation:*:${acct}:stack/${id}/*`,
+					`arn:${p}:cloudformation:*:${acct}:stack/${id}-*/*`,
+					`arn:${p}:cloudformation:*:${acct}:stack/CDKToolkit-${id}/*`,
+				],
+			},
+			{
+				// Without RoleARN, CloudFormation reuses the stack's previous service role,
+				// so a request must name this app's own execution role.
+				Sid: 'OnlyThisAppsExecutionRole',
+				Effect: 'Deny',
+				Action: ['cloudformation:CreateChangeSet', 'cloudformation:CreateStack', 'cloudformation:UpdateStack', 'cloudformation:DeleteStack'],
+				Resource: '*',
+				Condition: {
+					StringNotLike: { 'cloudformation:RoleArn': `arn:${p}:iam::${acct}:role/cdk-${id}-cfn-exec-role-${acct}-*` },
+				},
+			},
+		],
+	};
 }
 
 /** The resource types in a set of CloudFormation templates. */

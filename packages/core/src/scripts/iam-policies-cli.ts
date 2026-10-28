@@ -9,13 +9,14 @@
  *
  * Usage:
  *   blocks-iam-policies [cdk.out] [--out <dir>] [--boundary-name <name>]
- *                       [--app <id> --account <12 digits> [--qualifier <q>]] [--partition <p>]
+ *                       [--app <id> --account <12 digits>] [--partition <p>]
  *
  * Always writes `<out>/boundary.json`, the permissions boundary shared by every
  * app in the account. With `--app` and `--account`, also writes
  * `<out>/execution-<id>.json`, the app's CloudFormation execution policy, built
- * from the resource types in the synthesized templates in `cdk.out`, and lists
- * any resource type it has no scoped rule for.
+ * from the resource types in the synthesized templates in `cdk.out` (it lists
+ * any resource type it has no scoped rule for), and `<out>/deploy-guard-<id>.json`,
+ * the policy to attach to the app's CDK bootstrap deploy role.
  *
  * Exit codes: 0 written · 2 usage error.
  */
@@ -24,6 +25,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
 	generateBoundaryPolicy,
+	generateDeployGuardPolicy,
 	generateExecutionPolicy,
 	type IamPolicyOptions,
 	MANAGED_POLICY_MAX_CHARS,
@@ -36,7 +38,7 @@ function usage(message?: string): never {
 	if (message) process.stderr.write(`blocks-iam-policies: ${message}\n`);
 	process.stderr.write(
 		'Usage: blocks-iam-policies [cdk.out] [--out <dir>] [--boundary-name <name>] ' +
-			'[--app <id> --account <12 digits> [--qualifier <q>]] [--partition <p>]\n',
+			'[--app <id> --account <12 digits>] [--partition <p>]\n',
 	);
 	process.exit(2);
 }
@@ -56,7 +58,6 @@ for (let i = 0; i < args.length; i++) {
 	else if (arg === '--boundary-name') options.boundaryName = take(++i, arg);
 	else if (arg === '--app') options.appId = take(++i, arg);
 	else if (arg === '--account') options.account = take(++i, arg);
-	else if (arg === '--qualifier') options.qualifier = take(++i, arg);
 	else if (arg === '--partition') options.partition = take(++i, arg);
 	else if (arg === '--help' || arg === '-h') usage();
 	else if (arg.startsWith('-')) usage(`unknown option ${arg}.`);
@@ -91,6 +92,7 @@ if (options.appId || options.account) {
 		usage(error instanceof Error ? error.message : String(error));
 	}
 	write(join(out, `execution-${options.appId}.json`), result.document);
+	write(join(out, `deploy-guard-${options.appId}.json`), generateDeployGuardPolicy(options));
 	if (result.unscoped.length > 0) {
 		process.stdout.write(
 			`\nNo scoped rule for these resource types — add statements for them to execution-${options.appId}.json by hand:\n` +

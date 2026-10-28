@@ -21,20 +21,30 @@
 /** The tag key AWS Blocks stamps with the app id (mirrors `BLOCKS_APP_TAG_KEY`). */
 export const APP_TAG_KEY = 'app';
 
-/** `defaults.app.id`: lowercase letters and digits, starting with a letter, 1–32 characters. */
-export const APP_ID_PATTERN = /^[a-z][a-z0-9]{0,31}$/;
+/**
+ * `defaults.app.id`: lowercase letters and digits, starting with a letter, 1–10
+ * characters. Ten is CDK's limit for a bootstrap qualifier, so the app id can be
+ * the app's qualifier as-is: one bootstrap per app, and no two apps can end up
+ * sharing one through truncation.
+ */
+export const APP_ID_PATTERN = /^[a-z][a-z0-9]{0,9}$/;
 
 /** What a violation is about. */
 export type AppViolationRule =
 	| 'no-permissions-boundary'
 	| 'role-without-boundary'
 	| 'role-tag-mismatch'
+	| 'role-trust-not-service'
 	| 'stack-tag-mismatch'
 	| 'stack-name-outside-app'
 	| 'scope-outside-app'
 	| 'grant-outside-app'
+	| 'inverse-grant'
+	| 'unresolvable-grant'
 	| 'wildcard-data-grant'
 	| 'broad-managed-policy'
+	| 'resource-policy-outside-app'
+	| 'unreadable-template'
 	| 'app-id-mismatch';
 
 /** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
@@ -51,42 +61,77 @@ export function isUnderAppPrefix(name: string, id: string): boolean {
 }
 
 /**
- * Data services an app reaches other apps' data through. A grant on one of these
- * outside the app's prefix, or on `*`, is a violation.
+ * Services an app can reach another app's data or code through. A grant on one
+ * of these outside the app's prefix, or on `*`, is a violation.
  */
-const DATA_SERVICES = new Set(['ssm', 'dynamodb', 'sqs', 's3', 'secretsmanager', 'lambda']);
+const DATA_SERVICES = new Set([
+	'ssm',
+	'dynamodb',
+	'sqs',
+	's3',
+	'secretsmanager',
+	'lambda',
+	'logs',
+	'states',
+	'cognito-idp',
+	'events',
+	'scheduler',
+	'kms',
+]);
 
-/** Lambda actions that act on a function another app owns (invoking it, or changing it). */
-const LAMBDA_DATA_ACTION = /^lambda:(Invoke|Update|Delete|Put|Add|Remove|\*)/i;
-
-/** Placeholder for a CloudFormation intrinsic inside a rendered ARN. */
+/** Placeholder for a reference to one of the template's own resources inside a rendered ARN. */
 const TOKEN = '\u0000';
 
+/** What a resolved `Resource` value names. */
+export type RenderedResource =
+	/** A reference to a resource in the same template (`Ref` to a resource, `Fn::GetAtt`): the app's own. */
+	| { kind: 'own' }
+	/** A string ARN; references to own resources inside it are {@link TOKEN}, pseudo parameters `*`. */
+	| { kind: 'arn'; arn: string }
+	/** A value the check can't see through (`Fn::Sub`, `Fn::ImportValue`, `Ref` to a template parameter, …). */
+	| { kind: 'unresolvable' };
+
+/** Intrinsics whose result is one of the template's own resources. */
+const OWN_INTRINSICS = new Set(['Fn::GetAtt']);
+
 /**
- * Render a resolved `Resource` value to a string ARN, with any non-literal part
- * (a `Ref`, `Fn::GetAtt`, …) replaced by a placeholder. `Ref`s to pseudo
- * parameters (partition, region, account) become `*` — they don't name a
- * resource. Returns `undefined` for a value that names one of the app's own
- * resources by reference (`{ Ref: … }`, `Fn::GetAtt`): those are never another
- * app's.
+ * Render a resolved `Resource` value (see {@link RenderedResource}). `parameters`
+ * are the template's parameter names: a `Ref` to one is a value the deployer
+ * supplies, so it's unresolvable, not "own".
  */
-export function renderArn(value: unknown): string | undefined {
-	if (typeof value === 'string') return value;
-	if (!value || typeof value !== 'object') return undefined;
+export function renderResource(value: unknown, parameters: ReadonlySet<string> = new Set()): RenderedResource {
+	if (typeof value === 'string') return { kind: 'arn', arn: value };
+	if (!value || typeof value !== 'object') return { kind: 'unresolvable' };
 	const obj = value as Record<string, unknown>;
-	if (typeof obj.Ref === 'string') return obj.Ref.startsWith('AWS::') ? '*' : undefined;
-	const join = obj['Fn::Join'];
-	if (Array.isArray(join) && typeof join[0] === 'string' && Array.isArray(join[1])) {
-		const parts = (join[1] as unknown[]).map((p) => {
-			if (typeof p === 'string') return p;
-			if (p && typeof p === 'object' && typeof (p as { Ref?: unknown }).Ref === 'string') {
-				return ((p as { Ref: string }).Ref.startsWith('AWS::') ? '*' : TOKEN) as string;
-			}
+	const keys = Object.keys(obj);
+	if (typeof obj.Ref === 'string') {
+		if (obj.Ref.startsWith('AWS::')) return { kind: 'arn', arn: '*' };
+		return parameters.has(obj.Ref) ? { kind: 'unresolvable' } : { kind: 'own' };
+	}
+	if (keys.length === 1 && OWN_INTRINSICS.has(keys[0])) return { kind: 'own' };
+	// `Fn::Sub` with only pseudo parameters (e.g. CDK's asset bucket name) or
+	// references to the template's own resources is a readable name.
+	const sub = obj['Fn::Sub'];
+	if (typeof sub === 'string') {
+		let unresolvable = false;
+		const arn = sub.replace(/\$\{([^}]+)\}/g, (_m, ref: string) => {
+			if (ref.startsWith('AWS::')) return '*';
+			if (parameters.has(ref.split('.')[0])) unresolvable = true;
 			return TOKEN;
 		});
-		return parts.join(join[0]);
+		return unresolvable ? { kind: 'unresolvable' } : { kind: 'arn', arn };
 	}
-	return undefined;
+	const join = obj['Fn::Join'];
+	if (Array.isArray(join) && typeof join[0] === 'string' && Array.isArray(join[1])) {
+		const parts: string[] = [];
+		for (const part of join[1] as unknown[]) {
+			const rendered = renderResource(part, parameters);
+			if (rendered.kind === 'unresolvable') return rendered;
+			parts.push(rendered.kind === 'own' ? TOKEN : rendered.arn);
+		}
+		return { kind: 'arn', arn: parts.join(join[0]) };
+	}
+	return { kind: 'unresolvable' };
 }
 
 /** The service and the resource-name part of an ARN, or `undefined` for a non-ARN / unsupported service. */
@@ -96,22 +141,45 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 	if (!m) return undefined;
 	const service = m[1];
 	const rest = m[2];
+	const after = (prefix: string, sep: string) =>
+		rest.startsWith(prefix) ? rest.slice(prefix.length).split(sep)[0] : undefined;
+	let name: string | undefined;
 	switch (service) {
 		case 'ssm':
-			return rest.startsWith('parameter') ? { service, name: rest.slice('parameter'.length) } : undefined;
+			name = rest.startsWith('parameter') ? rest.slice('parameter'.length) : undefined;
+			break;
 		case 'dynamodb':
-			return rest.startsWith('table/') ? { service, name: rest.slice('table/'.length).split('/')[0] } : undefined;
+			name = after('table/', '/');
+			break;
 		case 'sqs':
-			return { service, name: rest };
+			name = rest;
+			break;
 		case 's3':
-			return { service, name: rest.split('/')[0] };
+			name = rest.split('/')[0];
+			break;
 		case 'secretsmanager':
-			return rest.startsWith('secret:') ? { service, name: rest.slice('secret:'.length) } : undefined;
+			name = after('secret:', '\u0001');
+			break;
 		case 'lambda':
-			return rest.startsWith('function:') ? { service, name: rest.slice('function:'.length).split(':')[0] } : undefined;
+			name = after('function:', ':');
+			break;
+		case 'logs':
+			name = after('log-group:', ':')?.replace(/^\/aws\/lambda\//, '');
+			break;
+		case 'states':
+			name = after('stateMachine:', ':') ?? after('execution:', ':');
+			break;
+		case 'events':
+			name = after('rule/', '/') ?? after('event-bus/', '/');
+			break;
+		case 'scheduler':
+			name = rest.startsWith('schedule/') ? rest.split('/')[2] : undefined;
+			break;
 		default:
-			return undefined;
+			// cognito-idp and kms name resources by id, not by name: only `*` is checked.
+			name = undefined;
 	}
+	return name === undefined ? undefined : { service, name };
 }
 
 /** Statement as found in a resolved policy document. */
@@ -119,8 +187,11 @@ export interface ResolvedStatement {
 	Sid?: string;
 	Effect?: string;
 	Action?: string | string[];
+	NotAction?: string | string[];
 	Resource?: unknown;
+	NotResource?: unknown;
 	Condition?: unknown;
+	Principal?: unknown;
 }
 
 const asList = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
@@ -130,31 +201,95 @@ function servicesOf(actions: string[]): Set<string> {
 }
 
 function touchesData(actions: string[]): boolean {
-	return actions.some((a) => {
-		if (a === '*') return true;
-		const service = a.split(':')[0].toLowerCase();
-		if (!DATA_SERVICES.has(service)) return false;
-		return service !== 'lambda' || LAMBDA_DATA_ACTION.test(a);
-	});
+	return actions.some((a) => a === '*' || DATA_SERVICES.has(a.split(':')[0].toLowerCase()));
+}
+
+/**
+ * A `Condition` that scopes a wildcard to one app's resources: by the resource's
+ * tag, or (for KMS) to calls made through a service whose own resources are fenced.
+ */
+function scopesWildcard(condition: unknown): boolean {
+	return condition !== undefined && /ResourceTag\/|kms:ViaService/.test(JSON.stringify(condition));
+}
+
+/**
+ * Grants AWS Blocks or CDK make that name resources outside the app's prefix,
+ * but that the generated boundary still caps to the app (or that only touch
+ * metadata). Each is listed with its reason; nothing else is exempt.
+ */
+function isKnownExemption(actions: string[], name: string): boolean {
+	const only = (allowed: string[]) => actions.every((a) => allowed.includes(a));
+	// Lists log-group names only (no log data); takes only `log-group:*`.
+	if (only(['logs:DescribeLogGroups'])) return true;
+	// CDK's log-retention provider grants these on `*`; the boundary caps them to the app's own log groups.
+	if (name === '*' && only(['logs:PutRetentionPolicy', 'logs:DeleteRetentionPolicy'])) return true;
+	// AgentCore runtimes write to AWS-named log groups (`/aws/bedrock-agentcore/runtimes/<runtime id>-…`)
+	// that can't carry the app's prefix: write access only, which the boundary also allows.
+	if (
+		name.startsWith('/aws/bedrock-agentcore/runtimes/') &&
+		only(['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'])
+	) {
+		return true;
+	}
+	return false;
 }
 
 /**
  * Check one policy statement. Only `Allow` statements can reach outside the app:
+ * - `inverse-grant`: `NotAction`, or `NotResource` on a data service — "everything
+ *   except …" reaches every other app;
+ * - `unresolvable-grant`: a resource on a data service the check can't see
+ *   through (`Fn::Sub`, `Fn::ImportValue`, a `Ref` to a template parameter);
  * - `wildcard-data-grant`: an action on a data service (or `*`) on `*`, or on a
- *   name that starts with `*`, with no `Condition`;
+ *   name that starts with `*`, unless a `Condition` scopes it by `aws:ResourceTag`;
  * - `grant-outside-app`: a literal resource name on a data service that isn't
- *   under the app's prefix (an intrinsic inside the name is checked only up to
- *   the intrinsic).
+ *   under the app's prefix (a reference inside the name is checked only up to it).
+ *
+ * @param parameters the template's parameter names (see {@link renderResource}).
  */
-export function checkStatement(statement: ResolvedStatement, id: string, where: string): AppViolation[] {
+export function checkStatement(
+	statement: ResolvedStatement,
+	id: string,
+	where: string,
+	parameters: ReadonlySet<string> = new Set(),
+): AppViolation[] {
 	if (statement.Effect !== 'Allow') return [];
+	if (statement.NotAction !== undefined) {
+		return [
+			{
+				rule: 'inverse-grant',
+				path: where,
+				message: `${where} allows every action except ${asList(statement.NotAction).join(', ')} — that reaches every app.`,
+			},
+		];
+	}
 	const actions = asList(statement.Action);
 	if (!touchesData(actions)) return [];
 	const services = servicesOf(actions);
+	if (statement.NotResource !== undefined) {
+		return [
+			{
+				rule: 'inverse-grant',
+				path: where,
+				message: `${where} grants ${actions.join(', ')} on every resource except the listed ones — that reaches every app.`,
+			},
+		];
+	}
 	const out: AppViolation[] = [];
 	for (const resource of asList(statement.Resource)) {
-		const arn = renderArn(resource);
-		if (arn === undefined) continue;
+		const rendered = renderResource(resource, parameters);
+		if (rendered.kind === 'own') continue;
+		if (rendered.kind === 'unresolvable') {
+			out.push({
+				rule: 'unresolvable-grant',
+				path: where,
+				message:
+					`${where} grants ${actions.join(', ')} on ${JSON.stringify(resource)}, which the check can't resolve ` +
+					'(Fn::Sub, Fn::ImportValue or a template parameter). Name the resource directly, or reference it.',
+			});
+			continue;
+		}
+		const arn = rendered.arn;
 		const parsed = arnResourceName(arn);
 		if (!parsed) continue;
 		if (parsed.service !== '*' && !services.has(parsed.service) && !services.has('*')) continue;
@@ -163,7 +298,7 @@ export function checkStatement(statement: ResolvedStatement, id: string, where: 
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: a placeholder shown in messages, not a template
 		const label = arn.replaceAll(TOKEN, '${…}');
 		if (literal.replace(/^\//, '').startsWith('*')) {
-			if (statement.Condition === undefined) {
+			if (!scopesWildcard(statement.Condition) && !isKnownExemption(actions, '*')) {
 				out.push({
 					rule: 'wildcard-data-grant',
 					path: where,
@@ -174,18 +309,80 @@ export function checkStatement(statement: ResolvedStatement, id: string, where: 
 		}
 		const bare = literal.replace(/^\//, '');
 		if (bare === '') continue;
-		// A name with an intrinsic in it is checked only up to the intrinsic: the
+		if (isKnownExemption(actions, literal)) continue;
+		// The app's own CDK asset bucket (`cdk-<qualifier>-assets-…`, qualifier = app id).
+		if (parsed.service === 's3' && bare.startsWith(`cdk-${id}-assets-`)) continue;
+		// A name with a reference in it is checked only up to the reference: the
 		// literal part must be under the prefix, or a start of it (`app` + `${…}`).
 		const within = name.includes(TOKEN)
 			? isUnderAppPrefix(bare, id) || `${id}-`.startsWith(bare)
 			: isUnderAppPrefix(bare, id);
 		if (!within) {
+			const asset = parsed.service === 's3' && /^cdk-[^-]+-assets-/.test(bare);
 			out.push({
 				rule: 'grant-outside-app',
 				path: where,
-				message: `${where} grants ${actions.join(', ')} on "${label}", which isn't under this app's prefix "${id}-".`,
+				message: asset
+					? `${where} reads the CDK asset bucket "${label}", which isn't this app's: bootstrap the app with ` +
+						`--qualifier ${id} and set @aws-cdk/core:bootstrapQualifier to "${id}" in cdk.json.`
+					: `${where} grants ${actions.join(', ')} on "${label}", which isn't under this app's prefix "${id}-".`,
 			});
 		}
+	}
+	return out;
+}
+
+/**
+ * Resource-policy resource types, and the property naming the resource each one
+ * opens up. A literal name there outside the app's prefix grants another app's
+ * resource to someone.
+ */
+const RESOURCE_POLICY_TARGETS: Record<string, string> = {
+	'AWS::Lambda::Permission': 'FunctionName',
+	'AWS::SQS::QueuePolicy': 'Queues',
+	'AWS::S3::BucketPolicy': 'Bucket',
+	'AWS::SecretsManager::ResourcePolicy': 'SecretId',
+	'AWS::SNS::TopicPolicy': 'Topics',
+};
+
+/** Whether a CloudFormation resource type is a resource policy {@link checkResourcePolicy} checks. */
+export function isResourcePolicyType(type: string): boolean {
+	return type in RESOURCE_POLICY_TARGETS;
+}
+
+/** The resource name in a resource-policy target value: an ARN's name, a queue URL's last segment, or a bare name. */
+function targetName(value: string): string {
+	const parsed = arnResourceName(value);
+	if (parsed) return parsed.name;
+	if (/^https:\/\/sqs\./.test(value)) return value.slice(value.lastIndexOf('/') + 1);
+	const arn = /^arn:[^:]*:[^:]+:[^:]*:[^:]*:(.*)$/.exec(value);
+	return arn ? arn[1].replace(/^[a-z-]+[:/]/, '') : value;
+}
+
+/** `resource-policy-outside-app` for a resource policy that opens up another app's resource. */
+export function checkResourcePolicy(
+	type: string,
+	props: Record<string, unknown>,
+	id: string,
+	where: string,
+	parameters: ReadonlySet<string> = new Set(),
+): AppViolation[] {
+	const key = RESOURCE_POLICY_TARGETS[type];
+	if (!key) return [];
+	const out: AppViolation[] = [];
+	for (const value of asList(props[key] as unknown)) {
+		const rendered = renderResource(value, parameters);
+		if (rendered.kind === 'own') continue;
+		const name = rendered.kind === 'arn' ? targetName(rendered.arn).split(TOKEN)[0] : undefined;
+		if (name !== undefined && (name === '' || isUnderAppPrefix(name, id))) continue;
+		out.push({
+			rule: 'resource-policy-outside-app',
+			path: where,
+			message:
+				name === undefined
+					? `${where} (${type}) targets ${JSON.stringify(value)}, which the check can't resolve.`
+					: `${where} (${type}) opens up "${name}", which isn't under this app's prefix "${id}-".`,
+		});
 	}
 	return out;
 }
@@ -197,7 +394,8 @@ const BROAD_MANAGED_POLICY = /:aws:policy\/(AdministratorAccess|PowerUserAccess|
 export function checkManagedPolicies(arns: unknown[], where: string): AppViolation[] {
 	const out: AppViolation[] = [];
 	for (const value of arns) {
-		const arn = renderArn(value);
+		const rendered = renderResource(value);
+		const arn = rendered.kind === 'arn' ? rendered.arn : undefined;
 		if (arn && BROAD_MANAGED_POLICY.test(arn)) {
 			out.push({
 				rule: 'broad-managed-policy',
@@ -220,14 +418,30 @@ export function appTagValue(tags: unknown): string | null | undefined {
 	return undefined;
 }
 
-/** Check a role's resolved `Properties`: the boundary (when one is expected) and the `app` tag. */
+/** Check a role's resolved `Properties`: its trust policy, the boundary (when one is expected), the `app` tag, and its policies. */
 export function checkRole(
 	props: Record<string, unknown>,
 	id: string,
 	where: string,
 	boundaryExpected: boolean,
+	parameters: ReadonlySet<string> = new Set(),
 ): AppViolation[] {
 	const out: AppViolation[] = [];
+	// Only AWS services may assume an app's roles: a role an account, user or
+	// federated identity can assume hands the app's access to someone outside it.
+	const trust = props.AssumeRolePolicyDocument as { Statement?: ResolvedStatement[] } | undefined;
+	for (const s of asList(trust?.Statement)) {
+		if (s.Effect !== 'Allow') continue;
+		const principal = s.Principal;
+		const services = principal && typeof principal === 'object' ? Object.keys(principal) : [];
+		if (principal === '*' || services.some((k) => k !== 'Service')) {
+			out.push({
+				rule: 'role-trust-not-service',
+				path: where,
+				message: `${where} can be assumed by ${JSON.stringify(principal)}; an app's roles may trust only AWS services.`,
+			});
+		}
+	}
 	if (boundaryExpected && (props.PermissionsBoundary === undefined || props.PermissionsBoundary === null)) {
 		out.push({ rule: 'role-without-boundary', path: where, message: `${where} has no permissions boundary.` });
 	}
@@ -244,7 +458,7 @@ export function checkRole(
 	}
 	for (const policy of asList(props.Policies as unknown[] | undefined)) {
 		const doc = (policy as { PolicyDocument?: { Statement?: ResolvedStatement[] } }).PolicyDocument;
-		for (const s of asList(doc?.Statement)) out.push(...checkStatement(s, id, where));
+		for (const s of asList(doc?.Statement)) out.push(...checkStatement(s, id, where, parameters));
 	}
 	out.push(...checkManagedPolicies(asList(props.ManagedPolicyArns as unknown[] | undefined), where));
 	return out;
