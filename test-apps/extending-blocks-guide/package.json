@@ -23,7 +23,7 @@
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-sqs": "^3.1156.0",
     "@guide/bb-queue": "*",
-    "zod": "^4.6.7"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",

@@ -46,7 +46,7 @@
     "@aws-blocks/bb-tracer": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
-    "zod": "^4.6.7"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@aws-sdk/client-cloudformation": "^3.1156.0",
