@@ -138,6 +138,48 @@ function describeOwner(scope: Construct): string {
 }
 
 /**
+ * Read the value currently registered under `key` (via {@link registerConfig}) for
+ * the backend root that owns `scope`, or `undefined` when nothing is registered.
+ * Read-only: it never creates the registry entry or mutates registry state.
+ *
+ * The lookup happens **when this is called**, not when the config JSON is
+ * serialized. Some keys are registered late — `BLOCKS_PUBLIC_ORIGIN` is
+ * registered by `Hosting` (built after `create()` resolves) or by the managed
+ * `apiFrontDoor: 'cloudfront'` aspect (which runs at synth) — so a Building Block
+ * constructed inside the backend module must call this from inside a
+ * `cdk.Lazy` producer, which runs at synth after every registration has landed:
+ *
+ * ```ts
+ * cdk.Lazy.list({ produce: () => {
+ *   const origin = getRegisteredConfigValue(this, 'BLOCKS_PUBLIC_ORIGIN');
+ *   return typeof origin === 'string' ? [`${origin}/callback`] : [];
+ * } });
+ * ```
+ *
+ * The value is returned as registered — often an unresolved CDK token.
+ *
+ * Caching caveat: CDK resolves a `cdk.Lazy` value once and caches the result
+ * (`Lazy.list` / `Lazy.string` cache; only `Lazy.uncachedList` /
+ * `Lazy.uncachedString` re-run the producer), so the value
+ * read inside `produce()` is the one in effect at that FIRST resolution. Read it
+ * inside `produce()` (never capture it in the constructor) and don't rely on a
+ * registration that lands after synth has started resolving the producer.
+ *
+ * @internal First-party plumbing for Building Blocks that resolve late-registered
+ * values from a `cdk.Lazy` producer; exported for them, not a stability-guaranteed
+ * public API.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ * @param key - The config key passed to {@link registerConfig}.
+ */
+export function getRegisteredConfigValue(scope: Construct, key: string): unknown {
+	// Read the registry slot directly instead of via `getRegistry`, which would
+	// lazily create (and attach) an empty registry on a root that has none.
+	const root = getBlocksRoot(scope) as Construct & { [REGISTRY_KEY]?: ConfigRegistryState };
+	return root[REGISTRY_KEY]?.entries.get(key);
+}
+
+/**
  * Ensure the shared config bucket exists and return where the config JSON lives
  * (`{ bucketName, key }`). The bucket is created **once per stack** (memoized on
  * the registry) and this is idempotent — the first caller creates it, later
