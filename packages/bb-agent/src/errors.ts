@@ -133,9 +133,11 @@ function displayModelId(modelId: string): string {
  * - Bedrock reports a model-access `AccessDeniedException` for a model the account cannot use.
  *
  * Walks `err` and its `.cause` chain. Nothing is classified unless some level is a Bedrock access
- * refusal — `name` is `AccessDeniedException` or `$metadata.httpStatusCode` is `403` — so the same
- * wording under another error (a validation error, a plain `Error`) is left unclassified; the message
- * text only selects which refusal it is. The returned message is composed here and never echoes the
+ * refusal — `name` is `AccessDeniedException` or `$metadata.httpStatusCode` is `403` — or, for the
+ * use-case-details refusal only, a `ResourceNotFoundException` (HTTP `404`) carrying that refusal's
+ * wording, which is how Bedrock reports it from `ConverseStream`. So the same wording under another
+ * error (a validation error, a plain `Error`) and a generic not-found error are left unclassified; the
+ * message text only selects which refusal it is. The returned message is composed here and never echoes the
  * raw provider error or its metadata, so it is safe to publish to the client.
  *
  * @param err - the error thrown by the agent loop.
@@ -145,12 +147,18 @@ function displayModelId(modelId: string): string {
  */
 export function classifyModelAccessError(err: unknown, modelId?: string): string | undefined {
 	const { names, messages, httpStatusCodes } = collectErrorText(err);
-	if (!names.includes('AccessDeniedException') && !httpStatusCodes.includes(403)) return undefined;
 	const text = messages.join('\n');
+	const useCaseRefusal = /use case details have not been submitted|anthropic use case details form/i.test(text);
+	// Bedrock reports the use-case-details refusal as ResourceNotFoundException (HTTP 404); the other
+	// refusals arrive as AccessDeniedException (HTTP 403). A 404 is only trusted with that wording, so a
+	// generic not-found error stays unclassified.
+	const accessRefusal = names.includes('AccessDeniedException') || httpStatusCodes.includes(403);
+	const useCaseNotFound = useCaseRefusal && (names.includes('ResourceNotFoundException') || httpStatusCodes.includes(404));
+	if (!accessRefusal && !useCaseNotFound) return undefined;
 	const named = modelId ? `Bedrock model '${displayModelId(modelId)}'` : undefined;
 	const subject = named ?? 'The selected Bedrock model';
 
-	if (/use case details have not been submitted|anthropic use case details form/i.test(text)) {
+	if (useCaseRefusal) {
 		return `${subject} requires Anthropic use case details for this AWS account. Submit the one-time Anthropic first-time-use form from the model catalog in the Amazon Bedrock console (or call the PutUseCaseForModelAccess API), then retry; access can take several minutes to become active after submission (GetFoundationModelAvailability reports its status). In opt-in Regions the form must be submitted again. Submitting once from an AWS Organizations management account covers its member accounts. Models from other providers do not require this form.`;
 	}
 	// Checked before the entitlement branch: Bedrock's Marketplace refusal can also say the model

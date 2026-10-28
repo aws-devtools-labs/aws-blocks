@@ -174,7 +174,7 @@ const SITE_WINDOW = 8;
  * adding an entry — every entry is a documented exception, not a hiding place.
  */
 const SITE_ALLOWLIST: Record<string, string> = {
-	'bb-agent/src/providers/throwing.ts:cause.name = \'AccessDeniedException\'':
+	'bb-agent/src/providers/throwing.ts:cause.name = \'ResourceNotFoundException\'':
 		'Test-only provider imitating a raw AWS SDK error as the cause of a model failure. It must stay unbranded: ' +
 		'bb-agent classifies it server-side and only its own composed, branded ModelUnavailable error crosses the wire.',
 };

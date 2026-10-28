@@ -11,7 +11,7 @@ import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/s
 /**
  * When the latest message contains this text, the provider instead fails the way Bedrock does
  * for an account that has not submitted Anthropic use-case details: a wrapper error whose
- * non-enumerable `.cause` is the raw `AccessDeniedException`.
+ * non-enumerable `.cause` is the raw `ResourceNotFoundException` (HTTP 404) Bedrock reports for it.
  */
 export const SIMULATE_MODEL_ACCESS_DENIED = '[simulate-model-access-denied]';
 
@@ -25,7 +25,9 @@ export class ThrowingProvider extends CannedProvider {
 			const cause = new Error(
 				'Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model. If you have already filled out the form, try again in 15 minutes.',
 			);
-			cause.name = 'AccessDeniedException';
+			// Bedrock reports this refusal from ConverseStream as ResourceNotFoundException (HTTP 404).
+			cause.name = 'ResourceNotFoundException';
+			Object.assign(cause, { $metadata: { httpStatusCode: 404 } });
 			throw new Error('Model stream failed', { cause });
 		}
 		yield { type: 'modelMessageStartEvent', role: 'assistant' };
