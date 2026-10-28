@@ -1,5 +1,5 @@
 /** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import {
 	type ExecuteOptions,
@@ -9,7 +9,7 @@ import {
 	SandboxTimeoutError,
 	type StreamChunk,
 } from '@strands-agents/sdk';
-import { buildAgentSpawn } from './isolation.mjs';
+import { buildAgentSpawn, killAgentGroup } from './isolation.mjs';
 import { buildShellEnv, redactSecrets } from './secrets.mjs';
 
 // Every command runs as the isolated agent user (lib/isolation.mjs): `sudo -n runuser -u benchagent
@@ -119,12 +119,13 @@ export function runShell(
 		// SIGKILL the whole process group (negative pid) to reap any backgrounded child whose
 		// inherited pipe write-ends keep 'close' from firing and hold libuv's loop open. Guarded
 		// (pid may be undefined / group already ESRCH). When isolated the group is benchagent-owned,
-		// so escalate via `sudo kill`; a `setsid` server escapes the group and keeps running.
+		// so escalate via `sudo kill` (killAgentGroup: see groupKillArgv for why its argv is fixed);
+		// a `setsid` server escapes the group and keeps running.
 		const killGroup = (): void => {
 			if (proc.pid === undefined) return;
 			if (process.env.BENCH_DIAG_JUDGE_BASH === 'no-group-kill') return; // DIAGNOSTIC: see executeStreaming
 			if (isolate) {
-				spawnSync('sudo', ['-n', 'kill', '-9', `-${proc.pid}`], { stdio: 'ignore', timeout: 5000 });
+				killAgentGroup(proc.pid);
 				return;
 			}
 			try {

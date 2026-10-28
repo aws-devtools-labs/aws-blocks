@@ -138,7 +138,7 @@ All providers are Strands model implementations, mapped from Blocks's `ModelConf
 |----------|--------------|----------|
 | `canned` | `CannedProvider` (custom) | Local dev — keyword-based responses with tool call support |
 | `bedrock` | `BedrockModel` | AWS — Amazon Bedrock models |
-| `openai-api` | `OpenAIModel` | Any OpenAI-compatible endpoint (OpenAI, Ollama, vLLM) |
+| `openai-api` | `OpenAIModel` | Any OpenAI-compatible endpoint (OpenAI, Ollama, vLLM, Bedrock Mantle). A Mantle endpoint without `apiKey` authenticates with short-term Bedrock API keys minted from the agent's AWS credentials |
 
 ## CannedProvider
 

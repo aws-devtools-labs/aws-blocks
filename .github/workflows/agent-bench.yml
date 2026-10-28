@@ -87,16 +87,16 @@ jobs:
       max-parallel: 5
       # One cell per (task, template) pair: each task runs on the single template that best
       # exercises its Building Blocks — 10 cells cover 18 Blocks without a full cross-product.
-      # DIAGNOSTIC (temporary, not for merge): four fast cells to find where the judge loses the
-      # runner. Round 1 showed it survives up to the judge's isolation phase, so each cell now either
-      # stops just before the model call or runs the full judge with one factor removed (see the
-      # judge step's BENCH_DIAG_* env). Restore the full matrix before anything merges.
+      # DIAGNOSTIC (temporary, not for merge): round 3 confirms the cause found in round 2 (procps
+      # kill reading `-9 -1xxxxx` as kill(-1); fixed by the `--` in groupKillArgv, PR #1102). Every
+      # cell runs the full judge with bash and the group kill on; all four should finish and score.
+      # Restore the full matrix before anything merges.
       matrix:
         include:
-          - { task: file-gallery, template: bare, judge_stop: before-invoke, judge_bash: '' }
-          - { task: async-word-counter, template: bare, judge_stop: '', judge_bash: none }
-          - { task: observability-api, template: backend, judge_stop: '', judge_bash: no-group-kill }
-          - { task: email-digest, template: demo, judge_stop: '', judge_bash: ulimit }
+          - { task: file-gallery, template: bare, judge_stop: '', judge_bash: echo }
+          - { task: async-word-counter, template: bare, judge_stop: '', judge_bash: echo }
+          - { task: observability-api, template: backend, judge_stop: '', judge_bash: echo }
+          - { task: email-digest, template: demo, judge_stop: '', judge_bash: echo }
     env:
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
@@ -331,8 +331,8 @@ jobs:
         env:
           # DIAGNOSTIC (temporary, not for merge): where this cell's judge stops (see 4-judge.ts).
           BENCH_DIAG_JUDGE_STOP: ${{ matrix.judge_stop }}
-          # none: no bash tool. no-group-kill: skip run-shell's `sudo kill -9 -<pgid>`. ulimit: cap
-          # each command's processes + memory. Any value also echoes each command (run-shell.ts).
+          # none: no bash tool. no-group-kill: skip run-shell's group kill. ulimit: cap each command's
+          # processes + memory. Any value (echo: nothing else) also echoes each command (run-shell.ts).
           BENCH_DIAG_JUDGE_BASH: ${{ matrix.judge_bash }}
           BUILDER_RESULT: /tmp/builder-result.json
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md

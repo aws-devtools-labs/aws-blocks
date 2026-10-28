@@ -435,20 +435,26 @@ function extractMethodTypeInfo(
 	return { params, returnType, transferable, skipCodegen };
 }
 
+function unwrapParens(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
+	let current = node;
+	while (current && ts.isParenthesizedTypeNode(current)) current = current.type;
+	return current;
+}
+
 /**
- * Walk a return-type AST node, unwrapping a single layer of `Promise<T>`,
- * and return the inner `TypeReferenceNode` if any. Used to recover the
- * syntactic type-arguments the customer wrote — `Promise<RealtimeChannel>`
- * has no inner `<...>`, while `Promise<RealtimeChannel<X>>` does.
+ * The written type reference inside an async return annotation, found through any
+ * parentheses and a single `Promise<T>` layer. Used to recover the type arguments the
+ * customer wrote: `Promise<RealtimeChannel>` has no inner `<...>`, `Promise<RealtimeChannel<X>>` does.
  */
 function unwrapPromiseTypeNode(node: ts.TypeNode | undefined): ts.TypeReferenceNode | undefined {
-	if (!node || !ts.isTypeReferenceNode(node)) return undefined;
-	const name = ts.isIdentifier(node.typeName) ? node.typeName.text : node.typeName.getText();
-	if (name === 'Promise' && node.typeArguments && node.typeArguments.length === 1) {
-		const inner = node.typeArguments[0];
-		return ts.isTypeReferenceNode(inner) ? inner : undefined;
+	const written = unwrapParens(node);
+	if (!written || !ts.isTypeReferenceNode(written)) return undefined;
+	const name = ts.isIdentifier(written.typeName) ? written.typeName.text : written.typeName.getText();
+	if (name === 'Promise' && written.typeArguments && written.typeArguments.length === 1) {
+		const inner = unwrapParens(written.typeArguments[0]);
+		return inner && ts.isTypeReferenceNode(inner) ? inner : undefined;
 	}
-	return node;
+	return written;
 }
 
 // ── Type-checker-based extraction for indirect ApiNamespace calls ────────────
@@ -525,8 +531,10 @@ function extractMethodsFromResolvedType(
 		// Extract return type (unwrap Promise<T>)
 		let retType = checker.getReturnTypeOfSignature(sig);
 		retType = unwrapPromise(retType, checker);
-		// Check if the return type is a transferable before converting to schema
-		const transferable = detectTransferable(retType, checker);
+		// `sig.declaration` is not usable here: on the `AsyncAPI<T>` mapped-type path it
+		// resolves to the mapper's own `Promise<Awaited<R>>`, so unwrapping it yields
+		// `Awaited<R>` and reports that node's own argument, `R`, as customer-written.
+		const transferable = detectTransferable(retType, checker, syntacticReturnTypeNode(prop));
 		const returnType = tsTypeToJsonSchema(retType, checker);
 
 		// JSDoc lives on the original method declaration, which we can reach
@@ -540,6 +548,25 @@ function extractMethodsFromResolvedType(
 
 		result.set(key, { params, returnType, transferable, skipCodegen });
 	}
+}
+
+/**
+ * A mapped-type property has no `valueDeclaration`, so fall back to its sole
+ * declaration; several would give no single annotation to pick.
+ */
+function syntacticReturnTypeNode(prop: ts.Symbol): ts.TypeReferenceNode | undefined {
+	const decl = prop.valueDeclaration ?? (prop.declarations?.length === 1 ? prop.declarations[0] : undefined);
+	if (!decl) return undefined;
+	if (ts.isMethodSignature(decl) || ts.isMethodDeclaration(decl)) return unwrapPromiseTypeNode(decl.type);
+	if (ts.isPropertySignature(decl) || ts.isPropertyDeclaration(decl)) {
+		const annotation = unwrapParens(decl.type);
+		return annotation && ts.isFunctionTypeNode(annotation) ? unwrapPromiseTypeNode(annotation.type) : undefined;
+	}
+	if (ts.isPropertyAssignment(decl)) {
+		const init = decl.initializer;
+		if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return unwrapPromiseTypeNode(init.type);
+	}
+	return undefined;
 }
 
 // ── Transferable detection ───────────────────────────────────────────────────
@@ -598,10 +625,20 @@ function detectTransferable(
 	// no `typeArguments`, treat the type as non-generic (defaults filled in
 	// by the checker shouldn't appear in the spec).
 	const typeArgs: JsonSchema[] = [];
-	const wroteTypeArgs = syntacticNode?.typeArguments && syntacticNode.typeArguments.length > 0;
-	if (wroteTypeArgs) {
-		const typeRef = type as ts.TypeReference;
-		const resolvedArgs = typeRef.typeArguments ?? [];
+	// All or nothing: a partial list would pass the arity check with the wrong types in it,
+	// since a dropped argument shifts the rest left. A trailing parameter filled from its
+	// default, or a wrapper the checker resolves away (the `Awaited<T>` in
+	// `Promise<Awaited<R>>`), leaves an argument nobody wrote. `===` is the right compare
+	// here: one checker interns its types, so the written node and the resolved argument
+	// are the same instance. A structural compare would accept a wrapper's own argument.
+	// This tightens both callers, not only the resolved-type one: emission used to need
+	// any written type argument, and now needs every one of them.
+	const writtenArgs = syntacticNode?.typeArguments ?? [];
+	const resolvedArgs = (type as ts.TypeReference).typeArguments ?? [];
+	const customerWroteEvery =
+		writtenArgs.length === resolvedArgs.length &&
+		writtenArgs.every((written, index) => checker.getTypeFromTypeNode(written) === resolvedArgs[index]);
+	if (customerWroteEvery) {
 		for (const arg of resolvedArgs) {
 			// Explicit `unknown` / `any` → empty schema (matches Req 4.3).
 			const argFlags = arg.getFlags();

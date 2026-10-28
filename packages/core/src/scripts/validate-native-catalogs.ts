@@ -412,6 +412,8 @@ function collectBindings(
 			// runs for every kind. Only the ABI allowlist is transferable-specific.
 			const tag = validateBindingTag(declaration.tag, id, path, declaredBy, sourceName, seenTags, errors);
 			const arity = validateBindingShape(declaration, path, declaredBy, errors);
+			// A built-in tag reaches no arity check: it cannot be bound by a block, so
+			// `validateBindingTag` rejects it and returns `undefined`.
 			if (arity !== undefined && tag !== undefined) {
 				validateArityAgainstMethods(tag, arity, methods, errors);
 			}
