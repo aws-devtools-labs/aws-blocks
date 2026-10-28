@@ -10,6 +10,7 @@ import {
 	MANAGED_POLICY_MAX_CHARS,
 	type PolicyDocument,
 	policySize,
+	splitPolicy,
 } from './iam-policies.js';
 
 /** IAM's `*` / `?` wildcard match. */
@@ -31,6 +32,8 @@ type Request = {
 	arn: string;
 	principalApp: string;
 	resourceApp?: string;
+	/** The `app` value the request itself sets as a tag (a create or tag call), if any. */
+	requestApp?: string;
 	viaService?: string;
 	roleArn?: string;
 };
@@ -47,6 +50,15 @@ function matches(s: Statement, r: Request): boolean {
 	if (s.Resource && !list(s.Resource).some((p) => glob(sub(p), r.arn))) return false;
 	if (s.NotResource && list(s.NotResource).some((p) => glob(sub(p), r.arn))) return false;
 	const c = s.Condition;
+	// Deny "resource tagged as another app": StringNotEquals + Null=false on aws:ResourceTag/app.
+	const notTag = c?.StringNotEquals?.['aws:ResourceTag/app'];
+	if (notTag !== undefined && c?.Null?.['aws:ResourceTag/app'] === 'false') {
+		if (r.resourceApp === undefined || r.resourceApp === notTag) return false;
+	}
+	const reqTag = c?.StringEquals?.['aws:RequestTag/app'];
+	if (reqTag !== undefined && r.requestApp !== reqTag) return false;
+	const notReqTag = c?.StringNotEquals?.['aws:RequestTag/app'];
+	if (notReqTag !== undefined && (r.requestApp === undefined || r.requestApp === notReqTag)) return false;
 	const tag = c?.StringEquals?.['aws:ResourceTag/app'];
 	if (tag !== undefined && sub(tag as string) !== r.resourceApp) return false;
 	const via = c?.StringLike?.['kms:ViaService'];
@@ -184,6 +196,33 @@ describe('blocks-iam-policies — the per-app execution policy', () => {
 		assert.strictEqual(sid('Queues'), undefined, 'no SQS rule for an app with no queue');
 	});
 
+	test('tag-scoped services: creates only top-level resources, manages only own-tagged ones, never another app\'s', () => {
+		const exec = generateExecutionPolicy(['AWS::ApiGateway::RestApi', 'AWS::StepFunctions::StateMachine', 'AWS::SecretsManager::Secret'], {
+			appId: 'appa',
+			account: acct,
+		}).document;
+		const r = (action: string, arn: string, resourceApp?: string, extra: Partial<Request> = {}) =>
+			allowed(exec, { action, arn, principalApp: 'appa', resourceApp, ...extra });
+		const api = (path: string) => `${A}:apigateway:us-east-1::${path}`;
+		// Creating the app's own API, and its children on its own API.
+		assert.strictEqual(r('apigateway:POST', api('/restapis'), undefined, { requestApp: 'appa' }), true, 'create a REST API');
+		assert.strictEqual(r('apigateway:POST', api('/restapis'), undefined), false, 'create an untagged REST API');
+		assert.strictEqual(r('apigateway:POST', api('/restapis/own123/stages'), 'appa'), true, "a stage on the app's own API");
+		assert.strictEqual(r('apigateway:TagResource', api('/tags/x'), 'appa', { requestApp: 'appa' }), true, 'tag its own API');
+		// The live-proof gap: a child on another app's API, even with a request tag of this app.
+		assert.strictEqual(
+			r('apigateway:POST', api('/restapis/other99/stages'), 'appb', { requestApp: 'appa' }),
+			false,
+			"a stage on another app's API",
+		);
+		assert.strictEqual(r('apigateway:PUT', api('/tags/other'), 'appb', { requestApp: 'appa' }), false, "re-tag another app's API");
+		assert.strictEqual(r('apigateway:TagResource', api('/tags/untagged'), undefined, { requestApp: 'appa' }), false, 'claim an untagged API');
+		assert.strictEqual(r('apigateway:TagResource', api('/tags/x'), 'appa', { requestApp: 'appb' }), false, 'hand its own API to another app');
+		assert.strictEqual(r('states:StartExecution', `${A}:states:us-east-1:${acct}:stateMachine:Gsi-x`, 'appa'), true);
+		assert.strictEqual(r('states:StartExecution', `${A}:states:us-east-1:${acct}:stateMachine:Gsi-y`, 'appb'), false);
+		assert.strictEqual(r('secretsmanager:GetSecretValue', `${A}:secretsmanager:us-east-1:${acct}:secret:db-x`, 'appb'), false);
+	});
+
 	test("manages only the app's own layers", () => {
 		assert.deepStrictEqual(sid('Layers')?.Resource, [`${A}:lambda:*:${acct}:layer:appa-*`, `${A}:lambda:*:${acct}:layer:appa-*:*`]);
 		assert.strictEqual(sid('LayersUnscopedNames'), undefined);
@@ -242,5 +281,18 @@ describe('blocks-iam-policies — the deploy guard', () => {
 
 	test('needs the app id and a 12-digit account', () => {
 		assert.throws(() => generateDeployGuardPolicy({ account: acct }), /app id/);
+	});
+});
+
+describe('blocks-iam-policies — splitting a large execution policy', () => {
+	test('every part fits IAM\'s limit, and no statement is lost or reordered', () => {
+		const types = ['AWS::Lambda::Function', 'AWS::Logs::LogGroup', 'AWS::DynamoDB::Table', 'AWS::SQS::Queue', 'AWS::S3::Bucket',
+			'AWS::SSM::Parameter', 'AWS::SecretsManager::Secret', 'AWS::ApiGateway::RestApi', 'AWS::Scheduler::Schedule', 'AWS::Events::Rule',
+			'AWS::Cognito::UserPool', 'AWS::KMS::Key', 'AWS::StepFunctions::StateMachine', 'AWS::ResourceGroups::Group', 'AWS::CloudWatch::Dashboard'];
+		const { document } = generateExecutionPolicy(types, { appId: 'appa', account: acct });
+		const parts = splitPolicy(document);
+		assert.ok(parts.length > 1, `expected a split, got ${policySize(document)} characters in one`);
+		for (const part of parts) assert.ok(policySize(part) <= MANAGED_POLICY_MAX_CHARS, `${policySize(part)} characters`);
+		assert.deepStrictEqual(parts.flatMap((p) => p.Statement), document.Statement);
 	});
 });

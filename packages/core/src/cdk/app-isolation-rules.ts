@@ -178,6 +178,11 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 		case 'scheduler':
 			name = rest.startsWith('schedule/') ? rest.split('/')[2] : undefined;
 			break;
+		case 'execute-api':
+			// `<api id>/<stage>/<method>/<path>`: an API id is never a name under the app's
+			// prefix, so a literal one is always outside the app — reference the API instead.
+			name = rest.split('/')[0];
+			break;
 		default:
 			// cognito-idp and kms name resources by id, not by name: only `*` is checked.
 			name = undefined;
@@ -346,10 +351,14 @@ export function checkStatement(
 			: isUnderAppPrefix(bare, id);
 		if (!within) {
 			const asset = parsed.service === 's3' && /^cdk-[^-]+-assets-/.test(bare);
+			const api = parsed.service === 'execute-api';
 			out.push({
 				rule: 'grant-outside-app',
 				path: where,
-				message: asset
+				message: api
+					? `${where} grants ${actions.join(', ')} on "${label}", a literal API id: API ids aren't app names, so ` +
+						"this can be another app's API. Reference the app's own API (its construct) instead."
+					: asset
 					? `${where} reads the CDK asset bucket "${label}", which isn't this app's: bootstrap the app with ` +
 						`--qualifier ${id} and set @aws-cdk/core:bootstrapQualifier to "${id}" in cdk.json.`
 					: `${where} grants ${actions.join(', ')} on "${label}", which isn't under this app's prefix "${id}-".`,

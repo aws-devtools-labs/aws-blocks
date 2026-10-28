@@ -9,7 +9,7 @@ This is the **api-only** service, set up to run on a **shared app platform**: on
 | `aws-blocks/index.cdk.ts` | `defaults.app: { id: APP_ID, strict: true }` | Tags every resource and role `app=<id>`, and fails synth if anything reaches outside the app. |
 | `aws-blocks/index.cdk.ts` | `defaults.permissionsBoundary` (`APP_PERMISSIONS_BOUNDARY`, default `apps-boundary`) | The platform's boundary policy on every role the app creates. |
 | `aws-blocks/index.cdk.ts` | stack name `<id>` (`<id>-<sandbox>` for a sandbox) | Every name AWS Blocks derives starts with the stack name, so it starts with the app id. |
-| `package.json` | `npm run check:iam` | Runs `blocks-iam-check`, the check the pipeline runs. |
+| `package.json` | `npm run check:iam` | Runs `blocks-iam-check --app "$APP_ID"`, the check the pipeline runs. |
 | `AGENTS.md` | "Platform rules" | Rules for coding agents. |
 
 `APP_ID` (1–10 lowercase letters and digits) is set by the platform's pipeline, from its own registry. For a sandbox, export it yourself: `APP_ID=<your app id> npm run sandbox`.
@@ -24,7 +24,7 @@ npx blocks-iam-policies cdk.out --out iam --app <id> --account <account>
 ```
 
 - `iam/boundary.json`: the permissions boundary, one policy for every app in the account. Create it once as `apps-boundary`.
-- `iam/execution-<id>.json`: this app's CloudFormation execution policy. Bootstrap the app with the app id as its qualifier and pass it: `cdk bootstrap --qualifier <id> --toolkit-stack-name CDKToolkit-<id> --cloudformation-execution-policies <arn>`. `aws-blocks/index.cdk.ts` already sets the qualifier from `APP_ID`, so synth and `npm run check:iam` need nothing else. The pipeline deploys the checked assembly with `cdk deploy --app cdk.out --toolkit-stack-name CDKToolkit-<id>`. AWS Blocks' own `npm run deploy` / `npm run sandbox` check the bootstrap using the qualifier in `cdk.json`, so to use them, also set `"@aws-cdk/core:bootstrapQualifier": "<id>"` there.
+- `iam/execution-<id>.json`: this app's CloudFormation execution policy. Bootstrap the app with the app id as its qualifier and pass it: `cdk bootstrap --qualifier <id> --toolkit-stack-name CDKToolkit-<id> --cloudformation-execution-policies <arn>`. `aws-blocks/index.cdk.ts` already sets the qualifier from `APP_ID`, so synth and `npm run check:iam` need nothing else. The pipeline deploys the checked assembly with `cdk deploy --app cdk.out --toolkit-stack-name CDKToolkit-<id>`. AWS Blocks' own `npm run deploy` / `npm run sandbox` check the bootstrap using the qualifier in `cdk.json`: scaffolding with `APP_ID` set writes it there (with `"toolkitStackName": "CDKToolkit-<id>"`); otherwise add both by hand.
 - An app whose roles call its own APIs through `execute-api` (a Realtime WebSocket API) needs its own boundary: after the first deploy, regenerate with `--execute-api <api id>`, which writes `iam/boundary-<id>.json`, and set `APP_PERMISSIONS_BOUNDARY` to it.
 - `iam/deploy-guard-<id>.json`: attach it to the app's deploy role (`cdk-<id>-deploy-role-<account>-<region>`), so this app's pipeline can only change this app's stacks.
 

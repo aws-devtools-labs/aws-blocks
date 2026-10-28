@@ -58,17 +58,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   /**
-   * Public — mint a presigned URL to upload a file. The client PUTs the bytes
-   * directly to the returned URL with the same Content-Type. No bytes pass
-   * through the API itself.
+   * Mint a presigned URL to upload a file under the caller's own folder. The
+   * client PUTs the bytes directly to the returned URL with the same
+   * Content-Type. No bytes pass through the API itself.
    */
   async createUploadUrl(path: string, contentType: string) {
-    return { url: await files.putUrl(path, { contentType }) };
+    const user = await auth.requireAuth(context);
+    return { url: await files.putUrl(`${user.userId}/${path}`, { contentType }) };
   },
 
-  /** Public — mint a presigned URL to download a file. The client GETs the bytes directly. */
+  /** Mint a presigned URL to download one of the caller's own files. The client GETs the bytes directly. */
   async createDownloadUrl(path: string) {
-    return { url: await files.getUrl(path) };
+    const user = await auth.requireAuth(context);
+    return { url: await files.getUrl(`${user.userId}/${path}`) };
   },
 
   /** Create an item owned by the caller. */

@@ -125,6 +125,16 @@ describe('app-isolation rules — layers and APIs', () => {
 		assert.deepStrictEqual(rules(checkLayer({}, 'appa', 'p')), ['layer-outside-app']);
 	});
 
+	test("a literal API id in an execute-api grant is outside the app; a reference to the app's own API is fine", () => {
+		const s = (Resource: unknown) => ({ Effect: 'Allow', Action: 'execute-api:ManageConnections', Resource });
+		assert.deepStrictEqual(
+			rules(checkStatement(s('arn:aws:execute-api:us-east-1:111111111111:bbb222/prod/POST/@connections/*'), 'appa', 'p')),
+			['grant-outside-app'],
+		);
+		const own = { 'Fn::Join': ['', ['arn:aws:execute-api:us-east-1:111111111111:', { Ref: 'WsApi' }, '/prod/POST/@connections/*']] };
+		assert.deepStrictEqual(checkStatement(s(own), 'appa', 'p'), []);
+	});
+
 	test('execute-api on * is a wildcard grant', () => {
 		const s = { Effect: 'Allow', Action: 'execute-api:ManageConnections', Resource: 'arn:aws:execute-api:us-east-1:111111111111:*' };
 		assert.deepStrictEqual(rules(checkStatement({ ...s, Resource: '*' }, 'appa', 'p')), ['wildcard-data-grant']);

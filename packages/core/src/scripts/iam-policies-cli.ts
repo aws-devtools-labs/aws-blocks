@@ -35,6 +35,7 @@ import {
 	type PolicyDocument,
 	policySize,
 	resourceTypesOf,
+	splitPolicy,
 } from './iam-policies.js';
 
 function usage(message?: string): never {
@@ -106,7 +107,16 @@ if (options.appId || options.account) {
 	} catch (error) {
 		usage(error instanceof Error ? error.message : String(error));
 	}
-	write(join(out, `execution-${options.appId}.json`), result.document);
+	// One file per managed policy: IAM caps each at 6,144 characters.
+	const parts = splitPolicy(result.document);
+	for (const [i, part] of parts.entries()) {
+		write(join(out, `execution-${options.appId}${i === 0 ? '' : `-${i + 1}`}.json`), part);
+	}
+	if (parts.length > 1) {
+		process.stdout.write(
+			`  → ${parts.length} execution policies: pass all of them, comma-separated, to cdk bootstrap --cloudformation-execution-policies.\n`,
+		);
+	}
 	write(join(out, `deploy-guard-${options.appId}.json`), generateDeployGuardPolicy(options));
 	if (result.unscoped.length > 0) {
 		process.stdout.write(
