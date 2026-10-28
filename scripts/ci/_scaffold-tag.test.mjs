@@ -44,6 +44,7 @@ describe('addPurposeTag', () => {
 		const file = tmpFile('index.cdk.ts');
 		writeFileSync(file, 'export const blocksStack = {};\n');
 		assert.throws(() => addPurposeTag(file, 'e2e-windows'), /aws-cdk-lib/);
+		assert.doesNotMatch(readFileSync(file, 'utf-8'), /Tags/);
 	});
 });
 

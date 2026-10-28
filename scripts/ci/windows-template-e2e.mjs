@@ -41,7 +41,8 @@ const teardown = (cmd, args, opts = {}) => runTeardown(cmd, args, opts, ROOT, te
  * Spawn a long-running command and poll `ready()` until it returns true.
  * Readiness is based on product artifacts (config/outputs files, ports), NOT
  * console log strings, so it doesn't break when log wording changes. Rejects if
- * the child exits early or the timeout elapses. Returns the child to kill.
+ * the child exits early or the timeout elapses; on timeout it kills the child's
+ * tree first, so the caller's teardown doesn't race it. Returns the child to kill.
  */
 async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
   console.log(`\n$ ${cmd} ${args.join(' ')}`);

@@ -45,7 +45,7 @@ export function killTree(pid) {
  *   duplicate line). Default true.
  * @returns the spawnSync result (`{status, error, ...}`). Callers decide how a
  *   non-zero status is handled — {@link runBool} for a boolean, {@link runOrThrow}
- *   to throw, {@link runTeardown} to record it without throwing — so the two
+ *   to throw, {@link runTeardown} to record it without throwing, so the two
  *   drivers keep their existing control flow.
  */
 export function runSpawn(cmd, args, opts = {}, root, { log = true } = {}) {
