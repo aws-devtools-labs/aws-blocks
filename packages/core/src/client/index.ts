@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { fetchWithStaleConnectionRetry } from './stale-connection.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -247,6 +248,24 @@ export interface ApiNamespaceClientOptions {
    * namespace-qualified URL. A trailing slash is tolerated.
    */
   url?: string;
+  /**
+   * Resend a call **once** when Node's `fetch` fails before the response headers arrived
+   * because the connection closed: `TypeError: fetch failed` whose cause is an undici
+   * socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or
+   * `EPIPE`. A partial status line followed by a close counts too, since the headers never
+   * arrived. Default `true`.
+   *
+   * The usual cause is a pooled keep-alive socket the server closed while it was idle,
+   * and then the first copy never reached the server. Node's `fetch` can't tell that
+   * apart from a fresh connection that closed, including a server that read the request
+   * and crashed before answering, so the resend makes delivery **at-least-once**: in
+   * that rare case the method runs twice. Set `false` for at-most-once delivery; the
+   * failure then surfaces to the caller instead. Browsers resend on their own, so this
+   * only matters in Node (CLIs, SSR, scripts).
+   *
+   * Generated clients accept it too: `generateClient({ url, retryStaleConnection: false })`.
+   */
+  retryStaleConnection?: boolean;
 }
 
 /**
@@ -290,12 +309,30 @@ function namespaceRequestUrl(baseUrl: string, namespace: string): string {
  * import { api } from 'aws-blocks';
  * const user = await api.getUser('123');
  * ```
+ *
+ * **Closed connections (at-least-once).** In Node (CLIs, SSR, scripts), a call whose
+ * `fetch` fails before the response headers arrived because the connection closed
+ * (`TypeError: fetch failed` whose cause is an undici socket error, `UND_ERR_SOCKET` such as
+ * `other side closed`, or `ECONNRESET` / `EPIPE`) is resent **once** on a new connection. The usual cause is a pooled keep-alive socket the server
+ * closed while idle, and then the first copy never reached the server. Node's `fetch`
+ * doesn't say whether the socket was reused, so the same error on a fresh connection, for
+ * example a server that read the request and crashed before sending a byte, is resent
+ * too, and in that rare case the method runs twice. Behind API Gateway, CloudFront or a
+ * Function URL a crashed backend answers with a 5xx, which is never retried. Keep
+ * state-changing methods idempotent where a duplicate would matter, or pass
+ * `retryStaleConnection: false` for at-most-once delivery. Nothing else is retried: not a
+ * timeout, not an abort, not a failure after the response headers arrived (while reading the
+ * body), not an HTTP or RPC error. Browsers already do this resend themselves.
  */
 export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => any>>(
   name: string,
   options?: ApiNamespaceClientOptions,
 ): AsyncAPI<T> {
   const urlOverride = options?.url;
+  // Look `fetch` up at call time (not when the client is built), as the retrying path does,
+  // so a `fetch` installed later (a polyfill, a test spy) is the one used.
+  const send: (url: string, init: RequestInit) => Promise<Response> =
+    options?.retryStaleConnection === false ? (url, init) => fetch(url, init) : fetchWithStaleConnectionRetry;
   return new Proxy({} as any, {
     get(target, method: string | symbol) {
       if (typeof method === 'symbol') return undefined;
@@ -342,7 +379,10 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           }
         }
         
-        const response = await fetch(requestUrl, {
+        // A connection that closes before the response headers arrive (usually a pooled
+        // keep-alive socket the server closed while idle) is resent once, unless
+        // `retryStaleConnection: false` (see stale-connection.ts).
+        const response = await send(requestUrl, {
           method: 'POST',
           headers: request.headers,
           credentials: 'include',

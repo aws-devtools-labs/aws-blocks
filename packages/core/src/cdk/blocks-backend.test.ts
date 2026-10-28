@@ -648,3 +648,21 @@ describe('gateway is not available during the backend import (BlocksBackend)', (
 		await assert.rejects(makeBackend(parent, 'Blocks', gatewayReadingBackendPath), /not fully initialized/);
 	});
 });
+
+describe('AWSBlocks template metadata (BlocksBackend.create)', () => {
+	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+
+	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
+
+	test('writes AWSBlocks on the parent stack by default', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'MetadataOnParent');
+		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+		assert.match(toolsMetrics(parent)?.AWSBlocks, /^1;core=[^;]+;mode=production;bb=[^;]*;custom=\d+$/);
+	});
+
+	test('omits AWSBlocks when CDK version reporting is off', async () => {
+		const parent = new cdk.Stack(new cdk.App({ analyticsReporting: false }), 'MetadataOffParent');
+		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+		assert.strictEqual(toolsMetrics(parent), undefined);
+	});
+});

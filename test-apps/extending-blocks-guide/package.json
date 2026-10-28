@@ -20,14 +20,14 @@
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-table": "*",
     "@aws-blocks/core": "*",
-    "@aws-sdk/client-cloudformation": "^3.1153.0",
-    "@aws-sdk/client-sqs": "^3.1152.0",
+    "@aws-sdk/client-cloudformation": "^3.1156.0",
+    "@aws-sdk/client-sqs": "^3.1156.0",
     "@guide/bb-queue": "*",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"

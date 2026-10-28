@@ -494,3 +494,34 @@ test('mock: when both guards are tripped, the CORS guard fires first (matches CD
 			!/noncurrentVersionExpirationDays/.test(err.message),
 	);
 });
+
+test('mock: objectLock with versioned:false throws (parity with the CDK synth guard)', () => {
+	const scope = new Scope('app');
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { versioned: false, objectLock: { mode: 'governance', retentionDays: 30 } }),
+		/objectLock requires versioning/,
+	);
+});
+
+test('mock: invalid objectLock retentionDays throws (parity with the CDK synth guard)', () => {
+	const scope = new Scope('app');
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { objectLock: { mode: 'compliance', retentionDays: 0 } }),
+		/objectLock\.retentionDays must be an integer between 1 and 36500/,
+	);
+});
+
+test('mock: encryption and a valid objectLock are accepted and the bucket still works', async () => {
+	const scope = new Scope('app');
+	const bucket = new FileBucket(scope, 'locked', {
+		encryption: FileBucket.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234'),
+		objectLock: { mode: 'governance', retentionDays: 1 },
+	});
+	await bucket.put('a.txt', 'hello');
+	const file = await bucket.get('a.txt');
+	assert.strictEqual(file?.body.toString(), 'hello');
+});
+
+test('mock: fromKmsKey returns a branded ref', () => {
+	assert.deepStrictEqual(FileBucket.fromKmsKey('arn:k'), { __brand: 'ExternalKmsKeyRef', keyArn: 'arn:k' });
+});

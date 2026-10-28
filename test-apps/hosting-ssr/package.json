@@ -38,7 +38,7 @@
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "concurrently": "^8.2.2",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1",
     "@playwright/test": "^1.64.1"
   }
