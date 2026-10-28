@@ -4,6 +4,7 @@
 import { AgentErrors, blocksAgentError } from './errors.js';
 
 export { AgentErrors, InterruptError } from './errors.js';
+export { BedrockModels, OllamaModels } from './models.js';
 
 export class Agent {
   constructor(..._args: any[]) {

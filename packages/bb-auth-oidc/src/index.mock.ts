@@ -196,7 +196,7 @@ export class AuthOIDC<
 		const dataDir = getMockDataDir(this);
 		for (const provider of options.providers) {
 			if (provider.kind === 'stub') {
-				mountStubIdpRoutes(this, provider, dataDir);
+				mountStubIdpRoutes(this, provider, { codeSecret: mockCookieSecret, dataDir });
 			}
 		}
 

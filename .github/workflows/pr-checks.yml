@@ -52,10 +52,16 @@ jobs:
   # or names an unknown job, it fails in its first step instead. E2E Sandbox
   # and E2E Production are required checks, and GitHub counts a skipped job as
   # passing, so a skip would let the trailer merge a PR past E2E. Push a
-  # commit without the trailer before merging.
+  # commit without the trailer before merging. For the same reason those two
+  # also start when this job fails or is cancelled, and fail in their first step.
+  #
+  # E2E VPC Smoke is left out while test-apps/vpc-smoke's tests are switched
+  # off (its test:e2e:sandbox script only echoes), since it would test nothing.
   #
   # The logic lives in scripts/ci/e2e-selection.sh, tested by
   # scripts/ci/e2e-selection.test.mjs (in Local Build and Checks).
+  # scripts/ci/required-checks.test.mjs checks that no required check passes
+  # when a job it depends on fails or is cancelled.
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -236,6 +242,11 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      # Keeps every Playwright browser install bounded (an apt hang once held a
+      # Hosting job for 57 min).
+      - name: Test the Playwright install wrapper
+        run: node --test scripts/ci/install-playwright.test.mjs
+
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
       - name: Check runtime mock-guard coverage
@@ -249,6 +260,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # A test app whose stacks the stale-stack sweeper can't match leaks every
+      # stack whose teardown fails.
+      - name: Test that cleanup-stacks.yml covers the E2E stacks
+        run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
+
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
       - name: Test the E2E job selection
@@ -257,6 +273,16 @@ jobs:
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs
+
+      # No required check may pass when a job it depends on fails or is
+      # cancelled (GitHub counts a skipped required check as passing).
+      - name: Test the required checks' failure paths
+        run: node --test scripts/ci/required-checks.test.mjs
+
+      # The Hosting delete replay (scripts/ci/hosting-teardown-replay.mjs): its
+      # log parser and quota model, against fixture logs (no GitHub calls).
+      - name: Test the Hosting teardown replay
+        run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
@@ -268,6 +294,11 @@ jobs:
 
       - name: Check API backward compatibility
         run: npm run check:api
+
+      # The scheduled stack cleanup (cleanup-stacks.yml) deletes orphaned log groups
+      # with this step; it must never delete one whose function or cluster is live.
+      - name: Test the orphaned log group sweep
+        run: node --test scripts/ci/sweep-log-groups.test.mjs
 
       # Tests the splitter the local-unit jobs use.
       - name: Test the unit test sharding
@@ -517,7 +548,14 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Sandbox
     needs: [build-and-test-local, detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox') && github.event.pull_request.head.repo.full_name == github.repository
+    # Required check: see "Check that Detect Changes succeeded" below. Only
+    # that branch uses always(); the run branch keeps success() so a failed
+    # need still skips the job and a cancelled run (a new push) still cancels
+    # the deploy.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((always() && needs.detect-changes.result != 'success') ||
+       (success() && contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox')))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -525,6 +563,18 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      # A failed or cancelled Detect Changes would otherwise skip this job, and
+      # a skipped required check counts as passing. always() starts the job and
+      # this step anyway, also in a cancelled run, and the step fails the job
+      # before anything else runs.
+      - name: Check that Detect Changes succeeded
+        if: always() && needs.detect-changes.result != 'success'
+        env:
+          RESULT: ${{ needs.detect-changes.result }}
+        run: |
+          echo "::error::Detect Changes ended $RESULT, so this run can't tell which E2E jobs this PR needs. Re-run the failed jobs."
+          exit 1
+
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'sandbox')
         run: |
@@ -590,6 +640,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
+    # detect-changes doesn't start this job while test-apps/vpc-smoke's
+    # test:e2e:sandbox script only echoes; it starts again by itself once the
+    # script runs the tests. Switching them on (or removing the suite) is
+    # tracked in https://github.com/aws-devtools-labs/aws-blocks/issues/987.
+    # Before that, this job must share one concurrency group with every other
+    # job that deploys BlocksTestVpc: e2e-selection.test.mjs fails once the
+    # tests are on and the groups differ.
+    #
     # Serialize across PRs: the smoke app provisions private-DNS interface
     # endpoints into the shared persistent test VPC, and AWS permits only one
     # per service per VPC. Without this, two open PRs collide on the endpoints
@@ -644,14 +702,20 @@ jobs:
         run: npm run test:e2e:sandbox:vpc
 
   e2e-compute-smoke:
-    name: E2E Compute Smoke
+    # The compute suite: one app (test-apps/compute-smoke) with a scenario module
+    # per compute kind and workload — container AsyncJobs, an API namespace on
+    # its own serverless compute — deployed once per leg. The legs vary the API
+    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
+    # its compute type. The `apigateway` front door is covered without a VPC by
+    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
     needs: [build-and-test-local, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 70
     environment: e2e
     # Serialize this suite across PRs: it provisions private-DNS interface
     # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
@@ -665,11 +729,21 @@ jobs:
     concurrency:
       group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
       cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      # Every leg provisions the same endpoints into the one compute test VPC, so
+      # legs run one after another. The concurrency group is not a queue: it holds
+      # one running and one pending job, and a newer pending job (another PR on
+      # this account) cancels the pending one.
+      max-parallel: 1
+      matrix:
+        front-door: [cloudfront]
     env:
-      # `pr-`, not `compute-`: the stack name already starts `bb-compute-smoke-`,
-      # and the extra characters pushed the app's FileBucket name past S3's 63
-      # at four-digit PR numbers.
+      # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
+      # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
+      # the app's FileBucket name past S3's 63 at four-digit PR numbers.
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
     steps:
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
@@ -705,12 +779,86 @@ jobs:
         run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
 
       - name: Export VPC ID
+        id: vpc-id
         run: |
           VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
           echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
 
+      # The last run's teardown returns once its deletes are accepted, and its
+      # end releases the lock above, so its stacks can still hold their VPC
+      # endpoints here: deleting, or still finishing a create that a cancel cut
+      # off. While this job holds the lock and has not deployed, any
+      # bb-test-compute- stack in an *_IN_PROGRESS state is an earlier run's (or
+      # an earlier leg's). Deploying now would
+      # fail with a conflicting private DNS name. Wait up to 10 minutes for them
+      # to settle, then deploy regardless. (The job timeout leaves room for it.)
+      # Once the compute test VPC has permanent endpoints (test-infra's
+      # BlocksComputeTestVpcEndpoints), the app adds none and runs need no lock,
+      # so there is nothing to wait for.
+      - name: Wait for an earlier run's stacks to settle
+        timeout-minutes: 12
+        run: |
+          # GitHub runs this step with `bash -e` only; without pipefail a failed
+          # list-stacks would read as "nothing in progress".
+          set -o pipefail
+          if grep -q BlocksComputeTestVpcEndpoints test-infra/vpc-test-stack.ts; then
+            echo "The compute test VPC has permanent endpoints: nothing to wait for."
+            exit 0
+          fi
+          stacks() {
+            aws cloudformation list-stacks --stack-status-filter "$@" --output json \
+              --query "StackSummaries[?starts_with(StackName, 'bb-test-compute-')].StackName" | jq -r 'join(" ")'
+          }
+          deadline=$((SECONDS + 600))
+          while :; do
+            if ! busy=$(stacks CREATE_IN_PROGRESS ROLLBACK_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_IN_PROGRESS \
+              UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS); then
+              echo "::warning title=Compute Smoke::Could not list the stacks of earlier runs, deploying anyway."
+              break
+            fi
+            if [ -z "$busy" ]; then break; fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning title=Compute Smoke::Still in progress after 10 minutes, deploying anyway: $busy"
+              break
+            fi
+            echo "Waiting for these stacks to settle: $busy"
+            sleep 30
+          done
+          # A delete that failed (often on the endpoints themselves) leaves them in place.
+          if failed=$(stacks DELETE_FAILED) && [ -n "$failed" ]; then
+            echo "::warning title=Compute Smoke::DELETE_FAILED, may still hold VPC endpoints: $failed"
+          fi
+
       - name: E2E Compute Smoke
         run: npm run test:e2e:sandbox:compute
+
+      # The suite destroys its stacks in test.after and fails the run if it
+      # can't, but test.after never runs when this job is cancelled (a new push
+      # cancels the run), times out or crashes. A leaked stack keeps its
+      # distribution and its VPC endpoints in the shared compute test VPC, so
+      # every later run in the same account fails to deploy. Delete what this
+      # checkout deployed (the app stack and its -vpc-ref, both named with the
+      # sandbox id), after a failure, a cancel or a pass that left a stack:
+      # skipped when nothing was synthesized, one ListStacks call when the suite
+      # cleaned up. Not `cdk destroy`: it waits for the delete to finish (about
+      # 12 minutes with the endpoints), and GitHub force-stops a cancelled job 5
+      # minutes after the cancel, so these two steps get 3 minutes together and
+      # only start the deletes. Fresh credentials, since the first session can
+      # expire before a long or timed-out job gets here.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        if: always() && hashFiles('test-apps/compute-smoke/.blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/compute-smoke
 
   e2e-production:
     permissions:
@@ -718,7 +866,14 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Production
     needs: [build-and-test-local, detect-changes]
-    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'production') && github.event.pull_request.head.repo.full_name == github.repository
+    # Required check: see "Check that Detect Changes succeeded" below. Only
+    # that branch uses always(); the run branch keeps success() so a failed
+    # need still skips the job and a cancelled run (a new push) still cancels
+    # the deploy.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      ((always() && needs.detect-changes.result != 'success') ||
+       (success() && contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'production')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: e2e
@@ -726,6 +881,18 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
+      # A failed or cancelled Detect Changes would otherwise skip this job, and
+      # a skipped required check counts as passing. always() starts the job and
+      # this step anyway, also in a cancelled run, and the step fails the job
+      # before anything else runs.
+      - name: Check that Detect Changes succeeded
+        if: always() && needs.detect-changes.result != 'success'
+        env:
+          RESULT: ${{ needs.detect-changes.result }}
+        run: |
+          echo "::error::Detect Changes ended $RESULT, so this run can't tell which E2E jobs this PR needs. Re-run the failed jobs."
+          exit 1
+
       - name: Check the E2E trailer
         if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'production')
         run: |
@@ -877,6 +1044,12 @@ jobs:
     environment: e2e
     strategy:
       fail-fast: false
+      # The legs run in one account, which allows one REST API delete every 30
+      # seconds, so their stack deletes can queue behind each other. They are
+      # not spread on purpose: fixed delays would need re-tuning whenever the
+      # suites' durations change. scripts/ci/hosting-teardown-replay.mjs
+      # replays recent runs' deletes through that quota, to check how long
+      # they wait or to evaluate a schedule (its header lists the inputs).
       matrix:
         include:
           - framework: spa
@@ -922,8 +1095,9 @@ jobs:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
       HOSTING_FRONT_DOOR: ${{ matrix.front-door || '' }}
-      # Web Function and front-door jobs keep the sandbox after the suite for the redeploy check.
-      BLOCKS_SANDBOX_KEEP: ${{ (matrix.compute-type == 'web-function' || matrix.front-door) && '1' || '' }}
+      # The suite keeps its sandbox; Destroy sandbox below deletes it (after the
+      # Web Function and front-door redeploy checks, which need it).
+      BLOCKS_SANDBOX_KEEP: '1'
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - name: Check the E2E trailer
@@ -956,10 +1130,16 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 23 min in all; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 25
+        run: node scripts/ci/install-playwright.mjs chromium
 
       - name: E2E Test Hosting (${{ matrix.framework }})
+        id: e2e
         run: npm run ${{ matrix.script }}
 
       # Sandbox deploys use Express Mode (rollback disabled), which rejects
@@ -973,8 +1153,20 @@ jobs:
         if: matrix.front-door
         run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
 
+      # Runs whenever the suite ran, passed or failed, like the suite's own
+      # afterAll destroy did, and a failed destroy fails the job, as it did
+      # from the afterAll (Web Function legs too; before, only Cleanup sandbox
+      # destroyed theirs, and ignored a failure). Cleanup sandbox retries when
+      # this step didn't succeed.
+      - name: Destroy sandbox
+        id: destroy
+        if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
+        run: |
+          cd ${{ matrix.app-dir }}
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
+
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
