@@ -206,6 +206,10 @@ export function productionDestroyDeps(
     '--force',
     '--output', DESTROY_ASSEMBLY_DIR,
     '--context', `projectRoot=${options.projectRoot}`,
+    // With `fromAssembly`, `--app` and `--output` name the same directory on
+    // purpose: an `--app` that is a cloud assembly is read as-is and not
+    // synthesized, so every attempt, retries included, deletes the stacks the
+    // confirmation listed rather than a fresh synth of the app.
     ...(fromAssembly ? ['--app', DESTROY_ASSEMBLY_DIR] : []),
   ];
   return {
