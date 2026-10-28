@@ -163,7 +163,7 @@ class OidcClientTest {
     fun `fromJson parses providers`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.providers shouldBe listOf("google")
     }
 
@@ -171,7 +171,7 @@ class OidcClientTest {
     fun `signing out on a closed client reports that rather than cancelling the caller`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         // The client shares the entry point's engine, so closing the entry point closes this too.
         httpClient.close()
 
@@ -186,7 +186,7 @@ class OidcClientTest {
     fun `exchange transitions to signed in`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         val user = client.exchange(
             code = "auth-code-123",
@@ -206,7 +206,7 @@ class OidcClientTest {
     fun `signOut transitions to signed out`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         client.exchange(
             code = "auth-code-123",
@@ -225,7 +225,7 @@ class OidcClientTest {
     fun `initial state is loading`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         client.authState.value shouldBe OidcAuthState.Loading
     }
@@ -238,7 +238,7 @@ class OidcClientTest {
         var issuedState: String? = null
         val httpClient = createMockClient(onIssuedState = { issuedState = it })
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { authorizeUrl ->
             capturedUrl = authorizeUrl
             "myapp://auth/callback?code=test-code&state=$issuedState"
@@ -265,7 +265,7 @@ class OidcClientTest {
     fun `signIn throws when provider not configured`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { "" }
 
         val exception = shouldThrow<OidcUnknownProviderException> {
@@ -278,7 +278,7 @@ class OidcClientTest {
     fun `signIn throws on state mismatch`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher {
             "myapp://auth/callback?code=test-code&state=wrong-state"
         }
@@ -293,7 +293,7 @@ class OidcClientTest {
     fun `signIn throws on IdP error`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher {
             "myapp://auth/callback?error=access_denied&error_description=User+cancelled" +
                 "&state=server-signed-state-envelope"
@@ -312,7 +312,7 @@ class OidcClientTest {
             authorizeParamsErrorResponse = """{"error":"invalid_relay","reason":"unknown-origin"}""",
         )
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { "" }
 
         shouldThrow<OidcCallbackException> {
@@ -324,7 +324,7 @@ class OidcClientTest {
     fun `signIn throws OidcCancelledException when launcher cancels`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { throw OidcCancelledException() }
 
         shouldThrow<OidcCancelledException> {
@@ -336,7 +336,7 @@ class OidcClientTest {
     fun `signIn throws when callback is missing code parameter`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher {
             "myapp://auth/callback?state=server-signed-state-envelope"
         }
@@ -351,7 +351,7 @@ class OidcClientTest {
     fun `signIn throws when callback is missing state parameter`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher {
             "myapp://auth/callback?code=test-code"
         }
@@ -368,7 +368,7 @@ class OidcClientTest {
             exchangeStatus = HttpStatusCode.InternalServerError,
         )
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         val exception = shouldThrow<OidcExchangeException> {
             client.exchange(
@@ -389,7 +389,7 @@ class OidcClientTest {
             exchangeResponse = """{"session":"abc"}""",
         )
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         val exception = shouldThrow<OidcExchangeException> {
             client.exchange(
@@ -446,7 +446,7 @@ class OidcClientTest {
         }
 
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { authorizeUrl ->
             // Reflect the issued state back from the authorize URL so it matches the envelope.
             val state = Url(authorizeUrl).parameters["state"]
@@ -464,7 +464,7 @@ class OidcClientTest {
     fun `signOut transitions to signed out even on server error`() = runTest {
         val httpClient = createMockClient(signOutStatus = HttpStatusCode.InternalServerError)
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
 
         client.exchange(
             code = "auth-code",
@@ -483,7 +483,7 @@ class OidcClientTest {
     fun `signIn does not change auth state on failure`() = runTest {
         val httpClient = createMockClient()
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         client.platformLauncher = FakeLauncher { throw OidcCancelledException() }
 
         client.authState.value shouldBe OidcAuthState.Loading
@@ -501,7 +501,7 @@ class OidcClientTest {
             onIssuedState = { issuedState = it },
         )
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "myapp://auth/callback")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "myapp://auth/callback")
         val launcher = FakeLauncher { "myapp://auth/callback?code=c&state=$issuedState" }
         client.platformLauncher = launcher
 
@@ -522,7 +522,7 @@ class OidcClientTest {
             },
         )
         val element = Json.parseToJsonElement(testDescriptor)
-        val client = OidcClient.fromJson(element, httpClient, localServer, "configured://ignored")
+        val client = OidcClient.fromJson<ProviderName>(element, httpClient, localServer, "configured://ignored")
         client.platformLauncher = FakeLauncher(sessionRelayTo = "http://127.0.0.1:9999/oidc/callback") {
             "http://127.0.0.1:9999/oidc/callback?code=test-code&state=$issuedState"
         }
@@ -535,7 +535,7 @@ class OidcClientTest {
     // --- typed providers ---
 
     /** Stands in for the enum a spec that named its providers generates. */
-    private enum class GeneratedProvider(val providerName: String) {
+    private enum class GeneratedProvider(override val providerName: String) : OidcProvider {
         Google("google"),
         MySso("my-sso"),
         Unconfigured("not-a-provider"),
@@ -560,7 +560,7 @@ class OidcClientTest {
             httpClient,
             localServer,
             "myapp://auth/callback",
-        ) { it.providerName }
+        )
         client.platformLauncher = FakeLauncher {
             "myapp://auth/callback?code=test-code&state=$issuedState"
         }
@@ -580,7 +580,7 @@ class OidcClientTest {
             httpClient,
             localServer,
             "myapp://auth/callback",
-        ) { it.providerName }
+        )
         client.platformLauncher = FakeLauncher { "" }
 
         val exception = shouldThrow<OidcUnknownProviderException> {
@@ -613,7 +613,7 @@ class OidcClientTest {
             httpClient,
             localServer,
             "myapp://auth/callback",
-        ) { it.providerName }
+        )
 
         client.exchange(
             code = "auth-code-123",

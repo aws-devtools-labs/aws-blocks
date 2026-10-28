@@ -4,6 +4,7 @@ import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
 import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.OidcProvider
 import kotlin.String
 
 public class Auth(
@@ -12,7 +13,7 @@ public class Auth(
   public suspend fun getClient(): OidcClient<GetClient.Provider> {
     val request = BlocksRequest(method = "auth.getClient", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return OidcClient.fromJson(result, client, "blocks-fixture://auth") { it.providerName }
+    return OidcClient.fromJson(result, client, "blocks-fixture://auth")
   }
 
   public object GetClient {
@@ -20,8 +21,8 @@ public class Auth(
      * The providers `auth.getClient` signs in with.
      */
     public enum class Provider(
-      public val providerName: String,
-    ) {
+      override val providerName: String,
+    ) : OidcProvider {
       Google("google"),
       Github("github"),
       MySso("my-sso"),

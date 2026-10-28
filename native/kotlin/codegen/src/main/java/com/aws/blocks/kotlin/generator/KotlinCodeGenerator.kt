@@ -63,8 +63,8 @@ private val knownTransferableBindings = mapOf(
     "oidc/client" to TransferableBinding(
         ClassNames.oidcClient,
         isGeneric = true,
-        // A spec that didn't resolve its provider names signs in with any string.
-        defaultTypeArgument = String::class.asTypeName(),
+        // A spec that didn't resolve its provider names signs in by name.
+        defaultTypeArgument = ClassNames.providerName,
     ),
 )
 
@@ -278,8 +278,8 @@ class KotlinCodeGenerator(
         if (namespace == "_default") operation.name else "$namespace.${operation.name}"
 
     /**
-     * `enum class Provider(val providerName: String)`, whose constants carry the names the backend
-     * knows its providers by. The generated client's `signIn` takes one of these.
+     * An [com.aws.blocks.kotlin.oidc.OidcProvider] enum whose constants carry the names the
+     * backend knows its providers by, which is what types the operation's client.
      */
     private fun generateOidcProviderEnum(
         operation: Operation,
@@ -289,6 +289,7 @@ class KotlinCodeGenerator(
         val builder = TypeSpec
             .enumBuilder(providers.name)
             .addKdoc("The providers `%L` signs in with.", fullMethodName(operation, namespace))
+            .addSuperinterface(ClassNames.oidcProvider)
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addParameter("providerName", String::class)
@@ -296,6 +297,7 @@ class KotlinCodeGenerator(
             )
             .addProperty(
                 PropertySpec.builder("providerName", String::class)
+                    .addModifiers(KModifier.OVERRIDE)
                     .initializer("providerName")
                     .build(),
             )
@@ -2105,16 +2107,10 @@ class KotlinCodeGenerator(
                 CodeBlock.of("%T.fromJson(%L)", ClassNames.fileUploadHandle, expr)
             }
 
+            // The declared return type carries the provider enum, so the call is the same whether
+            // or not the spec named them.
             OIDC_CLIENT_TAG -> {
-                val providers = type.typeArgs.firstOrNull() as? ResolvedType.Enum
-                if (providers != null) {
-                    CodeBlock.of(
-                        "%T.fromJson(%L, client, %S) { it.providerName }",
-                        ClassNames.oidcClient, expr, relayTo ?: "",
-                    )
-                } else {
-                    CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
-                }
+                CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
             }
 
             else -> {

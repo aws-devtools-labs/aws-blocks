@@ -339,7 +339,7 @@ class DeclaredTransferableBindingTest : FunSpec({
             "realtime/channel" to "RealtimeChannel<JsonElement>",
             "file-bucket/download" to "FileDownloadHandle",
             "file-bucket/upload" to "FileUploadHandle",
-            "oidc/client" to "OidcClient<String>",
+            "oidc/client" to "OidcClient<ProviderName>",
         ).forEach { (tag, runtimeType) ->
             test("a binding on $tag does not displace $runtimeType") {
                 val result = generate(

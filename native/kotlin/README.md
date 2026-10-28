@@ -127,9 +127,10 @@ The factory a declared package must expose is specified in [the schema generatio
 
 ### Typed OIDC Providers
 
-`OidcClient` is generic over the providers it signs in with. When the spec names an OIDC client's
-providers, the method's object gets a `Provider` enum whose constants carry the names the backend
-knows them by, and `getClient()` returns a client typed by it:
+`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. When the
+spec names an OIDC client's providers, the method's object gets a `Provider` enum that implements
+`OidcProvider`, whose constants carry the names the backend knows them by, and `getClient()`
+returns a client typed by it:
 
 ```kotlin
 val client = blocks.authApi.getClient()        // OidcClient<AuthApi.GetClient.Provider>
@@ -147,9 +148,15 @@ A provider name that is not a legal identifier is still spelled as one, and keep
 signs in with: `login.gov` becomes `LoginGov("login.gov")`.
 
 When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
-`OidcClient<String>` and `signIn` takes a provider name, as before. When the method's object
-already uses the name `Provider`, the enum is `ResultProvider` and codegen prints a `kotlin:`
-warning that names it.
+`OidcClient<ProviderName>`, whose `signIn` and `exchange` take a provider name, as before:
+
+```kotlin
+val client = blocks.authApi.getClient()        // OidcClient<ProviderName>
+val user = client.signIn("google")
+```
+
+When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
+prints a `kotlin:` warning that names it.
 
 ## Gradle Tasks
 

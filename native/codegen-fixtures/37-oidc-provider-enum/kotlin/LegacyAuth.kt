@@ -4,12 +4,12 @@ import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.BlocksRequest
 import com.aws.blocks.kotlin.oidc.OidcClient
-import kotlin.String
+import com.aws.blocks.kotlin.oidc.ProviderName
 
 public class LegacyAuth(
   private val client: BlocksClient,
 ) {
-  public suspend fun getClient(): OidcClient<String> {
+  public suspend fun getClient(): OidcClient<ProviderName> {
     val request = BlocksRequest(method = "legacyAuth.getClient", params = emptyList(), id = BlocksRequest.nextId())
     val result = client.execute(request)
     return OidcClient.fromJson(result, client, "blocks-fixture://auth")

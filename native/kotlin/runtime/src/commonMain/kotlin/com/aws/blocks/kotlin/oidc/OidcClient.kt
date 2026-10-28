@@ -30,16 +30,15 @@ import kotlinx.serialization.json.put
 /**
  * Signs a user in with one of the backend's OIDC providers.
  *
- * [P] names the providers this client signs in with. A spec that resolves its provider names to
- * string literals generates an enum for them, so `signIn` takes only those providers; one that
- * doesn't leaves the client an `OidcClient<String>`, whose `signIn` takes any provider name.
- * [providerName] maps a provider to the name the backend knows it by.
+ * [P] is the providers this client signs in with. A spec that resolves its provider names to
+ * string literals generates an [OidcProvider] enum for them, so `signIn` takes only those
+ * providers; one that doesn't leaves the client an `OidcClient<ProviderName>`, whose `signIn`
+ * takes any provider name.
  */
-class OidcClient<P> internal constructor(
+class OidcClient<P : OidcProvider> internal constructor(
     private val config: OidcClientConfig,
     private val httpClient: HttpClient,
     private val server: BlocksServer,
-    private val providerName: (P) -> String,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
@@ -62,7 +61,7 @@ class OidcClient<P> internal constructor(
 
     suspend fun signIn(provider: P): OidcUser {
         ensureOpen()
-        val name = providerName(provider)
+        val name = provider.providerName
         if (name !in config.providers) {
             throw OidcUnknownProviderException(name)
         }
@@ -132,7 +131,7 @@ class OidcClient<P> internal constructor(
         iss: String? = null
     ): OidcUser {
         ensureOpen()
-        val name = providerName(provider)
+        val name = provider.providerName
         if (name !in config.providers) {
             throw OidcUnknownProviderException(name)
         }
@@ -224,38 +223,50 @@ class OidcClient<P> internal constructor(
     }
 
     companion object {
-        /** A client whose providers the spec didn't name, so sign-in takes any provider name. */
-        fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient<String> =
-            fromJson(element, blocksClient, relayTo) { it }
-
         /**
-         * A client typed by the providers the spec named; [providerName] maps one to the name the
-         * backend knows it by. Generated code passes the enum it emitted for those names.
+         * The client for a `getClient` descriptor. [P] comes from the call site: the enum
+         * generated for a spec that named its providers, or [ProviderName] for one that didn't.
          */
-        fun <P> fromJson(
+        fun <P : OidcProvider> fromJson(
             element: JsonElement,
             blocksClient: BlocksClient,
             relayTo: String,
-            providerName: (P) -> String,
-        ): OidcClient<P> = fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo, providerName)
+        ): OidcClient<P> = fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
 
-        internal fun fromJson(
-            element: JsonElement,
-            httpClient: HttpClient,
-            server: BlocksServer,
-            relayTo: String
-        ): OidcClient<String> = fromJson(element, httpClient, server, relayTo) { it }
-
-        internal fun <P> fromJson(
+        internal fun <P : OidcProvider> fromJson(
             element: JsonElement,
             httpClient: HttpClient,
             server: BlocksServer,
             relayTo: String,
-            providerName: (P) -> String,
         ): OidcClient<P> {
             val config = BlocksJson.decodeFromJsonElement<OidcClientConfig>(element)
                 .copy(relayTo = relayTo)
-            return OidcClient(config, httpClient, server, providerName)
+            return OidcClient(config, httpClient, server)
         }
     }
 }
+
+/**
+ * Signs in with [provider], the name the backend knows it by.
+ *
+ * Only a client whose providers the spec didn't name signs in by name; one typed by a generated
+ * provider enum takes a constant of that enum instead.
+ */
+suspend fun OidcClient<ProviderName>.signIn(provider: String): OidcUser =
+    signIn(ProviderName(provider))
+
+/**
+ * Exchanges a callback's code for a user against [provider], the name the backend knows it by.
+ *
+ * Only a client whose providers the spec didn't name exchanges by name; one typed by a generated
+ * provider enum takes a constant of that enum instead.
+ */
+suspend fun OidcClient<ProviderName>.exchange(
+    code: String,
+    verifier: String,
+    state: String,
+    nonce: String,
+    provider: String,
+    callbackUrl: String,
+    iss: String? = null,
+): OidcUser = exchange(code, verifier, state, nonce, ProviderName(provider), callbackUrl, iss)

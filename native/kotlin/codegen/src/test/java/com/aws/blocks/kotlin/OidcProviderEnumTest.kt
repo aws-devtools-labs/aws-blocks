@@ -66,20 +66,21 @@ class OidcProviderEnumTest : FunSpec({
 
         source shouldContain "public suspend fun getClient(): OidcClient<GetClient.Provider>"
         source shouldContain "public enum class Provider("
-        source shouldContain "public val providerName: String,"
+        source shouldContain "override val providerName: String,"
+        source shouldContain ") : OidcProvider {"
         source shouldContain "Google(\"google\")"
         source shouldContain "Github(\"github\")"
         source shouldContain "The providers `auth.getClient` signs in with."
-        source shouldContain "OidcClient.fromJson(result, client, \"$RELAY_TO\") { it.providerName }"
+        source shouldContain "OidcClient.fromJson(result, client, \"$RELAY_TO\")"
         result.warnings shouldBe emptyList()
     }
 
     test("a spec that names no providers signs in with any string") {
         val source = generate(spec(oidcResult())).source()
 
-        source shouldContain "public suspend fun getClient(): OidcClient<String>"
+        source shouldContain "public suspend fun getClient(): OidcClient<ProviderName>"
         source shouldContain "OidcClient.fromJson(result, client, \"$RELAY_TO\")"
-        source shouldNotContain "providerName"
+        source shouldNotContain "override val providerName"
         source shouldNotContain "enum class Provider"
     }
 
@@ -87,7 +88,7 @@ class OidcProviderEnumTest : FunSpec({
         val source = generate(spec(oidcResult(providerNames("google"), nullable = true))).source()
 
         source shouldContain "public suspend fun getClient(): OidcClient<GetClient.Provider>?"
-        source shouldContain "else OidcClient.fromJson(result, client, \"$RELAY_TO\") { it.providerName }"
+        source shouldContain "else OidcClient.fromJson(result, client, \"$RELAY_TO\")"
     }
 
     test("a provider name that is not an identifier becomes one, and a repeat is dropped") {
@@ -141,7 +142,7 @@ class OidcProviderEnumTest : FunSpec({
         ).source()
 
         source shouldNotContain "enum class Provider"
-        source shouldContain "OidcClient<String>"
+        source shouldContain "OidcClient<ProviderName>"
     }
 
     test("an unconfigured build stubs the method and emits no enum") {

@@ -399,7 +399,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, or `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `ProviderName` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -433,7 +433,7 @@ The one exception is an `oidc/client`, which carries the provider names the type
 
 Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, whose `signIn(provider:relayTo:launcher:)` takes only those providers. Without the field, the client is `OIDCClient<String>`.
 
-Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<String>`. Dart ignores it for now.
+Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<ProviderName>`, where `ProviderName` is the Kotlin runtime's own wrapper for any provider name (not the TypeScript `ProviderName<P>` above), and `signIn` takes that name. Dart ignores it for now.
 
 ### `x-blocks-native-packages` (document root)
 
