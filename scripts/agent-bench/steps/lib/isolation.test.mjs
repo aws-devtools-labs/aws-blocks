@@ -204,13 +204,17 @@ describe('process-group kill argv', () => {
 		assert.equal(argv[1], '-9');
 	});
 
-	it('reaches only a pgid that exists: signal 0 to an absent group starting with 1 fails', { skip: absent() ? false : 'probe pgid exists' }, (t) => {
+	// The exit status can't tell the two parses apart: 4.0.4's special case inverts kill()'s result,
+	// so its successful kill(-1, 0) exits 1, silently. Only the whole-pid path names the pgid in
+	// its "No such process" error. Signal 0 delivers nothing, so the bare probe below is safe.
+	it('names the pgid it was given: signal 0 to an absent group starting with 1 reports that group', { skip: absent() ? false : 'probe pgid exists' }, (t) => {
 		const [kill, ...args] = groupKillArgv(ABSENT_PGID, '-0');
-		const r = spawnSync(kill, args, { stdio: 'ignore' });
+		const r = spawnSync(kill, args, { encoding: 'utf-8' });
 		assert.notEqual(r.status, 0, `${kill} ${args.join(' ')} succeeded, so it signalled some other group`);
-		// Without `--` a buggy kill probes kill(-1, 0) and succeeds. Signal 0 delivers nothing.
-		const bare = spawnSync(kill, ['-0', `-${ABSENT_PGID}`], { stdio: 'ignore' });
-		t.diagnostic(`${kill} -0 -${ABSENT_PGID} (no --) exit ${bare.status}: ${bare.status === 0 ? 'reads it as kill(-1)' : 'parses the whole pid'}`);
+		assert.match(r.stderr, new RegExp(`${ABSENT_PGID}`), `${kill} ${args.join(' ')} didn't report the pgid it was given`);
+		const bare = spawnSync(kill, ['-0', `-${ABSENT_PGID}`], { encoding: 'utf-8' });
+		const whole = new RegExp(`${ABSENT_PGID}`).test(bare.stderr);
+		t.diagnostic(`${kill} -0 -${ABSENT_PGID} (no --): exit ${bare.status}, ${whole ? 'parses the whole pid' : 'read as kill(-1)'}`);
 	});
 
 	it('kills the target group and nothing else', async () => {
