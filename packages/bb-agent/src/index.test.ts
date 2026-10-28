@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
 import { checkModelHealth } from './model-factory.js';
+import { _setMantleResolverForTest } from './mantle.js';
 import { z } from 'zod';
 import { createStrandsModel } from './model-factory.js';
 
@@ -1740,6 +1741,96 @@ describe('model-factory', () => {
 			if (original) process.env.OPENAI_API_KEY = original;
 		}
 	});
+
+	test('openai-api on a Bedrock Mantle endpoint needs neither apiKey nor OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			// Keys are minted lazily per request, so building the model touches no credentials.
+			const model = await createStrandsModel({ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' });
+			assert.ok(model);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
+
+	test('openai-api on a Mantle lookalike host still requires apiKey or OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			await assert.rejects(
+				() => createStrandsModel({ provider: 'openai-api', modelId: 'm', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig,
+			);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
+});
+
+describe('createStrandsModel on a Bedrock Mantle endpoint', () => {
+	const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+	const originalFetch = globalThis.fetch;
+	const originalKey = process.env.OPENAI_API_KEY;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+		else process.env.OPENAI_API_KEY = originalKey;
+		_setMantleResolverForTest('us-east-1', undefined);
+	});
+
+	/** Minimal streamed Chat Completions response (the chat adapter always requests `stream: true`). */
+	function chatCompletionStream(): Response {
+		const chunk = (delta: object, finish: string | null) => `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: MANTLE.modelId, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+		const body = `${chunk({ role: 'assistant', content: 'hi' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+		return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+	}
+
+	/** Stubs fetch (before the model's OpenAI client captures it) and records each request's Authorization header. */
+	function captureAuthorization(): string[] {
+		const seen: string[] = [];
+		globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get('authorization') ?? '');
+			return chatCompletionStream();
+		}) as typeof fetch;
+		return seen;
+	}
+
+	async function callModel(model: Awaited<ReturnType<typeof createStrandsModel>>): Promise<void> {
+		const { Message, TextBlock } = await import('@strands-agents/sdk');
+		for await (const _event of model.stream([new Message({ role: 'user', content: [new TextBlock('hello')] })])) {
+			// Drain the stream so the request completes.
+		}
+	}
+
+	test('resolves the minted key before each request, so a refreshed key is sent', async () => {
+		const keys = ['k1', 'k2'];
+		let resolved = 0;
+		_setMantleResolverForTest('us-east-1', async () => keys[resolved++] ?? 'unexpected');
+		const seen = captureAuthorization();
+		const model = await createStrandsModel(MANTLE);
+		await callModel(model);
+		await callModel(model);
+		assert.deepStrictEqual(seen, ['Bearer k1', 'Bearer k2']);
+	});
+
+	test('an explicit apiKey is sent as-is and no key is minted', async () => {
+		let minted = 0;
+		_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: 'explicit' }));
+		assert.deepStrictEqual(seen, ['Bearer explicit']);
+		assert.strictEqual(minted, 0);
+	});
+
+	test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+		process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+		_setMantleResolverForTest('us-east-1', async () => 'minted');
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: '' }));
+		assert.deepStrictEqual(seen, ['Bearer minted']);
+	});
 });
 
 // ── useChat ──────────────────────────────────────────────────────────────────
@@ -2662,6 +2753,84 @@ describe('checkModelHealth', () => {
 	test('bedrock global inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'Global Claude Opus' }) };
 		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, undefined, mockClient), true);
+	});
+
+	describe('Bedrock Mantle endpoint', () => {
+		const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+		const originalFetch = globalThis.fetch;
+		const originalKey = process.env.OPENAI_API_KEY;
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+			if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = originalKey;
+			_setMantleResolverForTest('us-east-1', undefined);
+		});
+
+		test('returns false and warns when a key cannot be minted', async () => {
+			_setMantleResolverForTest('us-east-1', async () => { throw new Error('no credentials'); });
+			const warnings: string[] = [];
+			const warnLog = { ...log, warn: (msg: string) => { warnings.push(msg); } };
+			let fetched = false;
+			globalThis.fetch = (async () => { fetched = true; return new Response('{}'); }) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0], /Bedrock API key/);
+			assert.strictEqual(fetched, false, 'no request without a key');
+		});
+
+		test('sends the minted key, not OPENAI_API_KEY, and finds the model', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-test');
+			const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+			globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+				return new Response(JSON.stringify({ data: [{ id: 'openai.gpt-oss-120b' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, log), true);
+			assert.strictEqual(calls.length, 1);
+			assert.strictEqual(calls[0].url, 'https://bedrock-mantle.us-east-1.api.aws/v1/models');
+			assert.strictEqual(calls[0].headers.Authorization, 'Bearer bedrock-api-key-test');
+		});
+
+		test('an explicit apiKey is sent as-is and no key is minted', async () => {
+			let minted = 0;
+			_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: 'explicit' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer explicit']);
+			assert.strictEqual(minted, 0);
+		});
+
+		test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'minted');
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: '' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer minted']);
+		});
+
+		test('a rejected minted key returns false and logs a permissions hint without the key', async () => {
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-secret');
+			const warnings: Array<{ msg: string; meta?: any }> = [];
+			const warnLog = { ...log, warn: (msg: string, meta?: any) => { warnings.push({ msg, meta }); } };
+			globalThis.fetch = (async () => new Response(`{"error":"not authorized"}${'x'.repeat(500)}`, { status: 403 })) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0].msg, /Mantle rejected the minted key \(HTTP 403\) at https:\/\/bedrock-mantle\.us-east-1\.api\.aws\/v1\./);
+			assert.match(warnings[0].msg, /bedrock-mantle:CallWithBearerToken, bedrock-mantle:ListModels and bedrock-mantle:CreateInference in us-east-1/);
+			assert.ok(warnings[0].meta.bodySnippet.startsWith('{"error":"not authorized"}'));
+			assert.strictEqual(warnings[0].meta.bodySnippet.length, 200);
+			assert.ok(!JSON.stringify(warnings).includes('bedrock-api-key-secret'), 'the key is never logged');
+		});
 	});
 
 	test('openai-api with unreachable endpoint returns false', async () => {
