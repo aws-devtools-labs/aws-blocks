@@ -531,9 +531,9 @@ function hasFnTransform(value: unknown): boolean {
  * expands them at deploy time, after the check ran, so what's checked isn't what
  * gets deployed.
  */
-export function checkTransforms(template: { Transform?: unknown; Resources?: unknown }, where: string): AppViolation[] {
+export function checkTransforms(template: { Transform?: unknown } & Record<string, unknown>, where: string): AppViolation[] {
 	const transforms = template.Transform === undefined ? [] : Array.isArray(template.Transform) ? template.Transform : [template.Transform];
-	if (transforms.length === 0 && !hasFnTransform(template.Resources)) return [];
+	if (transforms.length === 0 && !hasFnTransform(template)) return [];
 	return [
 		{
 			rule: 'template-transform',

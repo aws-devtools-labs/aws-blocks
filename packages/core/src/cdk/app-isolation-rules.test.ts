@@ -89,6 +89,11 @@ describe('app-isolation rules — statements fail closed', () => {
 			rules(checkTransforms({ Resources: { X: { Properties: { 'Fn::Transform': { Name: 'AWS::Include' } } } } }, 't')),
 			['template-transform'],
 		);
+		assert.deepStrictEqual(
+			rules(checkTransforms({ Outputs: { O: { Value: { 'Fn::Transform': { Name: 'Macro' } } } } }, 't')),
+			['template-transform'],
+			'any section of the template',
+		);
 		assert.deepStrictEqual(checkTransforms({ Resources: { X: { Type: 'AWS::SQS::Queue' } } }, 't'), []);
 	});
 
