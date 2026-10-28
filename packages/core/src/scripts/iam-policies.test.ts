@@ -123,6 +123,21 @@ describe('blocks-iam-policies — the shared boundary (allow-list)', () => {
 	}
 });
 
+describe('blocks-iam-policies — execute-api (per-app boundary)', () => {
+	const ws = (apiId: string) => `${A}:execute-api:us-east-1:${acct}:${apiId}/prod/POST/@connections/abc`;
+
+	test('the shared boundary allows no execute-api call at all', () => {
+		assert.strictEqual(allowed(generateBoundaryPolicy(), { action: 'execute-api:ManageConnections', arn: ws('aaa111'), principalApp: 'appa' }), false);
+	});
+
+	test("a per-app boundary allows the app's own APIs only", () => {
+		const own = generateBoundaryPolicy({ executeApiIds: ['aaa111'] });
+		assert.strictEqual(allowed(own, { action: 'execute-api:ManageConnections', arn: ws('aaa111'), principalApp: 'appa' }), true);
+		assert.strictEqual(allowed(own, { action: 'execute-api:ManageConnections', arn: ws('bbb222'), principalApp: 'appa' }), false);
+		assert.strictEqual(allowed(own, { action: 'execute-api:Invoke', arn: `${A}:execute-api:us-east-1:${acct}:bbb222/prod/GET/x`, principalApp: 'appa' }), false);
+	});
+});
+
 describe('blocks-iam-policies — the per-app execution policy', () => {
 	const types = [
 		'AWS::IAM::Role',
@@ -167,6 +182,11 @@ describe('blocks-iam-policies — the per-app execution policy', () => {
 		]);
 		assert.deepStrictEqual(sid('ApisManage')?.Condition, { StringEquals: { 'aws:ResourceTag/app': 'appa' } });
 		assert.strictEqual(sid('Queues'), undefined, 'no SQS rule for an app with no queue');
+	});
+
+	test("manages only the app's own layers", () => {
+		assert.deepStrictEqual(sid('Layers')?.Resource, [`${A}:lambda:*:${acct}:layer:appa-*`, `${A}:lambda:*:${acct}:layer:appa-*:*`]);
+		assert.strictEqual(sid('LayersUnscopedNames'), undefined);
 	});
 
 	test('reads only its own bootstrap: the qualifier is the app id', () => {

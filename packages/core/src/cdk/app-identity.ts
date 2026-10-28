@@ -69,6 +69,7 @@ export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined
 	if (!app) return undefined;
 	cdk.Tags.of(root).add(BLOCKS_APP_TAG_KEY, app.id, { priority: APP_TAG_PRIORITY });
 	forEachBlocksRole(root, (role) => tagRole(role, app.id));
+	nameLayersForApp(cdk.Stack.of(root), app.id);
 	if (!resolvePermissionsBoundary(root)) {
 		cdk.Annotations.of(root).addWarningV2(
 			'blocks:app:noPermissionsBoundary',
@@ -78,6 +79,35 @@ export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined
 		);
 	}
 	return app;
+}
+
+/** Max length of a Lambda layer name. */
+const LAYER_NAME_MAX = 140;
+
+/**
+ * Name every Lambda layer in the app's stack `<id>-<logical id>` when it has no
+ * name of its own. CDK's layers (e.g. the AWS CLI layer `BucketDeployment`
+ * uses) otherwise get CloudFormation-generated names that don't carry the app's
+ * prefix, so a platform couldn't scope layer operations to one app.
+ */
+function nameLayersForApp(stack: cdk.Stack, id: string): void {
+	cdk.Aspects.of(stack).add({
+		visit(node) {
+			if (!cdk.CfnResource.isCfnResource(node) || node.cfnResourceType !== 'AWS::Lambda::LayerVersion') return;
+			const layerStack = cdk.Stack.of(node);
+			// An L2 LayerVersion's name is a token that resolves to nothing unless a
+			// name was given (or one is generated for a cross-environment reference).
+			const props = (node as unknown as { _cfnProperties?: { LayerName?: unknown; layerName?: unknown } })._cfnProperties;
+			const named = layerStack.resolve((node as { layerName?: unknown }).layerName ?? props?.LayerName ?? props?.layerName);
+			if (named !== undefined && named !== null && named !== '') return;
+			node.addPropertyOverride(
+				'LayerName',
+				cdk.Lazy.string({
+					produce: () => `${id}-${layerStack.resolve(node.logicalId)}`.slice(0, LAYER_NAME_MAX),
+				}),
+			);
+		},
+	});
 }
 
 /**

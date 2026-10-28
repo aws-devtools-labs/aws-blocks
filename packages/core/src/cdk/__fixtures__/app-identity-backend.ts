@@ -13,7 +13,10 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../../common/index.js';
 import { Scope } from '../index.js';
@@ -37,6 +40,8 @@ class WellBehavedBlock extends Scope {
 		);
 		new iam.Role(this, 'HelperRole', { assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com') });
 		new s3.Bucket(this, 'bucket', { autoDeleteObjects: true, removalPolicy: cdk.RemovalPolicy.DESTROY });
+		// A layer with no name of its own, like the AWS CLI layer CDK's BucketDeployment adds.
+		new lambda.LayerVersion(this, 'layer', { code: lambda.Code.fromAsset(dirname(fileURLToPath(import.meta.url))) });
 	}
 }
 

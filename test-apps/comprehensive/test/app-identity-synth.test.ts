@@ -95,9 +95,10 @@ describe('defaults.app: every Building Block stays inside the app', () => {
     // `@aws-blocks/core` resolves to `<pkg>/dist/index.js`; the generator sits beside it.
     const core = dirname(createRequire(import.meta.url).resolve('@aws-blocks/core'));
     const { generateBoundaryPolicy } = (await import(pathToFileURL(join(core, 'scripts', 'iam-policies.js')).href)) as {
-      generateBoundaryPolicy: () => { Statement: { Effect: string; Action: string | string[] }[] };
+      generateBoundaryPolicy: (o: { executeApiIds: string[] }) => { Statement: { Effect: string; Action: string | string[] }[] };
     };
-    const allowed = generateBoundaryPolicy()
+    // With this app's own API ids (the per-app boundary for an app that calls its APIs through execute-api).
+    const allowed = generateBoundaryPolicy({ executeApiIds: ['api-id'] })
       .Statement.filter((s) => s.Effect === 'Allow')
       .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
     const glob = (pattern: string, value: string) =>

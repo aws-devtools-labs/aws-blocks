@@ -672,11 +672,11 @@ npx blocks-iam-check cdk.out --app "$APP_ID"   # exit 0: clean · 1: violations 
 - **It isolates apps from each other, not handlers inside one app.** Every handler in an app still runs as the same role, under the same boundary.
 - **Allow-list coverage.** A service the boundary has no rule for is denied at runtime (`AccessDenied`). Add rules for any service your apps use beyond AWS Blocks' own. A few rules are scoped by resource tag rather than name (Cognito, Step Functions, Secrets Manager, KMS and others); check them on a deployed app.
 - **Exceptions — cross-app reach the boundary still allows.**
-  - `execute-api:ManageConnections` and `execute-api:Invoke` on `*`: API ids aren't names and `execute-api` has no resource tags, so App A could post to, or drop, App B's WebSocket clients if it learns their connection ids.
   - `ses:SendEmail` / `SendRawEmail` / `SendBulkEmail` on `*`: App A can send as an identity App B verified. Scope SES by identity if your apps send email.
   - `ec2:DeleteNetworkInterface` on `*` (for VPC Lambdas): App A could delete another app's network interfaces.
   - AgentCore runtimes log to AWS-named log groups, which the boundary allows for writing only.
-  - CDK's own Lambda layers get names that can't be scoped, so the execution policy allows layer versions by any name (versions are immutable; deployed functions keep working).
+- **APIs called through `execute-api`** (a Realtime WebSocket API's `ManageConnections`, an IAM-authorized API's `Invoke`) can't be scoped by name or tag, so the shared boundary denies them. Give an app that needs them its own boundary, `apps-boundary-<id>`, from its first deploy (set it as the app's `permissionsBoundary`). Once the API exists, regenerate that policy with the app's own API ids — `npx blocks-iam-policies cdk.out --out iam --app appa --account 111122223333 --execute-api <api id>` writes `iam/boundary-appa.json` — and update the policy's document: a boundary change applies at once, with no redeploy. The execution policy written alongside it requires that boundary.
+- **Lambda layers.** With `defaults.app` set, AWS Blocks names every layer in the app's stack `<id>-<logical id>` (CDK's own layers otherwise get unscoped names), and the execution policy manages only `layer:<id>-*`. The check flags a layer named outside the prefix.
 - **Transforms.** A template with a `Transform` (a macro, `AWS::Include`, `AWS::Serverless`) or an `Fn::Transform` fails the check: CloudFormation expands it at deploy time, after the check ran.
 - **Account quotas are shared.** Each app adds roles and a bootstrap stack; at thousands of apps, spread them across several accounts.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.
