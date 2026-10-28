@@ -46,6 +46,7 @@ export type AppViolationRule =
 	| 'resource-policy-outside-app'
 	| 'unreadable-template'
 	| 'template-transform'
+	| 'layer-outside-app'
 	| 'app-id-mismatch';
 
 /** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
@@ -78,6 +79,7 @@ const DATA_SERVICES = new Set([
 	'events',
 	'scheduler',
 	'kms',
+	'execute-api',
 ]);
 
 /** Placeholder for a reference to one of the template's own resources inside a rendered ARN. */
@@ -541,6 +543,24 @@ export function checkTransforms(template: { Transform?: unknown } & Record<strin
 			message:
 				`${where} uses a CloudFormation transform (${transforms.length > 0 ? transforms.join(', ') : 'Fn::Transform'}), ` +
 				"which adds resources at deploy time that the check can't see. Remove it.",
+		},
+	];
+}
+
+/**
+ * `layer-outside-app` for a Lambda layer whose name isn't under the app's prefix:
+ * the platform scopes layer operations by name, so an unprefixed layer name is
+ * either another app's or one the execution policy won't let the app manage.
+ */
+export function checkLayer(props: Record<string, unknown>, id: string, where: string): AppViolation[] {
+	const name = renderResource(props.LayerName);
+	if (name.kind === 'arn' && isUnderAppPrefix(name.arn.split(TOKEN)[0], id)) return [];
+	if (name.kind === 'arn' && name.arn.startsWith(TOKEN)) return [];
+	return [
+		{
+			rule: 'layer-outside-app',
+			path: where,
+			message: `${where} is a Lambda layer named ${JSON.stringify(props.LayerName ?? null)}, which isn't under this app's prefix "${id}-".`,
 		},
 	];
 }

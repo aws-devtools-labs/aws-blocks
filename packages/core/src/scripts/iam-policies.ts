@@ -14,7 +14,9 @@
  *    resource's `app` tag, keyed on `${aws:PrincipalTag/app}` — plus the few
  *    actions that only take `*` (X-Ray, metrics, VPC network interfaces). A
  *    service nobody wrote a rule for is denied by default. IAM, Organizations and
- *    STS role assumption are never allowed.
+ *    STS role assumption are never allowed. `execute-api` can't be scoped by name
+ *    or tag, so an app that calls its own APIs through it gets a **per-app**
+ *    boundary listing exactly those API ids (`executeApiIds`).
  * 2. **The per-app CloudFormation execution policy** — attached to the app's own
  *    CDK bootstrap execution role (`cdk bootstrap --qualifier <id>
  *    --cloudformation-execution-policies <arn>`). It can only create roles that
@@ -47,6 +49,15 @@ export interface IamPolicyOptions {
 	boundaryName?: string;
 	/** The AWS partition (default `aws`). */
 	partition?: string;
+	/**
+	 * The ids of the app's own API Gateway APIs its roles call through
+	 * `execute-api` (a Realtime WebSocket API's `ManageConnections`, an
+	 * IAM-authorized API's `Invoke`). API ids aren't names and `execute-api` has
+	 * no resource tags, so these can't be scoped by the shared boundary: when
+	 * given, {@link generateBoundaryPolicy} returns a per-app boundary that allows
+	 * `execute-api` on exactly these APIs. Without them, `execute-api` is denied.
+	 */
+	executeApiIds?: string[];
 }
 
 /** An IAM policy document. */
@@ -161,8 +172,17 @@ export function generateBoundaryPolicy(options: IamPolicyOptions = {}): PolicyDo
 				],
 				'*',
 			),
-			// WebSocket (Realtime) and API calls: API ids aren't names, and execute-api has no resource tags.
-			allow('ApiConnections', ['execute-api:ManageConnections', 'execute-api:Invoke'], named('execute-api', '*:*:*')),
+			// WebSocket (Realtime) and IAM-authorized API calls: API ids aren't names and
+			// `execute-api` has no resource tags, so only the APIs listed for this app.
+			...(options.executeApiIds && options.executeApiIds.length > 0
+				? [
+						allow(
+							'OwnApis',
+							['execute-api:ManageConnections', 'execute-api:Invoke'],
+							options.executeApiIds.map((apiId) => `arn:${p}:execute-api:*:*:${apiId}/*`),
+						),
+					]
+				: []),
 		],
 	};
 }
@@ -197,12 +217,10 @@ const byTag = (sid: string, action: string | string[], id: string, resource = '*
 const RULES: Record<string, Rule> = {
 	'AWS::Lambda::': ({ id, p, acct }) => [
 		byName('Functions', 'lambda:*', [`arn:${p}:lambda:*:${acct}:function:${id}-*`]),
-		// Exception: CDK's own layers (e.g. the AWS CLI layer `BucketDeployment` uses) get
-		// CloudFormation-generated names that don't start with the stack name, so layers
-		// can't be scoped by name. Layer versions are immutable, so the exposure is
-		// publishing or deleting versions under another app's layer name.
-		byName('LayersUnscopedNames', ['lambda:PublishLayerVersion', 'lambda:DeleteLayerVersion', 'lambda:GetLayerVersion'], [
-			`arn:${p}:lambda:*:${acct}:layer:*`,
+		// AWS Blocks names every layer in an app's stack `<id>-…` under `defaults.app`.
+		byName('Layers', ['lambda:PublishLayerVersion', 'lambda:DeleteLayerVersion', 'lambda:GetLayerVersion'], [
+			`arn:${p}:lambda:*:${acct}:layer:${id}-*`,
+			`arn:${p}:lambda:*:${acct}:layer:${id}-*:*`,
 		]),
 		{
 			Sid: 'EventSourceMappings',

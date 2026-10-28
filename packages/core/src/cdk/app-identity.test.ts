@@ -94,6 +94,24 @@ describe('defaults.app — tags', () => {
 		assert.strictEqual(stack.tags.tagValues().app, 'appa');
 	});
 
+	test('set: a Lambda layer with no name of its own is named <id>-<logical id>', async () => {
+		const app = new cdk.App({ context: QUALIFIER });
+		const stack = await makeStack(app, 'appa', appDefaults());
+		const layers = Object.entries(Template.fromStack(stack).findResources('AWS::Lambda::LayerVersion'));
+		assert.ok(layers.length > 0, 'the fixture has a layer');
+		for (const [logicalId, layer] of layers) {
+			assert.strictEqual(layer.Properties?.LayerName, `appa-${logicalId}`);
+		}
+	});
+
+	test('unset: layers keep their CloudFormation-generated names', async () => {
+		const app = new cdk.App({ context: QUALIFIER });
+		const stack = await makeStack(app, 'appa', BlocksPresets.production);
+		for (const [, layer] of Object.entries(Template.fromStack(stack).findResources('AWS::Lambda::LayerVersion'))) {
+			assert.strictEqual(layer.Properties?.LayerName, undefined);
+		}
+	});
+
 	test("the app's own Tags.of(...) can't replace the app tag", async () => {
 		const app = new cdk.App({ context: QUALIFIER });
 		const stack = await makeStack(app, 'appa', appDefaults(), violatingBackend);

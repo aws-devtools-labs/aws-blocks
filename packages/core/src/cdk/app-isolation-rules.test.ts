@@ -3,7 +3,14 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { APP_ID_PATTERN, checkResourcePolicy, checkRole, checkStatement, checkTransforms } from './app-isolation-rules.js';
+import {
+	APP_ID_PATTERN,
+	checkLayer,
+	checkResourcePolicy,
+	checkRole,
+	checkStatement,
+	checkTransforms,
+} from './app-isolation-rules.js';
 
 const rules = (violations: { rule: string }[]) => violations.map((v) => v.rule);
 const ssmArn = (name: string) => ({
@@ -108,6 +115,19 @@ describe('app-isolation rules — statements fail closed', () => {
 		const read = (bucket: string) => ({ Effect: 'Allow', Action: 's3:GetObject', Resource: `arn:aws:s3:::${bucket}/*` });
 		assert.deepStrictEqual(checkStatement(read('cdk-appa-assets-111111111111-us-east-1'), 'appa', 'p'), []);
 		assert.deepStrictEqual(rules(checkStatement(read('cdk-appb-assets-111111111111-us-east-1'), 'appa', 'p')), ['grant-outside-app']);
+	});
+});
+
+describe('app-isolation rules — layers and APIs', () => {
+	test("a layer named outside the prefix, or with no name, is flagged; the app's own is fine", () => {
+		assert.deepStrictEqual(checkLayer({ LayerName: 'appa-AwsCliLayer' }, 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkLayer({ LayerName: 'appb-AwsCliLayer' }, 'appa', 'p')), ['layer-outside-app']);
+		assert.deepStrictEqual(rules(checkLayer({}, 'appa', 'p')), ['layer-outside-app']);
+	});
+
+	test('execute-api on * is a wildcard grant', () => {
+		const s = { Effect: 'Allow', Action: 'execute-api:ManageConnections', Resource: 'arn:aws:execute-api:us-east-1:111111111111:*' };
+		assert.deepStrictEqual(rules(checkStatement({ ...s, Resource: '*' }, 'appa', 'p')), ['wildcard-data-grant']);
 	});
 });
 

@@ -28,6 +28,7 @@ import {
 	checkRole,
 	checkStackName,
 	checkStatement,
+	checkLayer,
 	checkTransforms,
 	isResourcePolicyType,
 	type ResolvedStatement,
@@ -106,6 +107,8 @@ function checkTemplate(template: Template, id: string, stackId: string): AppViol
 			for (const s of asArray(doc?.Statement)) out.push(...checkStatement(s, id, where, parameters));
 		} else if (type === 'AWS::IAM::User' || type === 'AWS::IAM::Group') {
 			out.push(...checkManagedPolicies(asArray(props.ManagedPolicyArns as unknown[] | undefined), where));
+		} else if (type === 'AWS::Lambda::LayerVersion') {
+			out.push(...checkLayer(props, id, where));
 		} else if (isResourcePolicyType(type)) {
 			out.push(...checkResourcePolicy(type, props, id, where, parameters));
 		}
