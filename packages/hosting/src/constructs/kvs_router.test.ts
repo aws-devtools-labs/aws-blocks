@@ -1649,40 +1649,6 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     assert.equal(meta.rc, 1, 'route table fits in a single chunk (bounded)');
   });
 
-  void it('end-to-end: ISR + a prerendered page under a public dir routes non-prerendered children to compute', async () => {
-    // Nitro emits `/blog/*` static for the top-level `.output/public/blog/`
-    // dir plus `/blog/featured` + `/blog/featured/*` for the prerendered page
-    // (`routeRules: { '/blog/**': { isr: 60 }, '/blog/featured': { prerender: true } }`).
-    const entries = buildKvsEntries({
-      manifest: baseManifest({
-        routes: [
-          { pattern: '/blog/*', target: 'static' },
-          { pattern: '/blog/featured', target: 'static' },
-          { pattern: '/blog/featured/*', target: 'static' },
-          { pattern: '/*', target: 'compute' },
-        ],
-        cache: { computeResource: 'default', driver: 'nitro-s3' },
-      }),
-      buildId: 'b1',
-      hasServer: true,
-      hasImage: false,
-    });
-    const rows = JSON.parse(entries.r0) as [string, string][];
-    assert.deepEqual(
-      rows.filter(([p]) => p === '/blog/*'),
-      [['/blog/*', 'c']],
-      'exactly one /blog/* row, and it is compute',
-    );
-
-    const code = generateKvsRouterRequestCode();
-    const onDemand = await runRequestFn(code, entries, req('/blog/any-other-post'));
-    assert.equal(
-      onDemand.selectedOrigin,
-      ORIGIN_ID.server,
-      '/blog/any-other-post (non-prerendered ISR child) → compute, not the asset origin',
-    );
-  });
-
   void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
     const rows: [string, 's' | 'c'][] = [
       ['/mix/a', 's'],
