@@ -153,32 +153,11 @@ export interface TransactionOptions {
 	maxRetries?: number;
 }
 
-/** Which cluster each block is bound to. Written to stack metadata and to the dev-server marker. */
-export interface Bindings {
-	/** Keyed by block full id. `cluster` is `'default'` or the cluster's full id. */
-	databases: { [fullId: string]: DatabaseBinding };
-	/** Keyed by cluster full id. */
-	clusters: { [fullId: string]: ClusterBinding };
-}
-
-/** One `Database` block's binding. */
+/** Which cluster a `Database` is bound to. The dev server writes it to `.bb-data/{fullId}/binding.json`. */
 export interface DatabaseBinding {
 	/** `'default'` when the block owns its cluster, otherwise the cluster's full id. */
 	cluster: string;
 	type: ClusterType;
-	/**
-	 * CloudFormation logical id of the cluster resource the block owns. Present
-	 * only in stack metadata, only for a block that owns its cluster; lets the
-	 * deploy guard tell "this block was deleted" from "this cluster was renamed".
-	 */
-	resource?: string;
-}
-
-/** One `DatabaseCluster`'s entry in the binding record. */
-export interface ClusterBinding {
-	type: ClusterType;
-	/** CloudFormation logical id of the cluster resource. Present only in stack metadata. */
-	resource?: string;
 }
 
 /** A migration plan step, as `bb-database migrate --explain` prints it. */

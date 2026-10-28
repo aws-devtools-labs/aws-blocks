@@ -89,18 +89,7 @@ Every Lambda function that assumes the stack's execution role is made to depend 
 
 ## 6. Cluster binding
 
-### 6.1 Binding record
-
-At its first deploy, a block is bound to its cluster by id and type. The CDK layer writes this record to stack metadata under `aws-blocks:bindings`, together with the CloudFormation logical id of each cluster resource, keyed by the `Database` that owns it or the `DatabaseCluster` it belongs to. The dev server writes the same record, without the logical id, to `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it. Deleting `.bb-data` resets the local record.
-
-### 6.2 Deploy-time verification
-
-Before `cdk deploy` in the production stage, the block's pre-deploy hook (`src/predeploy.ts`) applies two checks to each synthesized stack (R4). The hook runner ships separately in `@aws-blocks/core`; the hook's context and result types are declared in this package so it compiles against a core without them, and a core that does not run hooks deploys without the guard. The package declares the hook in `package.json` under `aws-blocks.predeploy` with `stages: ['production']`; core's deploy script discovers hooks from the app's installed `@aws-blocks/*` packages, synthesizes once, and runs them. Core therefore carries no code that names this block. `npx bb-database predeploy` is a dry run of the same hooks through core's runner.
-
-1. The new binding record is compared with the deployed template. This detects a block moving between two clusters that both retain other blocks, a change CloudFormation does not consider destructive.
-2. A change set is created, inspected and deleted. Any `Replace` of an Aurora or DSQL cluster stops the deploy. A `Remove` stops it unless the resource belongs to a block or `DatabaseCluster` that is absent from the new record and the deployed resource's `DeletionPolicy` is `Retain`: that is deleting a block, which keeps its data. A `Remove` of a cluster whose owner is still in the record is a renamed construct, and stops.
-
-A template larger than CloudFormation's 51,200-byte inline limit is staged in the CDK bootstrap assets bucket and passed by URL, then deleted. The stop message names the resource and states whether its removal policy retains or deletes the data. Sandbox stages are exempt from both checks because their clusters are destroyed with the stack.
+A block is bound to its cluster by id and type (R4). The dev server writes the binding to `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it; deleting `.bb-data` resets it. Deploy-time verification, a binding record in stack metadata and a pre-deploy guard that inspects a change set before `cdk deploy`, is a separate pull request; until it lands, production relies on the cluster's removal policy.
 
 ## 7. Alternatives considered
 
@@ -165,4 +154,4 @@ A template larger than CloudFormation's 51,200-byte inline limit is staged in th
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
 | DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
-| Binding record and deploy-time checks | `src/bindings.ts`, `src/deploy-guard.ts`, `src/cli.ts` |
+| Binding rule (dev-server marker) | `src/bindings.ts` |

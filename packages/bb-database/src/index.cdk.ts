@@ -15,7 +15,6 @@ import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core
 import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID } from './constants.js';
 import { configError } from './errors.js';
-import { recordClusterBinding, recordDatabaseBinding } from './infra/bindings-metadata.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
 import { registerSchema, registerUniqueId } from './registry.js';
@@ -64,7 +63,6 @@ export class DatabaseCluster extends BuildingBlockScope {
 		});
 		for (const [key, value] of Object.entries(this.infra.configEntries)) registerConfig(this, key, value);
 		this.infra.grantRuntime(this.executionRole);
-		recordClusterBinding(this, this.fullId, { type: options.type, resource: this.infra.clusterLogicalId });
 	}
 }
 
@@ -103,11 +101,6 @@ export class Database extends BuildingBlockScope {
 			});
 			for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(this, key, value);
 			infra.grantRuntime(this.executionRole);
-			recordDatabaseBinding(this, this.fullId, {
-				cluster: resolved.ref.id,
-				type: resolved.ref.kind,
-				resource: infra.clusterLogicalId,
-			});
 			infra.attach(
 				{ scope: this, fullId: this.fullId, schemaName: this.schemaName, migrationsPath: this.migrationsPath },
 				this.executionRole,
@@ -115,7 +108,6 @@ export class Database extends BuildingBlockScope {
 			return;
 		}
 
-		recordDatabaseBinding(this, this.fullId, { cluster: resolved.ref.id, type: resolved.ref.kind });
 		if (!(resolved.shared instanceof DatabaseCluster)) {
 			throw configError(`Database '${this.fullId}': 'cluster' must be a DatabaseCluster.`);
 		}

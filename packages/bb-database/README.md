@@ -254,17 +254,14 @@ PGlite has one session, so local work on a cluster runs one statement or transac
 
 ## The binding rule
 
-A `Database` is bound to one cluster, by id and type, at its first deploy. A deploy that would change either stops:
+A `Database` is bound to one cluster, by id and type, and keeps it for life. The dev server enforces the rule with a marker file at `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it:
 
 ```
 Deploy stopped: Database 'app-shop' is bound to its default cluster (distributed) and cannot move to 'app-shared' (distributed).
 A Database keeps its cluster for life. To change clusters: add a new Database on 'app-shared', copy the data, switch your handlers, then remove 'shop'.
-Data on the default cluster is retained (removal policy: retain).
 ```
 
-Production has no override. Sandbox deploys skip the check, since a sandbox stack is destroyed anyway. The dev server keeps it with a marker file at `.bb-data/{fullId}/binding.json`; delete `.bb-data` to reset it.
-
-The guard runs before `cdk deploy` in production, as a pre-deploy hook that `npm run deploy` discovers from this package once `@aws-blocks/core` runs pre-deploy hooks; an older core ignores the declaration and deploys without the guard. It compares the bindings recorded in the stack's metadata with the deployed template. It also builds a change set and stops if the deploy would remove or replace a DSQL or Aurora cluster, which catches a renamed `Database` or `DatabaseCluster` id. Deleting a `Database` block is allowed: its cluster, or its schema on a shared cluster, stays under the removal policy. Deleting a block whose cluster has `removalPolicy: 'destroy'` in production is a stop, because that deploy would delete the data; deploy once with `retain` first.
+Delete `.bb-data` to reset it. A production deploy guard that stops a deploy moving a block or replacing a cluster ships as a separate change. Until then, a production deploy relies on the cluster's removal policy, `retain` by default: a renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data, but points the app at a new, empty one.
 
 **To move a block's data:**
 

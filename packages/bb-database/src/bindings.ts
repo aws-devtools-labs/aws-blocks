@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The binding rule: a `Database` is bound to one cluster, by id and type, at its
- * first deploy, and any deploy that would change either stops. This module holds
- * the record format, the per-block dev-server marker, the pure diff, and the one
- * stop-message text the dev server and the deploy guard both print.
+ * The binding rule: a `Database` is bound to one cluster, by id and type. This
+ * module holds the per-block dev-server marker and the stop-message text. The
+ * production deploy guard that enforces the rule at `cdk deploy` ships separately
+ * and reuses `formatBindingStop`.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { BINDING_MARKER_FILE, DEFAULT_CLUSTER_ID } from './constants.js';
 import { configError } from './errors.js';
-import type { Bindings, ClusterType, DatabaseBinding } from './types.js';
+import type { ClusterType, DatabaseBinding } from './types.js';
 
-/** A binding change the guard refuses. */
+/** A binding change the rule refuses. */
 export interface BindingChange {
 	fullId: string;
 	from: DatabaseBinding;
@@ -42,44 +42,6 @@ export function formatBindingStop(
 		`A Database keeps its cluster for life. To change clusters: add a new Database on ${target}, copy the data, switch your handlers, then remove '${shortId}'.\n` +
 		`Data on ${change.from.cluster === DEFAULT_CLUSTER_ID ? 'the default cluster' : `'${change.from.cluster}'`} is retained (removal policy: ${policy}).`
 	);
-}
-
-/**
- * Diff two binding records. Returns every `databases` entry whose cluster id or
- * type differs between `deployed` and `next`. New blocks and deleted blocks are
- * not changes: deleting a block retains its data under the removal policy.
- */
-export function diffBindings(deployed: Bindings | undefined, next: Bindings): BindingChange[] {
-	if (!deployed) return [];
-	const changes: BindingChange[] = [];
-	for (const [fullId, to] of Object.entries(next.databases ?? {})) {
-		const from = deployed.databases?.[fullId];
-		if (!from) continue;
-		if (from.cluster !== to.cluster || from.type !== to.type) changes.push({ fullId, from, to });
-	}
-	return changes;
-}
-
-/**
- * Logical ids of the cluster resources whose owner (a `Database` that owns its
- * cluster, or a `DatabaseCluster`) is in the deployed record but not in the
- * next one. Removing one of these is deleting a block, which the guard allows
- * when the resource is retained; removing any other cluster is a rename.
- */
-export function removedClusterResources(deployed: Bindings | undefined, next: Bindings): Set<string> {
-	const removed = new Set<string>();
-	if (!deployed) return removed;
-	for (const [fullId, binding] of Object.entries(deployed.databases ?? {})) {
-		if (binding.resource && !next.databases?.[fullId]) removed.add(binding.resource);
-	}
-	for (const [fullId, binding] of Object.entries(deployed.clusters ?? {})) {
-		if (binding.resource && !next.clusters?.[fullId]) removed.add(binding.resource);
-	}
-	return removed;
-}
-
-export function emptyBindings(): Bindings {
-	return { databases: {}, clusters: {} };
 }
 
 /** Read a block's dev-server marker, or `undefined` when none has been written. */

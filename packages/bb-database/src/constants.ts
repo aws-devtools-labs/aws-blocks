@@ -46,8 +46,6 @@ export const DEFAULT_CLUSTER_ID = 'default';
 /** Schema a `Database` that owns its cluster uses. */
 export const DEFAULT_SCHEMA = 'public';
 
-/** CloudFormation stack-metadata key carrying the {@link Bindings} record. */
-export const BINDINGS_METADATA_KEY = 'aws-blocks:bindings';
 
 /** Name of the per-block binding marker written by the dev server. */
 export const BINDING_MARKER_FILE = 'binding.json';

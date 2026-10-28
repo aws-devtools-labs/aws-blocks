@@ -6,72 +6,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import {
-	diffBindings,
-	enforceLocalBinding,
-	formatBindingStop,
-	readBindingMarker,
-	removedClusterResources,
-} from './bindings.js';
-import type { Bindings } from './types.js';
+import { enforceLocalBinding, formatBindingStop, readBindingMarker } from './bindings.js';
 
 describe('bindings', () => {
-	test('diffBindings reports only blocks whose cluster id or type changed', () => {
-		const deployed: Bindings = {
-			databases: {
-				'app-orders': { cluster: 'default', type: 'distributed', resource: 'ordersDsql' },
-				'app-gone': { cluster: 'default', type: 'distributed', resource: 'goneDsql' },
-			},
-			clusters: {},
-		};
-		const next: Bindings = {
-			databases: {
-				'app-orders': { cluster: 'app-main', type: 'distributed' },
-				'app-new': { cluster: 'default', type: 'distributed', resource: 'newDsql' },
-			},
-			clusters: { 'app-main': { type: 'distributed', resource: 'mainDsql' } },
-		};
-		const changes = diffBindings(deployed, next);
-		assert.strictEqual(changes.length, 1);
-		assert.strictEqual(changes[0].fullId, 'app-orders');
-		assert.deepStrictEqual(diffBindings(undefined, next), [], 'first deploy has nothing to compare');
-		// A changed logical id alone is not a binding change: the diff compares cluster and type.
-		const renamedResource: Bindings = {
-			databases: { 'app-orders': { cluster: 'default', type: 'distributed', resource: 'other' } },
-			clusters: {},
-		};
-		assert.deepStrictEqual(
-			diffBindings(
-				{ databases: { 'app-orders': deployed.databases['app-orders'] }, clusters: {} },
-				renamedResource,
-			),
-			[],
-		);
-	});
-
-	test('removedClusterResources lists the cluster resources whose owner left the record', () => {
-		const deployed: Bindings = {
-			databases: {
-				'app-orders': { cluster: 'default', type: 'distributed', resource: 'ordersDsql' },
-				'app-kept': { cluster: 'default', type: 'distributed', resource: 'keptDsql' },
-				'app-shared': { cluster: 'app-main', type: 'distributed' },
-			},
-			clusters: {
-				'app-main': { type: 'distributed', resource: 'mainDsql' },
-				'app-old': { type: 'distributed', resource: 'oldDsql' },
-			},
-		};
-		const next: Bindings = {
-			databases: {
-				'app-kept': { cluster: 'default', type: 'distributed', resource: 'keptDsql' },
-				'app-shared': { cluster: 'app-main', type: 'distributed' },
-			},
-			clusters: { 'app-main': { type: 'distributed', resource: 'mainDsql' } },
-		};
-		assert.deepStrictEqual([...removedClusterResources(deployed, next)].sort(), ['oldDsql', 'ordersDsql']);
-		assert.deepStrictEqual([...removedClusterResources(undefined, next)], []);
-	});
-
 	test('formatBindingStop prints the stop message', () => {
 		const message = formatBindingStop(
 			{
