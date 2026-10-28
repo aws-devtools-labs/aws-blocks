@@ -593,7 +593,7 @@ export function checkLayer(props: Record<string, unknown>, id: string, where: st
 export function checkApiChild(
 	type: string,
 	props: Record<string, unknown>,
-	id: string,
+	_id: string,
 	where: string,
 	parameters: ReadonlySet<string> = new Set(),
 ): AppViolation[] {
