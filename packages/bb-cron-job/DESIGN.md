@@ -129,7 +129,7 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## Mock Implementation
 
-- **Rate schedules** — `setInterval` with the computed interval in milliseconds when it is at most 2,147,483,647 ms (Node's timer limit). Longer intervals use successive bounded `setTimeout` waits and start the next interval after invoking the handler, without awaiting its completion.
+- **Rate schedules** — `setInterval` with the computed interval in milliseconds when it is at most 2,147,483,647 ms (Node's timer limit). Longer intervals use successive bounded `setTimeout` waits, with recurring deadlines anchored to the original schedule rather than the actual wake-up time. After firing late, the next deadline is the first strictly future point on that schedule; missed periods are skipped instead of replayed in a catch-up burst. Handler completion is not awaited.
 - **Cron schedules** — `setTimeout` to the next fire time, computed via `nextCronTime()`. After each fire, the next timeout is scheduled recursively.
 - **Long rate waits** — keep the target timestamp across intermediate waits and check it before invoking the handler. No timer exceeds Node's limit, which would otherwise cause Node to clamp the delay to 1 ms. Every timer is `unref()`'d to avoid blocking process exit.
 - **Timezone support** — `Intl.DateTimeFormat` with the specified timezone extracts local time components for cron matching.

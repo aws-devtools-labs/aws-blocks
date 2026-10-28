@@ -108,7 +108,9 @@ export class CronJob<T = void> extends Scope {
 				this._scheduleRateTick(intervalMs, fireAt);
 			} else {
 				this._fire();
-				this._scheduleRateTick(intervalMs);
+				// Stay on the original schedule, skipping deadlines that have already passed.
+				const periods = Math.max(1, Math.floor((Date.now() - fireAt) / intervalMs) + 1);
+				this._scheduleRateTick(intervalMs, fireAt + periods * intervalMs);
 			}
 		}, delayMs);
 		(this._timer as NodeJS.Timeout).unref();

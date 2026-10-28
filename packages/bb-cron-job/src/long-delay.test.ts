@@ -59,6 +59,50 @@ test('a 30-day rate waits the full interval and repeats without overflowing', (t
 	assert.deepEqual(fired, ['2026-01-31T00:00:00.000Z', '2026-03-02T00:00:00.000Z']);
 });
 
+test('a late rate wake-up does not shift the following deadline', (t) => {
+	const timer = clock(t, '2026-01-01T00:00:00Z');
+	const fired: string[] = [];
+	new CronJob(new Scope('late-rate'), 'job', {
+		schedule: 'rate(30 days)',
+		handler: async (event) => { fired.push(event.scheduledTime); },
+	});
+	timer.tick(30 * DAY + 5000);
+	assert.deepEqual(fired, ['2026-01-31T00:00:05.000Z']);
+	timer.tick(MAX_TIMER_DELAY);
+	timer.tick(30 * DAY - 5000 - MAX_TIMER_DELAY - 1);
+	assert.equal(fired.length, 1);
+	timer.tick(1);
+	assert.deepEqual(fired, ['2026-01-31T00:00:05.000Z', '2026-03-02T00:00:00.000Z']);
+});
+
+for (const elapsedDays of [90, 95]) {
+	test(`a rate waking after ${elapsedDays} days skips missed deadlines without a catch-up burst`, (t) => {
+		const start = new Date('2026-01-01T00:00:00Z').getTime();
+		const timer = clock(t, '2026-01-01T00:00:00Z');
+		const fired: string[] = [];
+		new CronJob(new Scope(`sleeping-rate-${elapsedDays}`), 'job', {
+			schedule: 'rate(30 days)',
+			handler: async (event) => { fired.push(event.scheduledTime); },
+		});
+		timer.tick(elapsedDays * DAY);
+		assert.deepEqual(fired, [new Date(start + elapsedDays * DAY).toISOString()]);
+		timer.tick(1);
+		assert.equal(fired.length, 1);
+		const next = start + 120 * DAY;
+		while (next - Date.now() > MAX_TIMER_DELAY) {
+			timer.tick(MAX_TIMER_DELAY);
+			assert.equal(fired.length, 1);
+		}
+		timer.tick(next - Date.now() - 1);
+		assert.equal(fired.length, 1);
+		timer.tick(1);
+		assert.deepEqual(fired, [
+			new Date(start + elapsedDays * DAY).toISOString(),
+			new Date(next).toISOString(),
+		]);
+	});
+}
+
 test('a 365-day rate can wait across multiple timer chunks', (t) => {
 	const timer = clock(t, '2026-10-04T00:00:00Z');
 	let calls = 0;

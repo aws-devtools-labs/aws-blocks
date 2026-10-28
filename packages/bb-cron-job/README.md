@@ -201,9 +201,8 @@ new CronJob<{ mode: string }>(scope, 'sync-daily', {
 
 In local dev mode, CronJob runs schedules in-process:
 
-- Rate schedules use `setInterval` for intervals within Node's timer limit (about 24.8 days); longer intervals use successive bounded `setTimeout` waits
+- Rate schedules respect their configured interval, including intervals longer than about 24.8 days
 - Cron schedules calculate the next fire time with timezone support and use `setTimeout`
-- Intermediate rate waits do not invoke the handler; the full interval must be reached. All timers are `unref()`'d so they do not keep the process running on their own
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
 - When `enabled: false`, the schedule does not run automatically
 - Failed handlers are logged with a warning that AWS would retry
