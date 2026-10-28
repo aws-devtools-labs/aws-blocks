@@ -37,7 +37,7 @@ function sysBin(name) {
 	return `/usr/bin/${name}`;
 }
 const BIN = Object.fromEntries(
-	['sudo', 'runuser', 'env', 'bash', 'pkill', 'pgrep', 'crontab', 'setfacl', 'chmod', 'find', 'getent', 'id'].map((n) => [n, sysBin(n)]),
+	['sudo', 'runuser', 'env', 'bash', 'kill', 'pkill', 'pgrep', 'crontab', 'setfacl', 'chmod', 'find', 'getent', 'id'].map((n) => [n, sysBin(n)]),
 );
 
 /** True on a CI runner, where a same-uid fallback is never allowed. */
@@ -416,6 +416,24 @@ export function verifyAgentIsolation({ paths = [], pids = [] }) {
 
 function sleepMs(ms) {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * The `kill` argv that signals process group `pgid`. The `--` is load-bearing: procps-ng 4.0.4
+ * (Ubuntu 24.04) reads a negative pid that follows the signal as its "signal digit" special case
+ * and keeps only the first digit, so `kill -9 -123456` is kill(-1, SIGKILL). Run as root, that
+ * signals every process on the machine, the runner included. After `--` the pid is parsed whole.
+ * @param {number} pgid
+ * @param {string} [signal]
+ * @returns {string[]}
+ */
+export function groupKillArgv(pgid, signal = '-9') {
+	return [BIN.kill, signal, '--', `-${pgid}`];
+}
+
+/** SIGKILL an agent-user process group, via sudo (the harness uid can't signal it directly). */
+export function killAgentGroup(pgid) {
+	spawnSync(BIN.sudo, ['-n', ...groupKillArgv(pgid)], { stdio: 'ignore', timeout: 5000 });
 }
 
 /**

@@ -5,7 +5,7 @@
 // sudo+runuser for the agent user, but FAIL on a GitHub Actions runner, so the selfcheck job proves
 // them on a real hosted runner (including against its real RUNNER_TEMP). Fakes are assembled at runtime.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -17,6 +17,7 @@ import {
 	buildAgentSpawn,
 	enterAgentPhase,
 	findAgentWritable,
+	groupKillArgv,
 	harnessUidPids,
 	isCI,
 	isolationAvailable,
@@ -178,6 +179,61 @@ describe('fail closed when the agent user is unavailable (CI)', () => {
 			assert.match(result.isolation_failure, /isolation unavailable/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+// run-shell kills each command's process group as root after the command exits. procps-ng 4.0.4
+// (Ubuntu 24.04) turned `kill -9 -<pgid>` into kill(-1) whenever the pgid started with 1, which
+// took down every process on the runner once pids passed 100000 (the judge, late in each cell).
+describe('process-group kill argv', () => {
+	// A pgid starting with 1 that no process group has (checked below), so signal 0 probes it safely.
+	const ABSENT_PGID = 1999999;
+	const absent = () => {
+		try {
+			process.kill(-ABSENT_PGID, 0);
+			return false;
+		} catch {
+			return true;
+		}
+	};
+
+	it('ends option parsing right before the negative pgid', () => {
+		const argv = groupKillArgv(123456);
+		assert.deepEqual(argv.slice(-2), ['--', '-123456']);
+		assert.equal(argv[1], '-9');
+	});
+
+	it('reaches only a pgid that exists: signal 0 to an absent group starting with 1 fails', { skip: absent() ? false : 'probe pgid exists' }, (t) => {
+		const [kill, ...args] = groupKillArgv(ABSENT_PGID, '-0');
+		const r = spawnSync(kill, args, { stdio: 'ignore' });
+		assert.notEqual(r.status, 0, `${kill} ${args.join(' ')} succeeded, so it signalled some other group`);
+		// Without `--` a buggy kill probes kill(-1, 0) and succeeds. Signal 0 delivers nothing.
+		const bare = spawnSync(kill, ['-0', `-${ABSENT_PGID}`], { stdio: 'ignore' });
+		t.diagnostic(`${kill} -0 -${ABSENT_PGID} (no --) exit ${bare.status}: ${bare.status === 0 ? 'reads it as kill(-1)' : 'parses the whole pid'}`);
+	});
+
+	it('kills the target group and nothing else', async () => {
+		const argv = groupKillArgv(1);
+		// Never run a real SIGKILL through an argv without `--` (it could be kill(-1)).
+		assert.equal(argv.at(-2), '--');
+		const target = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+		const bystander = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+		try {
+			const exited = new Promise((r) => target.once('exit', (code, sig) => r(sig)));
+			const [kill, ...args] = groupKillArgv(target.pid);
+			assert.equal(spawnSync(kill, args, { stdio: 'ignore' }).status, 0);
+			assert.equal(await exited, 'SIGKILL');
+			assert.equal(bystander.exitCode, null, 'the bystander group must survive');
+			assert.equal(bystander.signalCode, null, 'the bystander group must survive');
+		} finally {
+			for (const p of [target, bystander]) {
+				try {
+					process.kill(-p.pid, 'SIGKILL');
+				} catch {
+					/* already gone */
+				}
+			}
 		}
 	});
 });
