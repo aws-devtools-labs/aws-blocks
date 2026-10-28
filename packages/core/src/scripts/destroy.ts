@@ -25,9 +25,9 @@ export interface DestroyOptions {
   projectRoot: string;
   /**
    * Delete without asking, even on a terminal. Without it, `destroy` asks for
-   * confirmation, listing the stacks, when stdin is a terminal and the app has
-   * more than one top-level stack; every other run deletes without asking.
-   * The template scripts set it from `npm run destroy -- --force`.
+   * confirmation, listing the stacks, when stdin and stderr are both terminals
+   * and the app has more than one top-level stack; every other run deletes
+   * without asking. The template scripts set it from `npm run destroy -- --force`.
    */
   force?: boolean;
 }
@@ -43,14 +43,18 @@ const DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/destroy.out';
  * Production teardown behind `npm run destroy`: `cdk destroy --all --force`,
  * which deletes every top-level stack of the app (the stacks `npm run deploy`
  * creates; not stacks inside a CDK `Stage`), dependent stacks first.
- * Resources with a `RETAIN` removal policy are kept. When stdin is a terminal
- * and the app has more than one top-level stack, it lists them and asks
- * before deleting (a "no" deletes nothing); pass `force: true`
- * (`npm run destroy -- --force`) to skip the question. Runs without a
- * terminal (CI, piped, scripts) and single-stack apps never ask.
+ * Resources with a `RETAIN` removal policy are kept. When stdin and stderr
+ * are both terminals and the app has more than one top-level stack, it lists
+ * them on stderr and asks before deleting; a "no" deletes nothing and sets
+ * the exit code to 1, so `npm run destroy && ...` stops there. Pass
+ * `force: true` (`npm run destroy -- --force`) to skip the question. Runs
+ * without a terminal on stdin or stderr (CI, `< /dev/null`, `2> log`,
+ * `2>&1 | tee log`) and single-stack apps never ask; redirecting only stdout
+ * (`> log`, `| tee log`) still asks on the terminal.
  * Retries transient teardown failures (see {@link runDestroyWithRetries});
- * before a retry it empties only the S3 buckets the delete removes, never one
- * the stack keeps (see `listStackBucketNames` in ./sandbox.ts), reading the
+ * before a retry it empties only the S3 buckets the delete removes and would
+ * empty itself (`autoDeleteObjects`), never one the stack keeps (see
+ * `listStackBucketNames` in ./sandbox.ts), reading the
  * stacks, with their Regions, from the assembly the attempt synthesized, and
  * stops early when the Lambda@Edge stack can't be deleted yet.
  */
@@ -71,13 +75,15 @@ export async function destroy(options: DestroyOptions) {
       ...getCdkTelemetryEnv('production'),
     };
     const clients = await destroyRetryClients(options.projectRoot);
-    await runProductionDestroy(options, cdkEnv, clients, { isTTY: process.stdin.isTTY === true, ask: askYesNo });
+    if ((await runProductionDestroy(options, cdkEnv, clients, terminalPrompt())) === 'cancelled') {
+      process.exitCode = 1;
+    }
   });
 }
 
 /** How {@link runProductionDestroy} asks before a multi-stack destroy; injectable for tests. */
 export interface DestroyPrompt {
-  /** Whether stdin is a terminal (someone can answer). */
+  /** Whether someone at a terminal can see the question and answer it. */
   isTTY: boolean;
   /** Ask a yes/no question; resolves true for yes. */
   ask: (question: string) => Promise<boolean>;
@@ -87,8 +93,9 @@ export interface DestroyPrompt {
  * The body of {@link destroy} after the credential check: clears the assembly
  * directory, asks for confirmation when it should (see below), runs the
  * retrying `cdk destroy --all --force`, and removes the directory after a
- * successful destroy. `retryOverrides` replaces retry dependencies in tests
- * (e.g. `sleep`).
+ * successful destroy. Resolves `'cancelled'` when the question was answered
+ * no (nothing was deleted), else `'destroyed'`; a failed destroy rejects.
+ * `retryOverrides` replaces retry dependencies in tests (e.g. `sleep`).
  *
  * When `prompt.isTTY` and not `options.force`, it first synthesizes the app
  * into the assembly directory (`cdk synth --output`) to count its top-level
@@ -108,7 +115,7 @@ export async function runProductionDestroy(
   clients: Required<EmptyBucketsClients>,
   prompt: DestroyPrompt,
   retryOverrides: Partial<DestroyRetryDeps> = {},
-): Promise<void> {
+): Promise<'destroyed' | 'cancelled'> {
   // The destroy synthesizes into this directory; the retry reads the stacks
   // it selected from there. Cleared first so a failed synth can't leave an
   // earlier run's stack list behind, and removed after a successful destroy.
@@ -130,7 +137,7 @@ export async function runProductionDestroy(
     if (stacks.length !== 1 && !(await prompt.ask(confirmQuestion(stacks)))) {
       rmSync(assemblyDir, { recursive: true, force: true });
       console.log('\nDestroy cancelled. No stack was deleted.');
-      return;
+      return 'cancelled';
     }
   }
   // Reuse the sandbox path's shipped teardown-retry machinery: on a failed
@@ -143,6 +150,7 @@ export async function runProductionDestroy(
   // a throttle gets a longer, jittered backoff (see runDestroyWithRetries).
   await runDestroyWithRetries({ ...productionDestroyDeps(options, cdkEnv, clients, { fromAssembly }), ...retryOverrides });
   rmSync(assemblyDir, { recursive: true, force: true });
+  return 'destroyed';
 }
 
 /** The question asked before deleting several stacks (or stacks it could not list). */
@@ -162,14 +170,37 @@ export function isYes(answer: string): boolean {
   return /^y(es)?$/i.test(answer.trim());
 }
 
+/** The streams {@link terminalPrompt} asks on; `isTTY` is set when the stream is a terminal. */
+export interface PromptStreams {
+  input: NodeJS.ReadableStream & { isTTY?: boolean };
+  output: NodeJS.WritableStream & { isTTY?: boolean };
+}
+
 /**
- * Ask a yes/no question on the terminal. Anything but yes is no, and so is
- * Ctrl-C or Ctrl-D (readline rejects with ABORT_ERR, or closes before an
- * answer), so the caller's "cancelled" path runs instead of a raw error.
+ * The {@link DestroyPrompt} `destroy` uses: it asks on stderr and reads the
+ * answer from stdin, and can ask only when both are terminals. stderr rather
+ * than stdout, so `npm run destroy > destroy.log` (or `| tee`) still shows the
+ * question on the terminal instead of writing it into the file; and both must
+ * be terminals, so `2>&1 | tee destroy.log` doesn't wait for an answer to a
+ * question no one sees. With the output on a terminal, readline also puts the
+ * terminal in raw mode, which is what turns Ctrl-C into a "no".
  */
-async function askYesNo(question: string): Promise<boolean> {
+export function terminalPrompt(streams: PromptStreams = { input: process.stdin, output: process.stderr }): DestroyPrompt {
+  return {
+    isTTY: streams.input.isTTY === true && streams.output.isTTY === true,
+    ask: (question) => askYesNo(question, streams),
+  };
+}
+
+/**
+ * Ask a yes/no question on `output`, reading the answer from `input`. Anything
+ * but yes is no, and so is Ctrl-C or Ctrl-D (readline rejects with ABORT_ERR,
+ * or closes before an answer), so the caller's "cancelled" path runs instead
+ * of a raw error.
+ */
+async function askYesNo(question: string, { input, output }: PromptStreams): Promise<boolean> {
   const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createInterface({ input, output });
   try {
     const answer = await Promise.race([rl.question(question), once(rl, 'close').then(() => '')]);
     return isYes(answer);

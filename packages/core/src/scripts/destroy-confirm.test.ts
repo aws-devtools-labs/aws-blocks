@@ -6,13 +6,14 @@ import assert from 'node:assert';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
-import { type DestroyPrompt, isYes, runProductionDestroy } from './destroy.js';
+import { type DestroyPrompt, isYes, runProductionDestroy, terminalPrompt } from './destroy.js';
 
 // `npm run destroy` asks before it deletes several top-level stacks, but only
-// when someone can answer (stdin is a terminal) and the caller did not pass
-// `force`. Every other run (CI, piped, scripts, a single-stack app) deletes
+// when someone can answer (stdin and stderr are terminals) and the caller did
+// not pass `force`. Every other run (CI, scripts, a single-stack app) deletes
 // with `cdk destroy --all --force` as before. The fake `npx` records each CDK
 // command and, like CDK, writes a manifest with FAKE_STACKS top-level stacks
 // into the `--output` directory. POSIX shell script, so skipped on Windows.
@@ -83,14 +84,15 @@ function prompt(isTTY: boolean, answer: boolean) {
 async function run(
   p: DestroyPrompt,
   { stacks, force, failFirst }: { stacks: number; force?: boolean; failFirst?: boolean },
-): Promise<{ commands: string[]; out: string }> {
+): Promise<{ commands: string[]; out: string; result: string }> {
   const lines: string[] = [];
   const orig = { log: console.log, warn: console.warn, error: console.error };
   console.log = console.warn = console.error = (...a: unknown[]) => {
     lines.push(a.join(' '));
   };
+  let result: string;
   try {
-    await runProductionDestroy(
+    result = await runProductionDestroy(
       { cdkAppPath: join(projectRoot, 'index.cdk.ts'), projectRoot, force },
       { PATH: `${bin}:/usr/bin:/bin`, FAKE_STACKS: String(stacks), FAKE_FAIL_FIRST_DESTROY: failFirst ? '1' : '' },
       clients,
@@ -101,7 +103,7 @@ async function run(
     Object.assign(console, orig);
   }
   const commands = existsSync(log) ? readFileSync(log, 'utf-8').split('\n').filter(Boolean) : [];
-  return { commands, out: lines.join('\n') };
+  return { commands, out: lines.join('\n'), result };
 }
 
 const isDestroy = (c: string) => c.startsWith('cdk destroy ');
@@ -110,7 +112,8 @@ const isSynth = (c: string) => c.startsWith('cdk synth ');
 describe('npm run destroy asks before deleting several stacks, on a terminal only', { skip }, () => {
   it('on a terminal with several top-level stacks: lists them, asks once, then deletes with --force', async () => {
     const { p, questions } = prompt(true, true);
-    const { commands, out } = await run(p, { stacks: 2 });
+    const { commands, out, result } = await run(p, { stacks: 2 });
+    assert.strictEqual(result, 'destroyed');
     assert.strictEqual(questions.length, 1);
     assert.match(questions[0], /stack-1 \(us-east-1\)/);
     assert.match(questions[0], /stack-2 \(us-east-1\)/);
@@ -128,7 +131,9 @@ describe('npm run destroy asks before deleting several stacks, on a terminal onl
 
   it('a declined prompt deletes nothing: no destroy, no retry, no success message, the assembly is removed', async () => {
     const { p, questions } = prompt(true, false);
-    const { commands, out } = await run(p, { stacks: 2 });
+    const { commands, out, result } = await run(p, { stacks: 2 });
+    // Reported to `destroy`, which exits 1, so `npm run destroy && ...` stops.
+    assert.strictEqual(result, 'cancelled');
     assert.strictEqual(questions.length, 1);
     assert.deepStrictEqual(commands.filter(isDestroy), []);
     assert.doesNotMatch(out, /destroyed/);
@@ -173,9 +178,10 @@ describe('npm run destroy asks before deleting several stacks, on a terminal onl
     assert.match(out, /Production stacks destroyed!/);
   });
 
-  it('without a terminal (CI, piped, scripts): no synth, no question, deletes with --force', async () => {
+  it('without a terminal (CI, scripts): no synth, no question, deletes with --force', async () => {
     const { p, questions } = prompt(false, false);
-    const { commands } = await run(p, { stacks: 2 });
+    const { commands, result } = await run(p, { stacks: 2 });
+    assert.strictEqual(result, 'destroyed');
     assert.strictEqual(questions.length, 0);
     assert.deepStrictEqual(commands.filter(isSynth), []);
     assert.strictEqual(commands.length, 1);
@@ -190,6 +196,62 @@ describe('npm run destroy asks before deleting several stacks, on a terminal onl
     assert.deepStrictEqual(commands.filter(isSynth), []);
     assert.strictEqual(commands.length, 1);
     assert.match(commands[0], /^cdk destroy --all --force/);
+  });
+});
+
+/** A stream that reports `isTTY` like a terminal (or not), for {@link terminalPrompt}. */
+function stream(isTTY: boolean): PassThrough & { isTTY?: boolean } {
+  return Object.assign(new PassThrough(), isTTY ? { isTTY: true } : {});
+}
+
+// The question is written to stderr, so `npm run destroy > log` (or `| tee`)
+// still shows it on the terminal; and it is only asked when both stdin and
+// stderr are terminals, so `2>&1 | tee log` never waits on a question that
+// went into the file.
+describe('terminalPrompt', () => {
+  it('can ask only when both stdin and stderr are terminals', () => {
+    assert.strictEqual(terminalPrompt({ input: stream(true), output: stream(true) }).isTTY, true);
+    assert.strictEqual(terminalPrompt({ input: stream(true), output: stream(false) }).isTTY, false);
+    assert.strictEqual(terminalPrompt({ input: stream(false), output: stream(true) }).isTTY, false);
+  });
+
+  it('defaults to stdin and stderr, never stdout', () => {
+    const { isTTY: stdinTTY } = process.stdin;
+    const { isTTY: stdoutTTY } = process.stdout;
+    const { isTTY: stderrTTY } = process.stderr;
+    try {
+      Object.assign(process.stdin, { isTTY: true });
+      Object.assign(process.stdout, { isTTY: true });
+      Object.assign(process.stderr, { isTTY: undefined });
+      assert.strictEqual(terminalPrompt().isTTY, false);
+      Object.assign(process.stderr, { isTTY: true });
+      Object.assign(process.stdout, { isTTY: undefined });
+      assert.strictEqual(terminalPrompt().isTTY, true);
+    } finally {
+      Object.assign(process.stdin, { isTTY: stdinTTY });
+      Object.assign(process.stdout, { isTTY: stdoutTTY });
+      Object.assign(process.stderr, { isTTY: stderrTTY });
+    }
+  });
+
+  it('writes the question to the output stream and reads the answer from the input stream', async () => {
+    const input = stream(false);
+    const output = stream(false);
+    let written = '';
+    output.on('data', (chunk) => {
+      written += String(chunk);
+    });
+    const answer = terminalPrompt({ input, output }).ask('Delete them? (y/N) ');
+    input.write('yes\n');
+    assert.strictEqual(await answer, true);
+    assert.match(written, /Delete them\? \(y\/N\) /);
+  });
+
+  it('a closed input (Ctrl-D) is a no', async () => {
+    const input = stream(false);
+    const answer = terminalPrompt({ input, output: stream(false) }).ask('Delete them? (y/N) ');
+    input.end();
+    assert.strictEqual(await answer, false);
   });
 });
 

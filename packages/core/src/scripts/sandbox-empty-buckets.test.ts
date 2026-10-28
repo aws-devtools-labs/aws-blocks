@@ -61,12 +61,27 @@ describe('toDeleteObjects', () => {
 // responses. Cast to the real client type — this is test plumbing, not customer code.
 type Send = (cmd: { constructor: { name: string }; input: any }) => Promise<any>;
 
+/** The custom resource `autoDeleteObjects: true` adds for a bucket: it empties the bucket when the stack deletes it. */
+const autoDelete = (bucketLogicalId: string) => ({
+	Type: 'Custom::S3AutoDeleteObjects',
+	Properties: { ServiceToken: { 'Fn::GetAtt': ['Provider', 'Arn'] }, BucketName: { Ref: bucketLogicalId } },
+});
+
 describe('listStackBucketNames', () => {
 	it('follows NextToken across pages and returns only S3 buckets', async () => {
 		const seen: Array<string | undefined> = [];
 		const send: Send = async (cmd) => {
 			if (cmd.constructor.name === 'GetTemplateCommand') {
-				return { TemplateBody: JSON.stringify({ Resources: { B1: { Type: 'AWS::S3::Bucket' }, B2: { Type: 'AWS::S3::Bucket' } } }) };
+				return {
+					TemplateBody: JSON.stringify({
+						Resources: {
+							B1: { Type: 'AWS::S3::Bucket' },
+							B1AutoDelete: autoDelete('B1'),
+							B2: { Type: 'AWS::S3::Bucket' },
+							B2AutoDelete: autoDelete('B2'),
+						},
+					}),
+				};
 			}
 			seen.push(cmd.input.NextToken);
 			if (cmd.input.NextToken === undefined) {
@@ -91,7 +106,13 @@ describe('listStackBucketNames', () => {
 	// delete, so emptying it before a retry would only destroy the data the
 	// policy exists to keep. Read the policy from the DEPLOYED template: it is
 	// what CloudFormation acts on, even if the local code changed since.
-	it('skips buckets the stack delete keeps, and buckets already deleted or skipped', async () => {
+	// A bucket the stack deletes but doesn't empty (`RemovalPolicy.DESTROY`
+	// without `autoDeleteObjects`) is left in place, with its data, when it is
+	// not empty: the app never asked for its objects to be deleted, so the retry
+	// doesn't either. Only a bucket an `autoDeleteObjects` custom resource
+	// empties on delete is emptied before a retry, which is also the bucket that
+	// blocks the delete when that resource's Lambda never provisioned.
+	it('skips buckets the stack delete keeps or does not empty, and buckets already deleted or skipped', async () => {
 		const templateStages: unknown[] = [];
 		const send: Send = async (cmd) => {
 			if (cmd.constructor.name === 'GetTemplateCommand') {
@@ -100,11 +121,25 @@ describe('listStackBucketNames', () => {
 					TemplateBody: JSON.stringify({
 						Resources: {
 							Hosting: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' },
+							HostingAutoDelete: autoDelete('Hosting'),
 							Scratch: { Type: 'AWS::S3::Bucket' },
+							ScratchAutoDelete: autoDelete('Scratch'),
 							UserFiles: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' },
+							// Not something CDK synthesizes (it rejects autoDeleteObjects without DESTROY), but the policy still wins.
+							UserFilesAutoDelete: autoDelete('UserFiles'),
 							Logs: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'RetainExceptOnCreate' },
+							// RemovalPolicy.DESTROY without autoDeleteObjects: CloudFormation can't delete it
+							// while it holds objects, and the app never asked for them to be deleted.
+							Plain: { Type: 'AWS::S3::Bucket', DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' },
+							// A custom resource of another type that names a bucket doesn't count.
+							PlainNotifications: {
+								Type: 'Custom::S3BucketNotifications',
+								Properties: { BucketName: { Ref: 'Plain' } },
+							},
 							Gone: { Type: 'AWS::S3::Bucket' },
+							GoneAutoDelete: autoDelete('Gone'),
 							Skipped: { Type: 'AWS::S3::Bucket' },
+							SkippedAutoDelete: autoDelete('Skipped'),
 						},
 					}),
 				};
@@ -121,6 +156,7 @@ describe('listStackBucketNames', () => {
 					bucket('Scratch'),
 					bucket('UserFiles'),
 					bucket('Logs'),
+					bucket('Plain', 'DELETE_FAILED'),
 					bucket('Gone', 'DELETE_COMPLETE'),
 					bucket('Skipped', 'DELETE_SKIPPED'),
 					bucket('NotInTemplate'),
@@ -383,7 +419,7 @@ describe('emptySandboxBuckets', () => {
 				const home: Record<string, string> = { 'my-app': 'eu-west-1', 'edge-lambda-stack-x': 'us-east-1' };
 				if (home[cmd.input.StackName] !== region) throw new Error(`Stack with id ${cmd.input.StackName} does not exist`);
 				if (cmd.constructor.name === 'GetTemplateCommand') {
-					return { TemplateBody: JSON.stringify({ Resources: { B: { Type: 'AWS::S3::Bucket' } } }) };
+					return { TemplateBody: JSON.stringify({ Resources: { B: { Type: 'AWS::S3::Bucket' }, BAutoDelete: autoDelete('B') } }) };
 				}
 				return {
 					StackResourceSummaries: [
@@ -603,5 +639,40 @@ describe('destroyRetryClients', () => {
 		assert.strictEqual(await regionOf(clients.cfnFor('us-east-1')), 'us-east-1');
 		assert.strictEqual(clients.cfnFor('us-east-1'), clients.cfnFor('us-east-1')); // one client per Region
 		assert.strictEqual(await regionOf(clients.s3), 'eu-west-3');
+	});
+
+	// With no Region in cdk.json, the environment or a profile, CDK still picks
+	// one (the EC2 instance's, then us-east-1), but guessing it here could look
+	// up a same-named stack in another Region and empty its buckets. So a stack
+	// without its own Region gets a client with no Region, whose calls fail and
+	// are skipped, and the user is told once why the retry can't help.
+	it('warns once, when the retry first needs it, that no Region is configured', async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-retry-clients-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const env = {
+			HOME: dir,
+			USERPROFILE: dir,
+			AWS_CONFIG_FILE: join(dir, 'no-config'),
+			AWS_SHARED_CREDENTIALS_FILE: join(dir, 'no-credentials'),
+		};
+		const warn = t.mock.method(console, 'warn', () => {});
+		const clients = await destroyRetryClients(dir, env);
+		assert.strictEqual(warn.mock.callCount(), 0, 'nothing to say until a retry needs a client');
+		clients.cfnFor('us-east-1');
+		assert.strictEqual(warn.mock.callCount(), 0, 'a stack with its own Region is looked up there');
+		clients.cfnFor(undefined);
+		clients.cfnFor(undefined);
+		assert.strictEqual(warn.mock.callCount(), 1);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /No AWS Region is configured/);
+		assert.match(String(warn.mock.calls[0].arguments[0]), /cdk\.json/);
+	});
+
+	it('does not warn when a Region is configured', async (t) => {
+		const dir = mkdtempSync(join(tmpdir(), 'bb-retry-clients-'));
+		t.after(() => rmSync(dir, { recursive: true, force: true }));
+		const warn = t.mock.method(console, 'warn', () => {});
+		const clients = await destroyRetryClients(dir, { HOME: dir, USERPROFILE: dir, AWS_REGION: 'eu-central-1' });
+		clients.cfnFor(undefined);
+		assert.strictEqual(warn.mock.callCount(), 0);
 	});
 });

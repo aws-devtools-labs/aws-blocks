@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { buildCdkDeployArgs, readAppStackOutputs, selectAppStack } from './deploy-stream.js';
 import {
   buildSandboxDeployArgs,
+  buildSandboxSynthArgs,
   buildSandboxWatchArgs,
   quoteCdkAppPath,
   sandboxWatchStacks,
@@ -93,6 +94,20 @@ describe('destroy selects every stack its deploy creates', { skip }, () => {
     assert.strictEqual(argv[argv.indexOf('--output') + 1], '.blocks-sandbox/sandbox-destroy.out', `expected --output in: ${argv.join(' ')}`);
   });
 
+  // CDK runs the `--app` string through a shell, and every template passes an
+  // absolute path, so a space in it splits the command unless it is quoted the
+  // same way (double quotes on Windows, where cmd.exe keeps single quotes).
+  it('every sandbox command quotes the backend path in --app the same way', () => {
+    const backendPath = '/tmp/my app/aws-blocks/index.cdk.ts';
+    const app = `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`;
+    const options = { outDir: '.blocks-sandbox', projectRoot: '/app', backendPath };
+    const appOf = (argv: readonly string[]) => argv[argv.indexOf('--app') + 1];
+    assert.strictEqual(appOf(buildSandboxSynthArgs(options)), app, 'synth');
+    assert.strictEqual(appOf(buildSandboxDeployArgs(options)), app, 'deploy without an assembly');
+    assert.strictEqual(appOf(buildSandboxWatchArgs({ ...options, stacks: [] })), app, 'watch');
+    assert.strictEqual(appOf(recordDestroyArgv('./sandbox.js', `mod.destroySandbox(${JSON.stringify(backendPath)})`)), app, 'destroy');
+  });
+
   it('destroySandbox clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
     const assemblyDir = join(root, '.blocks-sandbox', 'sandbox-destroy.out');
     mkdirSync(assemblyDir, { recursive: true });
@@ -153,11 +168,18 @@ describe('the sandbox watch selects every stack', () => {
     assert.ok(!args.includes('--all'), `expected no --all in: ${args.join(' ')}`);
   });
 
-  it('the sandbox names stacks for `cdk watch` only when the app has several', () => {
+  it('the sandbox names every stack for `cdk watch`, a single stack too', () => {
     assert.deepStrictEqual(sandboxWatchStacks(['my-app', 'edge-lambda-stack-x']), ['my-app', 'edge-lambda-stack-x']);
-    // One stack (whatever its path) or none: no selector, the argv a single-stack app always had.
-    assert.deepStrictEqual(sandboxWatchStacks(['Api (dev)']), []);
+    // Named even when it is the only one, so a stack added during the session
+    // doesn't stop the watch: CDK matches an exact name first, glob characters
+    // included (see the real-CLI test below).
+    assert.deepStrictEqual(sandboxWatchStacks(['Api (dev)']), ['Api (dev)']);
+    // No readable assembly: no selector.
     assert.deepStrictEqual(sandboxWatchStacks([]), []);
+  });
+
+  it('the sandbox escapes a leading `!`, which CDK would read as "every stack but"', () => {
+    assert.deepStrictEqual(sandboxWatchStacks(['!Bang', 'a!b']), ['\\!Bang', 'a!b']);
   });
 
   it('the sandbox `cdk watch` passes no selector when no stack is named', () => {
@@ -221,6 +243,29 @@ function writeMultiStackAssembly(dir: string): void {
   );
 }
 
+/**
+ * A synthesized cloud assembly whose top-level stack paths contain glob
+ * characters or start with `!`, next to stacks those characters would match
+ * if they were read as a pattern (`Star*x` matches `StarAx`, `?Bang` matches
+ * `xBang`, `!Bang` everything else).
+ */
+function writeGlobNameAssembly(dir: string): string[] {
+  const template = JSON.stringify({ Resources: { H: { Type: 'AWS::CloudFormation::WaitConditionHandle' } } });
+  const names = ['Pa(r)en', 'Br[ab]', 'A{b,c}', 'Ext@(x)', 'Q?z', 'Star*x', '!Bang', 'StarAx', 'xBang', 'Ab'];
+  const artifacts: Record<string, unknown> = {};
+  names.forEach((displayName, i) => {
+    writeFileSync(join(dir, `s${i}.template.json`), template);
+    artifacts[`S${i}`] = {
+      type: 'aws:cloudformation:stack',
+      environment: 'aws://000000000000/us-east-1',
+      displayName,
+      properties: { templateFile: `s${i}.template.json` },
+    };
+  });
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ version: '22.0.0', artifacts }));
+  return names;
+}
+
 /** A synthesized cloud assembly with one top-level stack, below a construct. */
 function writeSingleStackAssembly(dir: string): void {
   writeFileSync(join(dir, 'app.template.json'), JSON.stringify({ Resources: {} }));
@@ -250,11 +295,20 @@ describe('watchArgsForAssembly', () => {
     assert.strictEqual(args[5], '--outputs-file');
   });
 
-  it('names no stack for a single-stack assembly', (t) => {
+  it('names the only stack of a single-stack assembly', (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'bb-watch-asm-'));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     writeSingleStackAssembly(dir);
     const args = watchArgsForAssembly(dir, { outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts' });
+    assert.deepStrictEqual(args.slice(2, 4), ['Api (dev)', '--outputs-file']);
+  });
+
+  it('names no stack when there is no assembly', () => {
+    const args = watchArgsForAssembly(join(tmpdir(), 'bb-no-such-assembly'), {
+      outDir: '.blocks-sandbox',
+      projectRoot: '/app',
+      backendPath: 'a.ts',
+    });
     assert.strictEqual(args[2], '--outputs-file', `expected no stack pattern: ${args.join(' ')}`);
   });
 });
@@ -297,7 +351,7 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     if (asm) rmSync(asm, { recursive: true, force: true });
   });
 
-  function cdk(args: string[]): { out: string; stdout: string; status: number | null } {
+  function cdk(args: string[], app = asm): { out: string; stdout: string; status: number | null } {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: asm,
@@ -312,7 +366,7 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
       for (const key of ['SystemRoot', 'TEMP', 'TMP']) env[key] = process.env[key];
     }
     assert.ok(cdkBin, 'the aws-cdk CLI must be resolvable here (run `npm ci` at the repo root)');
-    const r = spawnSync(process.execPath, [cdkBin, ...args, '--app', asm, '--no-notices'], {
+    const r = spawnSync(process.execPath, [cdkBin, ...args, '--app', app, '--no-notices'], {
       cwd: asm,
       env,
       encoding: 'utf-8',
@@ -351,6 +405,27 @@ describe('the real CDK CLI selects every top-level stack with these argv', () =>
     // The `*` wildcard would miss the stack below a construct.
     const star = cdk(['ls', '*']).stdout.split('\n').map((l) => l.trim()).filter(Boolean);
     assert.ok(!star.includes('Parent/Nested'), `expected '*' to miss Parent/Nested: ${star.join(', ')}`);
+  });
+
+  // CDK matches an exact name first, so a single stack whose path holds glob
+  // characters is still selected when named. Such a pattern can also match
+  // another top-level stack (`A{b,c}` matches `Ab`); the watch names all of
+  // them, so that selects nothing it wouldn't redeploy anyway. A leading `!`,
+  // unescaped, would select every other stack instead.
+  it('the watch stack names select each stack, glob characters and a leading `!` included', { skip: skipCli }, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'bb-cdk-glob-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const names = writeGlobNameAssembly(dir);
+    const ls = (patterns: string[]) => {
+      const listed = cdk(['ls', ...patterns], dir);
+      assert.strictEqual(listed.status, 0, listed.out);
+      return listed.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    };
+    for (const name of names) {
+      assert.ok(ls(sandboxWatchStacks([name])).includes(name), `the pattern for ${name} selects it`);
+    }
+    assert.deepStrictEqual(ls(sandboxWatchStacks(['!Bang'])), ['!Bang']);
+    assert.deepStrictEqual(ls(sandboxWatchStacks(names)).sort(), [...names].sort());
   });
 });
 
