@@ -46,6 +46,75 @@ export function blocksAgentError(name: AgentErrorName, message: string): Error {
 	return coreBlocksError(name, message);
 }
 
+/**
+ * Map a published `error` chunk to the branded error a client rejects or reports with.
+ *
+ * The chunk's optional `errorName` carries the server-side classification across the
+ * Realtime wire. Only names the server deliberately emits are honoured; an absent or
+ * unrecognised value falls back to {@link AgentErrors.StreamFailed}, so chunks from an
+ * older server (no `errorName`) keep their original behaviour.
+ */
+export function agentErrorFromChunk(chunk: { error?: string; errorName?: string }): Error {
+	const name: AgentErrorName =
+		chunk.errorName === AgentErrors.ModelUnavailable ? AgentErrors.ModelUnavailable : AgentErrors.StreamFailed;
+	return blocksAgentError(name, chunk.error ?? 'Agent error');
+}
+
+/** Bounded walk of `err` and its `.cause` chain, yielding each level's `name` and `message`. */
+function collectErrorText(err: unknown): { names: string[]; messages: string[] } {
+	const names: string[] = [];
+	const messages: string[] = [];
+	let current: unknown = err;
+	// `.cause` is often non-enumerable and may wrap several levels (e.g. a Strands wrapper over
+	// the raw AWS SDK error), so read it explicitly. The depth bound guards against cycles.
+	for (let depth = 0; current !== null && current !== undefined && depth < 5; depth++) {
+		if (typeof current === 'string') {
+			messages.push(current);
+			break;
+		}
+		if (typeof current !== 'object') break;
+		if ('name' in current && typeof current.name === 'string') names.push(current.name);
+		if ('message' in current && typeof current.message === 'string') messages.push(current.message);
+		current = 'cause' in current ? current.cause : undefined;
+	}
+	return { names, messages };
+}
+
+/**
+ * Recognise a Bedrock invoke-time model-access failure and compose an actionable message for it.
+ *
+ * A model can pass the health check (the inference profile exists) and still be refused when it is
+ * invoked, for account-level reasons IAM cannot fix:
+ * - Anthropic models require a one-time, per-account use-case-details (first-time-use) submission.
+ * - Some models are not entitled for every account ("is not available for this account").
+ * - Bedrock reports a model-access `AccessDeniedException` for a model the account cannot use.
+ *
+ * Walks `err` and its `.cause` chain, matching on names and messages only. The returned message is
+ * composed here and never echoes the raw provider error or its metadata, so it is safe to publish to
+ * the client.
+ *
+ * @param err - the error thrown by the agent loop.
+ * @param modelId - the Bedrock model or inference profile id, named in the message when known.
+ * @returns an actionable message, or `undefined` when `err` is not a recognised model-access failure.
+ */
+export function classifyModelAccessError(err: unknown, modelId?: string): string | undefined {
+	const { names, messages } = collectErrorText(err);
+	const text = messages.join('\n');
+	const named = modelId ? `Bedrock model '${modelId}'` : undefined;
+	const subject = named ?? 'The selected Bedrock model';
+
+	if (/use case details have not been submitted|anthropic use case details form/i.test(text)) {
+		return `${subject} requires Anthropic use case details for this AWS account. Submit the one-time Anthropic first-time-use form from the model catalog in the Amazon Bedrock console (or call the PutUseCaseForModelAccess API), then retry; it can take about 15 minutes to take effect. Models from other providers do not require this form.`;
+	}
+	if (/is not available for this account/i.test(text)) {
+		return `${subject} is not available for this AWS account. Choose a different model or preset (for example, a model from another provider), or contact AWS to make this model available to the account.`;
+	}
+	if (names.includes('AccessDeniedException') && /model access|access to the model/i.test(text)) {
+		return `Access to ${named ?? 'the selected Bedrock model'} was denied for this AWS account. For an Anthropic model, submit the one-time Anthropic first-time-use form from the model catalog in the Amazon Bedrock console (or call the PutUseCaseForModelAccess API); otherwise confirm the model is available to the account in this Region, or choose a different model.`;
+	}
+	return undefined;
+}
+
 export class InterruptError extends Error {
 	readonly interrupts: Array<{ id: string; name: string; reason?: any }>;
 

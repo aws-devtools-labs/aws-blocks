@@ -140,8 +140,9 @@ E2E_ACCOUNT_ID=<account-1-id> E2E_AGENT_BENCH=1 npm run deploy:oidc
 Set the `BenchRoleArn` output as the `BENCH_ROLE_ARN` secret of the
 `agent-bench` GitHub environment (and as a Dependabot secret) and
 `BenchBucketName` as its `BENCH_BUCKET` variable. The bench calls Anthropic
-models on Bedrock, so enable model access in account 1 and check the Bedrock
-quotas for the bench model before its first run.
+models on Bedrock, so submit the one-time Anthropic use case details form
+(Bedrock console model catalog, or `PutUseCaseForModelAccess`) in account 1 and
+check the Bedrock quotas for the bench model before its first run.
 
 Each role trusts only its own GitHub environment, so jobs in `agent-bench`
 can't assume `blocks-github-e2e` and jobs in `e2e` can't assume

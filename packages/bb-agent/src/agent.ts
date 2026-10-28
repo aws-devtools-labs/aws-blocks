@@ -15,7 +15,7 @@ import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
-import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
+import { AgentErrors, agentErrorFromChunk, blocksAgentError, classifyModelAccessError, InterruptError } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
@@ -295,17 +295,36 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
 			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
 			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err) });
+			// An account-level model-access refusal (e.g. Anthropic first-time-use not submitted, or a
+			// model not entitled for the account) passes the health check and only fails at invoke. Replace
+			// the raw provider message with an actionable one and tag the chunk so the client rejects with
+			// ModelUnavailable rather than the generic StreamFailed. Only the composed message is published.
+			const modelAccessMessage = classifyModelAccessError(err, this.singleModelId());
+			const clientMessage = modelAccessMessage ?? errorMessage;
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
-					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: errorMessage }) });
+					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage }) });
 				}
 			} catch (persistErr) {
 				this.log.error('Failed to persist error to history', { error: persistErr });
 			}
 			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
-			await this.rt.publish('chunks', payload.channelId, { type: 'error', error: errorMessage });
+			const errorChunk: AgentStreamChunk = modelAccessMessage
+				? { type: 'error', error: modelAccessMessage, errorName: AgentErrors.ModelUnavailable }
+				: { type: 'error', error: errorMessage };
+			await this.rt.publish('chunks', payload.channelId, errorChunk);
 		}
+	}
+
+	/**
+	 * The configured model id when exactly one model candidate is configured, so an error
+	 * message can name it. With a fallback list the candidate that actually ran is not known
+	 * here, so no id is returned rather than naming the wrong one.
+	 */
+	private singleModelId(): string | undefined {
+		const configs = Array.isArray(this.modelConfig) ? this.modelConfig : this.modelConfig ? [this.modelConfig] : [];
+		return configs.length === 1 ? configs[0]?.modelId : undefined;
 	}
 
 	/**
@@ -691,7 +710,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						resolve(chunk);
 					} else if (chunk.type === 'error') {
 						unsub();
-						reject(blocksAgentError(AgentErrors.StreamFailed, chunk.error ?? 'Agent error'));
+						// StreamFailed unless the server classified the failure (e.g. ModelUnavailable).
+						reject(agentErrorFromChunk(chunk));
 					} else if (chunk.type === 'interrupt') {
 						unsub();
 						reject(new InterruptError('Agent requires approval to continue', chunk.interrupts ?? []));

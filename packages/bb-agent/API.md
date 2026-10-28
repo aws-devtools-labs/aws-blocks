@@ -75,6 +75,7 @@ export interface AgentResult {
 export interface AgentStreamChunk {
     // (undocumented)
     error?: string;
+    errorName?: string;
     // (undocumented)
     input?: JSONValue;
     // (undocumented)

@@ -15,6 +15,13 @@ const FAST_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
  * optimal throughput. If your workload has data residency requirements, specify a
  * region-scoped inference profile explicitly.
  * @see https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+ *
+ * **Note:** All presets are Anthropic models. Anthropic requires first-time customers to submit
+ * use case details once per AWS account (from the model catalog in the Amazon Bedrock console, or
+ * with the `PutUseCaseForModelAccess` API) before the model can be invoked; until then invocation
+ * fails and the agent reports `AgentErrors.ModelUnavailable`. Models from other providers do not
+ * require this step.
+ * @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html
  */
 export const BedrockModels = {
 	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
