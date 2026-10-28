@@ -416,8 +416,8 @@ const STACK_ACTIONS = [
 /**
  * The deploy guard for app `appId` (see the module doc): attach it to the app's
  * CDK bootstrap deploy role (`cdk-<id>-deploy-role-<account>-<region>`). It
- * denies stack changes outside the app's own stacks (`<id>`, `<id>-…`, and its
- * toolkit stack `CDKToolkit-<id>`), and denies creating or changing a stack
+ * denies stack changes outside the app's own stacks (`<id>`, `<id>-…` — not its
+ * bootstrap stack, which only the platform re-bootstraps), and denies creating or changing a stack
  * without naming the app's own execution role — so CloudFormation can't fall back
  * to another stack's role.
  *
@@ -438,7 +438,6 @@ export function generateDeployGuardPolicy(options: IamPolicyOptions): PolicyDocu
 				NotResource: [
 					`arn:${p}:cloudformation:*:${acct}:stack/${id}/*`,
 					`arn:${p}:cloudformation:*:${acct}:stack/${id}-*/*`,
-					`arn:${p}:cloudformation:*:${acct}:stack/CDKToolkit-${id}/*`,
 				],
 			},
 			{

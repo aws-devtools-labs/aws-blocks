@@ -2,6 +2,7 @@
 "@aws-blocks/core": minor
 "@aws-blocks/blocks": minor
 "@aws-blocks/create-blocks-app": minor
+"@aws-blocks/hosting": minor
 ---
 
 feat(core): `defaults.app` — an app identity for running many apps in one AWS account, plus `blocks-iam-check` and `blocks-iam-policies`
@@ -37,3 +38,8 @@ one AWS account through one pipeline. All of it is opt-in: without
 - **`create-blocks-app --template platform`** (new template): the api-only
   service with `defaults.app`, the permissions boundary, a `check:iam` script and
   platform rules for coding agents in `AGENTS.md`.
+- **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
+  the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
+  Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
+  `defaults.app`, so a shared platform's checks and deploy guard see it as the
+  app's own stack.

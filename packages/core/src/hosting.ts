@@ -46,6 +46,7 @@ import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, publicHostStamp, registerPublicHosts } from './cdk/api-front-door.js';
 import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
+import { resolveAppIdentity } from './cdk/app-identity.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
 import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
@@ -1416,7 +1417,14 @@ export class Hosting extends Construct {
         : {}),
     };
 
-    const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
+    // On a shared app platform (`defaults.app` on the fronted backend), name the
+    // us-east-1 Lambda@Edge stack after the app, so the platform's deploy guard
+    // and checks treat it as the app's own stack.
+    const appIdentity = resolveAppIdentity(isBlocksBackendRoot(props.api) ? props.api : this);
+    const hosting = new HostingConstruct(this, 'Hosting', {
+      ...hostingProps,
+      ...(appIdentity ? { edgeStackId: `${appIdentity.id}-edge` } : {}),
+    });
 
     // ── 7. Front door: API proxy / stacked edge ──────────────────
     // The public origin the app is served from. Defaults to the L3's front-door

@@ -207,7 +207,11 @@ describe('blocks-iam-policies — the deploy guard', () => {
 	test('allows its own stacks with its own execution role', () => {
 		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('appa'), ownExec), false);
 		assert.strictEqual(denied('cloudformation:ExecuteChangeSet', stack('appa-api'), ownExec), false);
-		assert.strictEqual(denied('cloudformation:GetTemplate', stack('CDKToolkit-appa'), ownExec), false);
+		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('appa-edge'), ownExec), false);
+	});
+
+	test('denies changing its own bootstrap stack (only the platform re-bootstraps)', () => {
+		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('CDKToolkit-appa'), ownExec), true);
 	});
 
 	test('needs the app id and a 12-digit account', () => {

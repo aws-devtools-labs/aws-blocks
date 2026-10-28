@@ -28,6 +28,7 @@ import {
 	checkRole,
 	checkStackName,
 	checkStatement,
+	checkTransforms,
 	isResourcePolicyType,
 	type ResolvedStatement,
 } from '../cdk/app-isolation-rules.js';
@@ -64,6 +65,7 @@ interface Artifact {
 }
 
 type Template = {
+	Transform?: unknown;
 	Parameters?: Record<string, unknown>;
 	Resources?: Record<
 		string,
@@ -91,7 +93,7 @@ function readJson<T>(file: string): T {
 
 /** Template rules: every role, every IAM policy, every managed-policy attachment, every resource policy. */
 function checkTemplate(template: Template, id: string, stackId: string): AppViolation[] {
-	const out: AppViolation[] = [];
+	const out: AppViolation[] = [...checkTransforms(template, stackId)];
 	const parameters = new Set(Object.keys(template.Parameters ?? {}));
 	for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
 		const where = `${stackId}/${logicalId}`;
@@ -254,9 +256,9 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 			}
 			templates.push(source);
 			for (const v of checkTemplate(template, id, stack.label)) violations.push({ ...v, source });
-			// Helper stacks AWS Blocks adds (the us-east-1 edge stack) are named by CDK, not the app.
-			const isHelper = /^edge-lambda-stack-/.test(stack.stackName);
-			if (!isHelper && stack.stackName !== '') {
+			// Every stack is named after the app — including Hosting's us-east-1 edge
+			// stack, which AWS Blocks names `<id>-edge` when `defaults.app` is set.
+			if (stack.stackName !== '') {
 				for (const v of checkStackName(stack.stackName, id)) violations.push({ ...v, source: 'manifest.json' });
 			}
 		}
