@@ -61,10 +61,95 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
   return collected;
 }
 
+// ─── @aws-blocks/* version stamping ─────────────────────────────────────────
+//
+// Templates (and the add-to-existing paths below) write `*` for every
+// `@aws-blocks/*` package as a placeholder. Inside the monorepo the placeholder
+// becomes a `file:` path to the sibling package. From the published CLI it
+// becomes the caret range listed in create-blocks-app's own devDependencies,
+// which `changeset version` moves to each new release line. A scaffolded app
+// therefore starts on the line this CLI release was tested against, takes
+// non-breaking updates on reinstall, and never moves to a breaking line until
+// its owner edits the range.
+
+/**
+ * Reads the range to stamp for each `@aws-blocks/*` package from
+ * create-blocks-app's own manifest. The packages the CLI writes into a
+ * scaffolded app are listed there as devDependencies (never installed by
+ * customers), so `changeset version` keeps each range on the package's
+ * current release line.
+ *
+ * @param cliPkg - create-blocks-app's parsed package.json.
+ * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.8.0' }`.
+ * @throws When no `@aws-blocks/*` devDependency is listed, or one is `*` or
+ *   empty. Either is a packaging bug, so it fails before anything is written.
+ *
+ * @example
+ * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.8.0' } });
+ * // → { '@aws-blocks/blocks': '^0.8.0' }
+ */
+export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string, string> }): Record<string, string> {
+  const versions: Record<string, string> = {};
+  for (const [name, range] of Object.entries(cliPkg.devDependencies ?? {})) {
+    if (!name.startsWith('@aws-blocks/')) continue;
+    if (typeof range !== 'string' || range === '' || range === '*') {
+      throw new Error(
+        `Internal error: create-blocks-app lists ${name} with the range "${range}", which pins nothing. ` +
+        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+      );
+    }
+    versions[name] = range;
+  }
+  if (Object.keys(versions).length === 0) {
+    throw new Error(
+      'Internal error: create-blocks-app lists no @aws-blocks/* devDependencies, so it cannot pin the versions it scaffolds. ' +
+      'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+    );
+  }
+  return versions;
+}
+
+/**
+ * Replaces each `*` placeholder for an `@aws-blocks/*` package in `deps` with
+ * its range from `versions`, in place. Concrete ranges, `file:` paths and
+ * non-`@aws-blocks` entries are left as they are.
+ *
+ * @param deps - A dependency map to stamp (may be undefined).
+ * @param versions - The ranges from {@link resolveStampedVersions}.
+ * @throws When a placeholder names a package `versions` has no range for (a
+ *   template wrote a package create-blocks-app does not list).
+ */
+export function stampBlocksVersions(deps: Record<string, string> | undefined, versions: Record<string, string>): void {
+  if (!deps) return;
+  for (const [name, range] of Object.entries(deps)) {
+    if (!name.startsWith('@aws-blocks/') || range !== '*') continue;
+    const stamp = versions[name];
+    if (!stamp) {
+      throw new Error(
+        `Internal error: create-blocks-app has no version to pin ${name} to. ` +
+        'This is a bug, please report it at https://github.com/aws-devtools-labs/aws-blocks/issues',
+      );
+    }
+    deps[name] = stamp;
+  }
+}
+
+/** The stamp ranges from the installed create-blocks-app's own package.json. */
+async function loadStampedVersions(): Promise<Record<string, string>> {
+  return resolveStampedVersions(JSON.parse(await readFile(join(__dirname, '../package.json'), 'utf-8')));
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true, () => false);
+}
+
+// The CLI runs from the monorepo when a sibling `core` package sits next to it.
+const MONOREPO_PACKAGES_DIR = join(__dirname, '../..');
+
+async function isLocalMonorepo(): Promise<boolean> {
+  return exists(join(MONOREPO_PACKAGES_DIR, 'core', 'package.json'));
 }
 
 async function confirm(message: string): Promise<boolean> {
@@ -127,6 +212,8 @@ async function copySharedResources(targetDir: string): Promise<void> {
  * - Adding scripts to package.json
  * - Patching .gitignore
  * - Monorepo detection and file: path rewriting
+ * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
+ *   (published CLI only; a range the project already declares is kept)
  * - Running npm install
  */
 async function addBlocksWorkspace(targetDir: string, options: {
@@ -136,7 +223,18 @@ async function addBlocksWorkspace(targetDir: string, options: {
   gitignoreEntries: string[];
   skipInstall?: boolean;
 }): Promise<void> {
-  const { devDeps, deps, scripts, gitignoreEntries, skipInstall } = options;
+  const { scripts, gitignoreEntries, skipInstall } = options;
+  const deps = { ...options.deps };
+  const devDeps = { ...options.devDeps };
+
+  // From the published CLI, resolve `@aws-blocks/*` placeholders before any
+  // file is touched, so a packaging bug fails without a half-written project.
+  const localMonorepo = await isLocalMonorepo();
+  if (!localMonorepo) {
+    const versions = await loadStampedVersions();
+    stampBlocksVersions(deps, versions);
+    stampBlocksVersions(devDeps, versions);
+  }
 
   // Modify package.json
   const pkgPath = join(targetDir, 'package.json');
@@ -164,9 +262,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 
   // Monorepo detection for local dev
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-  if (isLocalMonorepo) {
+  if (localMonorepo) {
+    const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d: string) =>
       d.startsWith('@aws-blocks/'),
     );
@@ -342,8 +439,13 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-+/g, '-')
     .replace(/-$/, '') || 'blocks-app';
   
+  // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
+  // is written (see the version stamping section above).
+  const localMonorepo = await isLocalMonorepo();
+  const stampedVersions = localMonorepo ? null : await loadStampedVersions();
+
   console.log(`Creating Blocks app in ${targetDir}...`);
-  
+
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
@@ -367,11 +469,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // When running from the local monorepo, rewrite @aws-blocks/* deps
   // to file: paths so they resolve to sibling packages. When running from
   // the published registry (via npx), the sibling packages won't exist on
-  // disk — leave deps as-is so they resolve from the registry instead.
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-
-  if (isLocalMonorepo) {
+  // disk, so the `*` placeholders are stamped with the caret ranges this CLI
+  // release ships and resolve from the registry instead.
+  if (localMonorepo) {
+    const parentDir = MONOREPO_PACKAGES_DIR;
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d) =>
       d.startsWith('@aws-blocks/'),
     );
@@ -380,6 +481,9 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else if (stampedVersions) {
+    stampBlocksVersions(pkg.dependencies, stampedVersions);
+    stampBlocksVersions(pkg.devDependencies, stampedVersions);
   }
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
@@ -430,11 +534,23 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   console.log('\n📦 Scaffolding Blocks...\n');
 
-  // 1. Copy aws-blocks/ template
+  // From the published CLI, resolve the `@aws-blocks/*` ranges before anything
+  // is written (see the version stamping section above).
+  const stampedVersions = (await isLocalMonorepo()) ? null : await loadStampedVersions();
+
+  // 1. Copy aws-blocks/ template. Its package.json declares its own
+  // `@aws-blocks/*` placeholders, which the published CLI stamps too.
   const templateDir = join(__dirname, '../templates/amplify');
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  if (stampedVersions) {
+    const workspacePkgPath = join(awsBlocksDest, 'package.json');
+    const workspacePkg = JSON.parse(await readFile(workspacePkgPath, 'utf-8'));
+    stampBlocksVersions(workspacePkg.dependencies, stampedVersions);
+    stampBlocksVersions(workspacePkg.devDependencies, stampedVersions);
+    await writeFile(workspacePkgPath, `${JSON.stringify(workspacePkg, null, 2)}\n`);
+  }
   console.log('  ✓ Created aws-blocks/');
 
   // 2. Copy amplify/blocks.ts
@@ -485,6 +601,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
+    // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     deps: { '@aws-blocks/blocks': '*' },
     devDeps: {
       'tsx': '^4.7.0',
@@ -649,6 +766,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
   await addBlocksWorkspace(targetDir, {
+    // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
     deps: { '@aws-blocks/blocks': '*' },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
