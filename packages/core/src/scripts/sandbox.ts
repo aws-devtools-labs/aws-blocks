@@ -24,7 +24,9 @@ import {
 	formatRetainedSummary,
 	inspectDestroyAttempt,
 	isRetainedDependencyFailure,
+	isStackMissingError,
 	mergeResources,
+	type StackIdMap,
 	type StackResourceRef,
 } from './destroy-retained.js';
 
@@ -695,7 +697,7 @@ export async function stackDeleteThrottled(
 				if (!nextToken) break;
 			}
 		} catch (e) {
-			if (/does not exist/i.test((e as Error).message ?? '')) missing++;
+			if (isStackMissingError(e)) missing++;
 			else firstError ??= e;
 		}
 	}
@@ -791,12 +793,26 @@ export interface DestroyRetryDeps {
 	 * attempt that {@link isRetainedDependencyFailure} says no retry can fix
 	 * stops the loop at once, with no bucket emptying and no wait. A rejection is
 	 * logged and treated as "nothing known". Default: nothing known.
+	 *
+	 * When it succeeds, its report also decides whether the attempt was
+	 * throttled (a failed resource with an {@link isThrottleReason} reason), so
+	 * the stack events are scanned once per attempt; `isThrottled` is only the
+	 * fallback when it is missing or rejects. `stackIds` are the ids
+	 * `captureStackIds` recorded, when it did.
 	 */
 	inspectAttempt?: (
 		stackNames: string[],
 		attemptStartedAt: number,
 		previousFailureAt?: number,
+		stackIds?: StackIdMap,
 	) => Promise<DestroyAttemptReport>;
+	/**
+	 * Record the app's stack ids before the first attempt, while the stacks
+	 * still exist, so `inspectAttempt` can read a deleted stack's events by id
+	 * (it falls back to ListStacks without one). Best-effort: a rejection is
+	 * logged and ignored. Only called with `inspectAttempt`. Default: none.
+	 */
+	captureStackIds?: () => Promise<StackIdMap>;
 	/**
 	 * After a successful destroy, print the resources it kept because of their
 	 * removal policy (read with `inspectAttempt`; stack names come from
@@ -854,6 +870,14 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	// Retained resources seen across all attempts: CloudFormation reports a
 	// resource as DELETE_SKIPPED only on the attempt that skipped it.
 	const retained: StackResourceRef[] = [];
+	let stackIds: StackIdMap | undefined;
+	if (deps.inspectAttempt && deps.captureStackIds) {
+		try {
+			stackIds = await deps.captureStackIds();
+		} catch (e) {
+			console.warn(`  ⚠️  could not record the stack ids before destroy: ${(e as Error).message}`);
+		}
+	}
 	for (let attempt = 0; ; attempt++) {
 		const attemptStartedAt = now();
 		try {
@@ -863,30 +887,37 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			lastFailureAt = now();
 			firstFailureAt ??= lastFailureAt;
 			if (stackNames === undefined) stackNames = deps.listStackNames();
-			let throttled = false;
-			try {
-				throttled = await isThrottled(stackNames, attemptStartedAt, previousFailureAt);
-			} catch (e) {
-				console.warn(
-					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
-				);
-			}
+			let report: DestroyAttemptReport | undefined;
 			if (deps.inspectAttempt) {
-				let report: DestroyAttemptReport | undefined;
 				try {
-					report = await deps.inspectAttempt(stackNames, attemptStartedAt, previousFailureAt);
+					report = await deps.inspectAttempt(stackNames, attemptStartedAt, previousFailureAt, stackIds);
 				} catch (e) {
 					console.warn(`  ⚠️  could not read why the delete failed; retrying as usual: ${(e as Error).message}`);
 				}
-				if (report) {
-					mergeResources(retained, report.retained);
-					const sofar = { failed: report.failed, retained };
-					// Deterministic: the retained resource keeps using what the delete
-					// needs to remove, so a retry fails the same way. Stop now.
-					if (isRetainedDependencyFailure(sofar)) {
-						console.error(formatRetainedDependencyFailure(sofar));
-						throw error;
-					}
+			}
+			let throttled = false;
+			if (report) {
+				// One scan of the stack events answers both questions: the report's
+				// failed resources are this attempt's DELETE_FAILED events, the same
+				// ones `isThrottled` would read.
+				throttled = report.failed.some((r) => isThrottleReason(r.reason));
+			} else {
+				try {
+					throttled = await isThrottled(stackNames, attemptStartedAt, previousFailureAt);
+				} catch (e) {
+					console.warn(
+						`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
+					);
+				}
+			}
+			if (report) {
+				mergeResources(retained, report.retained);
+				const sofar = { failed: report.failed, retained };
+				// Deterministic: the retained resource keeps using what the delete
+				// needs to remove, so a retry fails the same way. Stop now.
+				if (isRetainedDependencyFailure(sofar)) {
+					console.error(formatRetainedDependencyFailure(sofar));
+					throw error;
 				}
 			}
 			let delayMs: number | undefined;
@@ -936,8 +967,13 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			// Best-effort: the stacks are gone either way, this only says what was kept.
 			try {
 				if (stackNames === undefined) stackNames = deps.listStackNames();
-				const report = await deps.inspectAttempt(stackNames, attemptStartedAt, lastFailureAt);
+				const report = await deps.inspectAttempt(stackNames, attemptStartedAt, lastFailureAt, stackIds);
 				mergeResources(retained, report.retained);
+				for (const stackName of report.unread ?? []) {
+					console.warn(
+						`  ⚠️  could not read delete events for stack ${stackName}; retained-resource summary unavailable`,
+					);
+				}
 			} catch (e) {
 				console.warn(`  ⚠️  could not list the resources this destroy retained: ${(e as Error).message}`);
 			}

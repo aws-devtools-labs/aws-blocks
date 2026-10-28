@@ -28,6 +28,24 @@ export interface DestroyAttemptReport {
 	failed: StackResourceRef[];
 	/** Resources CloudFormation kept because of their removal policy (`DELETE_SKIPPED`). */
 	retained: StackResourceRef[];
+	/**
+	 * Stacks whose delete events could not be read: missing by name, with no
+	 * id captured before the destroy and no matching deletion in ListStacks.
+	 * Absent when every stack was read.
+	 */
+	unread?: string[];
+}
+
+/** Stack name -> stack id, captured while the stacks still exist (see {@link describeStackIds}). */
+export type StackIdMap = ReadonlyMap<string, string>;
+
+/**
+ * Whether an AWS error says the stack does not exist (CloudFormation's
+ * `Stack with id … does not exist`). Shared with `stackDeleteThrottled` in
+ * `./sandbox.ts`.
+ */
+export function isStackMissingError(e: unknown): boolean {
+	return /does not exist/i.test((e as Error | undefined)?.message ?? '');
 }
 
 /**
@@ -45,6 +63,10 @@ export function isDependencyReason(reason: string | undefined): boolean {
  * security groups for as long as they run. While one of these is retained, a
  * subnet or security group it uses cannot be deleted, however long destroy
  * waits.
+ *
+ * Deliberately conservative: a holder type missing from this list only makes
+ * destroy fall back to its ordinary retries (the pre-existing behavior), while
+ * a type listed wrongly would stop a destroy that could have succeeded.
  */
 export const RETAINED_NETWORK_HOLDER_TYPES: ReadonlySet<string> = new Set([
 	'AWS::RDS::DBCluster',
@@ -55,6 +77,9 @@ export const RETAINED_NETWORK_HOLDER_TYPES: ReadonlySet<string> = new Set([
 	'AWS::ElastiCache::ReplicationGroup',
 	'AWS::EFS::MountTarget',
 ]);
+
+/** The resource types a retained network holder keeps in use: its subnets and security groups. */
+const HELD_NETWORK_TYPES: ReadonlySet<string> = new Set(['AWS::EC2::Subnet', 'AWS::EC2::SecurityGroup']);
 
 /**
  * Whether a failed delete attempt can never succeed on a retry: every resource
@@ -67,12 +92,31 @@ export const RETAINED_NETWORK_HOLDER_TYPES: ReadonlySet<string> = new Set([
  * failure only counts as permanent when no retained resource is a subnet: if
  * the retained resource's own subnets are retained too, the failing subnet
  * belongs to some other network and is retried as before.
+ *
+ * Each failed resource must also be one a retained holder plausibly keeps in
+ * use: a subnet or security group, of a type the app does NOT retain. If the
+ * app retains a resource of the same type (e.g. bb-data in a customer-provided
+ * VPC retains the cluster's security group), the holder's own one is kept, so
+ * the failing one belongs to something else (e.g. a VPC Lambda's security
+ * group whose network interfaces are still detaching) and is retried.
+ *
+ * Why a type heuristic and not an EC2 lookup: the robust check is to look up
+ * each failed subnet / security group's network interfaces
+ * (DescribeNetworkInterfaces) and stop only when an RDS-owned one, and no
+ * Lambda one, is still attached. That needs `@aws-sdk/client-ec2`, which
+ * `@aws-blocks/core` does not depend on, and no dependency is added for this.
+ * The residual case the heuristic cannot tell apart, a Lambda interface
+ * detaching from a subnet / security group that a retained cluster also still
+ * uses, is permanent anyway: the cluster keeps that resource in use.
  */
 export function isRetainedDependencyFailure(report: DestroyAttemptReport): boolean {
 	if (report.failed.length === 0) return false;
 	if (!report.failed.every((r) => isDependencyReason(r.reason))) return false;
 	if (report.retained.some((r) => r.type === 'AWS::EC2::Subnet')) return false;
-	return report.retained.some((r) => RETAINED_NETWORK_HOLDER_TYPES.has(r.type));
+	if (!report.retained.some((r) => RETAINED_NETWORK_HOLDER_TYPES.has(r.type))) return false;
+	return report.failed.every(
+		(r) => HELD_NETWORK_TYPES.has(r.type) && !report.retained.some((kept) => kept.type === r.type),
+	);
 }
 
 /** One line per resource: `stack/logicalId (type) physicalId`. */
@@ -143,6 +187,37 @@ async function findDeletedStackId(
 }
 
 /**
+ * The id of each of `stackNames` that exists now. Called before the first
+ * destroy attempt, so the success summary can read a deleted stack's events by
+ * id instead of searching ListStacks (which pages through every deleted stack
+ * in the account and Region). A stack that does not exist is left out; any
+ * other error is thrown after checking the remaining stacks.
+ */
+export async function describeStackIds(cfn: CloudFormationClient, stackNames: string[]): Promise<Map<string, string>> {
+	const { DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+	const ids = new Map<string, string>();
+	let firstError: unknown;
+	for (const stackName of stackNames) {
+		try {
+			const res = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
+			const id = res.Stacks?.[0]?.StackId;
+			if (id) ids.set(stackName, id);
+		} catch (e) {
+			if (!isStackMissingError(e)) firstError ??= e;
+		}
+	}
+	if (firstError !== undefined) throw firstError;
+	return ids;
+}
+
+/** {@link describeStackIds} with a default-Region CloudFormation client. */
+export async function captureStackIds(stackNames: string[]): Promise<StackIdMap> {
+	if (stackNames.length === 0) return new Map();
+	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+	return describeStackIds(new CloudFormationClient({}), stackNames);
+}
+
+/**
  * Read what the delete attempt that began at `sinceMs` did to each of
  * `stackNames`: its failed and retained resources. Like `stackDeleteThrottled`
  * in `./sandbox.ts`, it reads each stack's events newest-first back to this
@@ -151,20 +226,29 @@ async function findDeletedStackId(
  * is not found. A stack that was deleted is read by its id (found with
  * ListStacks); a stack that does not exist is skipped. Any other error is
  * thrown after checking the remaining stacks.
+ *
+ * A stack in `stackIds` (captured before the destroy) is read by that id
+ * directly; ListStacks is only the fallback for a stack with no captured id.
+ * A stack found by neither is listed in `unread`. Nested stacks (and nested
+ * cloud assemblies) are not followed: only the named stacks' own events are
+ * read.
  */
 export async function inspectStackDelete(
 	cfn: CloudFormationClient,
 	stackNames: string[],
 	sinceMs: number,
 	notBeforeMs?: number,
+	stackIds?: StackIdMap,
 ): Promise<DestroyAttemptReport> {
 	const { DescribeStackEventsCommand } = await import('@aws-sdk/client-cloudformation');
 	const oldest = Math.max(sinceMs - CLOCK_SKEW_MS, notBeforeMs ?? Number.NEGATIVE_INFINITY);
 	const report: DestroyAttemptReport = { failed: [], retained: [] };
+	const unread: string[] = [];
 	let firstError: unknown;
 	for (const stackName of stackNames) {
 		try {
-			let stackRef: string | undefined = stackName;
+			const knownId = stackIds?.get(stackName);
+			let stackRef: string | undefined = knownId ?? stackName;
 			const failed: StackResourceRef[] = [];
 			const retained: StackResourceRef[] = [];
 			let nextToken: string | undefined;
@@ -174,10 +258,13 @@ export async function inspectStackDelete(
 					res = await cfn.send(new DescribeStackEventsCommand({ StackName: stackRef, NextToken: nextToken }));
 				} catch (e) {
 					// A stack deleted by this attempt is no longer found by name.
-					if (page > 0 || stackRef !== stackName || !/does not exist/i.test((e as Error).message ?? ''))
-						throw e;
+					if (page > 0 || stackRef !== stackName || !isStackMissingError(e)) throw e;
 					stackRef = await findDeletedStackId(cfn, stackName, sinceMs);
-					if (!stackRef) break; // no deletion of it since this attempt began
+					if (!stackRef) {
+						// No deletion of it since this attempt began.
+						unread.push(stackName);
+						break;
+					}
 					res = await cfn.send(new DescribeStackEventsCommand({ StackName: stackRef }));
 				}
 				for (const ev of res.StackEvents ?? []) {
@@ -208,10 +295,12 @@ export async function inspectStackDelete(
 				if (!nextToken) break;
 			}
 		} catch (e) {
-			if (!/does not exist/i.test((e as Error).message ?? '')) firstError ??= e;
+			if (!isStackMissingError(e)) firstError ??= e;
+			else unread.push(stackName);
 		}
 	}
 	if (firstError !== undefined) throw firstError;
+	if (unread.length > 0) report.unread = unread;
 	return report;
 }
 
@@ -223,8 +312,9 @@ export async function inspectDestroyAttempt(
 	stackNames: string[],
 	sinceMs: number,
 	notBeforeMs?: number,
+	stackIds?: StackIdMap,
 ): Promise<DestroyAttemptReport> {
 	if (stackNames.length === 0) return { failed: [], retained: [] };
 	const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
-	return inspectStackDelete(new CloudFormationClient({}), stackNames, sinceMs, notBeforeMs);
+	return inspectStackDelete(new CloudFormationClient({}), stackNames, sinceMs, notBeforeMs, stackIds);
 }

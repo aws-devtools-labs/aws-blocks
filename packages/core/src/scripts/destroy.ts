@@ -6,7 +6,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { inspectDestroyAttempt } from './destroy-retained.js';
+import { captureStackIds, inspectDestroyAttempt } from './destroy-retained.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
 import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
@@ -131,6 +131,11 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
     // Stop at once on a failure caused by retained resources, and list what a
     // successful destroy retained (production retains stateful resources).
     inspectAttempt: inspectDestroyAttempt,
+    // Record the stack ids before the first attempt so the retained summary
+    // reads the deleted stacks by id. Names come from the last synthesized
+    // assembly whatever its age (stack names are stable, and a wrong name only
+    // means that stack falls back to ListStacks), so this costs no extra synth.
+    captureStackIds: () => captureStackIds(assemblyStackNames(options.projectRoot, 0) ?? []),
     reportRetained: true,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     successLabel: 'Production stack',

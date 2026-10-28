@@ -11,6 +11,7 @@ import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { assemblyStackNames, productionDestroyDeps } from './destroy.js';
 import {
 	type DestroyAttemptReport,
+	describeStackIds,
 	inspectDestroyAttempt,
 	inspectStackDelete,
 	isDependencyReason,
@@ -43,8 +44,23 @@ const subnetFailed: StackResourceRef = {
 	reason: SUBNET_REASON,
 };
 
+const SG_REASON = 'resource sg-0lambda has a dependent object (Service: Ec2, Error Code: DependencyViolation)';
+const clusterSg: StackResourceRef = {
+	stackName: 'app',
+	logicalId: 'mainClusterSecurityGroup',
+	type: 'AWS::EC2::SecurityGroup',
+	physicalId: 'sg-0cluster',
+};
+const lambdaSgFailed: StackResourceRef = {
+	stackName: 'app',
+	logicalId: 'BlocksLambdaSg',
+	type: 'AWS::EC2::SecurityGroup',
+	physicalId: 'sg-0lambda',
+	reason: SG_REASON,
+};
+
 /** Capture console.error/console.log output for the duration of `fn`. */
-async function captureConsole(fn: () => Promise<void>): Promise<{ errors: string; logs: string }> {
+async function captureConsole(fn: () => Promise<void>): Promise<{ errors: string; logs: string; warns: string }> {
 	const errors = mock.method(console, 'error', () => {});
 	const logs = mock.method(console, 'log', () => {});
 	const warns = mock.method(console, 'warn', () => {});
@@ -56,7 +72,7 @@ async function captureConsole(fn: () => Promise<void>): Promise<{ errors: string
 		warns.mock.restore();
 	}
 	const join = (m: typeof errors) => m.mock.calls.map((c) => String(c.arguments[0])).join('\n');
-	return { errors: join(errors), logs: join(logs) };
+	return { errors: join(errors), logs: join(logs), warns: join(warns) };
 }
 
 describe('isRetainedDependencyFailure', () => {
@@ -86,6 +102,27 @@ describe('isRetainedDependencyFailure', () => {
 	it("is false when the retained resource's subnets are retained too (the failing network is another one)", () => {
 		const keptSubnet = { stackName: 'app', logicalId: 'mainVpcSubnet', type: 'AWS::EC2::Subnet' };
 		assert.ok(!isRetainedDependencyFailure({ failed: [subnetFailed], retained: [cluster, keptSubnet] }));
+	});
+
+	it("is false for a VPC Lambda's security group when the cluster's own security group is retained (customer VPC)", () => {
+		assert.ok(!isRetainedDependencyFailure({ failed: [lambdaSgFailed], retained: [cluster, clusterSg] }));
+	});
+
+	it("is true for bb-data's own VPC when its subnet and security group were not retained", () => {
+		const instance = { stackName: 'app', logicalId: 'mainWriter', type: 'AWS::RDS::DBInstance' };
+		const subnetGroup = { stackName: 'app', logicalId: 'mainSubnets', type: 'AWS::RDS::DBSubnetGroup' };
+		const sgFailed = { ...lambdaSgFailed, logicalId: 'mainClusterSecurityGroup', physicalId: 'sg-0cluster' };
+		assert.ok(
+			isRetainedDependencyFailure({
+				failed: [subnetFailed, sgFailed],
+				retained: [cluster, instance, subnetGroup],
+			}),
+		);
+	});
+
+	it('is false when a failed resource is not a subnet or security group', () => {
+		const vpc = { ...subnetFailed, logicalId: 'mainVpc', type: 'AWS::EC2::VPC' };
+		assert.ok(!isRetainedDependencyFailure({ failed: [vpc], retained: [cluster] }));
 	});
 
 	it('is false when nothing failed', () => {
@@ -182,6 +219,79 @@ describe('runDestroyWithRetries (retained resources)', () => {
 		assert.deepStrictEqual(sleeps, [60_000, 120_000]);
 	});
 
+	it("retries a VPC Lambda's security group failure when the cluster and its security group are retained", async () => {
+		let attempts = 0;
+		const out = await captureConsole(async () => {
+			await runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					if (attempts < 2) throw new Error('DELETE_FAILED');
+				},
+				listStackNames: () => ['app'],
+				emptyBuckets: async () => {},
+				inspectAttempt: async () => ({ failed: [lambdaSgFailed], retained: [cluster, clusterSg] }),
+				sleep: async () => {},
+			});
+		});
+		assert.strictEqual(attempts, 2);
+		assert.doesNotMatch(out.errors, /Destroy stopped/);
+	});
+
+	it('reads the throttle from the inspected report, without a second scan', async () => {
+		let throttleChecks = 0;
+		const sleeps: number[] = [];
+		let attempts = 0;
+		await captureConsole(async () => {
+			await runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					if (attempts < 2) throw new Error('DELETE_FAILED');
+				},
+				listStackNames: () => ['app'],
+				emptyBuckets: async () => {},
+				isThrottled: async () => {
+					throttleChecks++;
+					return false;
+				},
+				inspectAttempt: async () => ({
+					failed: [{ ...subnetFailed, type: 'AWS::ApiGateway::RestApi', reason: 'Too Many Requests' }],
+					retained: [],
+				}),
+				sleep: async (ms) => {
+					sleeps.push(ms);
+				},
+				random: () => 0.5,
+				now: () => 0,
+			});
+		});
+		assert.strictEqual(throttleChecks, 0);
+		assert.deepStrictEqual(sleeps, [45_000]);
+	});
+
+	it('falls back to isThrottled when the attempt cannot be inspected', async () => {
+		let throttleChecks = 0;
+		let attempts = 0;
+		await captureConsole(async () => {
+			await runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					if (attempts < 2) throw new Error('DELETE_FAILED');
+				},
+				listStackNames: () => ['app'],
+				emptyBuckets: async () => {},
+				isThrottled: async () => {
+					throttleChecks++;
+					return false;
+				},
+				inspectAttempt: async () => {
+					throw new Error('AccessDenied');
+				},
+				sleep: async () => {},
+			});
+		});
+		assert.strictEqual(throttleChecks, 1);
+	});
+
 	it('still uses the throttle backoff for a throttled failure, even with a retained resource', async () => {
 		let attempts = 0;
 		const sleeps: number[] = [];
@@ -254,6 +364,33 @@ describe('runDestroyWithRetries (retained resources)', () => {
 		assert.match(out.logs, /keep running, and are billed, until you delete them/);
 	});
 
+	it('passes the stack ids captured before the first attempt, and warns about a stack it could not read', async () => {
+		const ids = new Map([['app', 'arn:app']]);
+		const seen: unknown[] = [];
+		let captures = 0;
+		const out = await captureConsole(async () => {
+			await runDestroyWithRetries({
+				runDestroy: () => {},
+				listStackNames: () => ['app', 'other'],
+				emptyBuckets: async () => {},
+				captureStackIds: async () => {
+					captures++;
+					return ids;
+				},
+				inspectAttempt: async (_names, _since, _prev, stackIds) => {
+					seen.push(stackIds);
+					return { failed: [], retained: [cluster], unread: ['other'] };
+				},
+				reportRetained: true,
+				sleep: async () => {},
+			});
+		});
+		assert.strictEqual(captures, 1);
+		assert.deepStrictEqual(seen, [ids]);
+		assert.match(out.warns, /could not read delete events for stack other; retained-resource summary unavailable/);
+		assert.match(out.logs, /Kept 1 resource/);
+	});
+
 	it('prints no retained summary when nothing was retained, or without reportRetained', async () => {
 		for (const reportRetained of [true, false]) {
 			const out = await captureConsole(async () => {
@@ -295,6 +432,7 @@ describe('destroy call sites (retained resources)', () => {
 		const production = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {});
 		assert.strictEqual(production.inspectAttempt, inspectDestroyAttempt);
 		assert.strictEqual(production.reportRetained, true);
+		assert.strictEqual(typeof production.captureStackIds, 'function');
 	});
 
 	it('assemblyStackNames reads a fresh assembly from the cdk.json output directory, and ignores a stale one', () => {
@@ -382,6 +520,11 @@ function fakeCfn(eventsByStack: Record<string, FakeEvent[]>, deleted: Record<str
 	const calls: string[] = [];
 	const send = async (cmd: { constructor: { name: string }; input: { StackName?: string } }) => {
 		calls.push(`${cmd.constructor.name}:${cmd.input.StackName ?? ''}`);
+		if (cmd.constructor.name === 'DescribeStacksCommand') {
+			const name = cmd.input.StackName ?? '';
+			if (!eventsByStack[name] || deleted[name]) throw new Error(`Stack with id ${name} does not exist`);
+			return { Stacks: [{ StackName: name, StackId: `id-${name}` }] };
+		}
 		if (cmd.constructor.name === 'ListStacksCommand') {
 			return {
 				StackSummaries: Object.entries(deleted).map(([name, when]) => ({
@@ -434,7 +577,26 @@ describe('inspectStackDelete', () => {
 
 	it('ignores an earlier deletion of a stack with the same name', async () => {
 		const { cfn } = fakeCfn({ s: deleteEvents(-60, 'complete') }, { s: at(-40) });
-		assert.deepStrictEqual(await inspectStackDelete(cfn, ['s'], SINCE), { failed: [], retained: [] });
+		assert.deepStrictEqual(await inspectStackDelete(cfn, ['s'], SINCE), {
+			failed: [],
+			retained: [],
+			unread: ['s'],
+		});
+	});
+
+	it('reads a deleted stack by the id captured before the destroy, without ListStacks', async () => {
+		const { cfn, calls } = fakeCfn({ s: deleteEvents(1, 'complete') }, { s: at(21) });
+		const report = await inspectStackDelete(cfn, ['s'], SINCE, undefined, new Map([['s', 'id-s']]));
+		assert.deepStrictEqual(
+			report.retained.map((r) => r.logicalId),
+			['Cluster'],
+		);
+		assert.deepStrictEqual(calls, ['DescribeStackEventsCommand:id-s']);
+	});
+
+	it('describeStackIds records the ids of the stacks that exist', async () => {
+		const { cfn } = fakeCfn({ s: deleteEvents(1, 'failed') });
+		assert.deepStrictEqual([...(await describeStackIds(cfn, ['s', 'gone']))], [['s', 'id-s']]);
 	});
 
 	it("ignores events from before this attempt's start", async () => {
