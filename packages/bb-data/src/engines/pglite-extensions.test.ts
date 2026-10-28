@@ -3,7 +3,31 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { resolveExtensions } from './pglite-extensions.js';
+import { readFileSync } from 'node:fs';
+import { installCommandFor, resolveExtensions } from './pglite-extensions.js';
+
+// dist/engines/*.test.js -> package root
+const pkgRoot = new URL('../../', import.meta.url);
+const pkgJson = JSON.parse(readFileSync(new URL('package.json', pkgRoot), 'utf8')) as {
+  peerDependencies: Record<string, string>;
+};
+const readme = readFileSync(new URL('README.md', pkgRoot), 'utf8');
+
+test('install commands are pinned to the exact peerDependencies versions', () => {
+  for (const [name, pkg] of [
+    ['postgis', '@electric-sql/pglite-postgis'],
+    ['pgvector', '@electric-sql/pglite-pgvector'],
+    ['vector', '@electric-sql/pglite-pgvector'],
+  ] as const) {
+    const peer = pkgJson.peerDependencies[pkg];
+    assert.ok(peer, `expected ${pkg} in peerDependencies`);
+    const cmd = `npm install ${pkg}@${peer}`;
+    assert.strictEqual(installCommandFor(name), cmd);
+    // README advertises the same pinned command, so docs and error cannot drift.
+    assert.ok(readme.includes(cmd), `README should contain \`${cmd}\``);
+  }
+  assert.strictEqual(installCommandFor('nosuchext'), null);
+});
 
 test('resolveExtensions returns empty object for undefined', async () => {
   assert.deepStrictEqual(await resolveExtensions(undefined), {});

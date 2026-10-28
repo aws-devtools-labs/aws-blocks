@@ -367,8 +367,12 @@ const db = new Database(scope, 'main', {
   unchanged across environments.
 - **Opt-in install.** Each extension ships as its own package, installed only if
   you declare it:
-  - `postgis` → `npm install @electric-sql/pglite-postgis`
-  - `pgvector` → `npm install @electric-sql/pglite-pgvector`
+  - `postgis` → `npm install @electric-sql/pglite-postgis@0.2.11`
+  - `pgvector` → `npm install @electric-sql/pglite-pgvector@0.0.12`
+
+  Install the exact version shown: `bb-data` peer-pins it, and each extension
+  release pins its own `@electric-sql/pglite` version, so an unpinned install can
+  pull a release that conflicts with the `pglite` version `bb-data` uses.
 
   If a declared extension's package is missing (or the name is unknown), the
   first database interaction fails with an actionable error — the exact install

@@ -22,6 +22,13 @@ import type { Extension, Extensions } from '@electric-sql/pglite';
 interface ExtensionSpec {
   /** The optional peer package that ships the PGlite build of the extension. */
   pkg: string;
+  /**
+   * The exact version bb-data peer-pins for `pkg` (must match `peerDependencies`
+   * in package.json). Each extension release peer-pins an exact
+   * `@electric-sql/pglite`, so the install command must carry this version or it
+   * can float onto a release whose pglite peer conflicts with bb-data's pin.
+   */
+  version: string;
   /** The named export to pull from that package. */
   exportName: string;
   /** The namespace key PGlite exposes the extension under. */
@@ -34,11 +41,21 @@ interface ExtensionSpec {
  * `vector`) and normalizes them to one spec.
  */
 const SUPPORTED_EXTENSIONS: Record<string, ExtensionSpec> = {
-  postgis: { pkg: '@electric-sql/pglite-postgis', exportName: 'postgis', namespace: 'postgis' },
-  pgvector: { pkg: '@electric-sql/pglite-pgvector', exportName: 'vector', namespace: 'vector' },
+  postgis: { pkg: '@electric-sql/pglite-postgis', version: '0.2.11', exportName: 'postgis', namespace: 'postgis' },
+  pgvector: { pkg: '@electric-sql/pglite-pgvector', version: '0.0.12', exportName: 'vector', namespace: 'vector' },
   // Alias: PGlite exposes pgvector under the `vector` namespace, so accept it too.
-  vector: { pkg: '@electric-sql/pglite-pgvector', exportName: 'vector', namespace: 'vector' },
+  vector: { pkg: '@electric-sql/pglite-pgvector', version: '0.0.12', exportName: 'vector', namespace: 'vector' },
 };
+
+/**
+ * The pinned `npm install` command for a supported extension name, or `null`
+ * for an unknown name. Exported for tests that keep it in lockstep with the
+ * `peerDependencies` pins.
+ */
+export function installCommandFor(name: string): string | null {
+  const spec = SUPPORTED_EXTENSIONS[name.trim().toLowerCase()];
+  return spec ? `npm install ${spec.pkg}@${spec.version}` : null;
+}
 
 /** The user-facing names we accept, for error messages. */
 function supportedNames(): string[] {
@@ -89,7 +106,7 @@ export async function resolveExtensions(
       if (isModuleNotFound(error)) {
         throw new Error(
           `Database extension '${name}' requires the '${spec.pkg}' package, which is not installed. ` +
-            `Install it with:\n\n  npm install ${spec.pkg}\n`,
+            `Install it with:\n\n  npm install ${spec.pkg}@${spec.version}\n`,
         );
       }
       throw error;

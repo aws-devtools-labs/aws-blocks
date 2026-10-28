@@ -74,8 +74,11 @@ export class LazyEngine implements DatabaseEngine {
   async destroy(): Promise<void> {
     // Only tear down if the engine was actually resolved; a Database that
     // declared extensions but was never used has nothing to close.
-    if (this.resolved) {
-      await (await this.resolved).destroy();
-    }
+    if (!this.resolved) return;
+    // A memoized factory rejection (e.g. a missing extension package) already
+    // surfaced on the first interaction; there is no engine to close, so
+    // teardown is a clean no-op instead of re-throwing the config error.
+    const engine = await this.resolved.catch(() => null);
+    if (engine) await engine.destroy();
   }
 }
