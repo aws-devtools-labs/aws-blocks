@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import assert from 'node:assert';
 import { resolveStampedVersions, stampBlocksVersions } from './index.js';
 
@@ -104,6 +104,20 @@ describe('create-blocks-app stamped package inventory', () => {
         if (!name.startsWith('@aws-blocks/')) continue;
         assert.ok(cliDevDeps[name], `${manifest} writes ${name}, so create-blocks-app must list it as a devDependency`);
       }
+    }
+  });
+
+  it('keeps @aws-blocks/* out of the aws-blocks/ workspace of every non-overlay template', () => {
+    // The add-to-existing path copies templates/<name>/aws-blocks/ verbatim and
+    // stamps only the root manifest, so a dependency declared there would ship as
+    // `*`. (The Amplify overlay's workspace is stamped on its own path.)
+    const templatesDir = join(PKG_DIR, 'templates');
+    for (const name of readdirSync(templatesDir)) {
+      const workspace = join(templatesDir, name, 'aws-blocks', 'package.json');
+      if (name === 'amplify' || !existsSync(workspace)) continue;
+      const pkg = readManifest(workspace);
+      const blocksDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).filter((d) => d.startsWith('@aws-blocks/'));
+      assert.deepStrictEqual(blocksDeps, [], `${workspace} must not declare @aws-blocks/* dependencies`);
     }
   });
 
