@@ -11,7 +11,9 @@ import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { assemblyStackNames, productionDestroyDeps } from './destroy.js';
 import {
 	type DestroyAttemptReport,
+	DestroyStoppedError,
 	describeStackIds,
+	endStoppedDestroy,
 	inspectDestroyAttempt,
 	inspectStackDelete,
 	isDependencyReason,
@@ -159,12 +161,21 @@ describe('runDestroyWithRetries (retained resources)', () => {
 						steps.push('sleep');
 					},
 				}),
-				/DELETE_FAILED/,
+				(e: unknown) => {
+					// The dedicated error, not the attempt's error rethrown.
+					assert.ok(e instanceof DestroyStoppedError);
+					assert.strictEqual(e.message, 'DELETE_FAILED');
+					assert.strictEqual((e.cause as Error).message, 'DELETE_FAILED');
+					assert.ok(!Object.keys(e).includes('cause'));
+					return true;
+				},
 			);
 		});
 		assert.strictEqual(attempts, 1);
 		assert.deepStrictEqual(steps, []);
 		assert.match(out.errors, /Destroy stopped/);
+		// The summary is the only thing printed.
+		assert.strictEqual(out.errors.match(/DELETE_FAILED/g), null);
 		assert.match(out.errors, /app\/mainVpcisolatedSubnet1 \(AWS::EC2::Subnet\) subnet-0abc: The subnet/);
 		assert.match(
 			out.errors,
@@ -421,6 +432,30 @@ describe('runDestroyWithRetries (retained resources)', () => {
 			});
 		});
 		assert.match(out.logs, /destroyed!/);
+	});
+});
+
+describe('endStoppedDestroy', () => {
+	it('ends a stopped destroy with exit code 1 and no rethrow; other errors are rethrown unchanged', async () => {
+		const saved = process.exitCode;
+		try {
+			process.exitCode = undefined;
+			await endStoppedDestroy(async () => {
+				throw new DestroyStoppedError(new Error('npx cdk destroy --force exited with code 1'));
+			});
+			assert.strictEqual(process.exitCode, 1);
+			process.exitCode = undefined;
+			const other = new Error('npx cdk destroy --force exited with code 1');
+			await assert.rejects(
+				endStoppedDestroy(async () => {
+					throw other;
+				}),
+				(e) => e === other,
+			);
+			assert.strictEqual(process.exitCode, undefined);
+		} finally {
+			process.exitCode = saved;
+		}
 	});
 });
 

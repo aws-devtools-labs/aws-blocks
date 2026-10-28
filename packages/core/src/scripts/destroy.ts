@@ -6,7 +6,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { captureStackIds, inspectDestroyAttempt } from './destroy-retained.js';
+import { captureStackIds, endStoppedDestroy, inspectDestroyAttempt } from './destroy-retained.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { runSync } from './run-command.js';
 import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
@@ -74,7 +74,8 @@ export function assemblyStackNames(projectRoot: string, notBeforeMs: number): st
 }
 
 export async function destroy(options: DestroyOptions) {
-  return trackCommand('destroy', async () => {
+  // A stopped destroy (retained resources) ends with its summary and exit code 1.
+  return endStoppedDestroy(() => trackCommand('destroy', async () => {
     console.log('🗑️  Destroying production stack...');
 
     // Fail fast on a missing/expired credential BEFORE entering the retry loop:
@@ -101,7 +102,7 @@ export async function destroy(options: DestroyOptions) {
     // using a subnet being deleted) stops at once instead, and a successful
     // destroy lists the resources it retained.
     await runDestroyWithRetries(productionDestroyDeps(options, cdkEnv));
-  });
+  }));
 }
 
 /**

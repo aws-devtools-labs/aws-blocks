@@ -20,6 +20,8 @@ import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 import {
 	type DestroyAttemptReport,
+	DestroyStoppedError,
+	endStoppedDestroy,
 	formatRetainedDependencyFailure,
 	formatRetainedSummary,
 	inspectDestroyAttempt,
@@ -851,8 +853,8 @@ export interface DestroyRetryDeps {
  * `inspectAttempt` shows that every failed resource is still used by something
  * and the app retains a resource that holds network interfaces (e.g. an Aurora
  * cluster with a `retain` removal policy still sitting in the subnets being
- * deleted), the loop prints what failed and what was retained, and throws
- * without emptying buckets or waiting. With `reportRetained`, a successful
+ * deleted), the loop prints what failed and what was retained, and throws a
+ * {@link DestroyStoppedError} without emptying buckets or waiting. With `reportRetained`, a successful
  * destroy prints the resources it retained.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
@@ -917,7 +919,9 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				// needs to remove, so a retry fails the same way. Stop now.
 				if (isRetainedDependencyFailure(sofar)) {
 					console.error(formatRetainedDependencyFailure(sofar));
-					throw error;
+					// The summary says it all: the destroy commands end on this
+					// error with a non-zero exit code and no further output.
+					throw new DestroyStoppedError(error);
 				}
 			}
 			let delayMs: number | undefined;
@@ -984,7 +988,8 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 }
 
 export async function destroySandbox(backendPath: string) {
-  return trackCommand('sandbox:destroy', async () => {
+  // A stopped destroy (retained resources) ends with its summary and exit code 1.
+  return endStoppedDestroy(() => trackCommand('sandbox:destroy', async () => {
     console.log("🗑️  Destroying sandbox...");
 
     // Fail fast on a missing/expired credential BEFORE the retry loop: a
@@ -1000,7 +1005,7 @@ export async function destroySandbox(backendPath: string) {
 
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv));
-  });
+  }));
 }
 
 /**

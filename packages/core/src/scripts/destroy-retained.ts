@@ -136,6 +136,38 @@ export function formatRetainedDependencyFailure(report: DestroyAttemptReport): s
 	].join('\n');
 }
 
+/**
+ * Thrown by {@link runDestroyWithRetries} when it stops on a failure a retained
+ * resource causes, after printing {@link formatRetainedDependencyFailure}. The
+ * destroy commands end on it with a non-zero exit code and nothing more (see
+ * {@link endStoppedDestroy}): cdk already streamed its own error during the
+ * attempt, and the summary says what to do. `message` is the failed attempt's,
+ * so telemetry still classifies it as a destroy failure; the attempt's error
+ * is kept as a non-enumerable `cause`.
+ */
+export class DestroyStoppedError extends Error {
+	constructor(cause: unknown) {
+		super(cause instanceof Error ? cause.message : String(cause));
+		this.name = 'DestroyStoppedError';
+		Object.defineProperty(this, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	}
+}
+
+/**
+ * Run a destroy command, ending a {@link DestroyStoppedError} with
+ * `process.exitCode = 1` instead of rethrowing it: its summary is already
+ * printed, and the scaffolded destroy scripts would otherwise print the error
+ * again with its stack. Every other error is rethrown unchanged.
+ */
+export async function endStoppedDestroy(run: () => Promise<void>): Promise<void> {
+	try {
+		await run();
+	} catch (e) {
+		if (!(e instanceof DestroyStoppedError)) throw e;
+		process.exitCode = 1;
+	}
+}
+
 /** The summary printed after a successful destroy that retained resources. */
 export function formatRetainedSummary(retained: StackResourceRef[]): string {
 	return [
