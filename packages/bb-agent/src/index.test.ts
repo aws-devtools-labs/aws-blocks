@@ -125,6 +125,24 @@ describe('classifyModelAccessError', () => {
 		assert.strictEqual(classifyModelAccessError(otherStatus), undefined);
 	});
 
+	test('classifies the use-case refusal Bedrock reports as ResourceNotFoundException (HTTP 404)', () => {
+		// The shape Bedrock returns from ConverseStream on a new account, wrapped the way Strands wraps it.
+		const notFound = Object.assign(named('ResourceNotFoundException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 404 } });
+		assert.match(classifyModelAccessError(new Error('Model stream failed', { cause: notFound }), 'global.anthropic.claude-sonnet-4-6') ?? '', /first-time-use form/);
+		// Either signal is enough on its own.
+		assert.match(classifyModelAccessError(named('ResourceNotFoundException', FIRST_TIME_USE)) ?? '', /first-time-use form/);
+		const status404 = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 404 } });
+		assert.match(classifyModelAccessError(status404) ?? '', /first-time-use form/);
+	});
+
+	test('leaves a not-found error unclassified unless it carries the use-case wording', () => {
+		const genericNotFound = Object.assign(named('ResourceNotFoundException', 'Model not found'), { $metadata: { httpStatusCode: 404 } });
+		assert.strictEqual(classifyModelAccessError(new Error('Model stream failed', { cause: genericNotFound })), undefined);
+		// A 404 does not admit the other refusals: their wording is only trusted on an access refusal.
+		assert.strictEqual(classifyModelAccessError(named('ResourceNotFoundException', MARKETPLACE_NOT_SUBSCRIBED)), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ResourceNotFoundException', NOT_ENTITLED)), undefined);
+	});
+
 	test('names only the resource part of an ARN model id, not the account id', () => {
 		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz');
 		assert.ok(message, 'should classify');
