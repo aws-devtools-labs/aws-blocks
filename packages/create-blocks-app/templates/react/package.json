@@ -44,7 +44,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.7.0",
     "typescript": "^5.9.3",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
     "aws-cdk": "^2.1145.0",
