@@ -4,12 +4,13 @@
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
+import { excludeBackendFromFrontendTsconfigs } from './tsconfig-exclude.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -116,6 +117,26 @@ async function copySharedResources(targetDir: string): Promise<void> {
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
+
+/**
+ * The frontend reads the backend's generated types (`aws-blocks/.types/`)
+ * through the `aws-blocks` package. A frontend tsconfig whose `include` also
+ * covers `aws-blocks/` (Next.js's `**\/*.ts`, or no `include` at all) would
+ * still typecheck the backend source with frontend settings, so exclude it.
+ * Edits the user's file in place, keeping its comments; prints a manual step
+ * when it can't.
+ */
+function excludeBackendFromFrontend(targetDir: string): void {
+  for (const result of excludeBackendFromFrontendTsconfigs(targetDir)) {
+    const name = relative(targetDir, result.file) || result.file;
+    if (result.status === 'updated') {
+      console.log(`  ✓ Excluded aws-blocks/ in ${name}`);
+    } else if (result.status === 'manual') {
+      console.log(`  ⚠ Could not edit ${name} (${result.reason}).`);
+      console.log('    Add "aws-blocks" to its "exclude" so the frontend uses the generated backend types.');
+    }
+  }
+}
 
 /**
  * Adds the aws-blocks workspace to an existing project's package.json.
@@ -417,6 +438,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -483,6 +505,8 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     }
   }
 
+  excludeBackendFromFrontend(targetDir);
+
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
     deps: { '@aws-blocks/blocks': '*' },
@@ -499,7 +523,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       'blocks:stop': 'tsx aws-blocks/scripts/stop.ts',
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
     },
-    gitignoreEntries: ['.blocks-sandbox'],
+    gitignoreEntries: ['.blocks-sandbox', 'aws-blocks/.types/'],
     skipInstall,
   });
 
@@ -601,6 +625,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
@@ -644,6 +669,8 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     console.log('  ⚠ cdk.json already exists, skipping');
   }
 
+  excludeBackendFromFrontend(targetDir);
+
   // 3. Add Blocks workspace (package.json, .gitignore, deps, install).
   // Source devDeps versions from the template's package.json — single source of truth.
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
@@ -666,7 +693,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'dev:server': 'tsx watch aws-blocks/scripts/server.ts',
       'dev:stop': 'tsx aws-blocks/scripts/stop.ts',
     },
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json'],
+    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/.types/', 'aws-blocks/blocks.spec.json'],
     skipInstall,
   });
 

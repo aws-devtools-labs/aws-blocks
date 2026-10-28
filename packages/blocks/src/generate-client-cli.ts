@@ -27,12 +27,18 @@
  * For a TypeScript foundation the worker is loaded with `--import tsx`. Like
  * `blocks-generate-spec`, tsx is expected from the consuming app's
  * devDependencies rather than bundled here, keeping the runtime path JS-only.
+ *
+ * After `client.js`, it also writes the backend's declaration files
+ * (`aws-blocks/.types/`) when the workspace's `exports["."].types` points at
+ * them, using the app's own `typescript`. Type errors in the backend fail the
+ * command so a build never continues with stale types.
  */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, isAbsolute } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { generateBackendTypes } from '@aws-blocks/core/scripts/generate-types';
 
 const require = createRequire(import.meta.url);
 
@@ -83,3 +89,17 @@ if (result.status !== 0) {
 }
 
 console.log(`blocks-generate-client: wrote ${outputPath}`);
+
+// Backend declaration files for the frontend's typed import (see
+// `generateBackendTypes`). Skipped for workspaces that still point
+// `exports["."].types` at their source. A failure exits non-zero: this runs as
+// `prebuild`, and a build must not continue with missing or stale types.
+const types = await generateBackendTypes(dirname(foundationPath));
+if (types.status === 'failed') {
+	console.error(`blocks-generate-client: backend types not written: ${types.message}`);
+	if (types.diagnostics) console.error(types.diagnostics);
+	process.exit(1);
+}
+if (types.status === 'written') {
+	console.log(`blocks-generate-client: wrote ${types.outFile}`);
+}

@@ -61,6 +61,7 @@
     },
     "./scripts": "./dist/scripts/index.js",
     "./scripts/generate-client-worker": "./dist/scripts/generate-client-worker.js",
+    "./scripts/generate-types": "./dist/scripts/generate-types.js",
     "./db-naming": {
       "types": "./dist/db-naming.d.ts",
       "default": "./dist/db-naming.js"
