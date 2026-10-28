@@ -214,7 +214,8 @@ async function copySharedResources(targetDir: string): Promise<void> {
  * - Patching .gitignore
  * - Monorepo detection and file: path rewriting
  * - Stamping `*` placeholders for `@aws-blocks/*` deps with the CLI's ranges
- *   (published CLI only; a range the project already declares is kept)
+ *   (published CLI only; a range the project already lists in `dependencies`
+ *   is kept)
  * - Running npm install
  */
 async function addBlocksWorkspace(targetDir: string, options: {
@@ -736,6 +737,11 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
+  // From the published CLI, check the `@aws-blocks/*` placeholder below has a
+  // range before anything is written (addBlocksWorkspace stamps it later).
+  const blocksDeps = { '@aws-blocks/blocks': '*' };
+  if (!(await isLocalMonorepo())) stampBlocksVersions({ ...blocksDeps }, await loadStampedVersions());
+
   // 1. Copy aws-blocks/ from the requested template so framework-specific files
   // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
   // user's project.
@@ -775,7 +781,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const tplDevDeps = templatePkg.devDependencies || {};
   await addBlocksWorkspace(targetDir, {
     // `*` is a placeholder: addBlocksWorkspace stamps it with the CLI's range.
-    deps: { '@aws-blocks/blocks': '*' },
+    deps: blocksDeps,
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',

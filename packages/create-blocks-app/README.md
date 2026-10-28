@@ -147,7 +147,7 @@ Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into 
 }
 ```
 
-A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.8.x` → `0.9.0`) is a new, breaking release line, and your app moves to it only when you edit the range. If you add Blocks to an existing project that already declares one of these packages, your range is kept.
+A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.8.x` → `0.9.0`) is a new, breaking release line, and your app moves to it only when you edit the range. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept.
 
 Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-blocks/*` package with a caret range for the version you have installed (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
 

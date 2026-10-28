@@ -529,6 +529,14 @@ describe("verify-scaffolder: a new release line for a stamped package needs a CL
 		assert.equal(status, 0, output);
 	});
 
+	it("passes on a minor for a stamped package already past 1.0, which the caret admits", (t) => {
+		const dir = baseRepo(t, { "packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED, { version: "1.2.0" }) });
+		commitPr(dir, { ".changeset/kv-feature.md": changeset({ [OTHER_STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
 	it("passes on a new line for a package the CLI does not stamp", (t) => {
 		const dir = baseRepo(t);
 		commitPr(dir, { ".changeset/break-core.md": changeset({ [NOT_STAMPED]: "minor" }) });
@@ -609,6 +617,28 @@ describe("verify-scaffolder: the release PR, read from the version diff", () => 
 
 		const { status, output } = guard(dir, "verify-scaffolder");
 		assert.equal(status, 0, output);
+	});
+
+	it("skips a stamped package that did not exist at the merge base", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"packages/bb-new/package.json": pkgJson("@aws-blocks/bb-new", { version: "0.3.0" }),
+			"packages/create-blocks-app/package.json": pkgJson(SCAFFOLDER, {
+				devDependencies: { [STAMPED]: "^0.1.0", [OTHER_STAMPED]: "^0.1.0", "@aws-blocks/bb-new": "^0.3.0" },
+			}),
+		});
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("fails loudly when a stamped package.json cannot be parsed at the merge base", (t) => {
+		const dir = baseRepo(t, { "packages/bb-kv-store/package.json": "{ not json" });
+		commitPr(dir, { "packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /Cannot parse packages\/bb-kv-store\/package\.json at the merge base/);
 	});
 });
 
