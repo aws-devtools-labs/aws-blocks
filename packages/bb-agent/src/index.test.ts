@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
 import { checkModelHealth } from './model-factory.js';
+import { _setMantleResolverForTest } from './mantle.js';
 import { z } from 'zod';
 import { createStrandsModel } from './model-factory.js';
 
@@ -1492,6 +1493,31 @@ describe('model-factory', () => {
 			if (original) process.env.OPENAI_API_KEY = original;
 		}
 	});
+
+	test('openai-api on a Bedrock Mantle endpoint needs neither apiKey nor OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			// Keys are minted lazily per request, so building the model touches no credentials.
+			const model = await createStrandsModel({ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' });
+			assert.ok(model);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
+
+	test('openai-api on a Mantle lookalike host still requires apiKey or OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			await assert.rejects(
+				() => createStrandsModel({ provider: 'openai-api', modelId: 'm', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig,
+			);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
 });
 
 // ── useChat ──────────────────────────────────────────────────────────────────
@@ -2387,6 +2413,45 @@ describe('checkModelHealth', () => {
 	test('bedrock global inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'Global Claude Opus' }) };
 		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, undefined, mockClient), true);
+	});
+
+	describe('Bedrock Mantle endpoint', () => {
+		const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+		const originalFetch = globalThis.fetch;
+		const originalKey = process.env.OPENAI_API_KEY;
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+			if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = originalKey;
+			_setMantleResolverForTest('us-east-1', undefined);
+		});
+
+		test('returns false and warns when a key cannot be minted', async () => {
+			_setMantleResolverForTest('us-east-1', async () => { throw new Error('no credentials'); });
+			const warnings: string[] = [];
+			const warnLog = { ...log, warn: (msg: string) => { warnings.push(msg); } };
+			let fetched = false;
+			globalThis.fetch = (async () => { fetched = true; return new Response('{}'); }) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0], /Bedrock API key/);
+			assert.strictEqual(fetched, false, 'no request without a key');
+		});
+
+		test('sends the minted key, not OPENAI_API_KEY, and finds the model', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-test');
+			const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+			globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+				return new Response(JSON.stringify({ data: [{ id: 'openai.gpt-oss-120b' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, log), true);
+			assert.strictEqual(calls.length, 1);
+			assert.strictEqual(calls[0].url, 'https://bedrock-mantle.us-east-1.api.aws/v1/models');
+			assert.strictEqual(calls[0].headers.Authorization, 'Bearer bedrock-api-key-test');
+		});
 	});
 
 	test('openai-api with unreachable endpoint returns false', async () => {

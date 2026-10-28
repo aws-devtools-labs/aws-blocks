@@ -10,6 +10,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
+import { parseMantleRegion } from './mantle.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
 import { BB_NAME } from './version.js';
@@ -77,14 +78,43 @@ export class Agent extends BuildingBlockScope {
 		// Bedrock evaluates `ModelConfig.guardrail` on each model call, which needs ApplyGuardrail on
 		// that guardrail. Granted per guardrail (never a wildcard) to the role the loop runs as.
 		const deployed = config?.model?.deployed;
+		const deployedModels = Array.isArray(deployed) ? deployed : deployed ? [deployed] : [];
 		const guardrailArns = [...new Set(
-			(Array.isArray(deployed) ? deployed : deployed ? [deployed] : [])
+			deployedModels
 				.flatMap((m) => (m.provider === 'bedrock' && m.guardrail ? [m.guardrail.identifier] : []))
 				.map((id) => (id.startsWith('arn:') ? id : cdk.Stack.of(this).formatArn({ service: 'bedrock', resource: 'guardrail', resourceName: id }))),
 		)];
 		if (guardrailArns.length > 0) {
 			this.executionRole.addToPrincipalPolicy(
 				new iam.PolicyStatement({ actions: ['bedrock:ApplyGuardrail'], resources: guardrailArns }),
+			);
+		}
+
+		// An `openai-api` model on a Bedrock Mantle endpoint without an explicit `apiKey` calls Mantle
+		// with short-term Bedrock API keys minted from the role the loop runs as, so that role needs
+		// the Mantle inference actions (scoped to the endpoint's region) and CallWithBearerToken
+		// (a permission-only action that supports only Resource "*"). An explicit `apiKey` carries
+		// its own identity and needs no grant on the role.
+		const mantleRegions = [...new Set(
+			deployedModels.flatMap((m) => {
+				const region = m.provider === 'openai-api' && m.apiKey === undefined ? parseMantleRegion(m.endpoint) : undefined;
+				return region ? [region] : [];
+			}),
+		)];
+		if (mantleRegions.length > 0) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:ListModels', 'bedrock-mantle:GetModel'],
+					resources: mantleRegions.map((region) => cdk.Stack.of(this).formatArn({ service: 'bedrock-mantle', region, resource: 'project', resourceName: '*' })),
+				}),
+			);
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['bedrock-mantle:CallWithBearerToken'],
+					resources: ['*'],
+					// The agent only mints short-term keys.
+					conditions: { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } },
+				}),
 			);
 		}
 	}

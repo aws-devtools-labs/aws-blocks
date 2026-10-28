@@ -16,8 +16,19 @@ export interface ModelConfig {
 	 */
 	provider: 'bedrock' | 'openai-api' | 'canned';
 	modelId?: string;
+	/**
+	 * Base URL of the OpenAI-compatible API for the `openai-api` provider (e.g. `http://localhost:11434/v1`).
+	 * For Amazon Bedrock Mantle, use `https://bedrock-mantle.<region>.api.aws/v1` (some model lines use `/openai/v1`);
+	 * only models that support the Chat Completions API work with this provider.
+	 */
 	endpoint?: string;
-	/** API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var. */
+	/**
+	 * API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var.
+	 *
+	 * For a Bedrock Mantle `endpoint`, omit it to authenticate with short-term Bedrock API keys minted from the
+	 * AWS credentials the agent runs with, refreshed automatically; `OPENAI_API_KEY` is not used for Mantle. The
+	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An explicit key takes precedence.
+	 */
 	apiKey?: string | (() => Promise<string>);
 	/**
 	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.

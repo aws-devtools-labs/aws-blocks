@@ -201,7 +201,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `provider` | `'bedrock' \| 'openai-api' \| 'canned'` | Model provider. |
 | `modelId` | `string` | Model ID. Required for bedrock and openai-api. |
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
-| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. |
+| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](#bedrock-via-mantle) endpoint, omit it to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
 | `cannedResponses` | `Record<string, string> \| string` | Canned-provider response dictionary, or path to a JSON dictionary. Ignored by real model providers. |
 | `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](#bedrock-guardrails). |
@@ -383,6 +383,21 @@ model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-opus-4-8
 #### Bedrock via Mantle
 
 Amazon Bedrock exposes an OpenAI-compatible endpoint via [Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html). Use it with `provider: 'openai-api'` and set the endpoint to `https://bedrock-mantle.<region>.api.aws/v1`.
+
+```typescript
+model: {
+  deployed: { provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
+}
+```
+
+When `apiKey` is omitted for a Mantle endpoint (an `https://bedrock-mantle.<region>.api.aws` URL), the agent mints short-term Bedrock API keys from the AWS credentials it runs with and refreshes them automatically before they expire, so long sessions keep working:
+
+- **Deployed**, the agent runs as the runtime role, which is granted `bedrock-mantle:CreateInference`, `bedrock-mantle:ListModels` and `bedrock-mantle:GetModel` on the endpoint region's Mantle projects, plus `bedrock-mantle:CallWithBearerToken` limited to short-term keys (`bedrock-mantle:BearerTokenType` = `SHORT_TERM`).
+- **Locally**, it uses your local AWS credentials, which need those same permissions.
+- `OPENAI_API_KEY` is not used for Mantle endpoints.
+- An explicit `apiKey` (for example a long-term Bedrock API key) still takes precedence. The deployed role is then not granted the `bedrock-mantle` permissions, since the key carries its own identity.
+
+Only models that support the Chat Completions API (`/v1/chat/completions`) work with this provider, such as the OpenAI gpt-oss models. Anthropic Claude models on Mantle support only the Messages API; use them with `provider: 'bedrock'` instead. Some model lines are served from `/openai/v1` rather than `/v1` — check the model card for the base path.
 
 ### Error Handling
 
