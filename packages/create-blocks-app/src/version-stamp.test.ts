@@ -113,7 +113,8 @@ describe('create-blocks-app stamped package inventory', () => {
     for (const [name, range] of stamped) {
       const current = readManifest(join(PACKAGES_DIR, name.replace('@aws-blocks/', ''), 'package.json'));
       assert.strictEqual(current.name, name);
-      const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range);
+      // An optional prerelease suffix keeps changesets pre mode (`^0.9.0-next.1`) working.
+      const match = /^\^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range);
       assert.ok(match, `${name}: expected a caret range, got "${range}"`);
       const [major, minor] = (current.version ?? '').split('.').map(Number);
       const line = major === 0 ? `0.${minor}` : `${major}`;

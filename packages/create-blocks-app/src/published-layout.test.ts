@@ -160,4 +160,25 @@ describe('create-blocks-app version stamping from the published package', () => 
       writeFileSync(manifestPath, original);
     }
   });
+
+  it('fails non-zero, before writing anything, when adding to an existing project without a blocks range', () => {
+    const manifestPath = join(dirname(dirname(cli)), 'package.json');
+    const original = readFileSync(manifestPath, 'utf-8');
+    const broken = readManifest(manifestPath);
+    delete broken.devDependencies?.['@aws-blocks/blocks'];
+    writeFileSync(manifestPath, JSON.stringify(broken));
+    const project = join(root, 'existing-missing-range');
+    mkdirSync(project, { recursive: true });
+    const before = JSON.stringify({ name: 'existing-missing-range', version: '1.0.0' });
+    writeFileSync(join(project, 'package.json'), before);
+    try {
+      const result = run(['.', '--yes', '--skip-install'], project);
+      assert.notStrictEqual(result.exitCode, 0, result.output);
+      assert.match(result.output, /no version to pin @aws-blocks\/blocks/);
+      assert.deepStrictEqual(readdirSync(project), ['package.json'], 'nothing else should be written');
+      assert.strictEqual(readFileSync(join(project, 'package.json'), 'utf-8'), before);
+    } finally {
+      writeFileSync(manifestPath, original);
+    }
+  });
 });

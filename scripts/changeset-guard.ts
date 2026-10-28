@@ -48,7 +48,7 @@
  *   verify-scaffolder Exit non-zero if this PR moves a package that
  *                   `@aws-blocks/create-blocks-app` stamps into new apps (each
  *                   `@aws-blocks/*` devDependency of the CLI) to a new release
- *                   line, a `minor` or `major` changeset, without any pending
+ *                   line (a `minor` before 1.0, a `major`), without any pending
  *                   changeset releasing create-blocks-app. The CLI stamps the
  *                   caret range from its own devDependencies, and a
  *                   devDependency bump never releases it (changesets assigns
@@ -536,8 +536,12 @@ function verifyScaffolder(): number {
 	const touched = getChangedChangesetFiles();
 	const withdrawnFrom = getWithdrawnFiles(pending, SCAFFOLDER_PKG);
 
+	// A new release line: any minor or major before 1.0, only a major after
+	// (the caret admits minors there), matching releaseLine().
+	const startsNewLine = (e: Entry) =>
+		e.type === "major" || (e.type === "minor" && getVersionAtHead(e.pkg.slice(SCOPE.length)).startsWith("0."));
 	const lineMoves = (entries: Entry[]) =>
-		[...new Set(entries.filter((e) => stamped.has(e.pkg) && e.type !== "patch").map((e) => e.pkg))].sort();
+		[...new Set(entries.filter((e) => stamped.has(e.pkg) && startsNewLine(e)).map((e) => e.pkg))].sort();
 
 	// As in verifyUmbrella: only this PR's own changesets trigger the check,
 	// unless this PR withdrew a create-blocks-app entry, which makes every
