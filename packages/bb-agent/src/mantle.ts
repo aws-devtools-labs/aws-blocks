@@ -157,7 +157,9 @@ export function buildMantleBearerToken(options: {
  */
 function effectiveExpiresInSeconds(requested: number | undefined, expiration: Date | undefined, now: Date): number {
 	let seconds =
-		requested !== undefined && Number.isFinite(requested) ? Math.floor(requested) : MANTLE_TOKEN_MAX_EXPIRES_IN_SECONDS;
+		requested !== undefined && Number.isFinite(requested)
+			? Math.floor(requested)
+			: MANTLE_TOKEN_MAX_EXPIRES_IN_SECONDS;
 	seconds = Math.min(seconds, MANTLE_TOKEN_MAX_EXPIRES_IN_SECONDS);
 	if (expiration) {
 		seconds = Math.min(seconds, Math.floor((expiration.getTime() - now.getTime()) / 1000));

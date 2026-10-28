@@ -154,7 +154,9 @@ describe('buildMantleBearerToken', () => {
 		const expiresOf = (token: string) => Number(/X-Amz-Expires=(\d+)/.exec(decode(token))?.[1]);
 		for (const expiresInSeconds of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
 			assert.strictEqual(
-				expiresOf(buildMantleBearerToken({ credentials, region: 'us-east-1', now: SIGNED_AT, expiresInSeconds })),
+				expiresOf(
+					buildMantleBearerToken({ credentials, region: 'us-east-1', now: SIGNED_AT, expiresInSeconds }),
+				),
 				43200,
 				String(expiresInSeconds),
 			);
