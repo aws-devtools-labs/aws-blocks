@@ -67,6 +67,12 @@ Returns `{ results: Array<{ status, messageId?, error? }> }`.
 Never throws on send failures. Both partial and total failures are reported per-entry in the
 `results` array (with `status: 'failed'`).
 
+A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
+as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
+Messages with `html` are sent in their own `SendBulkEmail` calls, before the text-only ones, so the
+order messages go out (and use up the SES sending rate) can differ from the input order; `results`
+stays in input order.
+
 Each message in the array is an `EmailMessage` (same type as `send()`):
 
 | Field | Type | Description |
@@ -77,6 +83,21 @@ Each message in the array is an `EmailMessage` (same type as `send()`):
 | `html` | `string?` | HTML body (optional) |
 | `cc` | `string[]?` | CC addresses (optional) |
 | `bcc` | `string[]?` | BCC addresses (optional) |
+
+### Input validation
+
+`send()` and `sendBatch()` validate each message the same way locally and when deployed, before
+calling SES:
+
+- every address (To, CC, BCC, `fromAddress` and `replyTo`) must be a valid email address, either
+  bare (`jane@example.com`) or with a display name made of plain words or one quoted string
+  (`Jane Doe <jane@example.com>`, `"Doe, Jane" <jane@example.com>`). The address is checked as
+  given: surrounding whitespace and control characters are rejected;
+- at most 50 recipients per message (To + CC + BCC combined);
+- at most 40 MB per message.
+
+A malformed address or too many recipients throws `InvalidInputException`; an oversized message
+throws `EmailSendFailedException`. In `sendBatch()` the message is marked `failed` instead.
 
 ## Error Handling
 
@@ -108,9 +129,16 @@ try {
 ## Local Development
 
 In local dev mode (`npm run dev`), emails are:
-- Logged to the console with format: `[Email:{id}] → recipient | Subject: ... | Body: ...`
+- Logged to the console as a block (body and HTML truncated):
+  ```
+  [Email:{id}]
+    Recipient: a@example.com, b@example.com
+    Subject:   ...
+    Body:      ...
+    HTML:      ...   (only when html is set)
+  ```
 - Persisted to `.bb-data/{fullId}/emails.json` for inspection
-- Batch sends emit a rate-limit warning (simulating SES sandbox behavior)
+- Validated with the same checks as the deployed client, so an address or message rejected locally is rejected the same way when deployed
 
 ## Package Export Conditions
 

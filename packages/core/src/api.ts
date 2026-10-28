@@ -203,8 +203,16 @@ export interface ApiNamespaceOptions {
  * ```
  * 
  * The local mock applies no auth either, so an ungated method passes every
- * local check and still ships callable by anyone. See your auth block's README
- * (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
+ * local check and still ships callable by anyone. See the `Auth` README
+ * (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+ *
+ * The functions on the handler's returned object are callable: its own
+ * enumerable properties (including spread-in ones) and, for a class instance,
+ * methods on its prototype chain (other than names `Object.prototype` defines,
+ * unless set as own properties). Members inherited from `Object.prototype`
+ * (`toString`, `hasOwnProperty`, …), `constructor`, `__proto__` and
+ * non-enumerable own properties are never endpoints — calling one returns the
+ * same "Method not found" error as an unknown name.
  * 
  * ## Context
  * 
@@ -213,7 +221,16 @@ export interface ApiNamespaceOptions {
  * - `context.request.json()` - Parse request body as JSON
  * - `context.response.headers` - Set response headers (e.g., cookies)
  * - `context.response.status` - Set HTTP status code
- * 
+ *
+ * Every `Set-Cookie` you set or append is delivered, locally and on AWS.
+ * If the method then throws, only cookies that are being **deleted**
+ * (an integer `Max-Age` of 0 or less, or an `Expires` in the past written as an
+ * IMF-fixdate such as `Thu, 01 Jan 1970 00:00:00 GMT`) are delivered with the
+ * error — so a method can reject with a 401 *and* clear a session cookie, but a
+ * method that signs a user in and then throws (e.g. a post-sign-in policy
+ * check) never hands out a live session. Other response headers are not sent
+ * with an error.
+ *
  * ## Local vs Deployed
  * 
  * - **Local**: APIs run in-process. Calls are direct function invocations.

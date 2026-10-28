@@ -7,6 +7,7 @@ import type { BlocksDefaults } from '../cdk/blocks-defaults.js';
 import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from './lambda-event-handlers.js';
 
 /** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
 const PG_APPLICATION_NAME_MAX_BYTES = 63;
@@ -56,7 +57,7 @@ export type ScopeParent = Scope | { id: string };
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
  * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Simple key-value storage (DynamoDB)
  * - **`DistributedTable`** from `@aws-blocks/bb-distributed-table` - Type-safe tables with Zod schemas, indexes, and queries (DynamoDB)
- * - **`AuthBasic`** from `@aws-blocks/bb-auth-basic` - Username/password authentication with JWT tokens and built-in UI components
+ * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
  * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
  * 
  * Read each Building Block's class and method docstrings for detailed documentation.
@@ -64,8 +65,8 @@ export type ScopeParent = Scope | { id: string };
  * ## Choosing the Right Building Block
  * 
  * **For authentication:**
- * - Use `AuthBasic` for username/password auth (includes built-in UI component)
- * - Provides JWT tokens, password hashing, and session management
+ * - Use `Auth` for every kind of sign-in: email + password, social, OIDC and SAML (includes built-in UI components)
+ * - Provides sessions, the `requireAuth` / `requireRole` guards, and sign-up / sign-in flows; see its README's "Which option and why"
  * 
  * **For data storage, choose based on your access patterns:**
  * 
@@ -128,11 +129,23 @@ export type ScopeParent = Scope | { id: string };
  * BBs that want to participate in user-agent chains must set these on their class.
  */
 export interface BuildingBlockMeta {
-	/** Short BB name used in user-agent strings, e.g. "KVStore", "AuthCognito" */
+	/** Short BB name used in user-agent strings, e.g. "KVStore", "Auth" */
 	readonly bbName: string;
 	/** Package version from the BB's own package.json (build-time generated) */
 	readonly bbVersion: string;
 }
+
+/**
+ * The Building Block registry: block names and instance counts collected as
+ * blocks are constructed, plus the deferred default block. Module-level so
+ * {@link registryEntries} / {@link mergeRegistry} can read it without being
+ * `Scope` members.
+ */
+const bbRegistry: {
+  blocks: Map<string, { version: string; count: number }>;
+  /** Deferred default block, folded in by {@link Scope.getRegisteredBlocks}. */
+  defaultBlock: { name: string; version: string } | undefined;
+} = { blocks: new Map(), defaultBlock: undefined };
 
 export class Scope {
   public readonly id: string;
@@ -143,11 +156,6 @@ export class Scope {
   /** Package version from the BB's own package.json. Set by subclass BBs. */
   readonly bbVersion?: string;
 
-  /** Static registry — collects BB names as they're instantiated */
-  private static _bbRegistry: Map<string, { version: string; count: number }> = new Map();
-
-  /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
-  private static _defaultBlock: { name: string; version: string } | undefined;
 
   /** Framework read from the synth sink for the process's telemetry event. */
   private static _framework: string | undefined;
@@ -161,8 +169,8 @@ export class Scope {
     if (options?.bbName) {
       this.bbName = options.bbName;
       this.bbVersion = options.bbVersion;
-      const existing = Scope._bbRegistry.get(options.bbName);
-      Scope._bbRegistry.set(options.bbName, {
+      const existing = bbRegistry.blocks.get(options.bbName);
+      bbRegistry.blocks.set(options.bbName, {
         version: options.bbVersion || 'unknown',
         count: (existing?.count || 0) + 1,
       });
@@ -182,7 +190,7 @@ export class Scope {
     const blocks: Array<{ name: string; version: string }> = [];
     let totalCount = 0;
     let customBlocksCount = 0;
-    for (const [name, { version, count }] of Scope._bbRegistry.entries()) {
+    for (const [name, { version, count }] of bbRegistry.blocks.entries()) {
       totalCount += count;
       if (OFFICIAL_BB_NAMES.has(name)) {
         blocks.push({ name, version });
@@ -190,8 +198,8 @@ export class Scope {
         customBlocksCount += count;
       }
     }
-    const fallback = Scope._defaultBlock;
-    if (fallback && !Scope._bbRegistry.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
+    const fallback = bbRegistry.defaultBlock;
+    if (fallback && !bbRegistry.blocks.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
       blocks.push(fallback);
       totalCount += 1;
     }
@@ -206,7 +214,7 @@ export class Scope {
    * @internal
    */
   static _setDefaultBlockForTelemetry(name: string, version: string): void {
-    Scope._defaultBlock = { name, version };
+    bbRegistry.defaultBlock = { name, version };
   }
 
   /**
@@ -225,8 +233,8 @@ export class Scope {
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
-    Scope._bbRegistry.clear();
-    Scope._defaultBlock = undefined;
+    bbRegistry.blocks.clear();
+    bbRegistry.defaultBlock = undefined;
     Scope._framework = undefined;
   }
 
@@ -240,16 +248,45 @@ export class Scope {
    * Used by Building Blocks that consume event sources (e.g., AsyncJob → SQS,
    * Realtime → API Gateway WebSocket).
    *
+   * A Cognito user pool trigger registers under `EventSourceMapping.COGNITO_USER_POOL`
+   * with the **user pool id** as `identifier` (the trigger event carries
+   * `userPoolId`, not a block id). Its handler accepts by resolving and rejects
+   * by throwing; the Lambda returns the event unchanged.
+   *
+   * **One handler per key.** A second registration for the same
+   * `{eventSource}:{identifier}` throws instead of replacing the first: every
+   * event is routed to exactly one handler, so a silent last-one-wins would let
+   * one block quietly take over another's events — for a user pool trigger,
+   * that disables the owner's check. Two blocks that both claim one queue or
+   * one pool are a configuration error. A deployed app reports it at **synth**:
+   * the CDK layer of each event-consuming block claims the same key, and the CDK
+   * `Scope` applies this rule (`cdk synth` fails). In the Lambda the error is
+   * thrown when the second block is constructed, which a synthesized app never
+   * reaches.
+   *
    * @param eventSource - Event source prefix (e.g., 'blocks.asyncjob', 'blocks.websocket').
    * @param identifier - Building Block's fullId (scope-qualified ID, e.g., 'myapp-rt').
    *                     Combined with eventSource to form the registry key '{eventSource}:{identifier}'.
    * @param handler - Async function that processes the raw Lambda event.
+   * @throws {Error} When a handler is already registered for `{eventSource}:{identifier}`
+   * (in the Lambda, when the second block is constructed; for a deployed app the
+   * CDK layer reports the same conflict at synth).
    */
   registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void {
     if (!(globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__) {
       (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = new Map<string, (record: any) => Promise<void>>();
     }
-    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__.set(`${eventSource}:${identifier}`, handler);
+    if (!(globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__) {
+      (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__ = new Map<string, string>();
+    }
+    const handlers: Map<string, (record: any) => Promise<void>> = (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    const owners: Map<string, string> = (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__;
+    const key = lambdaEventHandlerKey(eventSource, identifier);
+    if (handlers.has(key)) {
+      throw duplicateLambdaEventHandlerError(key, this.fullId, owners.get(key));
+    }
+    handlers.set(key, handler);
+    owners.set(key, this.fullId);
   }
 
   /**
@@ -316,7 +353,7 @@ export class Scope {
   /**
    * Render {@link buildUserAgentChain} as a single space-delimited string,
    * suitable for a string-typed field such as the Postgres `application_name`
-   * connection parameter (`aws-blocks/<core> bb/AuthBasic/<version> bb/Database/<version>`).
+   * connection parameter (`aws-blocks/<core> bb/Auth/<version> bb/Database/<version>`).
    *
    * Shortened here rather than left to the server: Postgres truncates an
    * over-long `application_name` by raw bytes, cutting mid-token, and preserves
@@ -387,6 +424,43 @@ function isBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
  */
 function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
+}
+
+/**
+ * Raw snapshot of the BB registry (custom BB names included), so a child
+ * process that imported the backend can hand its registrations back to the
+ * parent CLI via {@link mergeRegistry}. Local only — never sent anywhere;
+ * {@link Scope.getRegisteredBlocks} still applies the telemetry privacy filter.
+ * The default block (`Scope._setDefaultBlockForTelemetry`) is included as one
+ * instance when no constructed block has its name, the same way
+ * {@link Scope.getRegisteredBlocks} folds it in.
+ *
+ * Not re-exported from the package root.
+ * @internal
+ */
+export function registryEntries(): Array<[string, { version: string; count: number }]> {
+  const entries: Array<[string, { version: string; count: number }]> = [...bbRegistry.blocks.entries()].map(
+    ([name, entry]) => [name, { ...entry }],
+  );
+  const fallback = bbRegistry.defaultBlock;
+  if (fallback && !bbRegistry.blocks.has(fallback.name)) {
+    entries.push([fallback.name, { version: fallback.version, count: 1 }]);
+  }
+  return entries;
+}
+
+/**
+ * Merge entries produced by {@link registryEntries} (typically in another
+ * process) into this process's registry, adding instance counts.
+ *
+ * Not re-exported from the package root.
+ * @internal
+ */
+export function mergeRegistry(entries: Array<[string, { version: string; count: number }]>): void {
+  for (const [name, { version, count }] of entries) {
+    const existing = bbRegistry.blocks.get(name);
+    bbRegistry.blocks.set(name, { version, count: (existing?.count || 0) + count });
+  }
 }
 
 /**

@@ -47,7 +47,7 @@ import {
 	warnApiWafDeferredToHosting,
 	webAclArnForDistribution,
 } from './api-waf.js';
-import { registerConfig } from './config-registry.js';
+import { registerSharedConfig } from './config-registry.js';
 
 /** Construct id of the managed distribution. */
 const FRONT_DOOR_ID = 'ApiFrontDoor';
@@ -320,7 +320,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		// A `Hosting` door that serves `/aws-blocks/*` to browsers owns the origin
 		// (see `publishPublicOrigin`); this distribution then serves native clients only.
 		if (!this.owner._publicOriginPublishedByHosting) {
-			registerConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
+			registerSharedConfig(this.owner, 'BLOCKS_PUBLIC_ORIGIN', frontDoorUrl);
 		}
 	}
 }

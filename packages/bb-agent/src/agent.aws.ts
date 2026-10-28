@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import { getConfig, installClientUserAgent } from '@aws-blocks/core';
+import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -31,6 +31,11 @@ function toRuntimeSessionId(base: string): string {
  * endpoint (#120). `S3StorageImpl` is injectable so tests can assert the resulting
  * config without depending on S3Storage/AWS SDK internals; production uses the real one.
  *
+ * The bucket is addressed by the name the FileBucket registered (`getSdkIdentifiers`),
+ * which is the physical name CDK provisions — not by its `fullId`. The two differ when
+ * the `fullId` is over S3's 63 characters (e.g. a long production stack name): FileBucket
+ * then shortens it (`deriveBucketName`), and the raw `fullId` names no bucket.
+ *
  * The read paths are delegated to S3Storage UNCHANGED: a genuinely missing object
  * (the first-turn case) already comes back as `NoSuchKey`/`NoSuchBucket` → `null`
  * from S3Storage itself, which Strands' `SessionManager` treats as "start fresh".
@@ -56,7 +61,7 @@ export function createDeployedSnapshotStorage(
 	_log: ChildLogger,
 	S3StorageImpl: new (config: S3StorageConfig) => SnapshotStorage = S3Storage,
 ): SnapshotStorage {
-	return new S3StorageImpl({ bucket: bucket.fullId, region: process.env.AWS_REGION });
+	return new S3StorageImpl({ bucket: getSdkIdentifiers(bucket).bucketName, region: process.env.AWS_REGION });
 }
 
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {

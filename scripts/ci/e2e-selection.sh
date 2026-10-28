@@ -13,6 +13,9 @@
 #            in its first step
 #   run      e2e + blocked, the jobs that start at all
 #
+# sandbox-vpc is in none of them while the VPC smoke tests are switched off
+# (see below).
+#
 # An unknown job name blocks every job the changes call for. It only fails
 # this script when the changes call for none: a failure here fails E2E Sandbox
 # and E2E Production (the required ones) and skips the other E2E jobs, whereas
@@ -57,6 +60,38 @@ else
 			break
 		fi
 	done
+fi
+
+# E2E VPC Smoke has nothing to run while test-apps/vpc-smoke's sandbox script
+# only echoes: the job would install, build and redeploy the unchanged
+# persistent test VPC, holding a runner and the account's blocks-test-vpc-<n>
+# lock, and test nothing. So it is left out, also when the trailer names it,
+# until the root test:e2e:sandbox:vpc script runs anything else. A pre or post
+# hook on either script counts as running something. Before switching the
+# tests on, read the concurrency note on e2e-sandbox-vpc in pr-checks.yml.
+# Switching them on, or removing the suite, is tracked in
+# https://github.com/aws-devtools-labs/aws-blocks/issues/987. The skip is a
+# warning annotation, so a skipped E2E VPC Smoke doesn't read as a normal one.
+# Prints the script `name`, or nothing when it has a pre or post hook.
+script_without_hooks='.scripts as $s | if $s["pre" + $name] or $s["post" + $name] then "" else $s[$name] // "" end'
+vpc_root=$(jq -r --arg name test:e2e:sandbox:vpc "$script_without_hooks" package.json 2>/dev/null) || vpc_root=''
+vpc_app=$(jq -r --arg name test:e2e:sandbox "$script_without_hooks" test-apps/vpc-smoke/package.json 2>/dev/null) ||
+	vpc_app=''
+echo_only="^echo '[^']*'( && exit 0)?$"
+if [ "$vpc_root" = 'cd test-apps/vpc-smoke && npm run test:e2e:sandbox' ] && [[ $vpc_app =~ $echo_only ]] &&
+	[[ " $changed $selected " == *' sandbox-vpc '* ]]; then
+	vpc_skip="E2E VPC Smoke is left out: test-apps/vpc-smoke's tests are switched off (https://github.com/aws-devtools-labs/aws-blocks/issues/987)."
+	echo "::warning::$vpc_skip"
+	printf '%s\n\n' "$vpc_skip" >> "$GITHUB_STEP_SUMMARY"
+	without_vpc() {
+		local key out=''
+		for key in $1; do
+			[ "$key" = sandbox-vpc ] || out="$out $key"
+		done
+		echo "$out"
+	}
+	changed=$(without_vpc "$changed")
+	selected=$(without_vpc "$selected")
 fi
 
 blocked=''

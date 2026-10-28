@@ -81,6 +81,7 @@ const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js')
 const gatewayReadingBackendPath = join(__dirname, '__fixtures__', 'gateway-reading-backend.js');
 const namespaceRoutingBackendPath = join(__dirname, '__fixtures__', 'namespace-routing-backend.js');
 const reexportBackendPath = join(__dirname, '__fixtures__', 'reexport-backend.js');
+const deploymentTypeBackendPath = join(__dirname, '__fixtures__', 'deployment-type-backend.js');
 
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
@@ -457,4 +458,76 @@ describe('a namespace bound to another backend is not routed (multi-backend synt
 		await makeBackend(parent, 'BackendTwo', reexportBackendPath);
 		assert.ok(!routedPathParts(Template.fromStack(parent)).includes('reports'), "no route for 'reports'");
 	});
+});
+
+describe('AWSBlocks template metadata (BlocksStack.create)', () => {
+	before(() => delete process.env.AWS_BLOCKS_DISABLE_TEMPLATE_METADATA);
+
+	const toolsMetrics = (stack: cdk.Stack) => Template.fromStack(stack).toJSON().Metadata?.AWSToolsMetrics;
+
+	test('writes AWSBlocks by default', async () => {
+		const stack = await makeStack(new cdk.App(), 'MetadataOnStack', sideEffectBackendPath);
+		assert.match(toolsMetrics(stack)?.AWSBlocks, /^1;core=[^;]+;mode=production;bb=[^;]*;custom=\d+$/);
+	});
+
+	test('omits AWSBlocks when context blocks:template-metadata is false', async () => {
+		const app = new cdk.App({ context: { 'blocks:template-metadata': false } });
+		const stack = await makeStack(app, 'MetadataOffStack', sideEffectBackendPath);
+		assert.strictEqual(toolsMetrics(stack), undefined);
+	});
+});
+
+// create() derives the deployment type from the `sandboxMode` CDK context and
+// propagates it two ways: as a BB config entry (BLOCKS_DEPLOYMENT_TYPE, loaded
+// into process.env on deployed compute) and into this synth process's env
+// before the backend module is imported. The fixture records the env value at
+// module evaluation as a marker construct id.
+describe('deployment type propagation (synth -> runtime)', () => {
+	/** Whether the uploaded config JSON in `stack` contains `text` (Lazy source marker). */
+	const configContains = (stack: cdk.Stack, text: string): boolean =>
+		JSON.stringify(Template.fromStack(stack).findResources('Custom::CDKBucketDeployment')).includes(text);
+
+	const cases = [
+		{ name: 'sandbox context', context: { sandboxMode: 'true' }, expected: 'sandbox' },
+		{ name: 'non-sandbox context', context: {}, expected: 'production' },
+	] as const;
+
+	for (const { name, context, expected } of cases) {
+		for (const kind of ['BlocksStack', 'BlocksBackend'] as const) {
+			test(`${kind}.create() with ${name} propagates BLOCKS_DEPLOYMENT_TYPE=${expected}`, async () => {
+				const saved = process.env.BLOCKS_DEPLOYMENT_TYPE;
+				// A stale inherited value must be overwritten by the CDK context.
+				process.env.BLOCKS_DEPLOYMENT_TYPE = 'local';
+				try {
+					const app = new cdk.App({ context });
+					let scope: Construct;
+					let stack: cdk.Stack;
+					if (kind === 'BlocksStack') {
+						stack = await makeStack(app, `DeploymentType${expected}Stack`, deploymentTypeBackendPath);
+						scope = stack;
+					} else {
+						stack = new cdk.Stack(app, `DeploymentType${expected}Parent`);
+						// Distinct id per case: the backend import is cache-busted by id.
+						scope = await makeBackend(stack, `Blocks${expected}`, deploymentTypeBackendPath);
+					}
+
+					assert.ok(
+						scope.node.tryFindChild(`DeploymentTypeAtImport-${expected}`),
+						`backend module should see BLOCKS_DEPLOYMENT_TYPE=${expected} at import time`,
+					);
+					assert.strictEqual(process.env.BLOCKS_DEPLOYMENT_TYPE, expected);
+					assert.ok(configContains(stack, 'BLOCKS_DEPLOYMENT_TYPE'), 'config registry has BLOCKS_DEPLOYMENT_TYPE');
+					// The config JSON is embedded as a string in an Fn::Join, so its quotes
+					// appear escaped once in the stringified template.
+					assert.ok(
+						configContains(stack, `\\"BLOCKS_DEPLOYMENT_TYPE\\":\\"${expected}\\"`),
+						`config entry BLOCKS_DEPLOYMENT_TYPE has value '${expected}'`,
+					);
+				} finally {
+					if (saved === undefined) delete process.env.BLOCKS_DEPLOYMENT_TYPE;
+					else process.env.BLOCKS_DEPLOYMENT_TYPE = saved;
+				}
+			});
+		}
+	}
 });
