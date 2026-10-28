@@ -521,6 +521,32 @@ export function buildingBlockParent(
  */
 export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
 
+/**
+ * AWS WAF protection for the backend API. See {@link BlocksStackProps.apiWaf}.
+ *
+ * Either let Blocks create a web ACL (`enabled: true`, optionally with a
+ * `rateLimit`), or bring your own (`webAclArn`). The two are mutually exclusive.
+ */
+export interface ApiWafOptions {
+  /**
+   * Create a Blocks-managed web ACL with the AWS managed Common and Known Bad
+   * Inputs rule groups and a per-IP rate limit. Default: `false`.
+   */
+  enabled?: boolean;
+  /**
+   * Requests allowed per client IP in any 5-minute window before the rate rule
+   * blocks it. At least 100 (an AWS WAF minimum). Default: 1000. Only with
+   * `enabled: true`.
+   */
+  rateLimit?: number;
+  /**
+   * ARN of an existing web ACL to attach instead of creating one. Its scope must
+   * match where it attaches: `REGIONAL` under `apiFrontDoor: 'apigateway'`,
+   * `CLOUDFRONT` (created in us-east-1) under `apiFrontDoor: 'cloudfront'`.
+   */
+  webAclArn?: string;
+}
+
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -562,6 +588,54 @@ export interface BlocksStackProps extends StackProps {
    * migration.
    */
   apiFrontDoor?: ApiFrontDoorTier;
+  /**
+   * Put AWS WAF in front of the backend API. Default: off.
+   *
+   * The web ACL attaches to whichever front door clients reach the API through:
+   *
+   * - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the API Gateway
+   *   stage. Works in any region, and covers every caller of `ApiUrl`. When a
+   *   `Hosting` door also forwards browser traffic to the stage, the rate rule
+   *   adapts so browser users aren't counted as one client: a claiming
+   *   CloudFront `Hosting` marks its requests with a header the rate rule
+   *   exempts, and behind any other door (ALB, API Gateway, your own, or a
+   *   CloudFront edge over a router) the rate rule is left off and synth warns;
+   *   rate-limit those on the door's own WAF. Either way, browser requests
+   *   arriving through a `Hosting` door aren't rate-limited by `apiWaf`: turn on
+   *   the door's own WAF to rate-limit them.
+   * - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed
+   *   distribution. AWS only creates CloudFront web ACLs in us-east-1, so outside
+   *   us-east-1 pass the ARN of one you created there (`webAclArn`); `enabled:
+   *   true` fails synth in any other region.
+   * - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting
+   *   the API: the API is served from Hosting's distribution, so set the WAF
+   *   there (`frontDoor.features.waf`). `apiWaf` then creates nothing, and synth
+   *   warns.
+   *
+   * Not covered:
+   * - The gateway's own `execute-api` endpoint under `apiFrontDoor: 'cloudfront'`
+   *   (only the distribution has the web ACL), including browser traffic that a
+   *   non-CloudFront `Hosting` door forwards straight to `execute-api`.
+   * - `bb-realtime`'s WebSocket API: AWS WAF can't attach to API Gateway
+   *   WebSocket APIs.
+   *
+   * The Blocks-managed web ACL runs the AWS managed Common rule set and Known
+   * Bad Inputs rule set, plus a per-IP rate limit. The Common rule set's body
+   * rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`,
+   * `GenericRFI_BODY`) count instead of block, because RPC bodies routinely
+   * exceed 8 KB and carry user-written HTML, Markdown or paths as data; their
+   * query-string, URI and header variants still block. For a stricter or
+   * custom rule set, pass your own `webAclArn` (its scope and region are checked
+   * at synth). A `webAclArn` is attached as-is: behind a `Hosting` door its IP
+   * rate rules count CloudFront edge or proxy IPs for browser traffic, and it
+   * can't use the internal marker header to exempt them. WAF is billed per web ACL, per rule and per request.
+   *
+   * @example
+   * ```ts
+   * await BlocksStack.create(app, 'my-app', { ...props, apiWaf: { enabled: true, rateLimit: 2000 } });
+   * ```
+   */
+  apiWaf?: ApiWafOptions;
 }
 
 export class BlocksStack {
