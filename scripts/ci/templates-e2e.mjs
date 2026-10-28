@@ -5,7 +5,9 @@
 //
 // Publishes all packages to a local file-based registry, then for every
 // scaffoldable template: creates an app from the published CLI (exactly as a
-// customer would), runs its `test:e2e` suite, and runs `vendorize`. The suite
+// customer would), checks the app pins every `@aws-blocks/*` dependency to a
+// caret range on the release line being published, runs its `test:e2e` suite,
+// and runs `vendorize`. The suite
 // is LOCAL ONLY — each template's `test:e2e` boots a mock dev server, so there
 // is no AWS deploy and no credentials are needed. The real deploy/sandbox smoke
 // stays in windows-e2e.yml (scheduled).
@@ -98,6 +100,56 @@ function discoverTemplates() {
 	return names.sort();
 }
 
+/** Each workspace package's version at HEAD, by name: what the local registry serves. */
+function workspaceVersions() {
+	const versions = new Map();
+	const packagesDir = join(ROOT, 'packages');
+	for (const dir of readdirSync(packagesDir)) {
+		const pkgPath = join(packagesDir, dir, 'package.json');
+		if (!existsSync(pkgPath)) continue;
+		const { name, version } = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+		if (typeof name === 'string' && name.startsWith('@aws-blocks/')) versions.set(name, version);
+	}
+	return versions;
+}
+
+/** The pre-1.0 release line of a version: `0.8.3` → `0.8`, `1.2.0` → `1`. */
+const releaseLine = (major, minor) => (major === 0 ? `0.${minor}` : `${major}`);
+
+/**
+ * Problems with the `@aws-blocks/*` ranges a scaffolded app declares. Each must
+ * be a caret range `^x.y.z` on the release line of the version being published
+ * and no newer than it, so the app installs what this run tests, takes
+ * non-breaking updates, and never a breaking line. A stale or missing stamp in
+ * the CLI (`*`, an older line) fails here, on the release PR too.
+ */
+function stampProblems(app, versions) {
+	const pkg = JSON.parse(readFileSync(join(app, 'package.json'), 'utf-8'));
+	const deps = [...Object.entries(pkg.dependencies ?? {}), ...Object.entries(pkg.devDependencies ?? {})].filter(
+		([name]) => name.startsWith('@aws-blocks/'),
+	);
+	if (deps.length === 0) return ['no @aws-blocks/* dependency in package.json'];
+
+	const problems = [];
+	for (const [name, range] of deps) {
+		const published = versions.get(name);
+		const stamp = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range);
+		if (!published) {
+			problems.push(`${name}: not a workspace package`);
+		} else if (!stamp) {
+			problems.push(`${name}: "${range}" is not a caret range; expected the ^${published} line`);
+		} else {
+			const [sMajor, sMinor, sPatch] = stamp.slice(1).map(Number);
+			const [pMajor, pMinor, pPatch] = published.split(/[.-]/).map(Number);
+			const newer = sMajor !== pMajor ? sMajor > pMajor : sMinor !== pMinor ? sMinor > pMinor : sPatch > pPatch;
+			if (releaseLine(sMajor, sMinor) !== releaseLine(pMajor, pMinor) || newer) {
+				problems.push(`${name}: "${range}" does not admit ${published}, the version being published`);
+			}
+		}
+	}
+	return problems;
+}
+
 async function main() {
 	// ── Step 1: publish to the local registry (unless reusing dist-registry) ──
 	if (skipPublish && existsSync(join(ROOT, 'dist-registry'))) {
@@ -145,6 +197,7 @@ async function main() {
 	if (templates.length === 0) throw new Error(`no scaffoldable templates found under ${TEMPLATES_DIR}`);
 	console.log(`\nTemplates under e2e: ${templates.join(' ')}`);
 
+	const versions = workspaceVersions();
 	const failed = [];
 	for (const template of templates) {
 		console.log(`\n============================================`);
@@ -164,6 +217,16 @@ async function main() {
 			failed.push(template);
 			continue;
 		}
+
+		console.log('\n--- Checking @aws-blocks/* version ranges ---');
+		const problems = stampProblems(app, versions);
+		if (problems.length > 0) {
+			for (const problem of problems) console.error(`  FAIL: ${problem}`);
+			console.error(`  FAIL: template ${template} does not pin @aws-blocks/* to the release being published`);
+			failed.push(template);
+			continue;
+		}
+		console.log('  ✓ Every @aws-blocks/* dependency is a caret range on the release being published');
 
 		console.log('\n--- Running e2e tests ---');
 		if (!run('npm', ['run', 'test:e2e'], inApp)) {

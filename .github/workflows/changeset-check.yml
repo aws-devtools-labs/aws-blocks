@@ -56,6 +56,14 @@ jobs:
       # treat removing an existing one as the same failure.
       - name: Verify the umbrella is bumped with its siblings
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
+      # create-blocks-app stamps a caret range for each @aws-blocks/* package it
+      # writes into new apps, read from its own devDependencies. A devDependency
+      # bump never releases the CLI, so a new release line (minor/major) for a
+      # stamped package must come with a create-blocks-app changeset, or the
+      # published CLI keeps scaffolding the old line. On the release PR the same
+      # rule is read from the version diff.
+      - name: Verify create-blocks-app is released with a new stamped line
+        run: node --experimental-strip-types scripts/changeset-guard.ts verify-scaffolder
       # `npm search keywords:aws-blocks` is the discovery path the publishing
       # guide documents, and a package missing the tag still builds, tests and
       # publishes cleanly — it just never shows up in that search. #491 was
