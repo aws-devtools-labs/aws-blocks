@@ -67,7 +67,12 @@ jobs:
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Must cover the sum of all step budgets (agent 35 + build/test 12 + judge 20 + ~13 uncapped).
+    # Not the sum of the step caps: the capped steps add up to 125 min (Playwright install 25,
+    # agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3), plus the uncapped
+    # ones. Even the main path (install 25 + agent 35 + build/test 12 + judge 20 = 92) can
+    # exceed it, so a cell that runs long in an early step can hit this job timeout in a later
+    # step (the judge, the analysis or an upload) before that step's own cap fires. The caps
+    # bound each step on its own; only this line bounds the cell.
     timeout-minutes: 85
     permissions:
       id-token: write
@@ -251,12 +256,16 @@ jobs:
       # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
       # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
       # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      # The install retries an attempt that prints nothing for 8 min (a stalled apt mirror) and
+      # gives up after 23 min in all; timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
+      # That cap counts against the job's 85 min (see the note on timeout-minutes above).
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
         if: steps.init.outcome == 'success'
+        timeout-minutes: 25
         run: |
-          npx playwright@1.60.0 install --with-deps chromium
+          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
           # present on a stock runner (npx install above runs unprivileged and writes it there).

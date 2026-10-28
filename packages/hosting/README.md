@@ -255,7 +255,8 @@ Standalone hosting apps get two bundled CLIs:
 npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
 cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
 npx hosting-secret list --prefix /myapp/secrets
-npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets               # recoverable
+npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # immediate, no recovery
 
 # SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
 npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
@@ -271,8 +272,11 @@ prompt still work). `list` prints names only, never values.
 
 `remove` on a **secret** is recoverable by default — the value enters Secrets
 Manager's recovery window and can be restored (guards against a typo'd prod key).
-Pass `--force` to delete immediately with no recovery. (`config` removes are always
-immediate — SSM Parameter Store has no recovery window.)
+Pass `--force` to delete immediately with no recovery. `--force` always needs
+`--yes` (or `-y`) to confirm, in every stage, and prints a warning naming the stage
+(or saying the un-staged value is shared by every stage, production included)
+before it deletes. (`config` removes are always immediate — SSM Parameter Store has
+no recovery window — so `--force` changes nothing there and needs no `--yes`.)
 
 > **Footguns to know.**
 > 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys
@@ -289,6 +293,42 @@ immediate — SSM Parameter Store has no recovery window.)
 >    value — put production-only secrets in a stage-scoped slot and keep only a
 >    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
 >    constructs sharing a prefix are not isolated from each other.
+
+## Next.js: the OpenNext version
+
+The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
+(`@opennextjs/aws`). Declare it in your app so you control its version and the
+build doesn't download it:
+
+```bash
+npm install --save-dev @opennextjs/aws@~4.0.3
+```
+
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0`.
+  Outside that range the build warns and continues.
+- If the app doesn't declare OpenNext, the adapter builds with
+  `@opennextjs/aws@4.0.3` and prints a warning.
+- OpenNext declares the Next.js versions it supports as a `next` peer range
+  (4.0.3: `>=15.5.18 <16 || >=16.2.6`). When your `next` version is outside
+  it, the build prints a warning. Upgrade `next` within its major version to
+  one that range accepts.
+- A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
+  stack's region at synth time. Set `env` on the stack that holds `Hosting`:
+
+  ```ts
+  const blocksStack = await BlocksStack.create(app, stackName, {
+  	env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  	// …
+  });
+  ```
+
+  Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
+  `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
+  for the Lambda@Edge function, so bootstrap `us-east-1` too
+  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
+  has more than one stack is tracked in
+  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
 

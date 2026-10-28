@@ -8,7 +8,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { registerSharedConfig } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { validateAppSettingOptions } from './validation.js';
@@ -136,9 +137,14 @@ export class AppSetting<T = string> extends BuildingBlockScope {
 			resources: [parameterArn],
 		}));
 
-		// Pass the parameter name to the runtime via config registry
+		// Pass the parameter name to the runtime via config registry. The key is
+		// built from the block's local `id`, not its `fullId` (db-pull's generated
+		// code reads `BLOCKS_SSM_PARAM_DB_URL`, and the key is part of existing
+		// deployed config), so two settings with one local id under different scopes
+		// share it; the AppSetting runtime itself resolves its parameter by `fullId`.
+		// It therefore keeps last-one-wins instead of registerConfig's conflict check.
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-		registerConfig(this, envKey, parameterName);
+		registerSharedConfig(this, envKey, parameterName);
 	}
 
 	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
@@ -180,6 +186,11 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
+		// Lambda's 3 s default is too tight for a cold start plus one serial SSM
+		// call per secret: a slow cold start timed out and rolled the deploy back.
+		// Two minutes (the AwsCustomResource default) covers many secrets and SDK
+		// retries under SSM throttling, while a hung call still fails the deploy quickly.
+		timeout: cdk.Duration.minutes(2),
 		// Own the log group so its retention follows the stack-wide default
 		// instead of AWS's infinite retention.
 		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {

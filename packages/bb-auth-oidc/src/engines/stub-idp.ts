@@ -2,10 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Stub IdP used by the mock runtime.
+ * Stub IdP used by the mock runtime and by sandbox deployments.
+ *
+ * `stubIdp()` providers are limited to local development and sandbox
+ * deployments: the CDK entry rejects them at synth for any other deployment,
+ * and the AWS runtime mounts these routes only when `getDeploymentType()` is
+ * `'sandbox'`.
  *
  * Each configured provider gets its own issuer path, mounted as a set of
- * `RawRoute`s by the mock `AuthOIDC` constructor:
+ * `RawRoute`s by the `AuthOIDC` constructor:
  *
  *    /aws-blocks/auth/idp/<provider>/.well-known/openid-configuration
  *    /aws-blocks/auth/idp/<provider>/authorize
@@ -16,6 +21,12 @@
  * Tokens are signed with a real RS256 keypair per IdP instance so the mock
  * runtime exercises the same JWKS-fetch + RS256-verify code path
  * `openid-client` uses in production.
+ *
+ * Authorization codes are self-contained and HMAC-SHA256 signed so any
+ * container can verify a code minted by another. The signing key is derived
+ * per provider from the instance's cookie-signing secret (see
+ * {@link deriveStubCodeKey}), so it is unique to each deployment and is not
+ * a value shipped with the package.
  *
  * The stub auto-approves every `/authorize` with a deterministic fake user
  * derived from the requested provider name. Tests that want to exercise
@@ -29,6 +40,7 @@ import { join } from 'node:path';
 import { generateKeyPair, exportJWK, SignJWT, type JWK } from 'jose';
 import type { BlocksContext } from '@aws-blocks/core';
 import { BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import type { ProviderConfig, StubProvider, StubUser } from '../types.js';
 
 /**
@@ -208,7 +220,8 @@ export async function handleJwks(providerName: string, ctx: BlocksContext): Prom
  * authorization code tied to the PKCE challenge, and 302-redirects back to
  * the RP's callback URL with `code` + `state`.
  */
-export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext, dataDir?: string): Promise<void> {
+export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext, options: StubIdpHandlerOptions): Promise<void> {
+	const { dataDir } = options;
 	const req = parseAuthorizeRequest(ctx.request.url.searchParams, ctx);
 	if (!req) return; // parse/validate failure already responded
 
@@ -231,7 +244,7 @@ export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext
 	}
 
 	if (user) {
-		issueCodeRedirect(ctx, req, user);
+		issueCodeRedirect(ctx, req, user, await options.codeKey());
 		return;
 	}
 
@@ -245,13 +258,14 @@ export async function handleAuthorize(provider: StubProvider, ctx: BlocksContext
 }
 
 /** Login-screen form submission: resolve the picked user and issue the code. */
-export async function handleAuthorizeSubmit(provider: StubProvider, ctx: BlocksContext, dataDir?: string): Promise<void> {
+export async function handleAuthorizeSubmit(provider: StubProvider, ctx: BlocksContext, options: StubIdpHandlerOptions): Promise<void> {
+	const { dataDir } = options;
 	const form = new URLSearchParams(await ctx.request.text());
 	const req = parseAuthorizeRequest(form, ctx);
 	if (!req) return;
 	const user = stubUserDirectory(provider.name, dataDir, provider.users).find((u) => u.sub === form.get('sub'))
 		?? defaultUser(provider.name);
-	issueCodeRedirect(ctx, req, user);
+	issueCodeRedirect(ctx, req, user, await options.codeKey());
 }
 
 interface AuthorizeRequest {
@@ -308,8 +322,12 @@ function parseAuthorizeRequest(params: URLSearchParams, ctx: BlocksContext): Aut
 	};
 }
 
-/** Mint a self-contained code for `user` and 302 back to the RP callback. */
-function issueCodeRedirect(ctx: BlocksContext, req: AuthorizeRequest, user: StubUser): void {
+/**
+ * Mint a self-contained code for `user` and 302 back to the RP callback.
+ *
+ * @param codeKey - The provider's derived code-signing key (see {@link deriveStubCodeKey}).
+ */
+function issueCodeRedirect(ctx: BlocksContext, req: AuthorizeRequest, user: StubUser, codeKey: Buffer): void {
 	// Self-contained HMAC-signed code: only the same stub IdP verifies it, so
 	// no external validation and no server-side state across invocations.
 	const code = stubCodeEncode({
@@ -322,7 +340,7 @@ function issueCodeRedirect(ctx: BlocksContext, req: AuthorizeRequest, user: Stub
 		scopes: req.scopes,
 		user,
 		exp: Math.floor(Date.now() / 1000) + 300, // 5 min
-	});
+	}, codeKey);
 
 	const target = new URL(req.redirectUri);
 	target.searchParams.set('code', code);
@@ -348,7 +366,7 @@ function redirectWithError(ctx: BlocksContext, redirectUri: string, state: strin
  * Token endpoint. Exchanges an authorization code for an ID token + access
  * token. Verifies PKCE, client credentials, and redirect URI.
  */
-export async function handleToken(providerName: string, ctx: BlocksContext): Promise<void> {
+export async function handleToken(providerName: string, ctx: BlocksContext, options: StubIdpHandlerOptions): Promise<void> {
 	const body = await ctx.request.text();
 	const form = new URLSearchParams(body);
 	// `client_secret_basic` puts credentials in the Authorization header.
@@ -373,7 +391,7 @@ export async function handleToken(providerName: string, ctx: BlocksContext): Pro
 	// Decode the self-contained code JWT (no in-memory state needed).
 	let pending: PendingAuth | null = null;
 	if (code) {
-		pending = stubCodeDecode(code);
+		pending = stubCodeDecode(code, await options.codeKey());
 	}
 	if (!pending) {
 		ctx.response.status = 400;
@@ -552,28 +570,64 @@ export async function handleRevoke(providerName: string, ctx: BlocksContext): Pr
 }
 
 /**
- * Fixed HMAC secret for signing authorization codes. This is NOT a security
- * boundary — the stub IdP is a test double. The secret just ensures codes
- * can't be forged by test code that doesn't know it.
+ * Per-request options for the stub IdP handlers that mint or verify
+ * authorization codes.
  */
-const STUB_CODE_SECRET = 'blocks-stub-idp-code-signing-secret-not-for-production';
+export interface StubIdpHandlerOptions {
+	/**
+	 * Resolves the provider's code-signing key, normally from
+	 * {@link deriveStubCodeKey}. Called per request; callers are expected to
+	 * memoize it. Must be deterministic per deployment so a code minted by one
+	 * container verifies on another.
+	 */
+	codeKey: () => Buffer | Promise<Buffer>;
+	/** Directory holding the stub `users.json` (local mock only). */
+	dataDir?: string;
+}
 
-/** Encode a PendingAuth payload into a self-contained HMAC-signed code. */
-function stubCodeEncode(payload: object): string {
+/** Domain-separation label for the code-signing key derivation. */
+const STUB_CODE_KEY_LABEL = 'aws-blocks/stub-idp/code/v1/';
+
+/**
+ * Derive the HMAC key used to sign a provider's authorization codes from the
+ * instance's cookie-signing secret. The label separates this key from cookie
+ * signing, and including the provider name binds codes to the provider that
+ * minted them. Deterministic per deployment, so every container agrees.
+ *
+ * @param cookieSecret - The instance's cookie-signing secret.
+ * @param providerName - The stub provider's name.
+ */
+export function deriveStubCodeKey(cookieSecret: string, providerName: string): Buffer {
+	return createHmac('sha256', cookieSecret).update(STUB_CODE_KEY_LABEL + providerName).digest();
+}
+
+/**
+ * Encode a PendingAuth payload into a self-contained HMAC-signed code.
+ *
+ * @param codeKey - HMAC-SHA256 signing key (see {@link deriveStubCodeKey}).
+ */
+export function stubCodeEncode(payload: object, codeKey: string | Buffer): string {
 	const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-	const mac = createHmac('sha256', STUB_CODE_SECRET).update(body).digest('base64url');
+	const mac = createHmac('sha256', codeKey).update(body).digest('base64url');
 	return `${body}.${mac}`;
 }
 
-/** Decode and verify a self-contained code. Returns null if invalid or expired. */
-function stubCodeDecode(code: string): PendingAuth | null {
+/**
+ * Decode and verify a self-contained code. Returns null if invalid or expired.
+ *
+ * @param codeKey - The same HMAC-SHA256 key the code was signed with.
+ */
+export function stubCodeDecode(code: string, codeKey: string | Buffer): PendingAuth | null {
 	try {
 		const dotIdx = code.lastIndexOf('.');
 		if (dotIdx < 0) return null;
 		const body = code.slice(0, dotIdx);
+		// Compare the canonical base64url strings rather than decoded bytes:
+		// base64url decoding ignores padding and stray characters, so a byte
+		// comparison would accept non-canonical spellings of the same MAC.
 		const mac = code.slice(dotIdx + 1);
-		const expected = createHmac('sha256', STUB_CODE_SECRET).update(body).digest('base64url');
-		if (mac !== expected) return null;
+		const expected = createHmac('sha256', codeKey).update(body).digest('base64url');
+		if (!constantTimeEquals(mac, expected)) return null;
 		const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
 		if (payload.exp <= Math.floor(Date.now() / 1000)) return null;
 		return {

@@ -344,7 +344,18 @@ export interface CdkDeployArgsOptions {
 /**
  * Build the `cdk deploy` argv used by `npm run deploy`.
  *
- * Two of these flags exist purely so the deploy is observable — losing either
+ * - `--all`: deploy every stack the app synthesizes. Blocks apps routinely
+ *   synth more than one stack in documented configurations — `Hosting` with an
+ *   explicit `env.region` other than `us-east-1` adds a `us-east-1` monitoring
+ *   stack for the CloudFront alarm, and any Lambda@Edge function (e.g. a
+ *   Next.js `runtime = 'edge'` route) adds the CDK edge-support stack in
+ *   `us-east-1`. Without a stack selector the CDK CLI refuses to run a
+ *   multi-stack app ("Since this app includes more than a single stack, specify
+ *   which stacks to use … or specify `--all`"), so the deploy fails before any
+ *   stack is touched. The sandbox path ({@link buildSandboxDeployArgs}) already
+ *   passes `--all`; this keeps the two commands in agreement.
+ *
+ * Two further flags exist purely so the deploy is observable — losing either
  * one brings back the 0-byte stdout:
  *
  * - `--ci`: the CDK CLI picks its log stream as `isCI ? stdout : stderr`, so
@@ -361,6 +372,7 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
   return [
     'cdk',
     'deploy',
+    '--all',
     '--require-approval',
     'never',
     '--ci',

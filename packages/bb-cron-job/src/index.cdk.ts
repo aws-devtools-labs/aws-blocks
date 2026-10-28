@@ -43,6 +43,9 @@ export class CronJob<T = void> extends Scope {
 				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
 			);
 		}
+		// Claim the key the Lambda runtime registers this job's handler under, so
+		// two jobs with the same `fullId` fail synth instead of on cold start.
+		this.registerLambdaEventHandler('blocks.cronjob', this.fullId);
 		const lambdaArn = compute.fn.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(this, lambdaArn);
 
