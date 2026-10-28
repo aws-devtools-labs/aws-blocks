@@ -62,7 +62,7 @@
     "@aws-blocks/bb-lambda-compute": "^0.6.0",
     "@aws-blocks/bb-distributed-table": "^0.2.2",
     "@aws-blocks/bb-logger": "^0.2.2",
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1153.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0",
     "ws": "^8.22.0"
   },
