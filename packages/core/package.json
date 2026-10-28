@@ -84,7 +84,7 @@
     "@types/node": "^20.19.43",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
-    "unctx": "^2.5.0"
+    "unctx": "^3.0.1"
   },
   "dependencies": {
     "@aws-blocks/hosting": "^0.4.1",

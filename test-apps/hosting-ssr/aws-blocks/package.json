@@ -14,5 +14,9 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@opennextjs/aws": "^4.1.12",
+    "concurrently": "^10.0.6"
   }
 }
