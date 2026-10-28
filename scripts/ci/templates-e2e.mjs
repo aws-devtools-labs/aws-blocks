@@ -113,7 +113,7 @@ function workspaceVersions() {
 	return versions;
 }
 
-/** The pre-1.0 release line of a version: `0.8.3` → `0.8`, `1.2.0` → `1`. */
+/** The pre-1.0 release line of a version: `0.8.3` -> `0.8`, `1.2.0` -> `1`. */
 const releaseLine = (major, minor) => (major === 0 ? `0.${minor}` : `${major}`);
 
 /**

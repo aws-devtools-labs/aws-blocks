@@ -61,7 +61,7 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
   return collected;
 }
 
-// ─── @aws-blocks/* version stamping ─────────────────────────────────────────
+// --- @aws-blocks/* version stamping ----------------------------------------
 //
 // Templates (and the add-to-existing paths below) write `*` for every
 // `@aws-blocks/*` package as a placeholder. Inside the monorepo the placeholder
@@ -87,7 +87,7 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
  *
  * @example
  * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.8.0' } });
- * // → { '@aws-blocks/blocks': '^0.8.0' }
+ * // -> { '@aws-blocks/blocks': '^0.8.0' }
  */
 export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string, string> }): Record<string, string> {
   const versions: Record<string, string> = {};
