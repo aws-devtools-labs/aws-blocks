@@ -43,9 +43,11 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs CronJob",
     "build": "tsc --build",
-    "test": "node --test --test-force-exit dist/**/*.test.js"
+    "test": "node --test --test-force-exit dist/index.mock.test.js dist/schedule.test.js dist/schedule-validate.test.js && node --conditions=cdk --test --test-force-exit dist/index.cdk.test.js && node --conditions=aws-runtime --test --test-force-exit dist/index.aws.test.js"
   },
   "dependencies": {
+    "@aws-blocks/bb-async-job": "^0.2.3",
+    "@aws-blocks/bb-container-compute": "^0.1.0",
     "@aws-blocks/bb-logger": "^0.2.2",
     "@aws-blocks/bb-lambda-compute": "^0.6.0",
     "@aws-blocks/core": "^0.7.0"

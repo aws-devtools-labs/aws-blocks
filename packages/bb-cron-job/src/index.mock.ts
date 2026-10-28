@@ -43,6 +43,12 @@ import { parseScheduleForMock, validateTimezone, type CronFields, type RateSched
  * schedule interval, the next invocation starts while the previous is still
  * running. Design handlers to tolerate concurrent execution.
  *
+ * **Long-running jobs:** A serverless compute stops a handler after at most 15
+ * minutes. Pass a container `Compute` as `compute` (the same objects `AsyncJob`
+ * accepts) with a `timeoutSeconds` to run longer. Each tick is then delivered
+ * like a container `AsyncJob`: an enforced timeout, up to 3 attempts, then a
+ * dead-letter queue.
+ *
  * @example
  * ```typescript
  * const cleanup = new CronJob(scope, 'cleanup', {
@@ -50,6 +56,14 @@ import { parseScheduleForMock, validateTimezone, type CronFields, type RateSched
  *   handler: async (event) => {
  *     console.log(`Running cleanup at ${event.scheduledTime}`);
  *   },
+ * });
+ *
+ * const worker = new Compute(scope, 'worker', { type: 'container', size: { vcpu: 1, memory: 2048 } });
+ * new CronJob(scope, 'nightly-rebuild', {
+ *   schedule: 'cron(0 3 * * ? *)',
+ *   compute: worker,
+ *   timeoutSeconds: 2 * 60 * 60,
+ *   handler: async () => { await rebuildIndex(); },
  * });
  * ```
  */

@@ -88,6 +88,7 @@ Local Mock
 - **Simplicity** — no per-job role management, no cross-references between jobs.
 - **Security** — the role can only invoke the shared Lambda (least privilege for the scheduler service).
 - **Trust scoping** — the role's trust policy admits `scheduler.amazonaws.com` only when `aws:SourceAccount` is the stack's account and `aws:SourceArn` matches `arn:<partition>:scheduler:<region>:<account>:schedule-group/*`. Scheduler reports the schedule *group* ARN as the source, so the pattern is group-based rather than per-schedule.
+- **Per-target grants** — each CronJob adds a grant for its own target: `lambda:InvokeFunction` on its compute's function, or `sqs:SendMessage` on its runner queue (D-CJ-7). Jobs on one function share one rendered statement. (Before per-job compute, the role was granted only the first job's function, which was correct while every job shared one function.)
 
 ### D-CJ-6: Event routing via `source` + `jobName`
 
@@ -97,6 +98,23 @@ Local Mock
 - **Same pattern as AsyncJob** — AsyncJob routes by event source ARN; CronJob routes by `source` field. Consistent dispatch model.
 - **No extra infrastructure** — no SQS queue, no SNS topic. Direct Lambda invocation via EventBridge.
 - **Debugging** — `jobName` in the payload makes CloudWatch logs self-identifying.
+
+### D-CJ-7: Container compute delivers ticks through an internal AsyncJob
+
+**Decision:** `compute` accepts the same `Compute` objects as `AsyncJob`. On a Lambda compute nothing changes: the schedule invokes the function directly (D-CJ-2, D-CJ-6). On a container compute the CronJob constructs a child `AsyncJob` (id `runner`) on the same compute, and the schedule targets that job's SQS queue with `{ jobName, scheduledTime, input }` as the message body. The runner's handler calls the CronJob handler with the same `CronJobEvent<T>`.
+
+**Rationale:**
+- **No new delivery machinery** — a container AsyncJob already has an owner-matched poller, a worker thread per delivery with a hard-enforced `timeoutSeconds`, a visibility heartbeat for long deliveries, a DLQ, and queue-depth autoscaling. A tick needs exactly that.
+- **Same options, same meaning** — `timeoutSeconds` passes straight to the runner, so it means what it means on `AsyncJob`.
+- **Lambda path is untouched** — existing stacks synthesize the same schedule, target, and role (one invoke statement per target function).
+
+**Alternative considered: EventBridge Scheduler → ECS `RunTask` per tick.** Starting a one-off Fargate task per tick costs nothing between ticks, where this design keeps the container's `minInstances` tasks running. It was rejected for now because it is not the same compute object (a one-off task ignores the service's scaling and poller), it needs a new run-one-handler boot mode, and it would rebuild the timeout, retry, and DLQ handling AsyncJob already has. It can be added later as an option if pay-per-run matters.
+
+**Consequences:**
+- The child shows up as an `AsyncJob` in the block census and telemetry.
+- A failed tick is retried by the queue (3 attempts in total, the AsyncJob default), then moved to the DLQ. The Lambda path's async-invoke policy is also 3 attempts in total.
+- The runtime entry constructs the runner on every compute so its `fullId` matches synth. It stays inert unless synth provisioned its queue.
+- The CDK entry finds the runner's queue by its child id (`queue`); a unit test fails if AsyncJob renames it.
 
 ## Infrastructure (CDK)
 
@@ -157,6 +175,7 @@ This is a brute-force approach that trades performance for correctness. Acceptab
 | Local cron timing may drift | Schedule fires at slightly different times than EventBridge | No mitigation — timing precision is not critical for correctness |
 | No EventBridge retry in mock | Failed handlers are not retried locally | Mock logs the error with a warning that AWS would retry |
 | Handler runs in-process (not isolated) | Shared memory, no cold start, no timeout enforcement | No mitigation — shared Lambda in AWS is also not isolated per-job |
+| `compute` and `timeoutSeconds` are ignored | A container job runs in-process and is not stopped at `timeoutSeconds` locally | Same as AsyncJob's mock; deploy to a sandbox to exercise container delivery |
 | No concurrency control | Multiple invocations can overlap locally | No mitigation — same behavior in AWS (no per-job concurrency option) |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by the shared Lambda's grants |
 | Advanced cron forms (`L`, `W`, `#`, year field) don't fire in the mock | The mock's parser models a subset of AWS cron, so these throw in local dev even though EventBridge (and the CDK synth gate) accept them | Deploy to a sandbox to exercise advanced cron; the synth gate validates only the 6-field shape for cron (see D-CJ-4) so it never blocks a valid schedule |

@@ -1,6 +1,6 @@
 # @aws-blocks/bb-cron-job
 
-Scheduled task execution backed by EventBridge Scheduler and Lambda.
+Scheduled task execution backed by EventBridge Scheduler and Lambda, or a container compute for long-running jobs.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -16,6 +16,7 @@ Scheduled task execution backed by EventBridge Scheduler and Lambda.
 | Run daily at 9 AM Pacific | `schedule: 'cron(0 9 * * ? *)', timezone: 'America/Los_Angeles'` |
 | Pass data to handler | `input: { mode: 'full' }` |
 | Disable until manually triggered | `enabled: false` |
+| Run a job longer than 15 minutes | `compute: containerCompute, timeoutSeconds: 7200` (see [Running on a container compute](#running-on-a-container-compute)) |
 
 **Keywords:** cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval
 
@@ -59,6 +60,46 @@ const cleanup = new CronJob(scope, 'cleanup', {
 | `description` | `string` | — | Human-readable description of the job |
 | `timezone` | `string` | `'UTC'` | IANA timezone for cron expressions (e.g., `'America/Los_Angeles'`) |
 | `input` | `T` | — | Static payload passed to the handler on every invocation |
+| `logger` | `ChildLogger` | — | Optional logger for internal operations; defaults to a Logger at error level |
+| `compute` | `Compute` | app default (serverless) | The `Compute` this job's handler runs on. Assign a container `Compute` for long-running work. |
+| `timeoutSeconds` | `number` | — | Wall-clock limit for one tick. On a container the runtime terminates the tick's worker at the deadline; on serverless it's bounded by the function timeout. |
+
+### Running on a container compute
+
+By default a job runs on the app's serverless compute (Lambda), which stops a
+handler after at most 15 minutes. Assign a container `Compute` for a job that
+runs longer, using the same `Compute` objects and `timeoutSeconds` option as
+`AsyncJob`:
+
+```ts
+import { Compute } from '@aws-blocks/blocks';
+
+const worker = new Compute(scope, 'worker', {
+  type: 'container',
+  size: { vcpu: 1, memory: 2048 },
+  scaling: { minInstances: 1, maxInstances: 2 },
+});
+
+new CronJob(scope, 'nightly-rebuild', {
+  schedule: 'cron(0 3 * * ? *)',
+  compute: worker,
+  timeoutSeconds: 60 * 60 * 2,   // may run 2 hours, enforced by the runtime
+  handler: async (event) => { /* ... */ },
+});
+```
+
+On a container, the schedule sends each tick to a queue owned by an internal
+`AsyncJob`, and the container drains it. A tick gets the same delivery as a
+container `AsyncJob`:
+
+1. Each tick runs in its own worker thread, and `timeoutSeconds` is hard-enforced
+   (the worker is terminated at the deadline).
+2. A tick that throws or times out is retried, up to 3 attempts in total, then
+   moved to a dead-letter queue. That matches the serverless path's 3 attempts.
+3. The container keeps at least `minInstances` tasks running between ticks.
+
+In local dev the assignment is transparent — handlers run in-process. See
+`@aws-blocks/bb-compute`.
 
 ## Schedule Expressions
 
@@ -194,8 +235,8 @@ new CronJob<{ mode: string }>(scope, 'sync-daily', {
 
 - **Idempotency:** EventBridge provides at-least-once delivery. Design handlers to tolerate duplicate invocations.
 - **Rate expressions** for simple intervals; **cron expressions** for precise timing.
-- **Concurrent executions:** If a handler runs longer than the schedule interval, the next invocation starts while the previous is still running. Design for overlap or implement application-level locking with `KVStore`.
-- **Failure handling:** Handler exceptions are retried by Lambda's built-in async invoke retry policy (2 retries with exponential backoff). After retries exhaust, the error is logged to CloudWatch.
+- **Concurrent executions:** If a handler runs longer than the schedule interval, the next invocation starts while the previous is still running. Design for overlap or implement application-level locking with `KVStore`. This holds on a container compute too: a container runs up to its concurrency limit of ticks at once.
+- **Failure handling:** Handler exceptions are retried by Lambda's built-in async invoke retry policy (2 retries with exponential backoff). After retries exhaust, the error is logged to CloudWatch. On a container compute, a failed tick is retried by its queue (3 attempts in total), then moved to a dead-letter queue.
 
 ## Local Development
 
@@ -215,6 +256,7 @@ Automatically provisions:
 - **Shared Lambda:** Targets the shared Lambda (same as API handlers and AsyncJob). No dedicated Lambda per job.
 - **IAM role:** Per-stack EventBridge Scheduler role with `lambda:InvokeFunction` permission. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
 - **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
+- **On a container compute:** The schedule targets an SQS queue and dead-letter queue owned by an internal `AsyncJob` instead of a Lambda function. The scheduler role gets `sqs:SendMessage` on that queue in place of `lambda:InvokeFunction`.
 
 ## Key Distinction from AsyncJob
 

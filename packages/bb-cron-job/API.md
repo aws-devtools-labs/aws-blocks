@@ -5,6 +5,7 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
@@ -23,7 +24,7 @@ export const CronJobErrors: {
     readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
-// @public (undocumented)
+// @public
 export interface CronJobEvent<T = void> {
     input: T;
     jobName: string;
@@ -32,12 +33,14 @@ export interface CronJobEvent<T = void> {
 
 // @public
 export interface CronJobOptions<T = void> {
+    compute?: ComputeProvider;
     description?: string;
     enabled?: boolean;
     handler: (event: CronJobEvent<T>) => Promise<void>;
     input?: T;
     logger?: ChildLogger;
     schedule: string;
+    timeoutSeconds?: number;
     timezone?: string;
 }
 
