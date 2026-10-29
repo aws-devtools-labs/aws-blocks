@@ -85,7 +85,7 @@ Every Lambda function that assumes the stack's execution role is made to depend 
 
 ## 6. Cluster binding
 
-A block is bound to its cluster by id and type (R4). The dev server writes the binding to `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it; deleting `.bb-data` resets it. Deploy-time verification, a binding record in stack metadata and a pre-deploy guard that inspects a change set before `cdk deploy`, is a separate pull request; until it lands, production relies on the cluster's removal policy.
+R4 is met by a separate pull request: a binding record in stack metadata, a dev-server marker in `.bb-data`, and a pre-deploy guard that inspects a change set before `cdk deploy`. Until it lands, production relies on the cluster's removal policy, `retain` by default: a renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data but points the app at a new, empty schema.
 
 ## 7. Alternatives considered
 
@@ -98,8 +98,6 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 **Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
 
 **Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a two-hour budget.
-
-**An override for the binding check.** An environment variable would permit deliberate cluster moves. It weakens R4, since an override set once in a CI configuration persists unnoticed. The sandbox exemption and the documented copy procedure cover the legitimate cases.
 
 ## 8. Security and cost
 
@@ -150,4 +148,3 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 | DSQL compatibility checks and plan sequencing | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
-| Binding rule (dev-server marker) | `src/core/bindings.ts` |

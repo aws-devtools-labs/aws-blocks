@@ -5,7 +5,7 @@
  * Local-mode behavior of `Database` / `DatabaseCluster`: owned and shared
  * clusters, schema isolation, dsql-lint and the DSQL limits, conflict simulation
  * and retry, DSQL migration files run as written, and the three
- * construction-time rules (unique ids, schema collisions, the binding marker).
+ * two construction-time rules (unique ids, schema collisions).
  */
 import assert from 'node:assert';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -487,20 +487,6 @@ describe('construction-time rules', () => {
 		assert.throws(
 			() => new DatabaseCluster(new Scope('admin'), 'main', { type: 'dsql' }),
 			/DatabaseCluster id 'main' is used twice/,
-		);
-	});
-
-	test('the binding marker stops a block from moving clusters', () => {
-		const scope = app();
-		new Database(scope, 'orders');
-		assert.ok(existsSync(join(DATA_DIR, `${scope.id}-orders`, 'binding.json')));
-		_resetDatabaseRegistry();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
-		assert.throws(
-			() => new Database(scope, 'orders', { cluster: shared }),
-			new RegExp(
-				`Deploy stopped: Database '${scope.id}-orders' is bound to its default cluster \\(dsql\\) and cannot move to '${scope.id}-shared' \\(dsql\\)`,
-			),
 		);
 	});
 

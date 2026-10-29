@@ -46,9 +46,6 @@ export const DEFAULT_CLUSTER_ID = 'default';
 /** Schema a `Database` that owns its cluster uses. */
 export const DEFAULT_SCHEMA = 'public';
 
-/** Name of the per-block binding marker written by the dev server. */
-export const BINDING_MARKER_FILE = 'binding.json';
-
 /** Default root (relative to the project root) of per-block migration directories. */
 export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 

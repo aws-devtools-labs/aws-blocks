@@ -10,4 +10,4 @@ feat(bb-database): add `@aws-blocks/bb-database`, a preview of one `Database` bl
 - An `ApiError` or any branded Blocks error thrown inside `transaction()` reaches the caller unchanged (a 404 stays a 404); only other errors become `TransactionFailed`.
 - `bigint` results (identity columns, `count(*)`, `sum()` over integers) are JavaScript numbers on DSQL as they are locally; a value beyond ±2^53 is a `BigInt` in both.
 - The test helper `simulateConflict(db)` lives in `@aws-blocks/bb-database/testing`; the block's runtime class exposes only `query`, `queryOne`, `execute`, `transaction`, `cluster` and `schemaName`.
-- A `Database` is bound to one cluster for life; the dev server enforces it with a marker in `.bb-data`. The production deploy guard is a separate change.
+- A renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data under the default `retain` removal policy, but points the app at a new, empty one. The deploy guard that stops such a move is a separate change.

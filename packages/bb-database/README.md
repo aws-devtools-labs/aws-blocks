@@ -106,7 +106,7 @@ Cluster options:
 | Option | Type | Description |
 |---|---|---|
 | `type` | `'dsql'` | Required. Aurora DSQL. The value is required so that the planned `provisioned` kind adds a value without changing this line. |
-| `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when the stack is destroyed. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Most apps never set this. |
+| `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when the stack is destroyed. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Most apps never set this. A renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data under `retain`, but points the app at a new, empty one. |
 
 Block options:
 
@@ -132,7 +132,7 @@ The `DatabaseCluster` is the only thing that provisions: one DSQL cluster, one p
 
 **Isolation is by namespace, not by permission.** Both blocks connect as one role that has DML on every schema on the cluster. A query that qualifies a table name, ``sql`SELECT * FROM search.events` `` from `audit`, works, and so does a join across the two schemas in one statement. Treat the schema as a naming convention that keeps two blocks' tables apart, not as a boundary between tenants or trust levels; a block that must not see another block's data belongs on its own cluster.
 
-**Why share on DSQL.** A DSQL cluster costs nothing when idle, so sharing saves no money, unlike Aurora where a cluster has a capacity minimum. Share when you want one migration pipeline instead of one per block, when you need to query across the blocks' tables, or to stay under the default quota of 20 clusters per account and Region, which per-developer sandboxes count against. Keep separate clusters when the blocks have different lifecycles: the removal policy is set on the cluster, blocks on one cluster migrate one at a time, and a block never moves to another cluster later (see [The binding rule](#the-binding-rule)).
+**Why share on DSQL.** A DSQL cluster costs nothing when idle, so sharing saves no money, unlike Aurora where a cluster has a capacity minimum. Share when you want one migration pipeline instead of one per block, when you need to query across the blocks' tables, or to stay under the default quota of 20 clusters per account and Region, which per-developer sandboxes count against. Keep separate clusters when the blocks have different lifecycles: the removal policy is set on the cluster, blocks on one cluster migrate one at a time, and moving a block to another cluster later means copying its data.
 
 ## Migrations
 
@@ -251,25 +251,6 @@ PGlite runs your DSQL migration files with two keyword strips: `CREATE INDEX ASY
 | Migrations | Before the block's first query | Same, per block, into its schema |
 
 PGlite has one session, so local work on a cluster runs one statement or transaction at a time. Bugs that need two requests to overlap do not reproduce locally; `simulateConflict()` from `@aws-blocks/bb-database/testing` covers the retry path.
-
-## The binding rule
-
-A `Database` is bound to one cluster, by id and type, and keeps it for life. The dev server enforces the rule with a marker file at `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it:
-
-```
-Deploy stopped: Database 'app-shop' is bound to its default cluster (dsql) and cannot move to 'app-shared' (dsql).
-A Database keeps its cluster for life. To change clusters: add a new Database on 'app-shared', copy the data, switch your handlers, then remove 'shop'.
-```
-
-Delete `.bb-data` to reset it. A production deploy guard that stops a deploy moving a block or replacing a cluster ships as a separate change. Until then, a production deploy relies on the cluster's removal policy, `retain` by default: a renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data, but points the app at a new, empty one.
-
-**To move a block's data:**
-
-1. Add a new `Database` with a new id on the target cluster, give it the same migrations, and deploy.
-2. Copy each table from the old block's schema into the new one. On the same cluster, run `INSERT INTO new_schema.t SELECT * FROM old_schema.t`. Across clusters, export with `\copy old_schema.t TO 't.csv' CSV` and load with `\copy new_schema.t FROM 't.csv' CSV`. A `dsql` target accepts at most 3,000 rows per transaction, so load large tables in chunks of that size. Load parents before children, and end with a row-count check: an import that ignores constraint errors leaves orphans behind.
-3. Check row counts on both sides.
-4. Switch your handlers to the new block and deploy.
-5. Remove the old block and deploy. Its data stays until you drop the schema or the cluster.
 
 ## What it provisions (AWS)
 

@@ -15,7 +15,6 @@ import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/cor
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { DEFAULT_CLUSTER_ID, quoteIdent } from './constants.js';
-import { enforceLocalBinding } from './core/bindings.js';
 import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
 import { DatabaseCore } from './core/index.js';
 import { registerInternalAccess } from './core/internal.js';
@@ -115,7 +114,6 @@ export class Database extends Scope {
 		registerSchema(clusterKey, this.schemaName, this.fullId);
 
 		const dataDir = getMockDataDir(this);
-		enforceLocalBinding(dataDir, this.fullId, id, { cluster: resolved.ref.id, type: resolved.ref.kind });
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 
 		const buildEngine = async (): Promise<DatabaseEngine> => {

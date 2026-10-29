@@ -152,10 +152,3 @@ export interface TransactionOptions {
 	 */
 	maxRetries?: number;
 }
-
-/** Which cluster a `Database` is bound to. The dev server writes it to `.bb-data/{fullId}/binding.json`. */
-export interface DatabaseBinding {
-	/** `'default'` when the block owns its cluster, otherwise the cluster's full id. */
-	cluster: string;
-	type: ClusterType;
-}
