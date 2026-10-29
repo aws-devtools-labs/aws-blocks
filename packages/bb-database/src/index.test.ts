@@ -471,6 +471,20 @@ describe('construction-time rules', () => {
 		);
 	});
 
+	test('the binding marker stops a block from moving clusters', () => {
+		const scope = app();
+		new Database(scope, 'orders');
+		assert.ok(existsSync(join(DATA_DIR, `${scope.id}-orders`, 'binding.json')));
+		_resetDatabaseRegistry();
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
+		assert.throws(
+			() => new Database(scope, 'orders', { cluster: shared }),
+			new RegExp(
+				`Deploy stopped: Database '${scope.id}-orders' is bound to its default cluster \\(dsql\\) and cannot move to '${scope.id}-shared' \\(dsql\\)`,
+			),
+		);
+	});
+
 	test('closing a local cluster that never ran a statement resolves', async () => {
 		// Regression: PGlite 0.5.10's close() hangs before its init completes, and a
 		// block whose migration fails validation never reaches the engine.

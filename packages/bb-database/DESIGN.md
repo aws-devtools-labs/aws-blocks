@@ -85,7 +85,18 @@ Every Lambda function that assumes the stack's execution role is made to depend 
 
 ## 6. Cluster binding
 
-R4 is met by a separate pull request: a binding record in stack metadata, a dev-server marker in `.bb-data`, and a pre-deploy guard that inspects a change set before `cdk deploy`. Until it lands, production relies on the cluster's removal policy, `retain` by default: a renamed `Database` or `DatabaseCluster` id keeps the old cluster and its data but points the app at a new, empty schema.
+### 6.1 Binding record
+
+At its first deploy, a block is bound to its cluster by id and type. The CDK layer writes this record to stack metadata under `aws-blocks:bindings`, together with the CloudFormation logical id of each cluster resource, keyed by the `Database` that owns it or the `DatabaseCluster` it belongs to. The dev server writes the same record, without the logical id, to `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it. Deleting `.bb-data` resets the local record.
+
+### 6.2 Deploy-time verification
+
+Before `cdk deploy` in the production stage, the block's pre-deploy hook (`src/predeploy.ts`) applies two checks to each synthesized stack (R4). The hook runner ships separately in `@aws-blocks/core`; the hook's context and result types are declared in this package so it compiles against a core without them, and a core that does not run hooks deploys without the guard. The package declares the hook in `package.json` under `aws-blocks.predeploy` with `stages: ['production']`; core's deploy script discovers hooks from the app's installed `@aws-blocks/*` packages, synthesizes once, and runs them. Core therefore carries no code that names this block.
+
+1. The new binding record is compared with the deployed template. This detects a block moving between two clusters that both retain other blocks, a change CloudFormation does not consider destructive.
+2. A change set is created, inspected and deleted. Any `Replace` of an Aurora or DSQL cluster stops the deploy. A `Remove` stops it unless the resource belongs to a block or `DatabaseCluster` that is absent from the new record and the deployed resource's `DeletionPolicy` is `Retain`: that is deleting a block, which keeps its data. A `Remove` of a cluster whose owner is still in the record is a renamed construct, and stops.
+
+A template larger than CloudFormation's 51,200-byte inline limit is staged in the CDK bootstrap assets bucket and passed by URL, then deleted. The stop message names the resource and states whether its removal policy retains or deletes the data. Sandbox stages are exempt from both checks because their clusters are destroyed with the stack.
 
 ## 7. Alternatives considered
 
@@ -98,6 +109,8 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 **Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
 
 **Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a two-hour budget.
+
+**An override for the binding check.** An environment variable would permit deliberate cluster moves. It weakens R4, since an override set once in a CI configuration persists unnoticed. The sandbox exemption and the documented copy procedure cover the legitimate cases.
 
 ## 8. Security and cost
 
@@ -149,3 +162,4 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | Plan sequencing | `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/infra/migration-lambda.ts` |
+| Binding record, dev-server marker and deploy-time checks | `src/core/bindings.ts`, `src/deploy-guard.ts`, `src/predeploy.ts`, `src/infra/bindings-metadata.ts` |
