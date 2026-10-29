@@ -308,10 +308,15 @@ object OpenRpcParser {
         // Handle x-blocks-transferable
         schema["x-blocks-transferable"]?.let { transferableEl ->
             val transferableName = transferableEl.jsonPrimitive.content
-            val typeArgs = schema["x-blocks-type-args"]?.jsonArray?.map { argEl ->
-                val argObj = argEl.jsonObject
-                resolveSchema(argObj, components)
-            } ?: emptyList()
+            // An oidc/client's type argument names its providers, which the generated client doesn't use yet.
+            val typeArgs = if (transferableName == "oidc/client") {
+                emptyList()
+            } else {
+                schema["x-blocks-type-args"]?.jsonArray?.map { argEl ->
+                    val argObj = argEl.jsonObject
+                    resolveSchema(argObj, components)
+                } ?: emptyList()
+            }
             return TypeRef.Transferable(transferableName, typeArgs)
         }
 
