@@ -1880,6 +1880,107 @@ function subscribeCapture() {
 }
 
 describe('useChat', () => {
+	test('replays chunks received while loading a conversation', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		let resolveHistory: ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+		const history = new Promise<{ messages: Array<{ role: string; content: string }> }>((resolve) => { resolveHistory = resolve; });
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe,
+		});
+		const loading = chat.loadConversation('conv-1');
+		await flush();
+		assert.ok(cap.handler, 'subscription should be ready before loading history');
+		cap.handler({ type: 'text-delta', text: 'Live ' });
+		cap.handler({ type: 'done', text: 'Live response' });
+		assert.ok(resolveHistory, 'history request should be in flight');
+		resolveHistory({ messages: [{ role: 'user', content: 'Prompt' }] });
+		await loading;
+		assert.deepStrictEqual(chat.getMessages().map(({ role, content }) => ({ role, content })), [
+			{ role: 'user', content: 'Prompt' },
+			{ role: 'assistant', content: 'Live response' },
+		]);
+		chat.destroy();
+	});
+
+	test('does not duplicate a completion already returned in conversation history', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		let resolveHistory: ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+		const history = new Promise<{ messages: Array<{ role: string; content: string }> }>((resolve) => { resolveHistory = resolve; });
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe,
+		});
+		const loading = chat.loadConversation('conv-1');
+		await flush();
+		assert.ok(cap.handler);
+		cap.handler({ type: 'text-delta', text: 'Live ' });
+		cap.handler({ type: 'done', text: 'Live response' });
+		assert.ok(resolveHistory);
+		resolveHistory({ messages: [
+			{ role: 'user', content: 'Prompt' },
+			{ role: 'assistant', content: 'Live response' },
+		] });
+		await loading;
+		assert.deepStrictEqual(chat.getMessages().map(({ role, content }) => ({ role, content })), [
+			{ role: 'user', content: 'Prompt' },
+			{ role: 'assistant', content: 'Live response' },
+		]);
+		chat.destroy();
+	});
+
+	test('processes new chunks after loading a conversation fails to subscribe', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		let subscribeAttempts = 0;
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe: async (channelId, options) => {
+				subscribeAttempts++;
+				const sub = await subscribe(channelId, options);
+				return { ...sub, established: subscribeAttempts < 3 ? Promise.reject(new Error('subscription failed')) : Promise.resolve() };
+			},
+		});
+		await assert.rejects(() => chat.loadConversation('conv-1'), /subscription failed/);
+		await chat.sendMessage('Prompt');
+		assert.ok(cap.handler);
+		cap.handler({ type: 'done', text: 'Live response' });
+		assert.deepStrictEqual(chat.getMessages().map(({ role, content }) => ({ role, content })), [
+			{ role: 'user', content: 'Prompt' },
+			{ role: 'assistant', content: 'Live response' },
+		]);
+		chat.destroy();
+	});
+
+	test('does not recreate an assistant bubble for late chunks after a rejected send', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('send rejected'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+		});
+		await chat.sendMessage('Prompt');
+		assert.ok(cap.handler);
+		cap.handler({ type: 'text-delta', text: 'Late ' });
+		cap.handler({ type: 'done', text: 'Late response' });
+		assert.deepStrictEqual(chat.getMessages().map(({ role, content }) => ({ role, content })), [{ role: 'user', content: 'Prompt' }]);
+		chat.destroy();
+	});
+
 	// Type-only regression guard for the api return-type contract (PR that widened
 	// sendMessage/resume from Promise<void> to Promise<unknown>). This is compiled by
 	// `tsc --build` before the runtime tests execute, so narrowing either member back
