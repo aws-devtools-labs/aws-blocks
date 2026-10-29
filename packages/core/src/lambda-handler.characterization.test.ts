@@ -111,6 +111,15 @@ function registerRoutes() {
       ctx.response.send({ rest: ctx.request.params['*'] });
     },
   });
+  // Matches every three-segment POST, `/aws-blocks/api/<namespace>` included: the
+  // per-namespace RPC cases below pin that the RPC subtree skips RawRoute matching.
+  registerRoute({
+    method: 'POST',
+    path: '/{tenant}/{area}/{id}',
+    handler: async (ctx) => {
+      ctx.response.send({ rawRoute: ctx.request.params });
+    },
+  });
   registerRoute({
     method: 'GET',
     path: '/empty',
@@ -175,6 +184,9 @@ const CASES: Record<string, Case> = {
   },
   'rpc success with an unvalidated client user agent': {
     event: rpcEvent({ headers: { Host: API_HOST, 'X-Blocks-User-Agent': 'not a token' } }),
+  },
+  'rpc mixed-case valid client user agent header': {
+    event: rpcEvent({ headers: { Host: API_HOST, 'X-Blocks-User-Agent': 'aws-blocks-swift/1.2.3' } }),
   },
   'rpc mixed-case Cookie header': {
     event: rpcEvent({ headers: { Host: API_HOST, Cookie: 'Mixed=1' } }),
@@ -337,6 +349,20 @@ const EXPECTED: Record<string, unknown> = {
       "Set-Cookie": []
     },
     "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc mixed-case valid client user agent header": {
+    "statusCode": 200,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "multiValueHeaders": {
+      "Set-Cookie": []
+    },
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc mixed-case Cookie header": {
     "statusCode": 200,

@@ -8,7 +8,7 @@ import * as net from 'node:net';
 import { serveHttp, buildRequestUrl } from './http-server.js';
 import type { HttpServerHandle, ServeHttpOptions } from './http-server.js';
 import { FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from './constants.js';
-import { createLambdaHandler, _resetCorsPatterns, requestCookies } from './lambda-handler.js';
+import { createLambdaHandler, _resetCorsPatterns, requestClientUserAgent, requestCookies } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { MAX_RPC_BODY_BYTES, decodeRpcResponse } from './rpc.js';
 import type { BlocksContext } from './api.js';
@@ -119,6 +119,9 @@ const backend = {
     async fail() {
       throw new Error('boom: internal detail');
     },
+    async whoCalls() {
+      return { auth: ctx.request.headers.get('authorization'), userAgent: requestClientUserAgent.getStore() ?? null };
+    },
     async signOutAndFail() {
       ctx.response.headers.append('Set-Cookie', 'live=1; Path=/');
       ctx.response.headers.append('Set-Cookie', 'gone=; Path=/; Max-Age=0');
@@ -126,6 +129,9 @@ const backend = {
     },
   }),
 };
+
+/** Larger than the socket buffers, so the response is still being written when its handler settles. */
+const BIG_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 let slowRelease: (() => void) | undefined;
 let lastAbort: { aborted: boolean } | undefined;
@@ -176,6 +182,14 @@ function registerRoutes() {
     path: '/url',
     handler: async (ctx) => {
       ctx.response.send({ url: ctx.request.url.href });
+    },
+  });
+  registerRoute({
+    method: 'GET',
+    path: '/big',
+    handler: async (ctx) => {
+      ctx.response.headers.set('Content-Type', 'text/plain');
+      ctx.response.send('x'.repeat(BIG_RESPONSE_BYTES));
     },
   });
   registerRoute({
@@ -240,6 +254,14 @@ const PARITY: Array<{ name: string; method: string; target: string; headers?: Re
     body: rpc('api.echo', ['hi']),
   },
   { name: 'RPC error envelope', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.fail') },
+  {
+    name: 'RPC request headers and the client user agent reach the handler',
+    method: 'POST',
+    target: '/aws-blocks/api',
+    headers: { ...json, authorization: 'Bearer t', 'x-blocks-user-agent': 'aws-blocks-swift/1.2.3' },
+    body: rpc('api.whoCalls'),
+  },
+  { name: 'RPC non-ASCII arguments', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.echo', ['héllo ✓']) },
   { name: 'RPC unknown method', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.nope') },
   { name: 'RPC invalid JSON', method: 'POST', target: '/aws-blocks/api', headers: json, body: '{nope' },
   { name: 'RPC path/body namespace mismatch', method: 'POST', target: '/aws-blocks/api/other', headers: json, body: rpc('api.echo', ['x']) },
@@ -366,7 +388,40 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
       await Promise.all([first, second]);
     } finally {
       slowRelease?.();
+      // Close before awaiting the request, so a failed precondition can't hang the run.
+      await server.close();
       await slow.catch(() => {});
+    }
+  });
+
+  it('lets a response still being written finish before the drain closes its connection', async () => {
+    const server = await start({ drainTimeoutMs: 5_000 });
+    try {
+      const received = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: server.port, method: 'GET', path: '/big', agent: false },
+          (res) => {
+            // The handler has settled, but most of the body is still unsent: start
+            // draining now, and only then read the response.
+            res.pause();
+            void server.close();
+            setTimeout(() => {
+              let size = 0;
+              res.on('data', (c: Buffer) => {
+                size += c.length;
+              });
+              res.on('end', () => resolve(size));
+              res.on('error', reject);
+              res.resume();
+            }, 200);
+          },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+      assert.strictEqual(received, BIG_RESPONSE_BYTES, 'the whole response arrives');
+    } finally {
+      await server.close();
     }
   });
 
@@ -394,10 +449,16 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
   it('rejects a body whose declared length exceeds the limit with 413', async () => {
     const server = await start({ maxBodyBytes: 16 });
     try {
-      const reply = await send(server.port, 'POST', '/echo-body', { 'Content-Type': 'application/json' }, 'x'.repeat(17));
+      const reply = await send(
+        server.port,
+        'POST',
+        '/echo-body',
+        { 'Content-Type': 'application/json', 'Content-Length': '17', origin: ALLOWED_ORIGIN },
+        'x'.repeat(17),
+      );
       assert.strictEqual(reply.status, 413);
       assert.deepStrictEqual(JSON.parse(reply.body), { error: 'Payload Too Large' });
-      assert.strictEqual(reply.headers.vary, 'Origin', 'CORS headers ride on the 413');
+      assert.strictEqual(reply.headers['access-control-allow-origin'], ALLOWED_ORIGIN, 'CORS headers ride on the 413');
     } finally {
       await server.close();
     }
@@ -436,14 +497,47 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     }
   });
 
-  it('answers an oversized RPC body with the JSON-RPC 413 envelope', async () => {
+  it('answers an oversized RPC body with the JSON-RPC 413 envelope, then drops a stalled upload', async () => {
     const server = await start();
     try {
+      // Declares more than it sends: the upload is still incomplete after the linger.
       const reply = await send(server.port, 'POST', '/aws-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
       assert.strictEqual(reply.status, 200);
       assert.throws(
         () => decodeRpcResponse(JSON.parse(reply.body)),
         (e: any) => e.status === 413 && e.name === 'PayloadTooLarge',
+      );
+      // The same headers as every other JSON-RPC envelope.
+      assert.strictEqual(reply.headers['cache-control'], 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      assert.strictEqual(reply.headers.pragma, 'no-cache');
+      assert.strictEqual(reply.headers.connection, 'close');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('caps an RPC body at the JSON-RPC limit, before reading it, when maxBodyBytes is larger', async () => {
+    const server = await start({ maxBodyBytes: 2 * MAX_RPC_BODY_BYTES });
+    try {
+      // Declared over the RPC limit but under maxBodyBytes, and never sent: only a
+      // limit applied before reading answers (a read would wait for the body).
+      const reply = await send(server.port, 'POST', '/aws-blocks/api', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
+      assert.throws(
+        () => decodeRpcResponse(JSON.parse(reply.body)),
+        (e: any) => e.status === 413 && e.message.includes(`${MAX_RPC_BODY_BYTES} byte`),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('states the effective limit in the JSON-RPC 413 envelope', async () => {
+    const server = await start({ maxBodyBytes: 1024 });
+    try {
+      const reply = await send(server.port, 'POST', '/aws-blocks/api', json, Buffer.alloc(2048, ' '));
+      assert.throws(
+        () => decodeRpcResponse(JSON.parse(reply.body)),
+        (e: any) => e.status === 413 && e.message.includes('1024 byte'),
       );
     } finally {
       await server.close();
@@ -453,7 +547,7 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
   it('defaults the body limit to the JSON-RPC limit', async () => {
     const server = await start();
     try {
-      const reply = await send(server.port, 'POST', '/echo-body', { 'Content-Length': String(MAX_RPC_BODY_BYTES + 1) }, '');
+      const reply = await send(server.port, 'POST', '/echo-body', {}, Buffer.alloc(MAX_RPC_BODY_BYTES + 1, 'x'));
       assert.strictEqual(reply.status, 413);
     } finally {
       await server.close();
@@ -487,7 +581,69 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
   });
 });
 
+describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => {
+  const stamped = (lines: string[]) =>
+    ['GET /url HTTP/1.1', 'Host: internal-alb', ...lines, 'Connection: close', '', ''].join('\r\n');
+
+  it('builds the request URL from one stamped host and stage', async () => {
+    const server = await start({ trustForwardedHeaders: true });
+    try {
+      const reply = await send(server.port, 'GET', '/url', {
+        'x-blocks-forwarded-host': API_HOST,
+        'x-blocks-forwarded-stage': 'prod',
+      });
+      assert.deepStrictEqual(JSON.parse(reply.body), { url: `https://${API_HOST}/prod/url` });
+    } finally {
+      await server.close();
+    }
+  });
+
+  for (const [name, lines] of [
+    ['a client copy under another letter case', ['X-Blocks-Forwarded-Host: attacker.example', `x-blocks-forwarded-host: ${API_HOST}`]],
+    ['a malformed client copy under another letter case', ['X-Blocks-Forwarded-Host: x@attacker.example/', `x-blocks-forwarded-host: ${API_HOST}`]],
+    ['a host carrying userinfo and a path', ['x-blocks-forwarded-host: x@attacker.example/']],
+    ['a list of hosts', [`x-blocks-forwarded-host: attacker.example, ${API_HOST}`]],
+    ['two stages', [`x-blocks-forwarded-host: ${API_HOST}`, 'X-Blocks-Forwarded-Stage: evil', 'x-blocks-forwarded-stage: prod']],
+    ['a stage with a path', [`x-blocks-forwarded-host: ${API_HOST}`, 'x-blocks-forwarded-stage: prod/evil']],
+  ] as const) {
+    it(`refuses ${name} with 400`, async () => {
+      const server = await start({ trustForwardedHeaders: true });
+      try {
+        assert.strictEqual(await rawRequest(server.port, stamped([...lines])), 'HTTP/1.1 400 Bad Request');
+      } finally {
+        await server.close();
+      }
+    });
+  }
+
+  it('ignores stamped headers it does not trust', async () => {
+    const server = await start();
+    try {
+      const status = await rawRequest(
+        server.port,
+        stamped(['X-Blocks-Forwarded-Host: x@attacker.example/', `x-blocks-forwarded-host: ${API_HOST}`]),
+      );
+      assert.strictEqual(status, 'HTTP/1.1 200 OK');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe('serveHttp — initialization and request targets', { timeout: 30_000 }, () => {
+  it('takes only the raw path and query from an absolute-form target', async () => {
+    const server = await start();
+    try {
+      const routed = await send(server.port, 'GET', 'http://evil.example/users/42?q=a');
+      assert.strictEqual(routed.status, 201);
+      assert.deepStrictEqual(JSON.parse(routed.body).q, ['a']);
+      // Dot segments stay as sent, exactly as for an origin-form target.
+      assert.strictEqual((await send(server.port, 'GET', 'http://evil.example/x/../users/42')).status, 404);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('registers the built-in routes and locks the route registry', async () => {
     const server = await start();
     try {

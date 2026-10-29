@@ -102,6 +102,17 @@ const NO_STORE_HEADERS = {
 } as const;
 
 /**
+ * The headers of every JSON-RPC envelope, for `corsHeaders` (from
+ * `buildCorsHeaders`). Shared with transports that answer an RPC request before
+ * dispatching it (the container server's 413), so both envelopes match.
+ *
+ * @internal
+ */
+export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<string, string> {
+  return { 'Content-Type': 'application/json', ...corsHeaders, ...NO_STORE_HEADERS };
+}
+
+/**
  * Create the dispatcher for a backend module (the app's `aws-blocks/index.ts`).
  *
  * Handles, in order: cross-origin rejection, `OPTIONS` preflight, RawRoute
@@ -186,11 +197,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       };
     }
 
-    const rpcHeaders = {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-      ...NO_STORE_HEADERS,
-    };
+    const rpcHeaders = rpcResponseHeaders(corsHeaders);
     const rpcEnvelope = (body: string): DispatchResponse => ({ kind: 'rpc', status: 200, headers: rpcHeaders, cookies: [], body });
 
     const { text: bodyText, stream: bodyStream } = request.body();
@@ -257,7 +264,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         kind: 'rpc-result',
         status: responseStatus,
         headers: withoutSetCookie(responseHeaders),
-        cookies: responseHeaders.getSetCookie(),
+        cookies: setCookiesOf(responseHeaders),
         body: successResponse(responseBody ?? result, rpcId),
       };
     } catch (error: any) {
@@ -316,7 +323,7 @@ async function dispatchRawRoute(
       kind: 'raw-route',
       status: responseStatus,
       headers: withoutSetCookie(responseHeaders),
-      cookies: responseHeaders.getSetCookie(),
+      cookies: setCookiesOf(responseHeaders),
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
   } catch (error: unknown) {
@@ -326,10 +333,19 @@ async function dispatchRawRoute(
       kind: 'raw-route',
       status,
       headers: withoutSetCookie(responseHeaders),
-      cookies: responseHeaders.getSetCookie(),
+      cookies: setCookiesOf(responseHeaders),
       body,
     };
   }
+}
+
+/**
+ * The `Set-Cookie` values of `headers`, one per cookie. Guarded like the rest of
+ * core's cookie handling: a `Headers` polyfill without `getSetCookie` drops the
+ * cookies rather than failing the response.
+ */
+function setCookiesOf(headers: Headers): string[] {
+  return headers.getSetCookie?.() ?? [];
 }
 
 /** Response headers as a plain record, with `Set-Cookie` left to `cookies`. */

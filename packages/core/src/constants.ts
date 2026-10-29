@@ -98,25 +98,28 @@ export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';
 export const CLIENT_USER_AGENT_HEADER = 'x-blocks-user-agent';
 
 /**
- * Header the shared API gateway stamps with its public host (`context.domainName`)
- * on every request it forwards to a container compute. The container builds
- * `ctx.request.url` from it.
+ * The public host a request to a container compute was made to. The container
+ * builds `ctx.request.url` from it, since the request it receives carries the
+ * load balancer's host.
  *
- * Trusted only because every front door controls it: the gateway's integration
- * mapping overwrites any client-sent value, and a CloudFront behavior that routes
- * straight to the container's (internal) load balancer must strip it — together
- * with {@link FORWARDED_STAGE_HEADER} — from viewer requests with an origin request
- * policy deny list.
+ * Set by every front door, overwriting any client-sent value — which is what
+ * makes it trustworthy (the load balancer is internal, reachable only through
+ * them): the shared gateway's integration maps it from `context.domainName`, and
+ * a CloudFront behavior that routes straight to the load balancer sets it from
+ * the viewer's host in a viewer-request function. The container server accepts
+ * it only as a single host value, so a client copy sent under another letter
+ * case is refused rather than merged in.
  *
- * @internal Read by the container HTTP server, written by the shared gateway; not public API.
+ * @internal Read by the container HTTP server, written by the front doors; not public API.
  */
 export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
 
 /**
  * Companion to {@link FORWARDED_HOST_HEADER}: the API Gateway stage that prefixes
- * public paths (`context.stage`). Same trust requirements: overwritten by the
- * gateway, stripped by any CloudFront behavior that reaches the container directly.
+ * public paths (`context.stage`). Set by the gateway, removed by a CloudFront
+ * behavior that routes straight to the load balancer (CloudFront serves the API
+ * from the origin root); either way any client-sent value is overwritten.
  *
- * @internal Read by the container HTTP server, written by the shared gateway; not public API.
+ * @internal Read by the container HTTP server, written by the front doors; not public API.
  */
 export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';

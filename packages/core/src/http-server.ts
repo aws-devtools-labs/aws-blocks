@@ -7,11 +7,12 @@
 // event parsing, base64 bodies, the 28 s timeout guard).
 
 import * as http from 'node:http';
+import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { CLIENT_USER_AGENT_HEADER, FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders } from './cors.js';
-import { createDispatcher } from './dispatch.js';
+import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
 import type { Dispatcher, DispatchResponse } from './dispatch.js';
 import { lockRouteRegistry } from './raw-route.js';
 import { isLoopbackForwardedHost } from './request-context.js';
@@ -29,15 +30,16 @@ export interface ServeHttpOptions {
    * Build request URLs from the front-door-stamped {@link FORWARDED_HOST_HEADER} /
    * {@link FORWARDED_STAGE_HEADER}. Enable only where every path to the listener
    * goes through a front door that overwrites or strips them (the container
-   * compute behind its internal load balancer). Default `false`.
+   * compute behind its internal load balancer). A request whose stamped headers
+   * aren't exactly one well-formed value each is refused with a 400. Default `false`.
    */
   trustForwardedHeaders?: boolean;
   /** Public origin for request URLs when no front door stamped one. Default: `BLOCKS_PUBLIC_ORIGIN`. */
   publicOrigin?: string;
   /**
    * Largest accepted request body. Default: the JSON-RPC body limit (10 MiB).
-   * JSON-RPC bodies stay capped at that limit regardless; a larger value only
-   * raises the limit for RawRoutes.
+   * JSON-RPC bodies stay capped at that limit regardless — checked while reading,
+   * before buffering past it; a larger value only raises the limit for RawRoutes.
    */
   maxBodyBytes?: number;
   /** How long {@link HttpServerHandle.close} waits for in-flight requests. Default `25000`. */
@@ -72,6 +74,13 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 25_000;
 const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 
 /**
+ * How long a client has to send a whole request (headers and body). Above the
+ * longest front-door timeout (60 s), well below Node's 300 s default, so a
+ * trickled upload can't hold a buffer for minutes.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
  * How long to keep reading (and discarding) an oversized body before answering
  * 413. Bounds how long a slow or endless upload can hold the connection.
  */
@@ -79,6 +88,12 @@ const OVERSIZED_BODY_LINGER_MS = 5_000;
 
 /** API Gateway stage names: letters, digits, `-` and `_`. */
 const STAGE_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * A stamped host: a DNS name or IP address with an optional port. Nothing that
+ * could carry userinfo, a path or a second host (`x@evil/`, `a, b`).
+ */
+const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
 
 interface RequestEnv {
   dispatch: Dispatcher;
@@ -117,31 +132,50 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
   let draining = false;
   let inFlight = 0;
   const idleWaiters: Array<() => void> = [];
+  // Open connections, and those with a response in progress (counted per socket).
+  const sockets = new Set<net.Socket>();
+  const busy = new Map<net.Socket, number>();
 
   const server = http.createServer((req, res) => {
     inFlight++;
-    handleRequest(req, res, env)
-      .catch((error: unknown) => {
-        // The client went away mid-request (e.g. an aborted upload): nothing to answer.
-        if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
-        console.error('HTTP server error:', error);
-        if (res.destroyed) return;
-        if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-        }
-        res.end(JSON.stringify({ error: 'Internal Server Error' }));
-      })
-      .finally(() => {
-        // Counted until the handler settles, not until the client disconnects, so
-        // draining never cuts off work still running for a client that went away.
-        inFlight--;
-        if (inFlight === 0) {
-          for (const resolve of idleWaiters.splice(0)) resolve();
-        }
-      });
+    const socket = req.socket;
+    busy.set(socket, (busy.get(socket) ?? 0) + 1);
+    // While draining, close each connection once its response is written.
+    if (draining) res.shouldKeepAlive = false;
+    const handled = handleRequest(req, res, env).catch((error: unknown) => {
+      // The client went away mid-request (e.g. an aborted upload): nothing to answer.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
+      console.error('HTTP server error:', error);
+      if (res.destroyed) return;
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+      }
+      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+    });
+    // The response is done once it is handed to the OS (or the client is gone).
+    const responded = new Promise<void>((resolve) => res.once('close', resolve));
+    // Counted until the handler settles AND its response has been written — not
+    // until the client disconnects — so draining never cuts off work still running
+    // for a client that went away, nor a large response still being flushed.
+    void responded.then(() => {
+      const remaining = (busy.get(socket) ?? 1) - 1;
+      if (remaining > 0) busy.set(socket, remaining);
+      else busy.delete(socket);
+    });
+    void Promise.all([handled, responded]).finally(() => {
+      inFlight--;
+      if (inFlight === 0) {
+        for (const resolve of idleWaiters.splice(0)) resolve();
+      }
+    });
+  });
+  server.on('connection', (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
   });
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = KEEP_ALIVE_TIMEOUT_MS + 1_000;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
 
   const health = http.createServer((_req, res) => {
     const status = draining ? 503 : 200;
@@ -160,9 +194,16 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
   let closing: Promise<void> | undefined;
   async function drainAndClose(): Promise<void> {
     draining = true;
-    server.close();
-    // Idle keep-alive sockets would otherwise hold close() open until they time out.
-    server.closeIdleConnections();
+    // Stop accepting connections with the socket server's close, not
+    // http.Server#close: that also sweeps the connections Node deems idle, which
+    // include one whose response has ended but is still being flushed — cutting
+    // the response short.
+    net.Server.prototype.close.call(server);
+    // Idle keep-alive connections would otherwise hold the drain open until they
+    // time out; one with a response in progress closes once it is written.
+    for (const socket of sockets) {
+      if (!busy.has(socket)) socket.destroy();
+    }
     if (inFlight > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, drainTimeoutMs);
@@ -214,6 +255,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const origin = header(req, 'origin') ?? '';
   // Front doors forward the routing path itself (no API Gateway stage).
   const { pathname } = splitTarget(req.url ?? '/');
+  // JSON-RPC is capped at its own limit whatever `maxBodyBytes` allows RawRoutes.
+  const bodyLimit = isRpcPath(pathname) ? Math.min(env.maxBodyBytes, MAX_RPC_BODY_BYTES) : env.maxBodyBytes;
 
   // The request signal fires when the client goes away before the response is
   // written, so handlers can stop in-flight fetch / SDK calls.
@@ -222,12 +265,26 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     if (!res.writableFinished) abort.abort();
   });
 
-  const body = await readBody(req, env.maxBodyBytes);
+  const body = await readBody(req, bodyLimit);
   if (body === undefined) {
     await discardRemainingBody(req);
     // Still uploading after the linger window: answer, then drop the connection.
     if (!req.complete) res.setHeader('Connection', 'close');
-    writeResponse(res, payloadTooLarge(pathname, origin));
+    writeResponse(res, payloadTooLarge(pathname, origin, bodyLimit));
+    return;
+  }
+
+  // A front door overwrites the stamped headers with a single value. Two values
+  // mean a client sent its own under a name the front door didn't overwrite (a
+  // different letter case, say), and a malformed one could move the URL's host:
+  // refuse the request rather than guess which value is the front door's.
+  if (env.trustForwardedHeaders && !hasValidStampedHeaders(req)) {
+    writeResponse(res, {
+      status: 400,
+      headers: { 'Content-Type': 'application/json', ...buildCorsHeaders(origin) },
+      cookies: [],
+      body: JSON.stringify({ error: 'Bad Request' }),
+    });
     return;
   }
 
@@ -250,14 +307,14 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
  * path (what `parseRpcRequest` answers, so the client surfaces `e.status === 413`
  * and `PayloadTooLarge`), a plain 413 elsewhere.
  */
-function payloadTooLarge(pathname: string, origin: string): Omit<DispatchResponse, 'kind'> {
+function payloadTooLarge(pathname: string, origin: string, limitBytes: number): Omit<DispatchResponse, 'kind'> {
   const cors = buildCorsHeaders(origin);
   if (isRpcPath(pathname)) {
     return {
       status: 200,
-      headers: { 'Content-Type': 'application/json', ...cors, 'Cache-Control': 'no-store' },
+      headers: rpcResponseHeaders(cors),
       cookies: [],
-      body: payloadTooLargeResponse(),
+      body: payloadTooLargeResponse(limitBytes),
     };
   }
   return {
@@ -378,24 +435,43 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
 }
 
 /**
+ * Whether the front-door-stamped headers, where present, are one well-formed
+ * value each: {@link FORWARDED_HOST_HEADER} a host (see
+ * {@link STAMPED_HOST_PATTERN}), {@link FORWARDED_STAGE_HEADER} a stage name.
+ */
+function hasValidStampedHeaders(req: http.IncomingMessage): boolean {
+  const host = req.headersDistinct[FORWARDED_HOST_HEADER];
+  if (host && (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]))) return false;
+  const stage = req.headersDistinct[FORWARDED_STAGE_HEADER];
+  if (stage && (stage.length !== 1 || !STAGE_PATTERN.test(stage[0]))) return false;
+  return true;
+}
+
+/**
  * Split a request target into its path and query without resolving it as a URL:
  * `//host/x` stays a path (not a protocol-relative reference to `host`), and an
  * absolute-form target (`http://host/x`, as sent to a proxy) contributes only its
- * path and query, never its host.
+ * raw path and query — never its host, and with `..` segments left as sent, as
+ * for any other target.
  */
 function splitTarget(target: string): { pathname: string; search: string } {
-  if (!target.startsWith('/')) {
-    try {
-      const { pathname, search } = new URL(target);
-      return { pathname, search };
-    } catch {
-      return { pathname: '/', search: '' };
-    }
-  }
-  const query = target.indexOf('?');
+  const pathAndQuery = target.startsWith('/') ? target : absoluteFormPath(target);
+  const query = pathAndQuery.indexOf('?');
   return query === -1
-    ? { pathname: target, search: '' }
-    : { pathname: target.slice(0, query), search: target.slice(query) };
+    ? { pathname: pathAndQuery, search: '' }
+    : { pathname: pathAndQuery.slice(0, query), search: pathAndQuery.slice(query) };
+}
+
+/** The raw path and query of an absolute-form target (`http://host/x?y` → `/x?y`); `/` for anything else. */
+function absoluteFormPath(target: string): string {
+  const scheme = target.indexOf('://');
+  if (scheme === -1) return '/';
+  const authority = target.slice(scheme + 3);
+  // The path starts where the authority ends.
+  const end = authority.search(/[/?#]/);
+  if (end === -1) return '/';
+  const rest = authority.slice(end).split('#')[0];
+  return rest.startsWith('/') ? rest : `/${rest}`;
 }
 
 /** A single request header value (Node lower-cases names; repeats are joined). */
