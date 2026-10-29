@@ -471,6 +471,89 @@ describe('pool removal is refused at synth (layer 1)', () => {
 	});
 });
 
+// ── A change that was only synthesized, then reverted ──────────────────────
+
+describe('reverting a change that was synthesized but never deployed', () => {
+	/** The positions of `needles` in `haystack`, asserting each is present. */
+	const positions = (haystack: string, needles: string[]) =>
+		needles.map((needle) => {
+			const at = haystack.indexOf(needle);
+			assert.ok(at >= 0, `expected ${JSON.stringify(needle)} in:\n${haystack}`);
+			return at;
+		});
+
+	test('add a custom attribute, synth, revert, synth: refused, the violation before the re-baseline hint', () => {
+		// The baseline advances at synth, not at deploy. Layer 1 cannot tell a
+		// synthesized-only attribute from a deployed one, so it refuses — shows
+		// what is wrong, then how to get out when nothing reached AWS, then the
+		// advice for a deployed pool.
+		const dir = deployedAppDir();
+		const withPlan =
+			"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }, { name: 'plan', type: 'String', mutable: true }], groups: ['admins'] } })";
+		const added = synthGuarded({ build: asBuild(withPlan), appDir: dir });
+		assert.ok(added.ok, added.stderr);
+		assert.ok(added.infos.some((m) => m.includes('updated the user-pool baseline')));
+
+		const reverted = synthGuarded({ build: asBuild(BASE), appDir: dir });
+		assert.strictEqual(reverted.ok, false, 'synth must still fail: the guard cannot know it was never deployed');
+		const [headline, violation, hint, revert] = positions(reverted.stderr, [
+			"Auth 'TestStack-auth': this change cannot be deployed",
+			"custom attribute 'custom:plan' removed (was: String, mutable)",
+			'If this was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=TestStack-auth <your synth/deploy command>',
+			'If it was deployed — Remedy: Revert the change.',
+		]);
+		assert.ok(headline < violation && violation < hint && hint < revert, reverted.stderr);
+
+		// Following the hint: re-baseline, then plain synths pass.
+		const rebaselined = synthGuarded({
+			build: asBuild(BASE),
+			appDir: dir,
+			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
+		});
+		assert.ok(rebaselined.ok, rebaselined.stderr);
+		const again = synthGuarded({ build: asBuild(BASE), appDir: dir });
+		assert.ok(again.ok, again.stderr);
+	});
+
+	test('the same for a first synth with users.caseSensitive: false, reverted', () => {
+		const dir = appDir();
+		const insensitive = synthGuarded({
+			build: "const auth = new Auth(stack, 'auth', { users: { caseSensitive: false } });",
+			appDir: dir,
+		});
+		assert.ok(insensitive.ok, insensitive.stderr);
+		const reverted = synthGuarded({ build: "const auth = new Auth(stack, 'auth');", appDir: dir });
+		assert.strictEqual(reverted.ok, false);
+		const [violation, hint, revert] = positions(reverted.stderr, [
+			'CaseSensitive: false → true',
+			'If this was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=TestStack-auth',
+			'If it was deployed — Remedy: Revert the change.',
+		]);
+		assert.ok(violation < hint && hint < revert, reverted.stderr);
+	});
+
+	test('a pool removal: refused, leading with the danger and the stack check before the re-baseline hint', () => {
+		// No deploy-time backstop for a removal: the danger comes first.
+		const result = synthGuarded({
+			build: asBuild(POOL_REMOVED['last pool-backed method removed (direct OIDC only)']),
+			appDir: deployedAppDir(),
+		});
+		assert.strictEqual(result.ok, false);
+		const [danger, check, hint, violation, keep, deliberate] = positions(result.stderr, [
+			'This removes the user pool. If it was ever deployed, the next deploy deletes it and every user in it, and nothing at deploy time stops that.',
+			'Check your deployed stack first',
+			'If it was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=TestStack-auth',
+			'the user pool would be removed from the stack',
+			'If the pool was deployed — Remedy: keep a pool-backed sign-in method',
+			'If removing the pool is deliberate, re-baseline',
+		]);
+		assert.ok(
+			danger < check && check < hint && hint < violation && violation < keep && keep < deliberate,
+			result.stderr,
+		);
+	});
+});
+
 // ── The baseline file ──────────────────────────────────────────────────────
 
 describe('the baseline file', () => {

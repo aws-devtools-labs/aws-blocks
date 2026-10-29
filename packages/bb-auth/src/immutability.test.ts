@@ -255,6 +255,63 @@ describe('checkBaseline (the file layer)', () => {
 		assert.strictEqual(checkBaseline(input(g, owned(base()))).status, 'updated');
 	});
 
+	/** The message's lines after the headline, without the per-violation bullets. */
+	const guidance = (message: string) =>
+		message
+			.split('\n')
+			.slice(1)
+			.filter((line) => line.length > 0 && !line.startsWith('  '));
+
+	test('a rejection lists the violation, then the never-deployed re-baseline, then the revert advice (synth-only add → revert)', () => {
+		// The baseline advances at synth, so a custom attribute that was only
+		// synthesized is recorded as if deployed. Layer 1 cannot tell the two
+		// apart: it still refuses, shows what is wrong, and then says how to get
+		// out when nothing was deployed, before the advice for a deployed pool.
+		const f = file();
+		checkBaseline(input(f, owned(base())));
+		const added = snapshotFromTemplate({ ...BASE_L1, schema: [...BASE_L1.schema, { name: 'plan', mutable: true }] });
+		assert.strictEqual(checkBaseline(input(f, owned(added))).status, 'updated');
+		const before = readFileSync(f, 'utf8');
+		const out = checkBaseline(input(f, owned(base())));
+		assert.ok(out.status === 'rejected', 'still refused: the guard cannot know the attribute was never deployed');
+		assert.strictEqual(readFileSync(f, 'utf8'), before, 'and the baseline is left untouched');
+		const lines = out.message.split('\n');
+		assert.match(lines[0], /^Auth 'MyApp-prod-auth': this change cannot be deployed to the existing user pool\.$/);
+		assert.match(lines[1], /^ {2}• custom attribute 'custom:plan' removed/, 'the violation comes right after the headline');
+		const [first, ...rest] = guidance(out.message);
+		assert.match(
+			first,
+			/^If this was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=MyApp-prod-auth <your synth\/deploy command>, then commit the file\./,
+		);
+		assert.match(first, /advances when you synthesize, not when you deploy/);
+		assert.match(first, /the deploy-time guard still refuses it/);
+		assert.match(rest[0], /^If it was deployed — Remedy: Revert the change\./);
+		assert.match(out.message, /custom attribute 'custom:plan' removed/);
+		// Following the hint resolves it.
+		assert.strictEqual(checkBaseline(input(f, owned(base()), true)).status, 'rebaselined');
+		assert.strictEqual(checkBaseline(input(f, owned(base()))).status, 'unchanged');
+	});
+
+	test('a pool-removal rejection leads with the danger and the stack check, then the never-deployed re-baseline', () => {
+		// Nothing at deploy time refuses a pool removal (layer 2 goes with the
+		// pool), so a re-baseline after a real deploy deletes every user. The
+		// message must say so, and how to check, before it offers the re-baseline.
+		const f = file();
+		checkBaseline(input(f, { ownsPool: false, pool: null }));
+		assert.strictEqual(checkBaseline(input(f, owned(base()))).status, 'updated');
+		const out = checkBaseline(input(f, { ownsPool: false, pool: null }));
+		assert.ok(out.status === 'rejected' && out.violations[0].property === 'poolRemoved');
+		const lines = guidance(out.message);
+		assert.match(
+			lines[0],
+			/^This removes the user pool\. If it was ever deployed, the next deploy deletes it and every user in it, and nothing at deploy time stops that\. Check your deployed stack first/,
+		);
+		assert.match(lines[0], /aws cloudformation describe-stack-resources/);
+		assert.match(lines[1], /^If it was never deployed, re-baseline: BLOCKS_AUTH_REBASELINE=MyApp-prod-auth /);
+		assert.match(lines[2], /^If the pool was deployed — Remedy: keep a pool-backed sign-in method/);
+		assert.match(lines.at(-1) ?? '', /^If removing the pool is deliberate, re-baseline: BLOCKS_AUTH_REBASELINE=/);
+	});
+
 	test('rebaseline accepts anything and rewrites the file', () => {
 		const f = file();
 		checkBaseline(input(f, owned(base())));
