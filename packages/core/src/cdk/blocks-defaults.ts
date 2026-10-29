@@ -20,6 +20,18 @@ export interface BlocksThrottling {
 }
 
 /**
+ * Where AWS Blocks stores the secrets it generates for its own Building Blocks.
+ *
+ * - `'ssm'`: an SSM Parameter Store SecureString (standard tier, encrypted
+ *   with the `aws/ssm` key).
+ * - `'secrets-manager'`: an AWS Secrets Manager secret (encrypted with the
+ *   `aws/secretsmanager` key).
+ *
+ * See {@link BlocksDefaults.secretsStore}.
+ */
+export type BlocksSecretsStore = 'ssm' | 'secrets-manager';
+
+/**
  * Default values for every Amazon-authored Building Block created within a
  * `BlocksStack` or `BlocksBackend`. A per-block option always overrides the
  * corresponding default (`option ?? scope.defaults.field`).
@@ -148,6 +160,36 @@ export interface BlocksDefaults {
 	storageAccessLogging?: boolean;
 
 	/**
+	 * Where AWS Blocks stores the secrets it generates for its own Building
+	 * Blocks. It currently applies to the `Realtime` connection token key; other
+	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
+	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
+	 * are not affected.
+	 *
+	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
+	 *   per key, with a CloudFormation-generated name and value. The app's
+	 *   execution role can only read it. It is deleted with the stack.
+	 * - `'ssm'` (the `sandbox` preset): one SSM SecureString per key, written at
+	 *   deploy time. This has no per-secret charge, which suits short-lived
+	 *   stacks.
+	 *
+	 * Changing this value on a deployed stack creates new keys in the new store.
+	 * For `Realtime`, open connection tokens are rejected once and clients
+	 * reconnect.
+	 *
+	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
+	 * when this is `'ssm'` and the stack looks like production: the
+	 * `sandboxMode` context is not `'true'`, {@link removalPolicy} is `RETAIN`,
+	 * or {@link deletionProtection} is on. Acknowledge it with
+	 * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox')`
+	 * if SSM is a deliberate choice.
+	 *
+	 * The local mock ignores this field; local development behaves the same in
+	 * both modes.
+	 */
+	secretsStore: BlocksSecretsStore;
+
+	/**
 	 * Place the app's compute and VPC-resident resources in a VPC. Pass a
 	 * standard CDK VPC — Blocks handles Lambda placement, endpoint provisioning
 	 * (based on which Building Blocks are in scope), and security-group wiring.
@@ -242,6 +284,7 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
+		secretsStore: 'ssm',
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -261,5 +304,6 @@ export const BlocksPresets = {
 		// per stack once you've confirmed a single Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
+		secretsStore: 'secrets-manager',
 	},
 } satisfies Record<string, BlocksDefaults>;
