@@ -331,7 +331,7 @@ nearest hooked ancestor instead.
 | `authenticator-error` | Inline error message. Absent when the state carries no error |
 | `authenticator-action-<action>` | One wrapper per rendered action, e.g. `authenticator-action-signIn`. It is a `<form>` holding the action's inputs and submit button (it never navigates). Federated actions keep their provider suffix, so `signIn:google` gives `authenticator-action-signIn:google` |
 | `authenticator-<field>` | One per input, named after the field the server declared, e.g. `authenticator-username`, `authenticator-password`, `authenticator-code`. Hidden fields (session tokens, echoed usernames) carry it too |
-| `authenticator-submit` | The action's submit button |
+| `authenticator-submit` | The action's submit button. Disabled on an action marked `unavailable` (a social or SAML provider in `npm run dev`), whose form then also shows the reason as hint text |
 | `authenticated-content` | Container returned by `AuthenticatedContent` |
 | `account-menu` | Container returned by `AccountMenuBar` |
 | `account-menu-username` | Signed-in user's display name (`displayName`, else the username) in the bar |

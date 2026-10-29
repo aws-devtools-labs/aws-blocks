@@ -16,7 +16,7 @@
  *
  * | Construct id | Method | Path | |
  * |---|---|---|---|
- * | `auth-signin-<id>` | GET | `<base>/signin/<id>` | `302` to the IdP + pending cookie |
+ * | `auth-signin-<id>` | GET | `<base>/signin/<id>` | `302` to the IdP + pending cookie; a provider unavailable in this runtime answers `501` — JSON, or an explanatory HTML page for a browser navigation |
  * | `auth-callback` | GET | `<base>/callback` | the {@link dispatchCallback} → `302` landing / relay, or 4xx JSON |
  * | `auth-signout` | POST | `<base>/signout` | ends the session; a browser form gets `303` to the IdP logout (or `postSignOutPath`), an API client `204` (`?format=json`: `200 { logoutUrl? }`) |
  * | `auth-signout-landing` | GET | `<base>/signout` | where Cognito's `/logout` returns (with a GET): `302` to `postSignOutPath`; changes no state |
@@ -70,6 +70,7 @@ import type {
 	ResolvedProvider,
 } from './engines/types.js';
 import { AuthErrors } from './errors.js';
+import { providerDisplayName } from './provider-names.js';
 import { safeRedirectPath } from './redirect-path.js';
 import { validateRelay } from './relay.js';
 import { decodeState, encodeState, relayStateKey, type StatePayload } from './state-envelope.js';
@@ -199,6 +200,67 @@ function sendRedirect(ctx: BlocksContext, location: string, status = 302): void 
 	ctx.response.headers.set('Location', location);
 	ctx.response.headers.set('Cache-Control', 'no-store');
 	ctx.response.send('');
+}
+
+/** Escape text for an HTML text node or a double-quoted attribute. */
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+/** Whether the request is a browser page load (the `Authenticator`'s sign-in button, a typed URL). */
+function acceptsHtml(ctx: BlocksContext): boolean {
+	if (ctx.request.headers.get('sec-fetch-mode') === 'navigate') return true;
+	return (ctx.request.headers.get('accept') ?? '').toLowerCase().includes('text/html');
+}
+
+/**
+ * The page a browser gets when it navigates to the sign-in route of a provider
+ * this runtime cannot serve (a hosted-UI provider in `npm run dev`): the same
+ * `501` and explanation an API client gets as JSON, readable. Self-contained —
+ * no script, no external resource — and locked down by its CSP (no framing)
+ * and `nosniff`. Every interpolated value (the provider id reaches the title,
+ * the heading and the message) is HTML-escaped.
+ */
+function sendUnavailablePage(
+	ctx: BlocksContext,
+	providerId: string,
+	unavailable: { readonly hint: string; readonly message: string },
+): void {
+	const title = `${providerDisplayName(providerId)} sign-in is not available here`;
+	const html = [
+		'<!doctype html>',
+		'<html lang="en">',
+		'<head>',
+		'<meta charset="utf-8">',
+		'<meta name="viewport" content="width=device-width, initial-scale=1">',
+		`<title>${escapeHtml(title)}</title>`,
+		'<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.5;color:#1f2328}code{background:#f6f8fa;padding:0 .2em}</style>',
+		'</head>',
+		'<body>',
+		'<main>',
+		`<h1>${escapeHtml(title)}</h1>`,
+		`<p><strong>${escapeHtml(unavailable.hint)}</strong></p>`,
+		`<p>${escapeHtml(unavailable.message)}</p>`,
+		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderMisconfigured)}</code>. See "Social sign-in" in the Auth README (<code>@aws-blocks/bb-auth</code>).</p>`,
+		'<p><a href="/">Back to the app</a></p>',
+		'</main>',
+		'</body>',
+		'</html>',
+	].join('\n');
+	ctx.response.status = 501;
+	ctx.response.headers.set('Content-Type', 'text/html; charset=utf-8');
+	ctx.response.headers.set('Cache-Control', 'no-store');
+	ctx.response.headers.set(
+		'Content-Security-Policy',
+		"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+	);
+	ctx.response.headers.set('X-Content-Type-Options', 'nosniff');
+	ctx.response.send(html);
 }
 
 /** `{ error, name }` with the error's status — `AuthOIDC`'s error body. */
@@ -402,7 +464,7 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 	const scope = host.scope;
 
 	// ── Sign-in kickoff (server-initiated) ─────────────────────────────────
-	for (const { provider } of host.providers) {
+	for (const { provider, engine } of host.providers) {
 		new RawRoute(scope, `auth-signin-${provider.id}`, {
 			method: 'GET',
 			path: paths.signIn(provider.id),
@@ -412,6 +474,12 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 					const url = await host.signInUrl(ctx, provider.id, redirectPath ? { redirectPath } : {});
 					sendRedirect(ctx, url);
 				} catch (e) {
+					// A browser that lands here for a provider this runtime cannot
+					// serve gets a readable page; an API client keeps the JSON body.
+					if (engine.unavailable && acceptsHtml(ctx)) {
+						sendUnavailablePage(ctx, provider.id, engine.unavailable);
+						return;
+					}
 					sendError(host, ctx, e);
 				}
 			},

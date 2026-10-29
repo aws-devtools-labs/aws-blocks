@@ -37,6 +37,8 @@ export interface ProviderAction {
 	label: string;
 	/** Where the browser goes to start the sign-in (a GET). */
 	url: string;
+	/** Set when the provider cannot sign in in this runtime: the reason, shown with the disabled button. */
+	unavailable?: string;
 }
 
 /** A required custom attribute the sign-up form must collect. */
@@ -98,7 +100,8 @@ function humanizeAttributeName(name: string): string {
  *   when self-service sign-up is on, and `resetPassword` (always offered;
  *   whether the user exists is never revealed).
  * - Then one `signIn:<id>` action per federated provider, carrying `url` and
- *   `method: 'GET'`, with no fields.
+ *   `method: 'GET'`, with no fields — and `unavailable` (the reason) when the
+ *   provider cannot sign in in this runtime (a hosted-UI provider locally).
  *
  * With `emailPassword: false` only the provider actions remain, so the UI
  * matches the compile-time gate by construction.
@@ -162,7 +165,14 @@ export function signedOut(input: SignedOutInput): AuthState<never> {
 	}
 
 	for (const p of input.providers ?? []) {
-		actions.push({ name: `signIn:${p.id}`, label: p.label, fields: [], url: p.url, method: 'GET' });
+		actions.push({
+			name: `signIn:${p.id}`,
+			label: p.label,
+			fields: [],
+			url: p.url,
+			method: 'GET',
+			...(p.unavailable ? { unavailable: p.unavailable } : {}),
+		});
 	}
 
 	return {
