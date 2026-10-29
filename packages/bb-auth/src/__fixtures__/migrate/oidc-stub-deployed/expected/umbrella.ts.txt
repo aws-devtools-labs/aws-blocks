@@ -1,0 +1,12 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+export const auth = new blocks.Auth(scope, 'umbrella-auth', {
+	emailPassword: false,
+	oidcProviders: {
+		dev: blocks.stubIdp({
+			scopes: ['openid'],
+		}),
+	},
+});

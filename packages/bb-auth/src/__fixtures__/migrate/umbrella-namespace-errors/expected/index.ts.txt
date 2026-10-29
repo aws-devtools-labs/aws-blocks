@@ -1,0 +1,25 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
+export const auth = new blocks.Auth(scope, 'auth');
+
+// Every way an error key is named through the umbrella namespace gets the same
+// key mapping (and split TODO) as through a named import (named.ts).
+export function isWrongCode(e: unknown): boolean {
+	// TODO(aws-blocks-auth-migrate): review this auth error check: Auth renamed some error names and changed which flows return which (see MIGRATION.md, "Error names").
+	// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+	return blocks.isBlocksError(e, blocks.AuthErrors.CodeMismatch);
+}
+
+// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+export type WrongCode = typeof blocks.AuthErrors.CodeMismatch;
+export const expired = blocks.AuthErrors['NotAuthenticated'];
+// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+const { CodeMismatch: InvalidCode, NotAuthorized: badCredentials } = blocks.AuthErrors;
+export { InvalidCode, badCredentials };
