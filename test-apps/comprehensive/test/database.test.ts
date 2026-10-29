@@ -200,6 +200,20 @@ export function databaseTests(getApi: () => typeof apiType) {
       await api.dbDelete(b);
     });
 
+    for (const second of ['transaction', 'query', 'execute'] as const) {
+      test(`Database - overlapping ${second} is isolated from a rolled-back transaction`, async () => {
+        const api = getApi();
+        const prefix = `overlap-${second}-${Date.now().toString(36)}`;
+        try {
+          const rows = await api.dbOverlappingTransactions(prefix, second);
+          assert.deepStrictEqual(rows, [{ id: `${prefix}-b` }], 'only B must persist after A rolls back');
+        } finally {
+          await api.dbDelete(`${prefix}-a`);
+          await api.dbDelete(`${prefix}-b`);
+        }
+      });
+    }
+
     // Kysely typed query — the backend builds a typed query via createKyselyAdapter
     // (typing is enforced by the harness tsc check); this just verifies it runs.
     test('Database - Kysely typed select returns typed rows', async () => {
