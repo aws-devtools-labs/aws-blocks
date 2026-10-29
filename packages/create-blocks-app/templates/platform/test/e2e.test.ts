@@ -73,11 +73,21 @@ test('health: public liveness check', async () => {
 // upload URL, PUT the bytes directly (no bytes through the API), then ask for a
 // download URL and GET them back. Backed by the dev server's local file server,
 // so it runs with no AWS. The Content-Type on the PUT must match the one the
-// upload URL was signed with (presigned-URL parity with S3).
+// upload URL was signed with (presigned-URL parity with S3). Both methods
+// require sign-in and scope the path to the caller's own folder.
 test('files: presigned upload/download round-trips', async () => {
   const path = 'reports/data.txt';
   const contentType = 'text/plain';
   const payload = 'headless client via presigned url';
+
+  await assert.rejects(api.createUploadUrl(path, contentType), 'an upload URL requires sign-in');
+
+  const state = await authApi.setAuthState({
+    action: 'signUp',
+    username: `e2e-files-${Date.now().toString(36)}`,
+    password: 'password123',
+  });
+  assert.strictEqual(state.state, 'signedIn');
 
   const { url: uploadUrl } = await api.createUploadUrl(path, contentType);
   const putRes = await fetch(uploadUrl, {
