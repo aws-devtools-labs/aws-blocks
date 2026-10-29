@@ -8,7 +8,8 @@
  *
  * Runs during `cdk deploy`, never at request time. It reads and decrypts each
  * secret `ProviderDetails` value (`client_secret`, Apple's `private_key`) from
- * its SSM SecureString **by name** and calls `CreateIdentityProvider` /
+ * its SSM SecureString **by name** — or, for a provider secret given as a
+ * `Secret`, its Secrets Manager value **by ARN** — and calls `CreateIdentityProvider` /
  * `UpdateIdentityProvider` / `DeleteIdentityProvider`, so the secret reaches
  * Cognito without ever appearing in the CloudFormation template —
  * CloudFormation accepts no `ssm-secure` dynamic reference on
@@ -33,11 +34,15 @@ import {
 	type IdentityProviderTypeType,
 	UpdateIdentityProviderCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 
 /** Minimal client shapes, so the handler can be tested with fakes. */
 export interface SsmLike {
 	send(command: GetParameterCommand): Promise<{ Parameter?: { Value?: string } }>;
+}
+export interface SecretsManagerLike {
+	send(command: GetSecretValueCommand): Promise<{ SecretString?: string }>;
 }
 export interface IdpLike {
 	send(
@@ -58,6 +63,8 @@ export interface RegistrationProperties {
 	ProviderDetails?: Record<string, string>;
 	/** `ProviderDetails` key → SSM SecureString parameter name. */
 	SecretDetails?: Record<string, string>;
+	/** `ProviderDetails` key → Secrets Manager secret ARN (a provider secret given as a `Secret`). */
+	SecretsManagerDetails?: Record<string, string>;
 	AttributeMapping?: Record<string, string>;
 }
 
@@ -71,6 +78,8 @@ export interface CfnEvent {
 export interface HandlerOptions {
 	retries?: number;
 	retryDelayMs?: number;
+	/** Secrets Manager client for `SecretsManagerDetails`. @default a real client, created on first use */
+	secretsManager?: SecretsManagerLike;
 }
 
 const DEFAULT_RETRIES = 6;
@@ -131,6 +140,32 @@ export function createHandler(ssm: SsmLike, idp: IdpLike, options: HandlerOption
 		throw lastErr;
 	}
 
+	let secretsManager = options.secretsManager;
+
+	// Read a Secrets Manager secret's current string value by ARN. Same retry
+	// policy as `readSecret`; a terminal not-found or an empty secret surfaces an
+	// actionable message naming the secret.
+	async function readSecretsManagerValue(arn: string, providerName: string): Promise<string> {
+		secretsManager ??= new SecretsManagerClient({});
+		let lastErr: unknown;
+		for (let attempt = 0; attempt < retries; attempt++) {
+			try {
+				const r = await secretsManager.send(new GetSecretValueCommand({ SecretId: arn }));
+				return r.SecretString ?? '';
+			} catch (e) {
+				lastErr = e;
+				if (attempt < retries - 1) await sleep(retryDelayMs);
+			}
+		}
+		if (errorName(lastErr) === 'ResourceNotFoundException') {
+			throw new Error(
+				`Auth: Secrets Manager secret "${arn}" for identity provider "${providerName}" has no value (or does not exist). ` +
+					'Set its value — `npm run secret`, the console, or `aws secretsmanager put-secret-value` — and deploy again.',
+			);
+		}
+		throw lastErr;
+	}
+
 	async function resolveDetails(p: RegistrationProperties): Promise<Record<string, string>> {
 		const details: Record<string, string> = { ...(p.ProviderDetails ?? {}) };
 		for (const [key, parameter] of Object.entries(p.SecretDetails ?? {})) {
@@ -138,6 +173,15 @@ export function createHandler(ssm: SsmLike, idp: IdpLike, options: HandlerOption
 			if (!value) {
 				throw new Error(
 					`Auth: secret parameter "${parameter}" (${key}) for identity provider "${p.ProviderName}" is empty. Set its value before deploying.`,
+				);
+			}
+			details[key] = value;
+		}
+		for (const [key, arn] of Object.entries(p.SecretsManagerDetails ?? {})) {
+			const value = await readSecretsManagerValue(arn, p.ProviderName);
+			if (!value) {
+				throw new Error(
+					`Auth: Secrets Manager secret "${arn}" (${key}) for identity provider "${p.ProviderName}" is empty. Set its value before deploying.`,
 				);
 			}
 			details[key] = value;

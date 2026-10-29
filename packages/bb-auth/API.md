@@ -155,7 +155,7 @@ export type ApiMethods = Record<string, (...args: any[]) => any>;
 export interface AppleCredentials {
     clientId: string;
     keyId: string;
-    privateKey: AppSettingRef;
+    privateKey: ProviderSecretRef;
     teamId: string;
 }
 
@@ -430,7 +430,7 @@ export type CodeDeliveryPurpose = 'signUp' | 'resetPassword' | 'mfa' | 'attribut
 // @public
 export interface CognitoOidcProviderOptions extends OidcProviderBase {
     attributesRequestMethod?: 'GET' | 'POST';
-    clientSecret: AppSettingRef;
+    clientSecret: ProviderSecretRef;
     federateVia: 'cognito';
 }
 
@@ -485,7 +485,7 @@ export function customOauth2(options: CustomOauth2Options): OAuth2ProviderOption
 // @public
 export interface CustomOauth2Options {
     clientId: string;
-    clientSecret?: AppSettingRef;
+    clientSecret?: ProviderSecretRef;
     endpoints: OAuth2ProviderOptions['oauth2']['endpoints'];
     label?: string;
     mapClaims: (raw: unknown) => MappedClaims;
@@ -511,7 +511,7 @@ export interface DeviceRecord {
 
 // @public
 export interface DirectOidcProviderOptions extends OidcProviderBase {
-    clientSecret?: AppSettingRef;
+    clientSecret?: ProviderSecretRef;
     federateVia?: 'direct';
     groupsClaim?: string;
 }
@@ -586,7 +586,7 @@ export function github(options: GitHubOptions): OAuth2ProviderOptions;
 // @public
 export interface GitHubOptions {
     clientId: string;
-    clientSecret: AppSettingRef;
+    clientSecret: ProviderSecretRef;
     label?: string;
     scopes?: readonly string[];
 }
@@ -735,7 +735,7 @@ export interface OAuth2ProviderOptions extends DirectOidcProviderOptions {
 // @public
 export interface OAuthCredentials {
     clientId: string;
-    clientSecret: AppSettingRef;
+    clientSecret: ProviderSecretRef;
 }
 
 // @public
@@ -839,6 +839,9 @@ export type ProviderIdOf<O extends AuthOptions> = (O extends {
 } ? [S] extends [undefined] ? never : keyof NonNullable<S> & string : never);
 
 // @public
+export type ProviderSecretRef = AppSettingRef | SecretRef;
+
+// @public
 export type ReadAttrOf<O extends AuthOptions> = O extends {
     users: {
         attributes: readonly [unknown, ...unknown[]];
@@ -883,6 +886,12 @@ export interface SamlProviderOptions extends ProviderCommon {
     metadataFile?: string;
     metadataUrl?: string;
     signRequest?: boolean;
+}
+
+// @public
+export interface SecretRef {
+    readonly fullId: string;
+    get(): Promise<string | null>;
 }
 
 // @public

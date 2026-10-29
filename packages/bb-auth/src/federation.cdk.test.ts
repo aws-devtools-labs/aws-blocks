@@ -90,6 +90,7 @@ function synth(construct: string, options: SynthOptions = {}): CdkSynthResult {
 		imports: [
 			"import { Auth } from '@aws-blocks/bb-auth';",
 			"import { AppSetting } from '@aws-blocks/bb-app-setting';",
+			"import { Secret } from '@aws-blocks/bb-secret';",
 			"import { registerConfig } from '@aws-blocks/core/cdk';",
 		].join('\n'),
 		build: `${SECRETS}\n${options.before ?? ''}\nconst auth = ${construct};\n${options.after ?? ''}\nreport.fullId = auth.fullId;`,
@@ -624,6 +625,122 @@ describe('Auth federation — a provider secret resolves to its AppSetting param
 			() => synth(withSecret("{ fullId: 'TestStack-nowhere', get: async () => 'x' }")),
 			/socialProviders\.google\.clientSecret \('TestStack-nowhere'\) is not an AppSetting — it has no SSM parameter name/,
 		);
+	});
+});
+
+// ── Provider secrets given as a `Secret` (Secrets Manager) ──────────────────
+
+describe('Auth federation — a provider secret given as a Secret', () => {
+	const withSecret = (secretExpr: string) =>
+		`new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: ${secretExpr} } } })`;
+
+	/** Every statement of the registration Lambda's policy. */
+	function registrationStatements(template: CfnTemplateJson): Record<string, unknown>[] {
+		const policy = Object.values(template.Resources).find(
+			(r) =>
+				r.Type === 'AWS::IAM::Policy' &&
+				String(r.Metadata?.['aws:cdk:path']).startsWith('TestStack/auth/idp-registration-fn/'),
+		);
+		assert.ok(policy, 'the registration Lambda has a policy');
+		return ((policy.Properties?.PolicyDocument ?? {}) as { Statement: Record<string, unknown>[] }).Statement;
+	}
+	const withAction = (statements: Record<string, unknown>[], action: string) =>
+		statements.filter((st) => [st.Action].flat().includes(action));
+
+	test('a stack-managed Secret registers by its ARN, read only by the registration Lambda', () => {
+		const { template } = synth(withSecret("new Secret(stack, 'google-sm')"));
+		const p = idpRegistration(template, 'google');
+		assert.deepStrictEqual(p.SecretDetails, {}, 'nothing read from SSM');
+		const [secretId] = ofType(template, 'AWS::SecretsManager::Secret').find(([, r]) =>
+			String(r.Metadata?.['aws:cdk:path']).startsWith('TestStack/google-sm/'),
+		) ?? [undefined];
+		assert.ok(secretId, 'the Secret is in the template');
+		assert.deepStrictEqual(p.SecretsManagerDetails, { client_secret: { Ref: secretId } });
+
+		const statements = registrationStatements(template);
+		const read = withAction(statements, 'secretsmanager:GetSecretValue');
+		assert.strictEqual(read.length, 1);
+		assert.deepStrictEqual(read[0].Resource, { Ref: secretId }, 'exactly this secret, never a wildcard');
+		const decrypt = withAction(statements, 'kms:Decrypt');
+		assert.deepStrictEqual(
+			decrypt.map((st) => JSON.stringify(st.Condition)),
+			[
+				JSON.stringify({
+					StringEquals: {
+						'kms:ViaService': {
+							'Fn::Join': ['', ['secretsmanager.', { Ref: 'AWS::Region' }, '.amazonaws.com']],
+						},
+					},
+				}),
+			],
+			'decrypt only via Secrets Manager',
+		);
+		assert.deepStrictEqual(withAction(statements, 'ssm:GetParameter'), [], 'no SSM grant without an SSM secret');
+	});
+
+	test('a Secret.fromExisting() ARN is registered and granted verbatim', () => {
+		const arn = 'arn:aws:secretsmanager:us-east-1:123456789012:secret:shared/google-AbCdEf';
+		const { template } = synth(withSecret(`new Secret(stack, 'ext', { secret: Secret.fromExisting('${arn}') })`));
+		assert.deepStrictEqual(idpRegistration(template, 'google').SecretsManagerDetails, { client_secret: arn });
+		const read = withAction(registrationStatements(template), 'secretsmanager:GetSecretValue');
+		assert.deepStrictEqual(
+			read.map((st) => st.Resource),
+			[arn],
+		);
+	});
+
+	test('Apple private key and a cognito-federated OIDC secret accept a Secret too; AppSettings keep SSM', () => {
+		const { template } = synth(
+			`new Auth(stack, 'auth', { socialProviders: { ${P.google}, apple: { clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') } }, oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: new Secret(stack, 'okta-sm'), federateVia: 'cognito' } } })`,
+		);
+		const apple = idpRegistration(template, 'apple');
+		assert.deepStrictEqual(apple.SecretDetails, {});
+		assert.deepStrictEqual(Object.keys(apple.SecretsManagerDetails as object), ['private_key']);
+		const okta = idpRegistration(template, 'okta');
+		assert.deepStrictEqual(Object.keys(okta.SecretsManagerDetails as object), ['client_secret']);
+		const google = idpRegistration(template, 'google');
+		assert.deepStrictEqual(google.SecretDetails, { client_secret: '/TestStack-google-secret' });
+		assert.ok(!('SecretsManagerDetails' in google), 'an AppSetting-only registration keeps its old properties');
+		const statements = registrationStatements(template);
+		assert.strictEqual(withAction(statements, 'ssm:GetParameter').length, 1);
+		assert.strictEqual(withAction(statements, 'secretsmanager:GetSecretValue').length, 1);
+	});
+
+	test('a stack-managed Secret with no value warns at synth (the first deploy would fail); a valued one does not', () => {
+		const warningsFor = (construct: string) =>
+			synth(construct).warnings.filter((w) => /ProviderSecretWithoutValue|creates with no value/.test(w.message));
+		const valueless = warningsFor(withSecret("new Secret(stack, 'google-sm')"));
+		assert.strictEqual(valueless.length, 1);
+		assert.match(valueless[0].message, /socialProviders\.google\.clientSecret is the Secret 'TestStack-google-sm'/);
+		assert.match(valueless[0].message, /generate: true/);
+		assert.match(valueless[0].message, /npm run secret -- set/);
+		assert.match(valueless[0].message, /already exists/);
+		assert.match(valueless[0].message, /delete-secret/);
+
+		assert.deepStrictEqual(warningsFor(withSecret("new Secret(stack, 'google-gen', { generate: true })")), []);
+		assert.deepStrictEqual(
+			warningsFor(
+				withSecret(
+					"new Secret(stack, 'ext', { secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:g-AbCdEf') })",
+				),
+			),
+			[],
+			'an existing secret is owned outside the stack',
+		);
+		assert.deepStrictEqual(warningsFor(CONFIGS.socialOnly), [], 'an AppSetting is seeded by the deploy');
+		const apple = warningsFor(
+			`new Auth(stack, 'auth', { socialProviders: { apple: { clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') } } })`,
+		);
+		assert.strictEqual(apple.length, 1);
+		assert.match(apple[0].message, /socialProviders\.apple\.privateKey/);
+	});
+
+	test('an AppSetting-only configuration adds no Secrets Manager property or grant', () => {
+		const { template } = synth(CONFIGS.allSocial);
+		for (const id of ['google', 'facebook', 'amazon', 'apple']) {
+			assert.ok(!('SecretsManagerDetails' in idpRegistration(template, id)), id);
+		}
+		assert.deepStrictEqual(withAction(registrationStatements(template), 'secretsmanager:GetSecretValue'), []);
 	});
 });
 

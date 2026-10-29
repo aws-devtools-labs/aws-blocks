@@ -21,6 +21,18 @@ export type WritableSecret<_T = string> = Secret;
 export type SecretConstructor = typeof Secret;
 
 /**
+ * Symbol-keyed flag on a stack-managed `Secret` (absent on one wrapping
+ * `Secret.fromExisting()`): `true` when the secret is created with a value
+ * (`generate: true`), `false` when it starts empty. Read at synth by blocks
+ * that consume the value during the same deploy (`Auth`'s identity-provider
+ * registration), so they can warn before a deploy that would fail. A
+ * `Symbol.for` key, so a reader needs no dependency on this package.
+ *
+ * @internal
+ */
+const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
+
+/**
  * CDK construct for a single application secret backed by AWS Secrets Manager.
  *
  * Creates one `secretsmanager.Secret` (encrypted with the default
@@ -88,6 +100,7 @@ export class Secret extends BuildingBlockScope {
 				const cfn = l2.node.defaultChild as secretsmanager.CfnSecret;
 				cfn.addPropertyDeletionOverride('GenerateSecretString');
 			}
+			Reflect.set(this, SECRET_HAS_INITIAL_VALUE, options?.generate === true);
 			this.secret = l2;
 
 			// Tag the BB-created secret so it joins the stack's `-settings` resource

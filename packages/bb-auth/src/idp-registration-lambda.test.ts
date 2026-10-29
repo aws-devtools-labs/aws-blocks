@@ -10,7 +10,13 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { type CfnEvent, createHandler, type IdpLike, type SsmLike } from './idp-registration-lambda.js';
+import {
+	type CfnEvent,
+	createHandler,
+	type IdpLike,
+	type SecretsManagerLike,
+	type SsmLike,
+} from './idp-registration-lambda.js';
 
 interface Call {
 	name: string;
@@ -259,5 +265,93 @@ describe('IdP registration handler', () => {
 			}),
 			/unsupported identity provider type "GitHub"/,
 		);
+	});
+});
+
+// ── Provider secrets given as a `Secret` (Secrets Manager) ──────────────────
+
+function secretsManagerReturning(values: Record<string, string | undefined>): SecretsManagerLike & { reads: string[] } {
+	const reads: string[] = [];
+	return {
+		reads,
+		send: async (command) => {
+			const id = String(command.input.SecretId);
+			reads.push(id);
+			if (!(id in values)) throw Object.assign(new Error('missing'), { name: 'ResourceNotFoundException' });
+			return { SecretString: values[id] };
+		},
+	};
+}
+
+const GOOGLE_SECRET_ARN = 'arn:aws:secretsmanager:us-west-2:123456789012:secret:app-google-AbCdEf';
+
+const googleViaSecret: CfnEvent['ResourceProperties'] = {
+	...google,
+	SecretDetails: {},
+	SecretsManagerDetails: { client_secret: GOOGLE_SECRET_ARN },
+};
+
+describe('IdP registration handler — Secrets Manager secret details', () => {
+	test('Create: reads the secret by ARN and registers the provider with it', async () => {
+		const ssm = ssmReturning({});
+		const sm = secretsManagerReturning({ [GOOGLE_SECRET_ARN]: 'SM-SECRET' });
+		const cognito = cognitoFake();
+		await createHandler(ssm, cognito.idp, { ...fast, secretsManager: sm })({
+			RequestType: 'Create',
+			ResourceProperties: googleViaSecret,
+		});
+		assert.deepStrictEqual(sm.reads, [GOOGLE_SECRET_ARN]);
+		assert.deepStrictEqual(ssm.reads, [], 'no SSM read for a Secrets Manager secret');
+		const create = cognito.calls.find((c) => c.name === 'CreateIdentityProviderCommand');
+		assert.ok(create);
+		assert.deepStrictEqual(create.input.ProviderDetails, {
+			client_id: 'g-client',
+			authorize_scopes: 'openid email profile',
+			client_secret: 'SM-SECRET',
+		});
+	});
+
+	test('a secret with no value yet fails with a message naming the secret and the fix', async () => {
+		const sm = secretsManagerReturning({});
+		await assert.rejects(
+			createHandler(ssmReturning({}), cognitoFake().idp, { ...fast, secretsManager: sm })({
+				RequestType: 'Create',
+				ResourceProperties: googleViaSecret,
+			}),
+			(e: Error) => {
+				assert.match(e.message, new RegExp(GOOGLE_SECRET_ARN));
+				assert.match(e.message, /npm run secret/);
+				return true;
+			},
+		);
+		assert.strictEqual(sm.reads.length, fast.retries, 'retried like an SSM read');
+	});
+
+	test('an empty SecretString fails before calling Cognito', async () => {
+		const cognito = cognitoFake();
+		await assert.rejects(
+			createHandler(ssmReturning({}), cognito.idp, {
+				...fast,
+				secretsManager: secretsManagerReturning({ [GOOGLE_SECRET_ARN]: '' }),
+			})({ RequestType: 'Create', ResourceProperties: googleViaSecret }),
+			/is empty/,
+		);
+		assert.deepStrictEqual(cognito.calls, []);
+	});
+
+	test('SSM and Secrets Manager details merge into one registration', async () => {
+		const cognito = cognitoFake();
+		await createHandler(ssmReturning({ '/app-apple-key': 'PEM' }), cognito.idp, {
+			...fast,
+			secretsManager: secretsManagerReturning({ [GOOGLE_SECRET_ARN]: 'SM' }),
+		})({
+			RequestType: 'Create',
+			ResourceProperties: { ...apple, SecretsManagerDetails: { extra_secret: GOOGLE_SECRET_ARN } },
+		});
+		const create = cognito.calls.find((c) => c.name === 'CreateIdentityProviderCommand');
+		assert.ok(create);
+		const details = create.input.ProviderDetails as Record<string, string>;
+		assert.strictEqual(details.private_key, 'PEM');
+		assert.strictEqual(details.extra_secret, 'SM');
 	});
 });
