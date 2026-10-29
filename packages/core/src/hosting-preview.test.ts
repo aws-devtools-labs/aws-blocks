@@ -641,6 +641,22 @@ describe('the trim settings on their own', () => {
     ["buildId: 'fixed' behind the stacked door", { buildId: 'fixed', frontDoor: { kind: 'stacked', edge: 'cloudfront', router: 'alb' } }, /buildId: 'fixed'/],
     ['the preview preset with a CloudFront door override', { ...HostingPresets.preview, frontDoor: 'cloudfront' }, /UnsupportedHostingSettingError|not available/],
   ];
+  it('names every unsupported setting in one error, with the overrides for a preset spread', () => {
+    createSpaBuildOutput(tmpDir);
+    assert.throws(
+      () =>
+        new Hosting(newStack('RejectedAllAtOnce'), 'Hosting', {
+          ...HostingPresets.preview, frontDoor: 'cloudfront', root: tmpDir, api: MOCK_API,
+        }),
+      (err: Error & { resolution?: string }) =>
+        err.name === 'UnsupportedHostingSettingError' &&
+        /`imageOptimization: false`, `edgeRoutes: 'regional'`, `buildId: 'fixed'` are not available/.test(err.message) &&
+        /override after the preset spread \(`imageOptimization: true`, `edgeRoutes: 'edge'`, `buildId: 'per-deploy'`\)/.test(
+          err.resolution ?? '',
+        ),
+    );
+  });
+
   for (const [label, settings, message] of rejected) {
     it(`fails synth: ${label}`, () => {
       createSpaBuildOutput(tmpDir);

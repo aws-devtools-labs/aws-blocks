@@ -744,10 +744,11 @@ function isHttpApiDoor(frontDoor: HostingProps['frontDoor']): boolean {
 }
 
 /**
- * Fail synth for a setting the chosen door can't serve.
+ * Fail synth for the settings the chosen door can't serve, naming all of them
+ * at once (a preset spread can bring several).
  *
  * @param props the app's props.
- * @throws HostingError('UnsupportedHostingSettingError') naming the setting and the door.
+ * @throws HostingError('UnsupportedHostingSettingError') naming each setting and the door.
  */
 function assertDoorSupportsSettings(props: HostingProps): void {
   // `frontDoor: null` is the default door, as when it is omitted.
@@ -758,27 +759,41 @@ function assertDoorSupportsSettings(props: HostingProps): void {
       : typeof door === 'string'
         ? `'${door}'`
         : `{ kind: '${('kind' in door && door.kind) || 'cloudfront'}'${'api' in door && door.api ? `, api: '${door.api}'` : ''} }`;
-  const fail = (setting: string, needs: string) => {
-    throw new HostingError('UnsupportedHostingSettingError', {
-      message: `Hosting \`${setting}\` is not available behind frontDoor ${doorName}: ${needs}.`,
-      resolution:
-        "Use the API Gateway HTTP API door (`frontDoor: { kind: 'apiGateway' }`, as `HostingPresets.preview` does), or remove the setting.",
-    });
-  };
+  const unsupported: Array<{ setting: string; needs: string; override: string }> = [];
+  const fail = (setting: string, needs: string, override: string) => unsupported.push({ setting, needs, override });
   const httpApi = isHttpApiDoor(door);
   if (props.imageOptimization === false && !httpApi) {
-    fail('imageOptimization: false', "only the API Gateway HTTP API door's asset proxy answers the image endpoints without an image function");
+    fail(
+      'imageOptimization: false',
+      "only the API Gateway HTTP API door's asset proxy answers the image endpoints without an image function",
+      'imageOptimization: true',
+    );
   }
   if (props.edgeRoutes === 'regional' && !httpApi) {
-    fail("edgeRoutes: 'regional'", 'only the API Gateway HTTP API door routes a regional edge function straight to it');
+    fail(
+      "edgeRoutes: 'regional'",
+      'only the API Gateway HTTP API door routes a regional edge function straight to it',
+      "edgeRoutes: 'edge'",
+    );
   }
   const edgeCached =
     door === undefined ||
     door === 'cloudfront' ||
     (typeof door === 'object' && (!('kind' in door) || door.kind === undefined || door.kind === 'cloudfront' || door.kind === 'stacked'));
   if (props.buildId === 'fixed' && edgeCached) {
-    fail("buildId: 'fixed'", 'an edge cache would keep serving the files each deploy overwrites');
+    fail("buildId: 'fixed'", 'an edge cache would keep serving the files each deploy overwrites', "buildId: 'per-deploy'");
   }
+  if (unsupported.length === 0) return;
+  const settings = unsupported.map((u) => `\`${u.setting}\``).join(', ');
+  throw new HostingError('UnsupportedHostingSettingError', {
+    message:
+      `Hosting ${settings} ${unsupported.length === 1 ? 'is' : 'are'} not available behind frontDoor ${doorName}: ` +
+      `${unsupported.map((u) => `${u.setting}: ${u.needs}`).join('; ')}.`,
+    resolution:
+      "Use the API Gateway HTTP API door (`frontDoor: { kind: 'apiGateway' }`, as `HostingPresets.preview` does), " +
+      `or remove ${unsupported.length === 1 ? 'the setting' : 'the settings'} — or, when ${unsupported.length === 1 ? 'it comes' : 'they come'} from a preset, ` +
+      `override after the preset spread (${unsupported.map((u) => `\`${u.override}\``).join(', ')}).`,
+  });
 }
 
 
