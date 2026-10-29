@@ -8,19 +8,35 @@ import type { BlocksContext } from '@aws-blocks/core';
 // (which pulls in DOM-dependent UI helpers). The discriminated payload
 // map is re-exported alongside so customers calling `setAuthState`
 // directly get the typed overload.
-export type { AuthActionPayloadMap, AuthActionInput, AuthStateApi } from './ui.js';
+export type { AuthActionPayloadMap, AuthActionInput, AuthStateApi, AuthUserOf } from './ui.js';
+
+// Canonical auth error vocabulary + guards. See `errors.ts`.
+export { AuthErrors, isAuthError, isAuthErrorName } from './errors.js';
+export type { AuthErrorName } from './errors.js';
 
 /**
  * Common user shape returned by all auth Building Blocks.
  *
- * Provider-specific BBs extend this with additional fields
- * (e.g., `AuthBasicUser` adds `createdAt`, `AuthCognitoUser` adds `groups`).
+ * Auth BBs extend this with additional fields
+ * (e.g., `Auth`'s `AuthenticatedUser` adds `userSub`, `groups`, `attributes` and `signInProvider`).
  */
 export interface AuthUser {
 	/** Unique user identifier. */
 	userId: string;
 	/** Display name or username. */
 	username: string;
+	/**
+	 * A human-readable name to show the signed-in user ("Signed in as …"). On a
+	 * user pool whose users sign in with their email address or phone number,
+	 * `username` is an id Cognito generates; `displayName` is then their email
+	 * address or phone number.
+	 *
+	 * The auth block sets it on `AuthState.user`, which only the signed-in
+	 * caller's own state carries (never a signed-out or mid-challenge state).
+	 * Optional: fall back to `username` when it is absent. For display only —
+	 * never an identifier; key data on `userId` (or the block's `userSub`).
+	 */
+	displayName?: string;
 }
 
 /**
@@ -32,10 +48,23 @@ export interface AuthUser {
  *
  * ## Method Naming Conventions
  *
- * Follows [G14](../docs/tech-design/A0-API-DESIGN.md#g14-method-naming-conventions):
+ * Follows [G14](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/design/API-DESIGN.md#g14-method-naming-conventions):
  * - `requireAuth` — throws 401 if not authenticated (caller cannot proceed without value)
  * - `checkAuth` — returns boolean (for branching without retrieving the full object)
  * - `getCurrentUser` — returns null if not authenticated (caller can handle absence)
+ * - `requireRole` — throws 401 if not authenticated, 403 if not in the role
+ *
+ * ## Why the members are method shorthand
+ *
+ * Every member is declared as a method (`requireAuth(context): …`), never as a
+ * property holding a function type (`requireAuth: (context) => …`). Under
+ * `strictFunctionTypes`, only property-style function types check their
+ * parameters contravariantly; method shorthand checks them bivariantly. Auth
+ * BBs routinely *narrow* a parameter — e.g. `Auth.requireRole` takes the
+ * literal union of the groups it was configured with, not any `string` — and a
+ * narrowing implementation is only assignable to a method-shorthand member.
+ * Switching these to property syntax would break every such implementation.
+ * `blocks-auth.types-test.ts` pins this.
  */
 export interface BlocksAuth {
 	/**
@@ -44,12 +73,11 @@ export interface BlocksAuth {
 	 *
 	 * @param context - The BlocksContext from the API handler.
 	 * @returns The authenticated user.
-	 * @throws {ApiError} 401 when not authenticated. The error `name` is
-	 * `SessionExpiredException` for an absent or aged-out session; an
-	 * implementation that supports server-side revocation may instead throw
-	 * `SessionRevokedException` for a signed-out/revoked session (AuthBasic
-	 * does). Branch on `status === 401` to send users to sign-in regardless;
-	 * branch on the name only to message the two cases differently.
+	 * @throws {ApiError} 401 with name `NotAuthenticatedException` (`AuthErrors.NotAuthenticated`)
+	 * if not authenticated — the name `Auth` throws (as `AuthCognito` and `AuthOIDC` did; the removed
+	 * `AuthBasic` threw `SessionExpiredException`).
+	 * Branch on `status === 401` to send users to sign-in; branch on the name only to
+	 * message a case differently.
 	 */
 	requireAuth(context: BlocksContext): Promise<AuthUser>;
 
@@ -68,6 +96,28 @@ export interface BlocksAuth {
 	 * @returns The authenticated user, or `null` if no valid session.
 	 */
 	getCurrentUser(context: BlocksContext): Promise<AuthUser | null>;
+
+	/**
+	 * Require an authenticated user who is a member of `role`.
+	 *
+	 * Optional for now: only auth BBs with role/group support implement it
+	 * (`Auth` does; the removed `AuthBasic` and `AuthOIDC` did not). It becomes a
+	 * required member once the unified `Auth` Building Block has replaced the
+	 * provider-specific auth BBs.
+	 *
+	 * Implementations may narrow `role` to the roles they were configured with
+	 * (e.g. `Auth`'s declared `users.groups`) — see the note on method
+	 * shorthand above.
+	 *
+	 * @param context - The BlocksContext from the API handler.
+	 * @param role - The role (group) the user must belong to.
+	 * @returns The authenticated user.
+	 * @throws {ApiError} 401 with name `NotAuthenticatedException` (`AuthErrors.NotAuthenticated`)
+	 * if not authenticated.
+	 * @throws {ApiError} 403 with name `NotAuthorizedException` (`AuthErrors.NotAuthorized`)
+	 * if the user is not a member of `role`.
+	 */
+	requireRole?(context: BlocksContext, role: string): Promise<AuthUser>;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,8 +203,16 @@ export interface AuthAction {
  *    - External actions (with `url`): submits an HTML form to the external URL
  * 3. Receives the new `AuthState` and re-renders
  * 4. When `state === 'signedIn'`, renders the protected app
+ *
+ * `U` is the signed-in user's type. It defaults to {@link AuthUser}; an auth
+ * block that knows its configuration narrows it (`Auth.createApi()` carries
+ * the block's own user, with `groups`, `attributes` and `userSub`), so a
+ * frontend reads `state.user?.groups` with no cast. Native clients get the
+ * default (`@blocksCodegenDefaultTypeArgs`).
+ *
+ * @blocksCodegenDefaultTypeArgs
  */
-export interface AuthState {
+export interface AuthState<U extends AuthUser = AuthUser> {
 	/** Current state name. */
 	state:
 		| 'signedOut'
@@ -165,7 +223,7 @@ export interface AuthState {
 		| 'confirmingPasswordReset';
 
 	/** The authenticated user, present when `state === 'signedIn'`. */
-	user?: AuthUser;
+	user?: U;
 
 	/** Actions available from the current state. */
 	actions: AuthAction[];

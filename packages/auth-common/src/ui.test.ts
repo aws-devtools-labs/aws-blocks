@@ -566,6 +566,96 @@ describe('Authenticator', () => {
 	});
 });
 
+describe('Authenticator forms (password managers)', () => {
+	function actionEl(root: ParentNode, name: string): Element {
+		const el = root.querySelector(`[data-testid="authenticator-action-${name}"]`);
+		assert.ok(el, `action ${name} rendered`);
+		return el;
+	}
+
+	function input(root: ParentNode, field: string): HTMLInputElement {
+		const el = root.querySelector(`[data-testid="authenticator-${field}"]`);
+		assert.ok(el, `field ${field} rendered`);
+		return el as HTMLInputElement;
+	}
+
+	test('each action with fields is its own <form>, holding its inputs and submit button', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		for (const name of ['signIn', 'signUp']) {
+			const form = actionEl(el, name);
+			assert.strictEqual(form.tagName, 'FORM', `${name} is a form`);
+			// Server-side validation stays the source of truth; the browser must not block the submit.
+			assert.strictEqual((form as HTMLFormElement).noValidate, true, `${name} skips native validation`);
+			for (const pw of form.querySelectorAll('input[type="password"]')) {
+				assert.strictEqual(pw.closest('form'), form, 'the password input is inside its form');
+			}
+			const submit = form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement;
+			assert.ok(submit, 'the submit button is inside the form');
+			assert.strictEqual(submit.type, 'submit');
+		}
+	});
+
+	test('submitting the form calls setAuthState once and does not navigate', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		api.nextState = signedInState();
+		const form = actionEl(el, 'signIn') as HTMLFormElement;
+		input(form, 'username').value = 'alice';
+		input(form, 'password').value = 'secret';
+		const event = new Event('submit', { bubbles: true, cancelable: true });
+		form.dispatchEvent(event);
+		await flush();
+		assert.strictEqual(event.defaultPrevented, true, 'the page does not reload');
+		assert.deepStrictEqual(api.calls, [{ action: 'signIn', fields: { username: 'alice', password: 'secret' } }]);
+	});
+
+	test('a click or an Enter submits exactly once', async () => {
+		for (const how of ['click', 'enter'] as const) {
+			const api = mockApi(signedOutState());
+			const el = Authenticator(api);
+			await flush();
+			const form = actionEl(el, 'signIn');
+			input(form, 'username').value = 'alice';
+			input(form, 'password').value = 'secret';
+			if (how === 'click') (form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement).click();
+			else input(form, 'username').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+			await flush();
+			assert.strictEqual(api.calls.length, 1, `${how}: one setAuthState call`);
+		}
+	});
+
+	test('autocomplete is set for password managers; a field override wins', async () => {
+		const code: AuthAction = { name: 'confirmSignUp', label: 'Confirm', fields: [
+			{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+			{ name: 'code', label: 'Verification Code', type: 'text', required: true },
+		] };
+		const reset: AuthAction = { name: 'confirmResetPassword', label: 'Reset', fields: [
+			{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+			{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+		] };
+		const signUp: AuthAction = { name: 'signUp', label: 'Create Account', fields: [
+			{ name: 'username', label: 'Username', type: 'text', required: true },
+			{ name: 'password', label: 'Password', type: 'password', required: true },
+			{ name: 'email', label: 'Email', type: 'email', required: true },
+		] };
+		const signIn = signedOutState().actions[0];
+		const api = mockApi(signedOutState([signIn, signUp, code, reset]));
+		const el = Authenticator(api, { actions: { resetPassword: {}, confirmSignUp: { fields: { code: { autocomplete: 'off' } } } } });
+		await flush();
+		assert.strictEqual(input(actionEl(el, 'signIn'), 'username').autocomplete, 'username');
+		assert.strictEqual(input(actionEl(el, 'signIn'), 'password').autocomplete, 'current-password');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'username').autocomplete, 'username');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'password').autocomplete, 'new-password');
+		assert.strictEqual(input(actionEl(el, 'signUp'), 'email').autocomplete, 'email');
+		assert.strictEqual(input(actionEl(el, 'confirmResetPassword'), 'code').autocomplete, 'one-time-code');
+		assert.strictEqual(input(actionEl(el, 'confirmResetPassword'), 'newPassword').autocomplete, 'new-password');
+		assert.strictEqual(input(actionEl(el, 'confirmSignUp'), 'code').autocomplete, 'off', 'the override wins');
+	});
+});
+
 describe('AuthenticatedContent', () => {
 
 	test('renders content when signed in', async () => {
@@ -1075,6 +1165,21 @@ describe('test hooks', () => {
 		await flush();
 		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
 		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
+	});
+
+	test('the signed-in heading and the menu bar show displayName over a generated username', async () => {
+		const uuid = '815424a9-f32e-4407-b845-d35bf6294725';
+		const state: AuthState = {
+			state: 'signedIn',
+			user: { userId: uuid, username: uuid, displayName: 'alice@example.com' },
+			actions: [{ name: 'signOut', label: 'Sign Out', fields: [] }],
+		};
+		const el = Authenticator(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(el, 'authenticator-signed-in')?.textContent, 'Signed in as: alice@example.com');
+		const bar = AccountMenuBar(mockApi(state));
+		await flush();
+		assert.strictEqual(testId(bar, 'account-menu-username')?.textContent, '👤 alice@example.com');
 	});
 });
 

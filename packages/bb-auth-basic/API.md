@@ -41,8 +41,8 @@ export class AuthBasic extends Scope implements BlocksAuth {
     confirmSignUp(username: string, code: string): Promise<void>;
     // (undocumented)
     createApi(): {
-        getAuthState: () => Promise<AuthState>;
-        setAuthState: (input: AuthActionInput) => Promise<AuthState>;
+        getAuthState: () => Promise<AuthState<AuthUser>>;
+        setAuthState: (input: AuthActionInput) => Promise<AuthState<AuthUser>>;
     };
     // (undocumented)
     getCurrentUser(context: BlocksContext): Promise<AuthBasicUser | null>;

@@ -393,7 +393,7 @@ Error names match Cognito's wire-format exceptions, so customers familiar with A
 |---|---|---|
 | `AuthCognitoErrors.NotAuthenticated` | `NotAuthenticatedException` | No valid session — surfaced by `requireAuth` (401). |
 | `AuthCognitoErrors.NotAuthorized` | `NotAuthorizedException` | Bad credentials, or the user is not in the group required by `requireRole` (403). |
-| `AuthCognitoErrors.UserNotFound` | `UserNotFoundException` | No user with that username/alias. |
+| `AuthCognitoErrors.UserNotFound` | `UserNotFoundException` | No user with that username/alias. Only `auth.admin.*` reports it; public flows never reveal whether an account exists (see [Security Model](#security-model)). |
 | `AuthCognitoErrors.UserAlreadyExists` | `UsernameExistsException` | Username already taken on sign-up. |
 | `AuthCognitoErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't satisfy the pool policy. |
 | `AuthCognitoErrors.InvalidParameter` | `InvalidParameterException` | Malformed input or an unsupported request shape. |
@@ -411,7 +411,7 @@ Error names match Cognito's wire-format exceptions, so customers familiar with A
 | `AuthCognitoErrors.AliasExists` | `AliasExistsException` | Email or phone alias already in use on another user in this pool. |
 | `AuthCognitoErrors.InvalidLambdaResponse` | `InvalidLambdaResponseException` | Cognito Lambda trigger returned a malformed response. |
 | `AuthCognitoErrors.UserLambdaValidation` | `UserLambdaValidationException` | Cognito Lambda trigger threw; error wrapped by Cognito. |
-| `AuthCognitoErrors.InternalError` | `InternalErrorException` | Rare Cognito-side failure. Safe to retry with backoff. |
+| `AuthCognitoErrors.InternalError` | `InternalErrorException` | Rare Cognito-side failure. Safe to retry with backoff (HTTP 500, `retriable: true`). |
 | `AuthCognitoErrors.EnableSoftwareTokenMFA` | `EnableSoftwareTokenMFAException` | TOTP code mismatch during `VerifySoftwareToken` (MFA setup). Distinct from `CodeMismatchException`; retriable on the same session. |
 | `AuthCognitoErrors.WebAuthnNotEnabled` | `WebAuthnNotEnabledException` | Pool has no `WebAuthnConfiguration` — passkeys disabled. |
 | `AuthCognitoErrors.WebAuthnOriginNotAllowed` | `WebAuthnOriginNotAllowedException` | Browser submitted a passkey assertion from a non-allow-listed origin. |
@@ -560,6 +560,16 @@ Cognito scales automatically. Default quotas: 40 sign-ups/sec, 120 sign-ins/sec 
 AWS Blocks auth follows the BFF pattern: the browser sends `{username, password}` to the customer's Lambda over TLS; Lambda forwards to Cognito. The customer's Lambda is inside the user's trust boundary by design — same as `AuthBasic`, `AuthOIDC`, NextAuth, Devise, and every server-mediated auth library. Cognito tokens never reach the browser — instead, the BB issues an opaque HMAC-signed session cookie that maps to a server-side `SessionRecord` in a nested `KVStore`.
 
 The user pool client sets `PreventUserExistenceErrors: ENABLED`, so sign-in and forgot-password responses return a uniform error whether or not the username exists — closing the account-enumeration oracle Cognito exposes by default.
+
+The block enforces the same rule itself, so it also holds for a pool adopted with `fromExisting` that doesn't enable the setting, and in the local mock:
+
+- **Sign-in** (including a password answered on a `USER_AUTH` challenge): an unknown user, a wrong password and a disabled user all get the same error: `NotAuthorizedException`, HTTP 401, `Incorrect username or password`.
+- **`resetPassword`** always reports success. An unknown user gets plausible `codeDeliveryDetails`, the same shape a real account returns.
+- **`resendSignUpCode`** resolves for an unknown user.
+- **`confirmSignUp` / `confirmResetPassword`** answer an unknown user exactly like a wrong code (`CodeMismatchException`).
+- `auth.admin.*` runs server-side inside your trust boundary and still reports `UserNotFoundException`.
+
+Errors from AWS about the function's own credentials or IAM policy (for example `AccessDeniedException`) reach the client only as a generic message with HTTP 500, because the AWS message names the role ARN and account ID. The detail is written to the block's logger (`options.logger`, or a default error-level `Logger`). No Cognito error message that contains an ARN or a 12-digit account ID is sent to the client.
 
 See the auth-cognito technical design (see source repo) for the full architecture and mock-vs-AWS parity notes.
 

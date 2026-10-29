@@ -15,6 +15,9 @@
       "path": "../auth-common"
     },
     {
+      "path": "../bb-app-setting"
+    },
+    {
       "path": "../bb-kv-store"
     },
     {
