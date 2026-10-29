@@ -1182,8 +1182,9 @@ class CodegenModelBuilder {
   String _exportTypeName(String export) {
     if (!_exportGrammar.hasMatch(export)) {
       throw FormatException(
-        "Binding export '${escapeForDiagnostic(export)}' does not name a "
-        'public Dart type',
+        "Binding export '${escapeForDiagnostic(export)}' is not a -, _ or . "
+        'joined run of alphanumeric segments starting with a letter, so it '
+        'cannot name a public Dart type',
       );
     }
     return export.split(RegExp(r'[-_.]+')).map(_capitalize).join();

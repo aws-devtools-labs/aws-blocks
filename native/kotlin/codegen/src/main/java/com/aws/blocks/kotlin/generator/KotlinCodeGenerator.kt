@@ -67,19 +67,42 @@ private const val API_SUFFIX = "Api"
 
 private data class BoundTransferable(val type: ClassName, val genericArity: Int)
 
+private data class TypeNameClaim(val packageIdentity: String, val export: String, val genericArity: Int)
+
+/**
+ * A derived-name collision is the generator's own rejection, not the parser's: the name comes
+ * from [NamingUtils.exportTypeName] and the claimants depend on [excludedPackages], neither of
+ * which the parser can see. It shares [CodegenException] with the parser's rejections, so one
+ * catch covers every spec a run refuses. Two tags may share one export, so an identical claim is
+ * not a collision and only a differing export, package or arity is: the `prior != claim` test is
+ * load-bearing, not redundant against a bare presence check.
+ */
 private fun resolveBoundTransferables(
     catalogs: NativeCatalogs,
     excludedPackages: Set<String>,
-): Map<String, BoundTransferable> = catalogs.bindings
-    .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
-    .mapNotNull { binding ->
-        binding.kotlinPackage?.let { kotlinPackage ->
-            binding.tag to BoundTransferable(
-                ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export)),
-                binding.genericArity,
-            )
-        }
-    }.toMap()
+): Map<String, BoundTransferable> {
+    val claimants = mutableMapOf<String, TypeNameClaim>()
+    return catalogs.bindings
+        .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
+        .mapNotNull { binding ->
+            binding.kotlinPackage?.let { kotlinPackage ->
+                // A dropped binding is imported nowhere, so the drops must precede this claim.
+                val type = ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export))
+                val claim = TypeNameClaim(binding.packageIdentity, binding.export, binding.genericArity)
+                val prior = claimants[type.canonicalName]
+                if (prior != null && prior != claim) {
+                    throw CodegenException(
+                        "x-blocks-native-bindings binds tag \"${binding.tag}\" to " +
+                            "${type.canonicalName}, already resolved by export " +
+                            "\"${prior.export}\" in package \"${prior.packageIdentity}\" " +
+                            "at generic arity ${prior.genericArity}",
+                    )
+                }
+                claimants[type.canonicalName] = claim
+                binding.tag to BoundTransferable(type, binding.genericArity)
+            }
+        }.toMap()
+}
 
 /**
  * Generates Kotlin source files from a [CodegenModel] using KotlinPoet.

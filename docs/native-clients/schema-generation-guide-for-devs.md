@@ -479,7 +479,7 @@ Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), 
 }
 ```
 
-**Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
+**Codegen contract.** A method joins its binding by tag. Under `blocks-transferable-v1` an export splits on `-`, `_`, `.`, each segment's first character rises, the rest as declared, then `fromBlocksDescriptor` is called on it: `API_link` → `APILink`. Any other, doubled or dangling separator is a generation error; built-in tags cannot be bound.
 
 **Factory contract.** `fromBlocksDescriptor` is the declared package's own surface — nothing here type-checks it, so a shape mismatch surfaces only when the consumer compiles. Under `blocks-transferable-v1` the descriptor arrives already checked against the binding's `tag`. On Android the `export` must carry the form its `genericArity` selects:
 
