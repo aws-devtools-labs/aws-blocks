@@ -11,7 +11,11 @@
  * Every rule answers "does this reach outside the app?". An app's resources are
  * the ones whose name starts with the app's prefix: `<id>` followed by `-`, `/`
  * or the end of the name (`appa`, `appa-notes`, `/appa/key`). The id can't
- * contain `-`, so `appa-*` never matches another app (`appab-…`).
+ * contain `-`, so `appa-*` never matches another app (`appab-…`). Two namespaces
+ * AWS Blocks and CDK pick count the same way: a cross-region reference's SSM
+ * parameter (`/cdk/exports/<consumer stack>/…`, checked by the stack name), and
+ * Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`, the app's own
+ * only when `stackId` is the app id).
  *
  * These checks are fast feedback, not the boundary: the boundary is IAM.
  *
@@ -151,7 +155,9 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 	let name: string | undefined;
 	switch (service) {
 		case 'ssm':
-			name = rest.startsWith('parameter') ? rest.slice('parameter'.length) : undefined;
+			// A cross-region reference's parameter (`/cdk/exports/<consumer stack>/…`) is
+			// named after the stack that reads it, so it's checked by that stack's name.
+			name = rest.startsWith('parameter') ? rest.slice('parameter'.length).replace(/^\/cdk\/exports\//, '/') : undefined;
 			break;
 		case 'dynamodb':
 			name = after('table/', '/');
@@ -257,9 +263,25 @@ function scopesWildcard(condition: unknown, actions: string[], id: string): bool
  * Grants AWS Blocks or CDK make that name resources outside the app's prefix,
  * but that the generated boundary still caps to the app (or that only touch
  * metadata). Each is listed with its reason; nothing else is exempt.
+ *
+ * @param arn the rendered ARN the grant names (`*` for a bare wildcard).
  */
-function isKnownExemption(actions: string[], name: string): boolean {
+function isKnownExemption(actions: string[], name: string, arn = ''): boolean {
 	const only = (allowed: string[]) => actions.every((a) => allowed.includes(a));
+	// CDK's cross-region export writer (`Custom::CrossRegionExportWriter`, added for
+	// Hosting's us-east-1 support stack) grants these on `/cdk/exports/*` — every
+	// consumer stack's exports. CDK-internal; the boundary caps it to the exports of
+	// the app's own stacks (`/cdk/exports/<id>`, `<id>-…`, `<id>/…`).
+	if (
+		/:ssm:[^:]*:[^:]*:parameter\/cdk\/exports\/\*$/.test(arn) &&
+		only(['ssm:DeleteParameters', 'ssm:ListTagsForResource', 'ssm:GetParameters', 'ssm:PutParameter'])
+	) {
+		return true;
+	}
+	// CDK's Lambda@Edge ARN reader (`Custom::CrossRegionStringParameterReader`) reads
+	// `/cdk/EdgeFunctionArn/*`: a function ARN, read only. The boundary caps it to
+	// the parameters of the app's own stacks (`/cdk/EdgeFunctionArn/<region>/<id>…`).
+	if (/:ssm:[^:]*:[^:]*:parameter\/cdk\/EdgeFunctionArn\/\*$/.test(arn) && only(['ssm:GetParameter'])) return true;
 	// Lists log-group names only (no log data); takes only `log-group:*`.
 	if (only(['logs:DescribeLogGroups'])) return true;
 	// CDK's log-retention provider grants these on `*`; the boundary caps them to the app's own log groups.
@@ -339,7 +361,7 @@ export function checkStatement(
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: a placeholder shown in messages, not a template
 		const label = arn.replaceAll(TOKEN, '${…}');
 		if (literal.replace(/^\//, '').startsWith('*')) {
-			if (!scopesWildcard(statement.Condition, actions, id) && !isKnownExemption(actions, '*')) {
+			if (!scopesWildcard(statement.Condition, actions, id) && !isKnownExemption(actions, '*', arn)) {
 				out.push({
 					rule: 'wildcard-data-grant',
 					path: where,
@@ -350,21 +372,32 @@ export function checkStatement(
 		}
 		const bare = literal.replace(/^\//, '');
 		if (bare === '') continue;
-		if (isKnownExemption(actions, literal)) continue;
+		if (isKnownExemption(actions, literal, arn)) continue;
 		// The app's own CDK asset bucket (`cdk-<qualifier>-assets-…`, qualifier = app id).
 		if (parsed.service === 's3' && bare.startsWith(`cdk-${id}-assets-`)) continue;
+		// Hosting's `config()` (`/blocks/<stackId>/config/…`, SSM) and `secret()`
+		// (`blocks/<stackId>/secrets/…`, Secrets Manager) values: the app's own when
+		// `stackId` (`.blocks/config.json`) is the app id; anything else under
+		// `blocks/` is another app's, or no app's.
+		const hostingStore = (parsed.service === 'ssm' || parsed.service === 'secretsmanager') && /^blocks(\/|$)/.test(bare);
 		// A name with a reference in it is checked only up to the reference: the
 		// literal part must be under the prefix, or a start of it (`app` + `${…}`).
-		const within = name.includes(TOKEN)
-			? isUnderAppPrefix(bare, id) || `${id}-`.startsWith(bare)
-			: isUnderAppPrefix(bare, id);
+		const within = hostingStore
+			? bare.startsWith(`blocks/${id}/`)
+			: name.includes(TOKEN)
+				? isUnderAppPrefix(bare, id) || `${id}-`.startsWith(bare)
+				: isUnderAppPrefix(bare, id);
 		if (!within) {
 			const asset = parsed.service === 's3' && /^cdk-[^-]+-assets-/.test(bare);
 			const api = parsed.service === 'execute-api' || parsed.service === 'apigateway';
 			out.push({
 				rule: 'grant-outside-app',
 				path: where,
-				message: api
+				message: hostingStore
+					? `${where} grants ${actions.join(', ')} on Hosting's "${label}", which isn't under this app's ` +
+						`"blocks/${id}/" store prefix. Set "stackId" in .blocks/config.json to "${id}" (the app id), so ` +
+						`secret() and config() values live under blocks/${id}/.`
+					: api
 					? `${where} grants ${actions.join(', ')} on "${label}", a literal API id: API ids aren't app names, so ` +
 						"this can be another app's API. Reference the app's own API (its construct) instead."
 					: asset

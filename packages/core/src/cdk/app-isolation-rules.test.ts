@@ -184,3 +184,52 @@ describe('app-isolation rules — resource policies and trust', () => {
 		assert.deepStrictEqual(checkRole(role({ Service: 'lambda.amazonaws.com' }), 'appa', 'p', false), []);
 	});
 });
+
+describe('app-isolation rules — CDK cross-region references and Hosting stores', () => {
+	const ssm = (name: string) => `arn:*:ssm:us-east-1:111111111111:parameter/${name}`;
+
+	test("CDK's cross-region export writer on /cdk/exports/* is a known exemption; the same wildcard otherwise is not", () => {
+		const writer = {
+			Effect: 'Allow',
+			Action: ['ssm:DeleteParameters', 'ssm:ListTagsForResource', 'ssm:GetParameters', 'ssm:PutParameter'],
+			Resource: ssm('cdk/exports/*'),
+		};
+		assert.deepStrictEqual(checkStatement(writer, 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement({ ...writer, Action: ['ssm:GetParameter', 'ssm:GetParametersByPath'] }, 'appa', 'p')), [
+			'wildcard-data-grant',
+		]);
+		assert.deepStrictEqual(rules(checkStatement({ ...writer, Resource: ssm('*') }, 'appa', 'p')), ['wildcard-data-grant']);
+	});
+
+	test("the export reader on the app's own stack's exports is the app's own; another app's is outside", () => {
+		const reader = (stack: string) => ({
+			Effect: 'Allow',
+			Action: ['ssm:AddTagsToResource', 'ssm:RemoveTagsFromResource', 'ssm:GetParameters'],
+			Resource: ssm(`cdk/exports/${stack}/*`),
+		});
+		assert.deepStrictEqual(checkStatement(reader('appa-CfMonitoring-c8df000e'), 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement(reader('appb-CfMonitoring-c8df000e'), 'appa', 'p')), ['grant-outside-app']);
+	});
+
+	test("CDK's Lambda@Edge ARN reader (GetParameter on /cdk/EdgeFunctionArn/*) is a known exemption, read only", () => {
+		const s = { Effect: 'Allow', Action: 'ssm:GetParameter', Resource: ssm('cdk/EdgeFunctionArn/*') };
+		assert.deepStrictEqual(checkStatement(s, 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement({ ...s, Action: 'ssm:PutParameter' }, 'appa', 'p')), ['grant-outside-app']);
+	});
+
+	test("Hosting secret()/config() under blocks/<id>/ are the app's own; other blocks/ names are flagged with the stackId hint", () => {
+		const sm = (name: string) => ({
+			Effect: 'Allow',
+			Action: 'secretsmanager:GetSecretValue',
+			Resource: `arn:*:secretsmanager:us-east-1:111111111111:secret:${name}-??????`,
+		});
+		const cfg = (name: string) => ({ Effect: 'Allow', Action: 'ssm:GetParameter', Resource: ssm(name) });
+		assert.deepStrictEqual(checkStatement(sm('blocks/appa/secrets/DEMO_SECRET'), 'appa', 'p'), []);
+		assert.deepStrictEqual(checkStatement(cfg('blocks/appa/config/FEATURE_FLAGS'), 'appa', 'p'), []);
+		for (const s of [sm('blocks/secrets/DEMO_SECRET'), sm('blocks/appb/secrets/X'), cfg('blocks/config/FEATURE_FLAGS'), cfg('blocks/appab/config/X')]) {
+			const v = checkStatement(s, 'appa', 'p');
+			assert.deepStrictEqual(rules(v), ['grant-outside-app'], JSON.stringify(s.Resource));
+			assert.match(v[0].message, /stackId.*\.blocks\/config\.json.*"appa"/);
+		}
+	});
+});
