@@ -16,8 +16,12 @@ import { isTelemetryEnabled } from './consent.js';
  */
 export const FRAMEWORK_SINK_ENV = 'AWS_BLOCKS_FRAMEWORK_SINK';
 
-/** Sinks this process created, so cleanup only ever removes a directory we own. */
-const ownedSinks = new Set<string>();
+/**
+ * Sinks this process created, so cleanup only ever removes a directory we own. Each maps
+ * to its exit hook, which registerFrameworkFromSink detaches once it has cleaned up, so a
+ * long-running process does not accumulate one listener per deploy.
+ */
+const ownedSinks = new Map<string, () => void>();
 
 /**
  * Parent side: a sink path inside a fresh private (0700) directory, or undefined when
@@ -30,17 +34,18 @@ export function createFrameworkSink(): string | undefined {
   try {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-framework-'));
     const sink = resolve(dir, 'framework');
-    ownedSinks.add(sink);
     // Not a signal listener: one here would suppress the default termination the deploy
     // path relies on. 'exit' covers a throw and the sandbox handler's process.exit; an
     // uncaught signal or SIGKILL is left to the OS.
-    process.once('exit', () => {
+    const onExit = () => {
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
         // Cleanup is best-effort; never block the exit path.
       }
-    });
+    };
+    ownedSinks.set(sink, onExit);
+    process.once('exit', onExit);
     return sink;
   } catch {
     return undefined;
@@ -93,8 +98,10 @@ export function registerFrameworkFromSink(sinkPath: string | undefined): void {
   if (detected) Scope._setFrameworkForTelemetry(detected);
   // The remove is recursive, so only ever touch a directory createFrameworkSink made:
   // a caller-supplied path would otherwise take out whatever directory contains it.
-  if (!ownedSinks.has(resolve(sinkPath))) return;
+  const onExit = ownedSinks.get(resolve(sinkPath));
+  if (!onExit) return;
   ownedSinks.delete(resolve(sinkPath));
+  process.removeListener('exit', onExit);
   try {
     rmSync(dirname(sinkPath), { recursive: true, force: true });
   } catch {
