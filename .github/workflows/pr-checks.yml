@@ -266,6 +266,11 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # publish:local empties dist-registry/ before every run; this pins that the
+      # reset can never delete anything outside it.
+      - name: Test the local-registry reset guard
+        run: npx tsx --test scripts/publish/local-registry.test.ts
+
       # A test app whose stacks the stale-stack sweeper can't match leaks every
       # stack whose teardown fails.
       - name: Test that cleanup-stacks.yml covers the E2E stacks
@@ -432,6 +437,14 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # tsx runs the e2e suites without type-checking them, so a test's
+      # `@ts-expect-error` (a typed-DX assertion: "this call must not
+      # compile") would go unchecked. Type-check the backend, the frontend and
+      # the tests together.
+      - name: Type-check the comprehensive app and its e2e tests
+        working-directory: test-apps/comprehensive
+        run: npx tsc --noEmit -p tsconfig.json
 
       - name: E2E Test Local
         run: npm run test:e2e:local
@@ -610,6 +623,15 @@ jobs:
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
 
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
@@ -929,6 +951,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
+
       - name: E2E Test Production
         run: npm run test:e2e:production
 
@@ -1143,6 +1174,15 @@ jobs:
       - name: Install Playwright
         timeout-minutes: 25
         run: node scripts/ci/install-playwright.mjs chromium
+
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
 
       - name: E2E Test Hosting (${{ matrix.framework }})
         id: e2e

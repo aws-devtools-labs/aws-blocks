@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api, authApi } from 'aws-blocks';
-import { AccountMenuBar, onAuthChange } from '@aws-blocks/blocks/ui';
+import { AccountMenuBar, onAuthChange, type AuthUserOf } from '@aws-blocks/blocks/ui';
 
 // Backend APIs are fully typed — hover over api.* for signatures.
 // Full docs: node_modules/@aws-blocks/blocks/README.md
 
 type Todo = { todoId: string; title: string; completed: boolean; priority: number; version: number };
-type User = { username: string; userId: string };
+// The signed-in user (groups, attributes, userSub), typed by the backend's `authApi`.
+type User = AuthUserOf<typeof authApi>;
 type SortBy = 'priority' | 'title' | undefined;
 
 function TodoApp() {
@@ -22,15 +23,16 @@ function TodoApp() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    let sub: any;
+    let unsubscribe: (() => void) | undefined;
     (async () => {
       try {
         const channel = await api.subscribeTodos();
-        sub = channel.subscribe(() => load());
+        const sub = channel.subscribe(() => load());
+        unsubscribe = () => sub.unsubscribe();
         await sub.established;
       } catch { /* realtime not available in local dev */ }
     })();
-    return () => sub?.unsubscribe();
+    return () => unsubscribe?.();
   }, [load]);
 
   const addTodo = async () => {
@@ -122,7 +124,7 @@ export function App() {
         {' '}<strong>real-time sync</strong> across browser tabs,
         and <strong>todos stored in a distributed table</strong> with per-user isolation.
       </p>
-      {!user && <p>Sign in to get started.</p>}
+      {!user && <p>Sign in to get started. New accounts confirm their email with a 6-digit code — locally, it is printed in the <code>npm run dev</code> terminal.</p>}
       {user && <TodoApp />}
     </div>
   );

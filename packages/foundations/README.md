@@ -2,7 +2,7 @@
 
 Standard Building Blocks for common AWS services in the AWS Blocks.
 
-> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md) and [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md), which are the authoritative reference for the shipped blocks.
+> **Note:** This README describes an *aspirational* consolidated API for the foundation blocks. It is **not yet implemented** — this package is currently a stub. For the API that actually ships today, see [`packages/bb-kv-store/README.md`](../bb-kv-store/README.md), [`packages/bb-app-setting/README.md`](../bb-app-setting/README.md) and [`packages/bb-auth/README.md`](../bb-auth/README.md), which are the authoritative reference for the shipped blocks. The `Auth` section below matches the shipped API.
 
 ## Overview
 
@@ -10,39 +10,24 @@ Standard Building Blocks for common AWS services in the AWS Blocks.
 
 ## Available Building Blocks
 
-### AuthBasic
-Username/password authentication with code-based verification.
+### Auth
+One authentication block for email + password, social sign-in, generic OIDC and SAML. This section describes the shipped API; see [`packages/bb-auth/README.md`](../bb-auth/README.md) (including *Which option and why*) for the full reference.
 
 ```typescript
-import { AuthBasic } from '@aws-blocks/blocks';
+import { AppSetting, Auth } from '@aws-blocks/blocks';
 
-const auth = new AuthBasic(scope, 'auth', {
-  codeDelivery: async (username, code) => { /* send code via email */ },
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+
+// Email + password is on by default (sign-up confirms the email with a code);
+// every other sign-in method is a sibling key on the same options object.
+const auth = new Auth(scope, 'auth', {
+  socialProviders: { google: { clientId: 'your-google-client-id', clientSecret: googleSecret } }, // via Cognito
+  oidcProviders: { okta: { issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } }, // direct
 });
-```
+export const authApi = auth.createApi();
 
-### AuthOIDC
-OIDC/OAuth 2.0 sign-in gate — Google, GitHub, Okta, or any OIDC provider. Sessions outlive the IdP's ID token with transparent background refresh.
-
-```typescript
-import { AuthOIDC, google } from '@aws-blocks/blocks';
-
-const auth = new AuthOIDC(scope, 'auth', {
-  providers: [google({ clientId: '...', clientSecret: '...' })],
-  onSignIn: async (user) => { /* persist profile */ },
-});
-
+// Inside a request handler:
 const user = await auth.requireAuth(ctx);
-```
-
-### AuthCognito
-Cognito User Pool integration with sign-up, MFA, groups, and custom attributes.
-
-```typescript
-import { AuthCognito } from '@aws-blocks/blocks';
-
-const users = new AuthCognito(scope, 'users');
-export const auth = users.buildAPI();
 ```
 
 ### Storage (FileBucket)
