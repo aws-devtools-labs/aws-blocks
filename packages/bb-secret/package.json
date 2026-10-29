@@ -36,20 +36,32 @@
       "aws-runtime": "./dist/index.aws.js",
       "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
+    },
+    "./internal": {
+      "browser": "./dist/internal.browser.js",
+      "cdk": {
+        "types": "./dist/internal.cdk.d.ts",
+        "default": "./dist/internal.cdk.js"
+      },
+      "aws-runtime": "./dist/internal.aws.js",
+      "types": "./dist/internal.mock.d.ts",
+      "default": "./dist/internal.mock.js"
     }
   },
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs Secret",
     "build": "tsc --build",
-    "test": "node --test --test-concurrency=1 dist/*.test.js"
+    "test": "node --test --test-concurrency=1 dist/*.test.js && node --conditions=cdk --test --test-concurrency=1 dist/cdk-conditions/*.test.js && node --conditions=aws-runtime --test --test-concurrency=1 dist/aws-runtime-conditions/*.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.7.0",
+    "@aws-blocks/bb-app-setting": "^0.3.2",
     "@aws-blocks/bb-logger": "^0.2.2",
     "@aws-sdk/client-secrets-manager": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-ssm": "^3.1156.0",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "zod": "^4.6.7"

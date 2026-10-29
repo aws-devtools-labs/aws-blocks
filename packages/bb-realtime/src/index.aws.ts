@@ -25,7 +25,7 @@ import {
 	PostToConnectionCommand,
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
@@ -144,16 +144,16 @@ function connectionsTable() {
 	return _connectionsTable;
 }
 
-// ── Token secret via AppSetting ──────────────────────────────────────────────
+// ── Token secret via frameworkKey ────────────────────────────────────────────
 
-let _tokenSecret: AppSetting | null = null;
+let _tokenSecret: FrameworkKey | null = null;
 let cachedSecret: string | null = null;
 let secretPromise: Promise<string> | null = null;
 
 async function getTokenSecret(): Promise<string> {
 	if (cachedSecret) return cachedSecret;
 	if (secretPromise) return secretPromise;
-	if (!_tokenSecret) throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret AppSetting not initialized');
+	if (!_tokenSecret) throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret not initialized');
 	secretPromise = _tokenSecret.get().then(value => { cachedSecret = value; return value; });
 	return secretPromise;
 }
@@ -382,16 +382,17 @@ export const Realtime: {
 			});
 		}
 
-		// Initialize the token secret via AppSetting (shared across instances)
+		// Initialize the token secret via frameworkKey (shared across instances).
+		// Same scope path as the CDK layer, so both derive the same names.
 		if (!_tokenSecret) {
-			_tokenSecret = new AppSetting(this, 'token-secret', { secret: true });
+			_tokenSecret = frameworkKey(this, 'token-secret');
 		}
 
 		if (!wsUrl) {
 			console.warn(`[Realtime] BLOCKS_RT_WS_URL not set — getChannel() will return incomplete descriptors`);
 		}
 
-		// Pre-warm secret fetch. Resolves to null when SSM is unreachable (e.g., codegen).
+		// Pre-warm secret fetch. Resolves to null when the store is unreachable (e.g., codegen).
 		// Callers must treat null as "secret unavailable" and fail explicitly.
 		this._cachedSecretPromise = getTokenSecret().catch(() => null);
 
@@ -448,7 +449,7 @@ export const Realtime: {
 		if (wsUrl) {
 			const fullId = this.fullId;
 			this._cachedSecretPromise.then(secret => {
-				if (!secret) return; // SSM unavailable (e.g., codegen)
+				if (!secret) return; // secret store unavailable (e.g., codegen)
 				const channelToken = mintChannelToken(fullChannel, secret);
 				const connectToken = mintConnectToken(fullId, secret);
 				wsSub = serverSubscribe(wsUrl, connectToken, fullChannel, channelToken, handler);

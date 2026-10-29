@@ -60,6 +60,7 @@ export {
 export {
 	type BlocksDefaults,
 	BlocksPresets,
+	type BlocksSecretsStore,
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';

@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@aws-blocks/core": "^0.7.0",
-    "@aws-blocks/bb-app-setting": "^0.3.2",
+    "@aws-blocks/bb-secret": "^0.2.0",
     "@aws-blocks/bb-lambda-compute": "^0.6.0",
     "@aws-blocks/bb-distributed-table": "^0.2.2",
     "@aws-blocks/bb-logger": "^0.2.2",

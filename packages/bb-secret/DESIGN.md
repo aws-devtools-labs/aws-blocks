@@ -230,6 +230,49 @@ README's "Managing secret values" for the three approaches (auto-generated, the
 CI/CD). The CDK construct's job is name + IAM grant + runtime ARN registration;
 it never carries the value.
 
+## Framework keys (`@aws-blocks/bb-secret/internal`)
+
+Some blocks generate a signing key for their own use. `Realtime`
+(`token-secret`) creates it with `frameworkKey(scope, id)` from the `./internal`
+subpath; other blocks that generate keys will adopt the helper. The subpath
+has the same runtime conditions as `.` (cdk, aws-runtime, browser, mock) and is
+not part of the public API.
+
+**Shape.** A function, not a construct class. In `'ssm'` mode the key must be
+the exact `AppSetting` the blocks created before, at the same construct path, so
+the template does not change. A wrapping construct would add a level to the
+path, change `fullId`, and rename the SSM parameter. The function creates the
+`Secret` or `AppSetting` directly under the caller's scope and returns a small
+`FrameworkKey` handle with `get(): Promise<string>`.
+
+**CDK.** The store comes from `defaults.secretsStore` of the caller's scope:
+
+- `'secrets-manager'`: a `Secret` with two package-internal options
+  (`InternalSecretOptions`, not exported from the entry points): no `Name`, so
+  CloudFormation generates a unique one, and a `GenerateSecretString` of 64
+  characters from `[A-Za-z0-9]` (about 381 bits). It also sets
+  `removalPolicy: 'destroy'` and leaves `allowRuntimeWrite` unset, so the app
+  role can only read it. The ARN reaches the runtime through config, as for any
+  `Secret`. The public `Secret` defaults (fixed name, empty value, removal
+  policy from `defaults`) are unchanged.
+- `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
+  like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
+  or `deletionProtection` on), synth emits the warning
+  `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
+
+**Runtime.** The AWS entry checks config for the key's Secret ARN
+(`BLOCKS_SECRET_ARN_<FULLID>`). If present, the stack was synthesized in
+`'secrets-manager'` mode and the key is read from Secrets Manager; otherwise it
+is read through `AppSetting` from SSM. The choice is made once, at
+construction; a failed read is never retried against the other store. The mock
+entry is the mock `AppSetting`, so local development does not depend on the
+setting.
+
+**Value format.** The SSM path stores 32 random bytes as base64url; the Secrets
+Manager path stores the 64-character generated string. Consumers must use the
+key as a UTF-8 string (for example an HMAC key), never as decoded bytes, so both
+formats work. `Realtime` passes it straight to `createHmac('sha256', key)`.
+
 ## Non-goals (v1)
 
 - **Automatic rotation.** Managed rotation is credential-type-specific (AWS only

@@ -4,7 +4,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-realtime`
 **Type:** Client-facing
-**AWS Services:** API Gateway WebSocket, DynamoDB, SSM Parameter Store
+**AWS Services:** API Gateway WebSocket, DynamoDB, AWS Secrets Manager or SSM Parameter Store (token secret, per `defaults.secretsStore`)
 
 ## Design Decisions
 
@@ -14,7 +14,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 
 **No `publish()` on `RealtimeChannel`:** Channel handles are subscribe-only. Publishing goes through `rt.publish()` from API methods. Authorization stays in user code.
 
-**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
+**`getChannel()` returns `Promise<RealtimeChannel>`:** The token secret is fetched from Secrets Manager or SSM asynchronously on cold start. Making `getChannel()` async ensures the secret is available before minting tokens. `await` on the mock's synchronous return is a no-op.
 
 **No `unsubscribe_success` acknowledgment:** The server does not send a confirmation when a client unsubscribes. Unlike `subscribe`, which needs `established` for auth confirmation, unsubscribe is fire-and-forget — the client has already stopped listening. Adding an ack would cost a PostToConnection call per unsubscribe for zero functional benefit.
 
@@ -120,7 +120,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | AppSetting (secret: true) | HMAC signing key, auto-generated |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key, so open connection tokens are rejected once and clients reconnect |
 
 ### DynamoDB Connections Table
 
@@ -176,7 +176,8 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 |----------|-------|
 | `BLOCKS_RT_WS_URL` | `wss://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
-| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting) |
+| `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
+| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (set by the `Secret` the framework key creates; `'secrets-manager'` mode only) |
 
 The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 
