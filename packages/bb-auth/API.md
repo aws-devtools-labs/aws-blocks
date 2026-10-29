@@ -231,6 +231,39 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 }
 
 // @public
+export interface AuthClient<P extends string = string> {
+    fetchAuthSession(): Promise<BrowserAuthSession>;
+    getCurrentUser(): Promise<BrowserUser>;
+    handleSignInRedirect(): Promise<SignInRedirectResult | null>;
+    signInWithRedirect(input: SignInWithRedirectInput<P>): Promise<void>;
+    signOut(options?: {
+        endProviderSession?: boolean;
+    }): Promise<SignOutResult>;
+}
+
+// @public
+export interface AuthClientEnvironment {
+    currentUrl(): string;
+    fetch(input: string, init?: RequestInit): Promise<Response>;
+    navigate(url: string): void;
+    replaceUrl(url: string): void;
+    storage: {
+        getItem(key: string): string | null;
+        setItem(key: string, value: string): void;
+        removeItem(key: string): void;
+    };
+}
+
+// @public
+export interface AuthClientOptions {
+    baseUrl?: string;
+    callbackPath?: string;
+    environment?: Partial<AuthClientEnvironment>;
+    redirectUri?: string;
+    signOutPath?: string;
+}
+
+// @public
 export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends Omit<AuthUser, 'displayName'> {
     attributes: Partial<Record<ReadAttrOf<O>, string>>;
     claims?: Readonly<Record<string, unknown>>;
@@ -349,6 +382,19 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
 // @public
 export interface BearerAuthOptions {
     clientIds?: readonly string[];
+}
+
+// @public
+export type BrowserAuthSession = {
+    signedIn: true;
+    user: BrowserUser;
+} | {
+    signedIn: false;
+};
+
+// @public
+export interface BrowserUser extends Omit<AuthenticatedUser, 'claims' | 'federatedIdentity'> {
+    displayName: string;
 }
 
 // @public
@@ -817,6 +863,12 @@ export interface SignInOptions {
 }
 
 // @public
+export interface SignInRedirectResult {
+    customState?: string;
+    user: BrowserUser;
+}
+
+// @public
 export type SignInResult<O extends AuthOptions = AuthOptions> = {
     status: 'signedIn';
     user: AuthenticatedUser<O>;
@@ -837,8 +889,20 @@ export interface SignInUrlOptions {
 }
 
 // @public
+export interface SignInWithRedirectInput<P extends string = string> {
+    customState?: string;
+    provider: P;
+    redirectUri?: string;
+}
+
+// @public
 export interface SignOutOptions {
     global?: boolean;
+}
+
+// @public
+export interface SignOutResult {
+    logoutUrl?: string;
 }
 
 // @public

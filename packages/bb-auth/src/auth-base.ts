@@ -1427,6 +1427,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					}
 					return engine.exchangeCode(context, input);
 				}),
+			currentUser: async (context) => {
+				const user = await this.getCurrentUser(context);
+				return user ? this.stateUser(user) : null;
+			},
 			signOut: async (context) => {
 				await this.signOut(context);
 				return this.signOutRedirect(context);
