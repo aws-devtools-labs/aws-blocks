@@ -18,14 +18,20 @@ import * as internal from './internal.js';
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('data-common internal entry', () => {
-	it('exports the two helpers the SQL blocks import', () => {
+	it('exports the helpers the SQL blocks import', () => {
 		assert.strictEqual(typeof internal.closeOnProcessExit, 'function');
 		assert.strictEqual(typeof internal.pgliteUnrefTimersExtension, 'object');
 		assert.strictEqual(typeof internal.pgliteUnrefTimersExtension.setup, 'function');
+		assert.strictEqual(typeof internal.PgliteTransaction.begin, 'function');
 	});
 
 	it('the package root no longer exports the PGlite process helpers', () => {
-		for (const name of ['closeOnProcessExit', 'pgliteUnrefTimersExtension', 'runWithUnrefTimers']) {
+		for (const name of [
+			'closeOnProcessExit',
+			'pgliteUnrefTimersExtension',
+			'runWithUnrefTimers',
+			'PgliteTransaction',
+		]) {
 			assert.ok(!(name in root), `${name} is still exported from the package root`);
 		}
 	});

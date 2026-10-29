@@ -104,6 +104,18 @@ test('integration: without withRLS, superuser sees all rows', async () => {
   assert.strictEqual(rows.length, 3);
 });
 
+test('integration: concurrent RLS scopes and ordinary reads keep their own session context', { timeout: 10_000 }, async () => {
+  const db = await setup();
+  const [first, second, unscoped] = await Promise.all([
+    db.withRLS({ userId: 'user-1' }).query<{ id: string }>(sql`SELECT id FROM todos ORDER BY id`),
+    db.withRLS({ userId: 'user-2' }).query<{ id: string }>(sql`SELECT id FROM todos ORDER BY id`),
+    db.query<{ id: string }>(sql`SELECT id FROM todos ORDER BY id`),
+  ]);
+  assert.deepStrictEqual(first, [{ id: 't1' }, { id: 't2' }]);
+  assert.deepStrictEqual(second, [{ id: 't3' }]);
+  assert.deepStrictEqual(unscoped, [{ id: 't1' }, { id: 't2' }, { id: 't3' }]);
+});
+
 test('integration: withRLS execute respects policy (user-1 can only delete own rows)', async () => {
   const db = await setup();
   const scoped = db.withRLS({ userId: 'user-1' });
