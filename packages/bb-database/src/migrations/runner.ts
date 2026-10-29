@@ -1,14 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
 /**
  * Runs a {@link MigrationPlan} in the block's schema. `_migrations` records
  * finished files; `_migration_progress` records the last completed step of an
  * unfinished one (and the DSQL job it is waiting on, if any), so a re-run
  * resumes where it failed or where it left off waiting.
  */
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { brandBlocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { DEFAULT_MIGRATIONS_ROOT, quoteIdent } from '../constants.js';

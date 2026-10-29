@@ -3,10 +3,9 @@
 
 /**
  * Synth-level contract of the CDK entry: what an owned and a shared cluster
- * provision, how blocks attach and chain, which functions wait for migrations,
- * and what the stack's binding record says. Harness mirrors
- * bb-distributed-table's cdk test: a stub stack exposing `executionRole` +
- * `defaults` as the ambient CURRENT_BLOCKS_STACK.
+ * provision, how blocks attach and chain, and which functions wait for
+ * migrations. Harness mirrors bb-distributed-table's cdk test: a stub stack
+ * exposing `executionRole` + `defaults` as the ambient CURRENT_BLOCKS_STACK.
  */
 import assert from 'node:assert';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

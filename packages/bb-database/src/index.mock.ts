@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { join } from 'node:path';
 /**
  * Local development entry point (`npm run dev`, tests).
  *
@@ -10,6 +9,7 @@ import { join } from 'node:path';
  * every statement through dsql-lint first, so unsupported SQL fails here, not
  * in production.
  */
+import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';

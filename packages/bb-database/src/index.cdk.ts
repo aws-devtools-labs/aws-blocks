@@ -7,8 +7,7 @@
  * A `DatabaseCluster` provisions an Aurora DSQL cluster plus its migration
  * Lambdas. A `Database` either owns a `dsql` cluster or attaches to a
  * shared one, adding the CustomResource that creates its schema and runs its
- * migrations at deploy time. Both record their binding in stack metadata for
- * the deploy guard.
+ * migrations at deploy time.
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
