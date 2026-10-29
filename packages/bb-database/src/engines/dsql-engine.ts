@@ -9,7 +9,7 @@ import pg from 'pg';
 import { DEFAULT_POOL_SIZE, quoteIdent } from '../constants.js';
 import { isStaleSchemaCache, translatePgError } from '../errors.js';
 
-export interface DsqlEngineConfig {
+interface DsqlEngineConfig {
 	endpoint: string;
 	getAuthToken: () => Promise<string>;
 	poolSize?: number;
@@ -27,6 +27,7 @@ const INT8_OID = 20;
  * value is a safe integer, otherwise a `BigInt`. pg's default is a string, which
  * would make every identity column, `count(*)` and `sum()` over integers a
  * number locally and a string on DSQL.
+ * @internal
  */
 export function parseInt8(text: string): number | bigint {
 	const big = BigInt(text);
@@ -34,7 +35,7 @@ export function parseInt8(text: string): number | bigint {
 	return Number.isSafeInteger(num) ? num : big;
 }
 
-/** pg type parsers for DSQL: pg's defaults, with `bigint` matching the local engine. */
+/** @internal pg type parsers for DSQL: pg's defaults, with `bigint` matching the local engine. */
 export const dsqlTypeParsers: pg.CustomTypesConfig = {
 	getTypeParser: (oid: number, format?: 'text' | 'binary') =>
 		oid === INT8_OID && format !== 'binary' ? parseInt8 : pg.types.getTypeParser(oid, format),

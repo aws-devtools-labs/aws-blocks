@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
  */
 
 /** Regex to sanitize names into valid environment variable / resource name segments. */
-export const ENV_NAME_SANITIZE_PATTERN = /[^a-zA-Z0-9]/g;
+const ENV_NAME_SANITIZE_PATTERN = /[^a-zA-Z0-9]/g;
 
 /** Prefix for config keys injected by the CDK layer and read by the runtime engines. */
 export const ENV_VAR_PREFIX = 'BLOCKS';
@@ -53,10 +53,10 @@ export const BINDING_MARKER_FILE = 'binding.json';
 export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 
 /** Prefix of the custom database role the migration Lambda creates for the app on a DSQL cluster. */
-export const DB_ROLE_PREFIX = 'blocks_app_';
+const DB_ROLE_PREFIX = 'blocks_app_';
 
 /** Max PostgreSQL identifier length. */
-export const PG_NAME_MAX = 63;
+const PG_NAME_MAX = 63;
 
 /**
  * Sanitize an id into a valid PostgreSQL role name. Short ids stay readable;

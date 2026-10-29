@@ -23,7 +23,7 @@ import type { FilePlan, MigrationPlan, PlanStep } from '../types.js';
 import { classifyStatement, findStatementIssues, stripLiteralsAndComments } from '../validation.js';
 
 /** Error name for a migration directory the target cluster cannot run. */
-export const MIGRATION_VALIDATION_ERROR_NAME = 'DsqlMigrationValidationError';
+const MIGRATION_VALIDATION_ERROR_NAME = 'DsqlMigrationValidationError';
 
 /** `CREATE [UNIQUE] INDEX ASYNC …`: DSQL returns a job id and builds the index in the background. */
 const CREATE_INDEX_ASYNC = /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+ASYNC\b/i;
@@ -49,7 +49,7 @@ function sequenceStatement(statement: string): PlanStep[] {
 	return [{ kind: 'statement', sql: statement, transactional: classifyStatement(statement) !== 'ddl' }];
 }
 
-export interface BuildPlanOptions {
+interface BuildPlanOptions {
 	/**
 	 * Check each file with dsql-lint before sequencing it. On by default; the
 	 * migration Lambda turns it off because the files were checked at synth and

@@ -53,7 +53,7 @@ const CACHE_LIMIT = 2000;
 const cache = new Map<string, LintDiagnostic[]>();
 let binaryPath: string | undefined;
 
-/** Path to the `dsql-lint` binary for this platform; `DSQL_LINT_PATH` overrides the lookup. */
+/** @internal Path to the `dsql-lint` binary for this platform; `DSQL_LINT_PATH` overrides the lookup. */
 export function dsqlLintBinary(): string {
 	if (binaryPath) return binaryPath;
 	const override = process.env.DSQL_LINT_PATH;
@@ -83,7 +83,7 @@ export function dsqlLintBinary(): string {
 	return binaryPath;
 }
 
-/** Whether the binary can be found (does not run it). */
+/** @internal Whether the binary can be found (does not run it). */
 export function isDsqlLintAvailable(): boolean {
 	try {
 		dsqlLintBinary();

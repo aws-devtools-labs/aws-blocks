@@ -57,7 +57,7 @@ export function registerSchema(clusterId: string, schemaName: string, blockFullI
 	bySchema.set(schemaName, blockFullId);
 }
 
-/** Clear every registry. **For test cleanup only.** */
+/** @internal Clear every registry. **For test cleanup only.** */
 export function _resetDatabaseRegistry(): void {
 	const s = state();
 	s.databases.clear();

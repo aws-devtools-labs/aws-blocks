@@ -130,19 +130,15 @@ class Mutex {
  * The shared PGlite behind one local cluster. Hand out per-block engines with
  * {@link PgliteCluster.forSchema}.
  */
-export class PgliteCluster {
+class PgliteCluster {
 	private db: PGlite;
 	private closed = false;
 	private ready?: Promise<PGlite>;
 	private readonly mutex = new Mutex();
 	/** The schema the single session's `search_path` currently points at; `undefined` when unknown. */
 	private currentSchema?: string;
-	private readonly ensuredSchemas = new Set<string>();
 
-	constructor(
-		readonly dataDir: string,
-		private readonly createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir),
-	) {
+	constructor(readonly dataDir: string) {
 		this.db = this.createDb();
 	}
 
@@ -150,7 +146,7 @@ export class PgliteCluster {
 		mkdirSync(this.dataDir, { recursive: true });
 		recoverIncompletePgliteDataDir(this.dataDir);
 		cleanStaleLock(this.dataDir);
-		return this.createClient(this.dataDir);
+		return new PGlite(this.dataDir);
 	}
 
 	/** Force PGlite's lazy WASM init, retrying past intermittent initdb traps, then install the `sys` stub. */
@@ -188,18 +184,6 @@ export class PgliteCluster {
 		if (this.currentSchema === schema) return;
 		await this.raw(`SET search_path TO ${quoteIdent(schema)}`);
 		this.currentSchema = schema;
-	}
-
-	/** Create `schema` if needed (once per process). */
-	async ensureSchema(schema: string): Promise<void> {
-		if (this.ensuredSchemas.has(schema)) return;
-		const release = await this.mutex.acquire();
-		try {
-			await this.raw(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schema)}`);
-			this.ensuredSchemas.add(schema);
-		} finally {
-			release();
-		}
 	}
 
 	/** Forget the remembered search_path (after a ROLLBACK, which undoes an in-transaction SET). */
@@ -353,7 +337,7 @@ export function sharedPgliteCluster(dataDir: string): PgliteCluster {
 	return c;
 }
 
-/** Close and forget every shared PGlite. **For test cleanup only.** */
+/** @internal Close and forget every shared PGlite. **For test cleanup only.** */
 export async function _closeAllPgliteClusters(): Promise<void> {
 	const all = [...clusters.values()];
 	clusters.clear();

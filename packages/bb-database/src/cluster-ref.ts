@@ -10,7 +10,7 @@ import { configError } from './errors.js';
 import type { ClusterRef, DatabaseClusterLike, DatabaseOptions } from './types.js';
 
 /** Whether a `cluster` option value looks like a `DatabaseCluster` (any entry point's class). */
-export function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
+function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
 	return (
 		typeof value === 'object' &&
 		value !== null &&
@@ -21,7 +21,7 @@ export function isDatabaseClusterLike(value: unknown): value is DatabaseClusterL
 }
 
 /** Everything a layer needs to know about the cluster a block was given. */
-export interface ResolvedCluster {
+interface ResolvedCluster {
 	ref: ClusterRef;
 	/** The schema this block's tables live in. */
 	schemaName: string;

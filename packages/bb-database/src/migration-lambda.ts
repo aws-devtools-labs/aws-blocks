@@ -30,7 +30,7 @@ const MAX_DELAY_MS = 30000;
  * True when the cluster is not accepting statements yet (just created, endpoint
  * not reachable), as opposed to a bad statement.
  */
-export function isRetryableMigrationError(e: unknown): boolean {
+function isRetryableMigrationError(e: unknown): boolean {
 	if (!(e instanceof Error)) return false;
 	const raw = e.cause instanceof Error ? e.cause : undefined;
 	const matches = (err: Error): boolean =>
@@ -43,7 +43,7 @@ export function isRetryableMigrationError(e: unknown): boolean {
 }
 
 /** Exponential backoff while the cluster is unreachable. */
-export async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		try {
 			return await fn();
@@ -66,6 +66,7 @@ function escapeString(value: string): string {
 /**
  * Provision the app's DML-only role on a `dsql` cluster and grant it the
  * block's schema. Idempotent; runs on every deploy so new tables get grants.
+ * @internal
  */
 export async function provisionAppRole(
 	engine: DatabaseEngine,

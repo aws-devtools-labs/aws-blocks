@@ -25,9 +25,9 @@ import { formatDiagnostic, type LintDiagnostic, lintSql } from './dsql-lint.js';
 import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from './errors.js';
 
 const DOCS = 'https://docs.aws.amazon.com/aurora-dsql/latest/userguide';
-export const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;
-export const DDL_DOC = `${DOCS}/working-with-ddl.html`;
-export const QUOTAS_DOC = `${DOCS}/CHAP_quotas.html`;
+const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;
+const DDL_DOC = `${DOCS}/working-with-ddl.html`;
+const QUOTAS_DOC = `${DOCS}/CHAP_quotas.html`;
 
 /** Strip string literals and comments before classifying a statement. */
 export function stripLiteralsAndComments(sql: string): string {
@@ -76,7 +76,7 @@ export function stripLiteralsAndComments(sql: string): string {
 }
 
 /** A compatibility finding, with the doc page to read. */
-export interface ValidationIssue {
+interface ValidationIssue {
 	/** The dsql-lint rule id. */
 	rule: string;
 	/** dsql-lint's message and suggestion. */
@@ -133,7 +133,7 @@ export function classifyStatement(sql: string): 'ddl' | 'dml' | 'other' {
 }
 
 /** Build the branded `TransactionRowLimitExceeded` the mock raises for the row and size limits. */
-export function transactionLimitError(detail: string): Error {
+function transactionLimitError(detail: string): Error {
 	const err = new Error(`${detail} Split the work into smaller transactions. (${QUOTAS_DOC})`);
 	err.name = DatabaseErrors.TransactionRowLimitExceeded;
 	return brandBlocksError(err);

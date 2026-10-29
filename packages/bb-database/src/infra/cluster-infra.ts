@@ -37,7 +37,7 @@ import {
 	sanitizeDbRoleName,
 	toEnvName,
 } from '../constants.js';
-import type { ClusterType, DatabaseClusterOptions } from '../types.js';
+import type { DatabaseClusterOptions } from '../types.js';
 
 const REMOVAL_POLICY_MAP = {
 	destroy: cdk.RemovalPolicy.DESTROY,
@@ -45,7 +45,7 @@ const REMOVAL_POLICY_MAP = {
 } as const;
 
 /** Hash all .sql files in a directory to detect changes. */
-export function hashMigrationsDir(dir: string): string {
+function hashMigrationsDir(dir: string): string {
 	const hash = createHash('sha256');
 	const files = readdirSync(dir)
 		.filter((f) => f.endsWith('.sql'))
@@ -57,18 +57,17 @@ export function hashMigrationsDir(dir: string): string {
 	return hash.digest('hex').slice(0, 16);
 }
 
-export interface ClusterInfraProps {
+interface ClusterInfraProps {
 	/** The construct the cluster's resources are created under (the `DatabaseCluster`, or the owning `Database`). */
 	owner: BuildingBlockScope;
 	/** Names the cluster; drives resource names and the `BLOCKS_{id}_*` config keys. */
 	fullId: string;
-	type: ClusterType;
 	options: DatabaseClusterOptions;
 	defaults: BlocksDefaults;
 }
 
 /** A block attached to the cluster. */
-export interface AttachedBlock {
+interface AttachedBlock {
 	scope: Construct;
 	fullId: string;
 	schemaName: string;
@@ -99,7 +98,6 @@ class FunctionsWaitForMigration implements cdk.IAspect {
 }
 
 export class ClusterInfra {
-	readonly type: ClusterType;
 	/** Config entries the runtime reads (`BLOCKS_{id}_*` → token). */
 	readonly configEntries: Record<string, string>;
 	/** The PostgreSQL role the app connects as on a `dsql` cluster. */
@@ -107,18 +105,14 @@ export class ClusterInfra {
 	/** CloudFormation logical id of the cluster resource (a token until synth); recorded in the binding record. */
 	readonly clusterLogicalId: string;
 
-	private readonly fullId: string;
 	private readonly clusterResource: cdk.CfnResource;
 	private readonly clusterArn: string;
 	private readonly migrationFn: lambda.NodejsFunction;
 	private readonly isCompleteFn: lambda.NodejsFunction;
 	private readonly provider: cr.Provider;
-	private readonly attached: AttachedBlock[] = [];
 	private lastCustomResource: cdk.CfnResource | undefined;
 
 	constructor(props: ClusterInfraProps) {
-		this.fullId = props.fullId;
-		this.type = props.type;
 		this.dbRole = sanitizeDbRoleName(props.fullId);
 		const stack = cdk.Stack.of(props.owner);
 		const envName = toEnvName(props.fullId);
@@ -146,7 +140,6 @@ export class ClusterInfra {
 		const lambdaEnv: Record<string, string> = {
 			DSQL_ENDPOINT: endpoint,
 			DSQL_REGION: stack.region,
-			DB_ROLE_NAME: this.dbRole,
 		};
 
 		// The code is bundled now, before any block attaches, so migrations travel
@@ -198,7 +191,6 @@ export class ClusterInfra {
 	 * assumes `appRole` then waits for that resource.
 	 */
 	attach(block: AttachedBlock, appRole: iam.IRole): void {
-		this.attached.push(block);
 		const migrationsHash = block.migrationsPath ? hashMigrationsDir(block.migrationsPath) : 'no-migrations';
 		const asset = block.migrationsPath ? this.migrationsAsset(block.scope, block.migrationsPath) : undefined;
 		if (asset) {

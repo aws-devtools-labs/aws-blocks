@@ -35,13 +35,13 @@ export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 /** Serialization failure (an OCC conflict). SQLSTATE class 40, transaction rollback. */
 export const PG_SERIALIZATION_FAILURE = '40001';
 /** Unique constraint violation. SQLSTATE class 23 (Integrity Constraint Violation). */
-export const PG_UNIQUE_VIOLATION = '23505';
+const PG_UNIQUE_VIOLATION = '23505';
 /** Connection exception class prefix. SQLSTATE class 08. */
-export const PG_CONNECTION_EXCEPTION_CLASS = '08';
+const PG_CONNECTION_EXCEPTION_CLASS = '08';
 /** Program limit exceeded. DSQL reports its per-transaction row and size limits with this SQLSTATE. */
-export const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
+const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
 /** Aurora DSQL stale schema cache. Retried once, anywhere: the retry refreshes the catalog. */
-export const DSQL_STALE_SCHEMA_CACHE = 'OC001';
+const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 
 /**
  * The messages DSQL attaches to SQLSTATE 54000 when a transaction exceeds its
@@ -68,7 +68,7 @@ export function serializationConflict(cause: Error): ApiError {
  * Build the 409 ApiError for a unique-constraint violation (SQLSTATE 23505).
  * Not retriable: a duplicate key is deterministic.
  */
-export function uniqueConstraintConflict(cause: Error): ApiError {
+function uniqueConstraintConflict(cause: Error): ApiError {
 	return new ApiError('The item violates a unique constraint', 409, {
 		name: DatabaseErrors.UniqueConstraintViolation,
 		cause,
@@ -118,7 +118,7 @@ export function reTagged(name: string, cause: Error): Error {
 }
 
 /** Wrap an unknown caught value with a standardized {@link DatabaseErrors} name. */
-export function wrapError(e: unknown): never {
+function wrapError(e: unknown): never {
 	const error = e instanceof Error ? e : new Error(String(e));
 	const name = knownErrors.has(error.name) ? error.name : DatabaseErrors.QueryFailed;
 	throw reTagged(name, error);
@@ -130,7 +130,7 @@ export function pgErrorCode(e: unknown): string | undefined {
 }
 
 /** Whether a driver error is DSQL's per-transaction row or size limit (SQLSTATE 54000 with the DSQL message). */
-export function isDsqlTransactionLimit(e: unknown): boolean {
+function isDsqlTransactionLimit(e: unknown): boolean {
 	return (
 		e instanceof Error &&
 		pgErrorCode(e) === PG_PROGRAM_LIMIT_EXCEEDED &&

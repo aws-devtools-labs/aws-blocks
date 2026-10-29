@@ -10,7 +10,7 @@
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { configError } from './errors.js';
 
-export interface InternalAccess {
+interface InternalAccess {
 	/** The underlying engine, memoized; may run migrations first. */
 	engine(): Promise<DatabaseEngine>;
 	/** Local mode: make the next commit fail with `SerializationFailure`. Throws elsewhere. */

@@ -58,7 +58,6 @@ export class DatabaseCluster extends BuildingBlockScope {
 		this.infra = new ClusterInfra({
 			owner: this,
 			fullId: this.fullId,
-			type: options.type,
 			options,
 			defaults: this.defaults,
 		});
@@ -99,7 +98,6 @@ export class Database extends BuildingBlockScope {
 			const infra = new ClusterInfra({
 				owner: this,
 				fullId: this.fullId,
-				type: 'dsql',
 				options: { type: 'dsql', removalPolicy: owned.removalPolicy },
 				defaults: this.defaults,
 			});

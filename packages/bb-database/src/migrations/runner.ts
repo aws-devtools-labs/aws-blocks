@@ -18,7 +18,7 @@ import type { MigrationPlan, PlanStep } from '../types.js';
 /** Error name for a migration that failed mid-plan. */
 const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
 
-export interface RunPlanOptions {
+interface RunPlanOptions {
 	/** The block's schema. Created if missing (unless `public`). */
 	schemaName: string;
 	/** Where progress lines go. @default console.log */

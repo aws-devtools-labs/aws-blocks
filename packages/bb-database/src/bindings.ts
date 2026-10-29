@@ -60,7 +60,7 @@ export function readBindingMarker(dataDir: string): DatabaseBinding | undefined 
 }
 
 /** Write a block's dev-server marker. */
-export function writeBindingMarker(dataDir: string, binding: DatabaseBinding): void {
+function writeBindingMarker(dataDir: string, binding: DatabaseBinding): void {
 	const file = join(dataDir, BINDING_MARKER_FILE);
 	mkdirSync(dirname(file), { recursive: true });
 	writeFileSync(file, `${JSON.stringify(binding, null, 2)}\n`);

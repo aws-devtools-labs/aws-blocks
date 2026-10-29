@@ -25,7 +25,7 @@ import { classifyStatement, stripLiteralsAndComments, TransactionTracker, valida
 import { currentTransactionHandle } from './tx-scope.js';
 
 /** Stable, BB-authored message for the mock's DDL guard. */
-export const DDL_NOT_ALLOWED_MESSAGE =
+const DDL_NOT_ALLOWED_MESSAGE =
 	'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime of a DSQL cluster. ' +
 	'Put them in a migration file; the migration Lambda runs DDL with dsql:DbConnectAdmin.';
 

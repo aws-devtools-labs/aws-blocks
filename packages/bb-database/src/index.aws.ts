@@ -57,8 +57,6 @@ export class DatabaseCluster extends Scope {
 export class Database extends Scope {
 	readonly cluster: ClusterRef;
 	readonly schemaName: string;
-	/** Migrations run at deploy time; the path is not resolved in the Lambda. */
-	private readonly migrationsPath: string | undefined = undefined;
 
 	private readonly core: DatabaseCore;
 	/** @internal Logger for internal operations. Defaults to error level. */
@@ -101,7 +99,7 @@ export class Database extends Scope {
 			});
 		};
 
-		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
+		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
 			simulateConflict: () => {

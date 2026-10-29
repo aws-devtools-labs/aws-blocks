@@ -17,11 +17,9 @@ import type { QueryOptions, Transaction, TransactionOptions } from './types.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export interface DatabaseCoreOptions {
+interface DatabaseCoreOptions {
 	/** Produces (and memoizes) the engine; may run migrations first. */
 	engine: () => Promise<DatabaseEngine>;
-	/** Names the block in error messages. */
-	fullId: string;
 }
 
 export class DatabaseCore {

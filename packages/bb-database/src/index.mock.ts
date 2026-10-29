@@ -144,7 +144,7 @@ export class Database extends Scope {
 			return mock;
 		};
 
-		this.core = new DatabaseCore({ engine: buildEngine, fullId: this.fullId });
+		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
 			simulateConflict: () => {
