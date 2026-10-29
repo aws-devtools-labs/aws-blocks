@@ -839,3 +839,70 @@ Applying that test shrank the overlap rather than documenting it, and it gives t
 ### References
 - `packages/core/src/scripts/validate-native-catalogs.ts` — `seenIds`, now the single enforcement point for binding-`id` uniqueness, with cross-block reporting
 - `native/swift/Sources/BlocksCodegen/CodegenModel.swift` — `resolveDeclaredTransferableBindings`, the six rules Swift keeps because its emission reads them
+
+## D-021: An export's type name raises each segment's first character and nothing else
+
+**Date**: 2026-10-29
+**Authors:** varshpam
+
+### Context
+A transferable binding declares an `export`, and each native generator derives a type name from it that must resolve to a symbol the declared package exports. The design doc states the constraint — the type must be public in the declared Dart library, Swift module or Kotlin package — and describes the derivation only as upper camel case, without settling whether an acronym's tail is lowered; its `export` examples are all separator-free lower-camel, so none discriminates either.
+
+The three generators had diverged:
+
+- `API_link` resolved to `APILink` on Dart and Kotlin, and `ApiLink` on Swift.
+- `DEVICE_LINK` resolved to `DEVICELINK` and `DeviceLink`.
+- `device.link` was accepted by Dart and Swift, and rejected by Kotlin.
+- `device:link` was accepted by Swift alone.
+- Swift had no export grammar at all: `device__link`, `device.`, `.link` and `device-.link` all derived a name and passed its post-hoc identifier check.
+
+### Decision
+An export resolves to a type name by splitting on `-`, `_` and `.`, raising each segment's first character, and leaving the rest of every segment as declared.
+
+- **Alphabet.** Exactly `-`, `_` and `.`, each joining two non-empty segments. A doubled or dangling separator, or any other separator, is a generation error. `:` is refused.
+- **Collision.** Two bindings whose exports resolve to the same type name in one generated client are a generation error, unless both make the identical claim — so two distinct tags declaring one export in one package at one arity generate fine.
+- **Scope.** Only the bindings a generator emits are checked: a built-in-tag or opted-out binding is dropped beforehand and collides with nothing.
+- **Length.** An export is bounded at 64 characters, in the producer and in the Kotlin parser only; Swift and Dart derive a name from whatever length reaches them.
+
+### Rationale
+The rest of a segment is left as declared because the derived name is not invented: it must match a symbol a third party exported. A package exporting `APILink` must be imported as `APILink`; lowering the tail names `ApiLink`, which it does not export, so the failure surfaces in the consumer's compiler, not at generation.
+
+The alphabet is the producer's: `EXPORT_GRAMMAR` gates every spec derived from native declarations, so a narrower generator alphabet is a defect and a wider one is dead permissiveness. That grammar rejects `:` upstream, so no `blocks.spec.json` can carry one and the derivation never receives it — that unreachability decides removing `:` from the separator set.
+
+Kotlin had keyed uniqueness on `tag` alone, and accepting `.` enlarged the surface, so its guard was required by this change rather than added alongside it.
+
+The rule exists as four independent implementations with no cross-language guard, the posture D-020 settled, pinned by per-language unit tests and fixture 27's goldens. The export grammar is a seventh rule coinciding with the producer, after D-020's six: no generator's derivation specifies a result for a dangling or doubled separator.
+
+This is a behavior change for an all-caps Swift export: `API_link` now resolves to `APILink`, not `ApiLink`. It is latent: no shipped block declares a native binding, so no generated client changes.
+
+### Collision-rule divergence
+The collision rule is not one convention across the four implementations, and this change narrows the divergence. The producer has none, and the three generators diverge on two axes.
+
+**What is compared.** All three compare package, export and `genericArity`, so one export declared at two generic arities is an error on each. Dart had omitted arity, generating `Future<APILink>` and `Future<APILink<…>>` side by side from one import.
+
+**How it is qualified.** Dart keys the resolved name bare, Swift keys `module.Type` and Kotlin the `canonicalName`, so two packages resolving to one type name is a Dart generation error, reported as already declaring `DeviceLink`, and generates cleanly on Swift and Kotlin, which emit `PkgOne.DeviceLink` and `PkgTwo.DeviceLink` from two imports. Dart's bare keying predates this change; Kotlin's guard was added here to match Swift, making the split two generators against one.
+
+The package term discriminates because Kotlin keys on `kotlinPackage` and Swift on the Swift module, which two catalog identities may share; Swift's `moduleOwners` guard compares declared `identity` and `product` rather than the catalog's `package` key, so byte-identical Swift package metadata passes it and is rejected on the package term alone.
+
+**Reserved names.** Dart alone refuses a resolved name owned by `dart:core`, `dart:async` or `blocks_runtime`. Swift's `reservedTypeNames` is not a counterpart: `safeTypeName` is its only caller, and consults it for a name the generator invents. Kotlin has no equivalent, and this divergence predates this change too.
+
+Reconciling them changes behavior on whichever side moves, so it is left to its own decision.
+
+### Length bound
+No generator's emission depends on how long an export is — a long name derives and compiles — so by D-020's test none needs a bound of its own, and the producer's covers all three because `packages/core/src/scripts/validate-native-catalogs.ts` is the only path that derives a spec from native declarations. Kotlin's parser carries one anyway because it is the only one whose grammar can be defeated by length: Kotlin's `Regex` is `java.util.regex`, which keeps its backtrack state on the program stack, and the export grammar's nested quantifier overflows it.
+
+The overflow threshold is not a stable figure worth quoting. It tracks thread stack size and moves with calling context, so it is a property of the running JVM rather than of the grammar, and above the smallest stack sizes it is not even deterministic: at the 2 MB default and at `-Xss8m`, inputs near the boundary split match and overflow across fresh JVMs at one configuration, and a smaller input can overflow where a larger one matches. One point is sharp, and it is the only one the bound needs: at `-Xss256k` 196 single-character segments (391 characters) match and 197 (393 characters) overflow, ten fresh JVMs per side with no split, and identically on Corretto 11, 17 and 21 and OpenJDK 24. Swift's `range(of:options:.regularExpression)` and Dart's `RegExp` both matched 200,001 characters without fault.
+
+What the bound needs is an ordering rather than a margin: 64 characters sits below every threshold measured at every stack size — narrowest at `-Xss256k`, where the shortest overflowing input is still about 6× the cap — and it still admits every export a package is likely to name, so Swift and Dart gain nothing from repeating it.
+
+### Alternatives Considered
+- **Apply each language's house style** — Effective Dart and the Kotlin conventions both lower an acronym's tail, while Swift's own API Design Guidelines require `APILink`, so the three styles cannot produce the one name the binding needs; and each guide binds the author who declares a type, not a tool deriving a name for someone else's symbol.
+
+- **Normalize the name and ship a mapping escape hatch**, as `openapi-generator` does with `--model-name-mappings` — deferred rather than rejected: normalization is only safe with an override, and the manifest that would carry one is a later iteration.
+
+- **A cross-language guard over the four implementations** — per D-020's own rejected alternative.
+
+### References
+- D-020 — what a native generator validates
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `EXPORT_GRAMMAR`, the alphabet the generators follow; `MAX_EXPORT_LENGTH`, the 64-character bound shared with `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/parser/NativeCatalogParser.kt` alone; and `seenTags`, which a derived type name is distinct from
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift`, `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/NamingUtils.kt`, `native/dart/packages/blocks_codegen/lib/src/builder.dart` — the three derivations

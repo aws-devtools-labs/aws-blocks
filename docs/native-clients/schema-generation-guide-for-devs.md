@@ -483,7 +483,9 @@ Each binding carries a stable `id`, a `kind` (only `transferable` in schema 1), 
 }
 ```
 
-**Codegen contract.** A method joins its binding only by tag: `result.schema.x-blocks-transferable` equals `bindings[].tag`. The `abi` fixes the call: under `blocks-transferable-v1`, export `x` resolves to `X.fromBlocksDescriptor`. A built-in tag cannot be bound by a block.
+**Codegen contract.** A method joins its binding by tag. Under `blocks-transferable-v1` an export splits on `-`, `_` or `.`, each segment's first character is raised, and the rest stands as declared. `fromBlocksDescriptor` is called on the type that results, so `API_link` resolves to `APILink.fromBlocksDescriptor`. A built-in tag cannot be bound.
+
+**Type names.** A doubled, dangling or foreign separator is an error, and spec generation refuses an export over 64 characters. No two exports may resolve to one type name, and an export may be declared at one arity only. A name `dart:core`, `dart:async` or `blocks_runtime` owns is refused. Two tags may share one export at one arity.
 
 **Factory contract.** `fromBlocksDescriptor` is the declared package's own surface — nothing here type-checks it, so a shape mismatch surfaces only when the consumer compiles. Under `blocks-transferable-v1` the descriptor arrives already checked against the binding's `tag`. On Android the `export` must carry the form its `genericArity` selects:
 

@@ -18,7 +18,9 @@ import io.kotest.matchers.string.shouldNotContain
 
 private const val TAG = "example-iot/device-link"
 private const val KOTLIN_PACKAGE = "com.example.blocks.iot"
+private const val PEER_KOTLIN_PACKAGE = "com.example.blocks.peer"
 private const val IDENTITY = "example-iot-native"
+private const val PEER_IDENTITY = "example-peer-native"
 private const val OIDC_TAG = "oidc/client"
 
 private val TELEMETRY_REF = """{ "${'$'}ref": "#/components/schemas/Telemetry" }"""
@@ -48,6 +50,24 @@ private fun packagesCatalog(identity: String = IDENTITY, platforms: String = and
     "packages": {
       "$identity": {
         "platforms": {$platforms
+        }
+      }
+    }
+  }"""
+
+private fun peerPackagesCatalog(
+    identity: String = IDENTITY,
+    peerKotlinPackage: String = KOTLIN_PACKAGE,
+) = """
+  "x-blocks-native-packages": {
+    "schemaVersion": 1,
+    "packages": {
+      "$identity": {
+        "platforms": {${androidPlatform()}
+        }
+      },
+      "$PEER_IDENTITY": {
+        "platforms": {${androidPlatform(kotlinPackage = peerKotlinPackage)}
         }
       }
     }
@@ -628,7 +648,7 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
     }
 
-    context("malformed present metadata is a generation error") {
+    context("present metadata is validated at generation") {
         fun rejected(extensions: String, resultSchema: String = transferableResult(typeArgs = null)): String =
             shouldThrow<OpenRpcParseException> { generate(spec(resultSchema, extensions)) }
                 .message.shouldNotBeNull()
@@ -762,12 +782,180 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
 
         // One per rejecting clause: leading non-letter, illegal character, dangling separator.
-        listOf("9link", "iot.deviceLink", "link-").forEach { bad ->
+        listOf("9link", "iot:deviceLink", "link-").forEach { bad ->
             test("an export of \"$bad\" is rejected") {
                 rejected(
                     "${packagesCatalog()}," + bindingsCatalog(binding(export = bad, arity = "0")),
-                ) shouldContain "\"export\" is not an identifier: \"$bad\""
+                ) shouldContain
+                    "\"export\" is not a -, _ or . joined run of " +
+                    "alphanumeric segments starting with a letter: \"$bad\""
             }
+        }
+
+        // This input overflows the grammar's backtracking, so it passes only while the length
+        // check runs first.
+        test("an export over the cap is rejected by length before the grammar regex runs") {
+            val oversized = "a" + "_a".repeat(4000)
+            rejected(
+                "${packagesCatalog()}," + bindingsCatalog(binding(export = oversized, arity = "0")),
+            ) shouldContain "\"export\" exceeds 64 characters: ${oversized.length}"
+        }
+
+        test("an export at exactly the maximum length is accepted") {
+            val atCap = "d".repeat(64)
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()},${bindingsCatalog(binding(export = atCap, arity = "0"))}",
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.D${"d".repeat(63)}\n"
+        }
+
+        test("an export one character over the maximum length is rejected") {
+            val overCap = "d".repeat(65)
+            rejected(
+                "${packagesCatalog()}," + bindingsCatalog(binding(export = overCap, arity = "0")),
+            ) shouldContain "\"export\" exceeds 64 characters: 65"
+        }
+
+        test("a newline in an id cannot split the export cap rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = rejected(
+                "${packagesCatalog()}," +
+                    bindingsCatalog(binding(export = "d".repeat(65), arity = "0", id = forged)),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        test("a dot-separated export resolves like any other separator") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()},${bindingsCatalog(binding(export = "device.link", arity = "0"))}",
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+        }
+
+        fun collided(extensions: String): String =
+            shouldThrow<CodegenException> {
+                generate(spec(transferableResult(typeArgs = null), extensions))
+            }.message.shouldNotBeNull()
+
+        test("two exports in one package resolving to one type name are rejected") {
+            collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "device_link", arity = "0"),
+                    binding(tag = "example-iot/other", id = "other", export = "device-link", arity = "0"),
+                ),
+            ) shouldContain
+                "x-blocks-native-bindings binds tag \"example-iot/other\" to " +
+                "$KOTLIN_PACKAGE.DeviceLink, already resolved by export \"device_link\" " +
+                "in package \"$IDENTITY\" at generic arity 0"
+        }
+
+        test("two exports resolving to one simple name under two kotlinPackages are accepted") {
+            val src = generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${peerPackagesCatalog(peerKotlinPackage = PEER_KOTLIN_PACKAGE)}," + bindingsCatalog(
+                        binding(export = "device_link", arity = "0"),
+                        binding(
+                            tag = "example-iot/other",
+                            id = "other",
+                            pkg = PEER_IDENTITY,
+                            export = "device-link",
+                            arity = "0",
+                        ),
+                    ),
+                ),
+            ).source()
+            src shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+            src shouldNotContain "UnknownTransferable"
+        }
+
+        // The colliding tag is unconstrained by any grammar, so it must arrive escaped.
+        test("a newline in a tag cannot split the collision rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "device_link", arity = "0"),
+                    binding(tag = forged, id = "other", export = "device-link", arity = "0"),
+                ),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        // The prior package identity is an unconstrained catalog key, so it must arrive escaped too.
+        test("a newline in the prior package identity cannot split the collision rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = collided(
+                "${peerPackagesCatalog(identity = forged)}," + bindingsCatalog(
+                    binding(pkg = forged, export = "device_link", arity = "0"),
+                    binding(
+                        tag = "example-iot/other",
+                        id = "other",
+                        pkg = PEER_IDENTITY,
+                        export = "device-link",
+                        arity = "0",
+                    ),
+                ),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        test("one export declared at two generic arities is rejected") {
+            collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "deviceLink", arity = "0"),
+                    binding(tag = "example-iot/other", id = "other", export = "deviceLink", arity = "1"),
+                ),
+            ) shouldContain
+                "x-blocks-native-bindings binds tag \"example-iot/other\" to " +
+                "$KOTLIN_PACKAGE.DeviceLink, already resolved by export \"deviceLink\" " +
+                "in package \"$IDENTITY\" at generic arity 0"
+        }
+
+        test("two tags declaring one export in one package at one arity share its type name") {
+            val src = generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(export = "device-link", arity = "0"),
+                        binding(tag = "example-iot/other", id = "other", export = "device-link", arity = "0"),
+                    ),
+                ),
+            ).source()
+            src shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+            src shouldContain "): DeviceLink {"
+            src shouldNotContain "UnknownTransferable"
+        }
+
+        test("a built-in tag's export claims no type name, so an emitted export may resolve to it") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(tag = OIDC_TAG, id = "oidc", export = "device_link", arity = "0"),
+                        binding(export = "device-link", arity = "0"),
+                    ),
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+        }
+
+        test("an opted-out package's export claims no type name") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${peerPackagesCatalog()}," + bindingsCatalog(
+                        binding(tag = "example-iot/other", id = "other", export = "device_link", arity = "0"),
+                        binding(pkg = PEER_IDENTITY, export = "device-link", arity = "0"),
+                    ),
+                ),
+                excluded = setOf(IDENTITY),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
         }
 
         test("an all-caps export keeps its case, so the import names what the package exports") {

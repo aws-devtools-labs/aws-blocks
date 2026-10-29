@@ -1265,7 +1265,7 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 		]) {
 			const errors = errorsFrom([source({ bindings: [binding({ export: exported })] })]);
 			assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].export']);
-			assert.match(errors[0].message, /delimited run of alphanumeric segments/);
+			assert.match(errors[0].message, /joined run of alphanumeric segments/);
 		}
 	});
 
@@ -1276,6 +1276,32 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 			const errors = errorsFrom([source({ bindings: [binding({ export: exported })] })]);
 			assert.deepStrictEqual(paths(errors), []);
 		}
+	});
+
+	it('rejects an export longer than the cap by its length', () => {
+		const errors = errorsFrom([source({ bindings: [binding({ export: `d${'e'.repeat(64)}` })] })]);
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].export']);
+		assert.match(errors[0].message, /must be at most 64 characters, got 65/);
+	});
+
+	it('escapes a newline in a rejected export so it cannot forge a diagnostic', () => {
+		const errors = errorsFrom([source({ bindings: [binding({ export: '9bad\nAWSBLOCKS-NATIVE-999: forged' })] })]);
+		assert.strictEqual(errors.length, 1);
+		assert.ok(!errors[0].message.includes('\n'));
+		assert.ok(errors[0].message.includes('9bad\\nAWSBLOCKS-NATIVE-999: forged'));
+	});
+
+	it('accepts an export of exactly the cap', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([source({ bindings: [binding({ export: 'device link' })] })])), []);
+		const errors = errorsFrom([source({ bindings: [binding({ export: `d${'e'.repeat(63)}` })] })]);
+		assert.deepStrictEqual(paths(errors), []);
+	});
+
+	it('reports the length rather than the grammar when an over-long export also breaks the grammar', () => {
+		const errors = errorsFrom([source({ bindings: [binding({ export: `0${'e'.repeat(64)}` })] })]);
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].export']);
+		assert.match(errors[0].message, /must be at most 64 characters, got 65/);
 	});
 
 	it('rejects a dart package name the generated client already imports', () => {
