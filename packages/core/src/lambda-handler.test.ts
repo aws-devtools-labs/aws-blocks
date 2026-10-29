@@ -224,6 +224,20 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(body.error.code, -32600);
   });
 
+  it('returns Invalid Request for a literal JSON null body instead of throwing', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async noop() { return {}; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({ body: 'null' }));
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.id, null);
+  });
+
   it('decodes base64-encoded body', async () => {
     let capturedText = '';
 
