@@ -15,6 +15,7 @@ import {
 import { classifyDenialError, denialGuidance } from './denial-guidance.js';
 import {
 	type DeploymentTargetOptions,
+	deploymentCredentialsEnv,
 	environmentAccessKeys,
 	REGION_CODE,
 	resolveDeploymentTarget,
@@ -312,16 +313,7 @@ export async function assertAwsCredentials({
 					failure,
 					// The guidance follows the deploy: with environment keys, no profile is used, and
 					// the keys are passed under the AWS_ names that the guidance reads.
-					env: environmentKeys
-						? {
-								...env,
-								AWS_PROFILE: undefined,
-								AWS_DEFAULT_PROFILE: undefined,
-								AWS_ACCESS_KEY_ID: environmentKeys.accessKeyId,
-								AWS_SECRET_ACCESS_KEY: environmentKeys.secretAccessKey,
-								AWS_SESSION_TOKEN: environmentKeys.sessionToken,
-							}
-						: env,
+					env: deploymentCredentialsEnv(env, environmentKeys),
 					profile,
 					readAwsCliVersion,
 					region,
