@@ -55,6 +55,11 @@ export interface MethodTypeInfo {
 	 */
 	skipCodegen?: boolean;
 	/**
+	 * Why part of the parameter list could not be described (the variable-length tail of a rest
+	 * parameter's tuple), for `generate-spec` to print with the parameters' own warnings.
+	 */
+	paramWarnings?: string[];
+	/**
 	 * Why part of the return type is described as a plain object (a recursive
 	 * type cut, a size limit), for `generate-spec` to print when it uses this
 	 * schema. A parameter's are on its {@link ParamTypeInfo.warnings}.
@@ -319,6 +324,10 @@ export interface JsonSchema {
 	type?: string;
 	properties?: Record<string, JsonSchema>;
 	items?: JsonSchema | JsonSchema[];
+	/** A tuple's positional element schemas (JSON Schema 2020-12). */
+	prefixItems?: JsonSchema[];
+	minItems?: number;
+	maxItems?: number;
 	required?: string[];
 	$ref?: string;
 	nullable?: boolean;
@@ -581,6 +590,7 @@ function extractMethodTypeInfo(
 	sourceFile: ts.SourceFile,
 ): MethodTypeInfo | null {
 	const params: ParamTypeInfo[] = [];
+	const paramWarnings: string[] = [];
 
 	for (const param of method.parameters) {
 		const name = ts.isIdentifier(param.name) ? param.name.text
@@ -593,6 +603,15 @@ function extractMethodTypeInfo(
 		let warnings: string[] | undefined;
 		if (symbol) {
 			const paramType = checker.getTypeOfSymbolAtLocation(symbol, param);
+			const spread = param.dotDotDotToken
+				? restTupleParams(paramType, checker, method.name.getText(sourceFile), name, params)
+				: undefined;
+			if (spread) {
+				params.push(...spread.params);
+				if (spread.warning) paramWarnings.push(spread.warning);
+				continue;
+			}
+			if (param.dotDotDotToken) paramWarnings.push(variadicRestWarning(method.name.getText(sourceFile), name));
 			({ schema, warnings } = topLevelSchemaWithWarnings(paramType, checker, `${method.name.getText(sourceFile)}(${name})`));
 		} else if (param.type) {
 			// Fallback to AST-based extraction
@@ -625,7 +644,14 @@ function extractMethodTypeInfo(
 	}
 
 	const skipCodegen = hasBlocksSkipCodegenTag(method) || undefined;
-	return { params, returnType, transferable, skipCodegen, ...(returnWarnings ? { returnWarnings } : {}) };
+	return {
+		params,
+		returnType,
+		transferable,
+		skipCodegen,
+		...(paramWarnings.length > 0 ? { paramWarnings } : {}),
+		...(returnWarnings ? { returnWarnings } : {}),
+	};
 }
 
 function unwrapParens(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
@@ -709,8 +735,22 @@ function extractMethodsFromResolvedType(
 
 			// Extract params
 			const params: ParamTypeInfo[] = [];
+			const paramWarnings: string[] = [];
 			for (const paramSymbol of sig.getParameters()) {
 				const paramType = checker.getTypeOfSymbol(paramSymbol);
+				const restDecl = paramSymbol.valueDeclaration;
+				const spread =
+					restDecl && ts.isParameter(restDecl) && restDecl.dotDotDotToken
+						? restTupleParams(paramType, checker, prop.getName(), paramSymbol.getName(), params)
+						: undefined;
+				if (spread) {
+					params.push(...spread.params);
+					if (spread.warning) paramWarnings.push(spread.warning);
+					continue;
+				}
+				if (restDecl && ts.isParameter(restDecl) && restDecl.dotDotDotToken) {
+					paramWarnings.push(variadicRestWarning(prop.getName(), paramSymbol.getName()));
+				}
 				const { schema, warnings } = topLevelSchemaWithWarnings(
 					paramType,
 					checker,
@@ -750,7 +790,14 @@ function extractMethodsFromResolvedType(
 				skipCodegen = true;
 			}
 
-			return { params, returnType, transferable, skipCodegen, ...(returnWarnings ? { returnWarnings } : {}) };
+			return {
+				params,
+				returnType,
+				transferable,
+				skipCodegen,
+				...(paramWarnings.length > 0 ? { paramWarnings } : {}),
+				...(returnWarnings ? { returnWarnings } : {}),
+			};
 		});
 		if (info) result.set(key, info);
 	}
@@ -914,8 +961,8 @@ const MAX_UNNAMED_DEPTH = 32;
  * its declaration with a new type each level: past
  * {@link MAX_NESTED_INSTANTIATIONS} it is cut (`Box<Box<string>>` and the like
  * stay well under). A cut is an open map (see {@link cutSchema}) and prints a
- * warning naming the field. (Not a `$ref` to its own component: the Kotlin
- * generator cannot yet generate a self-referencing type.)
+ * warning naming the field. (Not a `$ref` to its own component: the Swift
+ * generator cannot yet generate a type that holds an optional of itself.)
  */
 const typesInProgress = new Map<ts.Type, number>();
 const declarationsInProgress = new Map<ts.Symbol, number>();
@@ -1160,6 +1207,12 @@ function tsTypeToJsonSchema(type: ts.Type, checker: ts.TypeChecker, depth = 0): 
 		return { type: 'object' };
 	}
 
+	// Tuple type (`[A, B]`, `readonly [start: T, end: T]`). Checked before arrays: a tuple is an
+	// object type too, and described as one it lists "0", "1", `length` and every array method.
+	if (checker.isTupleType(type)) {
+		return tupleTypeToJsonSchema(type as ts.TupleTypeReference, checker, depth);
+	}
+
 	// Array type
 	if (checker.isArrayType(type)) {
 		const typeArgs = (type as ts.TypeReference).typeArguments;
@@ -1198,6 +1251,110 @@ function tsTypeToJsonSchema(type: ts.Type, checker: ts.TypeChecker, depth = 0): 
 	}
 
 	return { type: 'unknown' };
+}
+
+/**
+ * The warning for a rest parameter typed as a plain array (`...ids: string[]`), which stays one array
+ * param in the spec: the server spreads the params into the method, so a native client that sends the
+ * array as that one param (`[["a", "b"]]`) reaches the method with the whole array as its first
+ * argument (`ids = [["a", "b"]]`). Positional params cannot describe a variable number of arguments.
+ */
+function variadicRestWarning(method: string, restName: string): string {
+	return `[blocks] ${method}(...${restName}) takes a variable number of arguments, which the OpenRPC spec describes as one array parameter: a native client sends them as one nested array, so the method receives that array as its only \`${restName}\` argument. Declare the parameter as an array (\`${restName}: T[]\`) for native clients.`;
+}
+
+/**
+ * The positional params of a rest parameter typed as a tuple (`...args: [id: string, count?: number]`,
+ * `...args: Parameters<typeof table.put>`), or `undefined` for any other rest parameter. The server calls
+ * a method with its params spread (`method(...params)`), so each element is a param of its own: named by
+ * its tuple label (`id`), else `arg<n>` by its position in the method's params, and optional where the
+ * element is (`count?`). Described as one param holding the tuple, a native client sent `[[1, "s"]]` and
+ * the method received `args = [[1, "s"]]`. A rest element in the tuple (`[level: string, ...string[]]`)
+ * takes a variable number of arguments, which positional params cannot describe: the fixed elements
+ * before it are the params, and the warning says the rest are left out. An element named like one of
+ * the method's earlier params ([before]) is renamed (`id_2`); names are not on the wire.
+ */
+function restTupleParams(
+	type: ts.Type,
+	checker: ts.TypeChecker,
+	method: string,
+	restName: string,
+	before: readonly ParamTypeInfo[],
+): { params: ParamTypeInfo[]; warning?: string } | undefined {
+	if (!checker.isTupleType(type)) return undefined;
+	const tuple = type as ts.TupleTypeReference;
+	const { elementFlags, labeledElementDeclarations } = tuple.target;
+	const elementTypes = checker.getTypeArguments(tuple).slice(0, elementFlags.length);
+	const params: ParamTypeInfo[] = [];
+	const position = before.length;
+	// The method's earlier params keep their names; an element named like one steps aside (`id_2`).
+	const taken = new Set(before.map((p) => p.name));
+	for (const [i, elementType] of elementTypes.entries()) {
+		if (elementFlags[i]! & ts.ElementFlags.Variable) {
+			return {
+				params,
+				warning: `[blocks] ${method}(...${restName}) takes a variable number of arguments after its first ${params.length}; the OpenRPC spec describes only those ${params.length}, so a native client cannot send the others.`,
+			};
+		}
+		const label = labeledElementDeclarations?.[i]?.name;
+		const base = label && ts.isIdentifier(label) ? label.text : `arg${position + i}`;
+		let name = base;
+		for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
+		taken.add(name);
+		const { schema, warnings } = topLevelSchemaWithWarnings(elementType, checker, `${method}(${name})`);
+		params.push({
+			name,
+			required: (elementFlags[i]! & ts.ElementFlags.Required) !== 0,
+			schema,
+			...(warnings ? { warnings } : {}),
+		});
+	}
+	return { params };
+}
+
+/**
+ * A tuple is a JSON array whose elements are positional. A fixed tuple (`[A, B]`, `[A, B?]`) is
+ * described with `prefixItems` and bounded by `minItems` (its required elements) and `maxItems` (all
+ * of them), which also closes it: no `items: false`, which OpenRPC 1.3.2's JSON Schema (draft-07)
+ * reads as "no elements at all", so a validator would reject every value. The native generators read
+ * `prefixItems` as a fixed-shape tuple. A tuple with a rest element (`[A, ...B[]]`) has no fixed
+ * shape, so it is an array of the union of its element types with `minItems` for its required
+ * elements, and the empty tuple is an array with `maxItems: 0`. Past {@link MAX_DEPTH}, a tuple
+ * of unnamed objects or arrays is an array of any values, as an array is.
+ */
+function tupleTypeToJsonSchema(type: ts.TupleTypeReference, checker: ts.TypeChecker, depth: number): JsonSchema {
+	const { elementFlags } = type.target;
+	const elementTypes = checker.getTypeArguments(type).slice(0, elementFlags.length);
+	if (depth > MAX_DEPTH && !elementTypes.every((t) => keepsTypePastLimit(t, checker))) {
+		warnDeep();
+		return { type: 'array', items: { type: 'unknown' } };
+	}
+	const minItems = elementFlags.filter((flag) => flag & ts.ElementFlags.Required).length;
+	if (elementTypes.length === 0) return { type: 'array', items: { type: 'unknown' }, maxItems: 0 };
+	if (elementFlags.some((flag) => flag & ts.ElementFlags.Variable)) {
+		const schemas: JsonSchema[] = [];
+		const seen = new Set<string>();
+		elementTypes.forEach((elementType, i) => {
+			let schema = tsTypeToJsonSchema(elementType, checker, depth + 1);
+			// `...T` with `T` an array type (a variadic element): its elements are the tuple's.
+			if (elementFlags[i]! & ts.ElementFlags.Variadic) {
+				schema = schema.items && !Array.isArray(schema.items) ? schema.items : { type: 'unknown' };
+			}
+			const key = JSON.stringify(schema);
+			if (!seen.has(key)) {
+				seen.add(key);
+				schemas.push(schema);
+			}
+		});
+		const items = schemas.length === 1 ? schemas[0]! : { oneOf: schemas };
+		return minItems > 0 ? { type: 'array', items, minItems } : { type: 'array', items };
+	}
+	return {
+		type: 'array',
+		prefixItems: elementTypes.map((elementType) => tsTypeToJsonSchema(elementType, checker, depth + 1)),
+		minItems,
+		maxItems: elementTypes.length,
+	};
 }
 
 function objectTypeToJsonSchema(type: ts.ObjectType, checker: ts.TypeChecker, depth: number): JsonSchema {

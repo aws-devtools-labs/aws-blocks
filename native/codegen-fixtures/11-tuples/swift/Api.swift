@@ -29,12 +29,44 @@ public final nonisolated class Api: Sendable {
         return try JSONDecoder().decode(GetPair.Result.self, from: result)
     }
 
+    /// Calls `api.queryRange`.
+    public func queryRange(range: QueryRange.Range, cursor: QueryRange.Cursor? = nil) async throws -> QueryRange.Result {
+        var _params: [any Encodable] = [range]
+        if let cursor { _params.append(cursor) }
+        let request = BlocksRequest(method: "api.queryRange", params: _params, id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.queryRange") }
+        return try JSONDecoder().decode(QueryRange.Result.self, from: result)
+    }
+
+    /// Calls `api.getShortTuples`.
+    public func getShortTuples(one: [String]) async throws -> GetShortTuples.Result {
+        let request = BlocksRequest(method: "api.getShortTuples", params: [one], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getShortTuples") }
+        return try JSONDecoder().decode(GetShortTuples.Result.self, from: result)
+    }
+
     public enum GetCoords {
 
         public struct Result: Codable {
             public let item0: Double
             public let item1: Double
             public let item2: String
+
+            public init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                self.item0 = try c.decode(Double.self)
+                self.item1 = try c.decode(Double.self)
+                self.item2 = try c.decode(String.self)
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.unkeyedContainer()
+                try c.encode(self.item0)
+                try c.encode(self.item1)
+                try c.encode(self.item2)
+            }
 
             public init(item0: Double, item1: Double, item2: String) {
                 self.item0 = item0
@@ -50,9 +82,170 @@ public final nonisolated class Api: Sendable {
             public let item0: String
             public let item1: Int
 
+            public init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                self.item0 = try c.decode(String.self)
+                self.item1 = try c.decode(Int.self)
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.unkeyedContainer()
+                try c.encode(self.item0)
+                try c.encode(self.item1)
+            }
+
             public init(item0: String, item1: Int) {
                 self.item0 = item0
                 self.item1 = item1
+            }
+        }
+    }
+
+    public enum QueryRange {
+
+        public struct Range: Codable {
+            public let item0: Double
+            public let item1: Double
+
+            public init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                self.item0 = try c.decode(Double.self)
+                self.item1 = try c.decode(Double.self)
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.unkeyedContainer()
+                try c.encode(self.item0)
+                try c.encode(self.item1)
+            }
+
+            public init(item0: Double, item1: Double) {
+                self.item0 = item0
+                self.item1 = item1
+            }
+        }
+
+        public struct Cursor: Codable {
+            public let item0: String
+            public let item1: Int?
+
+            public init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                self.item0 = try c.decode(String.self)
+                self.item1 = try c.decodeIfPresent(Int.self)
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.unkeyedContainer()
+                try c.encode(self.item0)
+                try c.encode(self.item1)
+            }
+
+            public init(item0: String, item1: Int? = nil) {
+                self.item0 = item0
+                self.item1 = item1
+            }
+        }
+
+        public struct Result: Codable {
+            public let pairs: [Pair]
+            public let `where`: Where
+
+            enum CodingKeys: String, CodingKey {
+                case pairs
+                case `where` = "where"
+            }
+
+            public init(pairs: [Pair], `where`: Where) {
+                self.pairs = pairs
+                self.`where` = `where`
+            }
+
+            public struct Pair: Codable {
+                public let item0: String
+                public let item1: Int
+
+                public init(from decoder: Decoder) throws {
+                    var c = try decoder.unkeyedContainer()
+                    self.item0 = try c.decode(String.self)
+                    self.item1 = try c.decode(Int.self)
+                }
+
+                public func encode(to encoder: Encoder) throws {
+                    var c = encoder.unkeyedContainer()
+                    try c.encode(self.item0)
+                    try c.encode(self.item1)
+                }
+
+                public init(item0: String, item1: Int) {
+                    self.item0 = item0
+                    self.item1 = item1
+                }
+            }
+
+            public struct Where: Codable {
+                public let between: Between
+
+                public init(between: Between) {
+                    self.between = between
+                }
+
+                public struct Between: Codable {
+                    public let item0: String
+                    public let item1: String
+
+                    public init(from decoder: Decoder) throws {
+                        var c = try decoder.unkeyedContainer()
+                        self.item0 = try c.decode(String.self)
+                        self.item1 = try c.decode(String.self)
+                    }
+
+                    public func encode(to encoder: Encoder) throws {
+                        var c = encoder.unkeyedContainer()
+                        try c.encode(self.item0)
+                        try c.encode(self.item1)
+                    }
+
+                    public init(item0: String, item1: String) {
+                        self.item0 = item0
+                        self.item1 = item1
+                    }
+                }
+            }
+        }
+    }
+
+    public enum GetShortTuples {
+
+        public struct Result: Codable {
+            public let one: [Double]
+            public let short: Short
+
+            public init(one: [Double], short: Short) {
+                self.one = one
+                self.short = short
+            }
+
+            public struct Short: Codable {
+                public let item0: String
+                public let item1: Int?
+
+                public init(from decoder: Decoder) throws {
+                    var c = try decoder.unkeyedContainer()
+                    self.item0 = try c.decode(String.self)
+                    self.item1 = try c.decodeIfPresent(Int.self)
+                }
+
+                public func encode(to encoder: Encoder) throws {
+                    var c = encoder.unkeyedContainer()
+                    try c.encode(self.item0)
+                    try c.encode(self.item1)
+                }
+
+                public init(item0: String, item1: Int? = nil) {
+                    self.item0 = item0
+                    self.item1 = item1
+                }
             }
         }
     }

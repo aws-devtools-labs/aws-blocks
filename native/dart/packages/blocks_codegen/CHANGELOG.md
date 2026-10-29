@@ -1,5 +1,21 @@
 ## Unreleased
 
+- **Breaking for Dart clients:** tuple-typed params and results were
+  `dynamic` (a `List`) and are now records, e.g. `(num, String)`; one-element
+  tuples are `List<T>`. Update call sites. (`blocks-generate-spec` now
+  describes a TypeScript tuple with `prefixItems`; it used to write an object
+  with properties `"0"`, `"1"` and `length`, which generated `dynamic`.)
+- Decode an optional tuple element missing from a shorter array (`["c"]` for
+  TypeScript `[string, number?]`) as `null`. Reading it threw a `RangeError`.
+- Generate a one-element tuple (`prefixItems` with one schema, TypeScript
+  `[number]`) as a one-element `List`, as Swift does. It used to collapse to
+  its element type, so a result `[5]` failed `as num` and a parameter
+  `["x"]` was sent as `"x"`.
+- Treat an object schema with an empty `properties` map (`{"type": "object",
+  "properties": {}}`, which `blocks-generate-spec` writes for an interface
+  whose only fields start with `_`) like `{"type": "object"}`: a `dynamic`
+  value. It used to generate a class with no fields whose `const X({})`
+  constructor doesn't compile.
 - Fix generated calls that sent an argument to the wrong parameter. A call
   sent its arguments as a by-name map that left out unset optionals, but an
   AWS Blocks server reads params by position (a map by its values, in order),

@@ -423,7 +423,8 @@ public struct CodegenModelBuilder {
                     type: fieldType,
                     required: field.required,
                     description: field.description,
-                    defaultValue: field.defaultValue
+                    defaultValue: field.defaultValue,
+                    positional: field.positional
                 )
             }
             let resolvedAddProps = addProps.map {

@@ -128,9 +128,10 @@ public struct OpenRPCParser {
 
         case .tuple(let elements):
             // Multi-element tuples render as a positional inline-object with
-            // synthesized fields `item0`, `item1`, … .
+            // synthesized fields `item0`, `item1`, … . On the wire it is a JSON
+            // array of their values (`positional`), not an object.
             let fields = elements.enumerated().map { idx, element -> Field in
-                Field(name: "item\(idx)", type: mapTypeRef(element), required: true)
+                Field(name: "item\(idx)", type: mapTypeRef(element), required: true, positional: true)
             }
             return .inlineObject(fields: fields, additionalProperties: nil, embeddedUnion: nil)
 

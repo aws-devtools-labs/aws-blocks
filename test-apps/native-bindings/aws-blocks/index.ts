@@ -580,4 +580,36 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async echoArgs(first: string, middle?: string, last?: string) {
     return { first, middle: middle ?? null, last: last ?? null };
   },
+
+  /**
+   * A rest parameter typed as a tuple, as `...args: Parameters<typeof table.put>` forwards a
+   * Building Block's parameters. Its elements are positional params (`label`, `count`), so a
+   * native client sends `["x", 2]` and `args` is `["x", 2]`; one that sent the tuple as a single
+   * param (`[["x", 2]]`) made `args.length` 1 and `args[0]` the array. Echoes what it received.
+   */
+  async echoRestArgs(...args: [label: string, count?: number]) {
+    const argCount: number = args.length;
+    return { argCount, label: args[0], count: args[1] ?? null };
+  },
+
+  /** {@link echoRestArgs} through `Parameters<typeof …>` of a function with an optional object parameter. */
+  async echoForwardedArgs(...args: Parameters<typeof describeKey>) {
+    const argCount: number = args.length;
+    return { argCount, ...describeKey(...args) };
+  },
+
+  /**
+   * Tuples on the wire: `one` is a one-element tuple (`["abc"]`), `short` leaves out its optional
+   * second element (`["abc"]`), and `pair` has both (`["abc", 3]`).
+   */
+  async echoTuples(
+    one: [string],
+  ): Promise<{ one: [number]; short: [string, number?]; pair: [string, number] }> {
+    return { one: [one[0].length], short: [one[0]], pair: [one[0], one[0].length] };
+  },
 }));
+
+/** The key and tag {@link api.echoForwardedArgs} forwards its parameters to. */
+function describeKey(key: string, options?: { tag?: string }) {
+  return { key, tag: options?.tag ?? null };
+}

@@ -792,6 +792,45 @@ void main() {
       expect(output, contains('(result as List<dynamic>)[2] as String'));
     });
 
+    // An optional element (TypeScript `[string, number?]`) may be missing
+    // from a shorter array (`["c"]`): it decodes as null. Reading it as
+    // `list[1]` threw a RangeError.
+    test('decodes a missing optional element as null', () {
+      final output = gen.generate(
+        CodegenModel(
+          title: 'test',
+          version: '1.0',
+          namespaces: [
+            Namespace(
+              name: 'api',
+              operations: [
+                Operation(
+                  name: 'getCursor',
+                  fullName: 'api.getCursor',
+                  params: [],
+                  result: TupleType([
+                    const PrimitiveType('String'),
+                    const NullableType(PrimitiveType('int')),
+                  ]),
+                ),
+              ],
+            ),
+          ],
+          types: {},
+        ),
+      );
+      expect(output, contains('Future<(String, int?)> getCursor()'));
+      expect(output, contains('(result as List<dynamic>)[0] as String'));
+      expect(
+        output,
+        contains(
+          '((result as List<dynamic>).length > 1 '
+          '? (result as List<dynamic>)[1] : null)',
+        ),
+      );
+      expect(output, isNot(contains('(result as List<dynamic>)[1] as')));
+    });
+
     test('emits tuple toJson as list for params', () {
       final output = gen.generate(
         CodegenModel(

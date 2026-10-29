@@ -325,7 +325,14 @@ class OpenRpcParser {
         final prefixItems = (schema['prefixItems'] as List<dynamic>)
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
             .toList();
-        if (prefixItems.length == 1) return prefixItems.first;
+        // One element (`[string]`) is the array `["x"]`: a one-element list,
+        // as in Swift, never the element itself.
+        if (prefixItems.length == 1) {
+          return ArrayRef(
+            prefixItems.first,
+            constraints: _parseConstraints(schema),
+          );
+        }
         return TupleRef(prefixItems);
       }
       // Regular array (or array-form items as tuple)
@@ -340,7 +347,12 @@ class OpenRpcParser {
         final tupleItems = items
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
             .toList();
-        if (tupleItems.length == 1) return tupleItems.first;
+        if (tupleItems.length == 1) {
+          return ArrayRef(
+            tupleItems.first,
+            constraints: _parseConstraints(schema),
+          );
+        }
         return TupleRef(tupleItems);
       }
       final itemsMap = items as Map<String, dynamic>;
@@ -368,8 +380,10 @@ class OpenRpcParser {
       }
     }
 
-    // Object
-    if (type == 'object' && schema.containsKey('properties')) {
+    // Object. One with no properties (`properties: {}`) holds any fields, as
+    // `{type: object}` does: it falls through to `dynamic` below.
+    if (type == 'object' &&
+        (schema['properties'] as Map<String, dynamic>?)?.isNotEmpty == true) {
       final props = (schema['properties'] as Map<String, dynamic>);
       // Detect spread params garbage (numeric keys + "length")
       if (props.containsKey('length') &&

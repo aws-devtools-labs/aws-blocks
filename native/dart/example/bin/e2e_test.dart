@@ -23,6 +23,9 @@ void main() async {
     // The JSON-RPC wire contract: positional params, a left-out optional's
     // slot kept as null (FX48).
     'rpc_wire_test.dart',
+    // Tuples on the wire: a rest tuple parameter's elements are positional
+    // params; one-element and short tuples.
+    'rest_tuple_params_test.dart',
   ];
 
   var allPassed = true;

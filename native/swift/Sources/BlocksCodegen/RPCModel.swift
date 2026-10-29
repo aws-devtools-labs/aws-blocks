@@ -88,13 +88,20 @@ struct Field: Equatable {
     let description: String?
     /// `default` value from the spec, encoded as raw JSON.
     let defaultValue: String?
+    /// An element of a tuple (`prefixItems`), not a property: the object holding it is a JSON array of its
+    /// fields' values, in order, on the wire.
+    let positional: Bool
 
-    init(name: String, type: TypeRef, required: Bool, description: String? = nil, defaultValue: String? = nil) {
+    init(
+        name: String, type: TypeRef, required: Bool, description: String? = nil, defaultValue: String? = nil,
+        positional: Bool = false
+    ) {
         self.name = name
         self.type = type
         self.required = required
         self.description = description
         self.defaultValue = defaultValue
+        self.positional = positional
     }
 }
 
