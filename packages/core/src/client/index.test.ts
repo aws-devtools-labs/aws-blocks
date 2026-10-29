@@ -191,3 +191,16 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
     }
   });
 });
+
+describe('ApiNamespaceClient namespace identity', () => {
+  it('answers Symbol.for("aws-blocks.apiNamespace") with its namespace, plus the URL when overridden', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const key = Symbol.for('aws-blocks.apiNamespace');
+    assert.strictEqual(Reflect.get(ApiNamespaceClient('pwAuth'), key), 'pwAuth');
+    assert.strictEqual(
+      Reflect.get(ApiNamespaceClient('pwAuth', { url: 'https://api.example.com' }), key),
+      'https://api.example.com#pwAuth',
+    );
+    assert.strictEqual(Reflect.get(ApiNamespaceClient('pwAuth'), Symbol.for('other')), undefined, 'other symbols stay undefined');
+  });
+});

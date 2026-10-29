@@ -30,6 +30,7 @@ import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
 import { isCuratedLevel, log, resolveLogLevel } from './log.js';
+import { installDevRejectionHandler, runDevRequest } from './dev-unhandled-rejection.js';
 
 function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
   if (!text) return null;
@@ -637,6 +638,9 @@ export async function startDevServer(options: DevServerOptions) {
     frontendPort = 3100,
   } = options;
   const devStartTime = Date.now();
+  // A request's unhandled rejection (e.g. a guard called without `await`) is
+  // logged with its method instead of ending the process (dev server only).
+  installDevRejectionHandler();
 
   // ── Singleton guard ─────────────────────────────────────────────────────
   // Prevent two fighting supervisors: a second `npm run dev` must not spawn a
@@ -1564,7 +1568,7 @@ function handleApiRequest(
           return;
         }
 
-        const result = await apiMethod(...args);
+        const result = await runDevRequest(`${apiNamespace}.${rpcMethod}`, () => apiMethod(...args));
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {
@@ -1650,7 +1654,7 @@ function handleApiRequest(
           },
         };
 
-        await matched.route.handler(context);
+        await runDevRequest(`${method} ${url.pathname}`, () => matched.route.handler(context));
 
         const headerObj: Record<string, string | string[]> = {};
         for (const [key, value] of responseHeaders.entries()) {

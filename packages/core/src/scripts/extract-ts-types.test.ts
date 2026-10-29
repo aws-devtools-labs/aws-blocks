@@ -7,7 +7,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { extractMethodTypes, extractSkipCodegenMethods } from './extract-ts-types.js';
+import { CodegenTagError, describeOrWarn, extractMethodTypes, extractSkipCodegenMethods, type JsonSchema } from './extract-ts-types.js';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -403,6 +403,140 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 	});
 });
 
+
+describe('extractMethodTypes — @blocksCodegenDefaultTypeArgs (one native shape for a per-instance narrowing)', () => {
+	const TSCONFIG = JSON.stringify({
+		compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+	});
+	/**
+	 * A Building Block that narrows per instance, like `Auth`: `K` is the
+	 * instance's subset of `Action`. The tagged types are described at their
+	 * defaults; `PlainStep` and `PlainApi` are the same shapes, untagged.
+	 */
+	const BLOCK = `
+		${API_NS_MOCK}
+
+		export type Action = { action: 'signIn'; username: string } | { action: 'signOut' } | { action: 'listPasskeys' };
+		export interface State { state: string }
+		export type AnyStep = { name: 'sms'; session: string } | { name: 'totp'; session: string } | { name: 'newPassword' };
+
+		/**
+		 * The block's client surface.
+		 *
+		 * @blocksCodegenDefaultTypeArgs
+		 */
+		export interface TaggedApi<I extends Action = Action> {
+			getState(): Promise<State>;
+			setState(input: I): Promise<State>;
+			setMany(inputs: I[]): Promise<State>;
+		}
+		export interface PlainApi<I extends Action = Action> {
+			setState(input: I): Promise<State>;
+		}
+
+		/** @blocksCodegenDefaultTypeArgs */
+		export type Step<K extends AnyStep['name'] = AnyStep['name']> = Extract<AnyStep, { name: K | 'newPassword' }>;
+		export type Result<K extends AnyStep['name'] = AnyStep['name']> = { status: 'next'; step: Step<K> } | { status: 'done' };
+		/** @blocksCodegenDefaultTypeArgs */
+		export interface Preference<K extends string = 'sms' | 'totp'> { enabled: K[] }
+		export type PlainStep<K extends AnyStep['name'] = AnyStep['name']> = Extract<AnyStep, { name: K | 'newPassword' }>;
+
+		export class Block<const A extends Action['action'], const K extends AnyStep['name']> {
+			constructor(readonly allowed: readonly A[], readonly factors: readonly K[]) {}
+			createApi(): TaggedApi<Extract<Action, { action: A }>> {
+				return new ApiNamespace(null, 'auth', () => ({
+					async getState() { return { state: 'x' }; },
+					async setState(_input: Action) { return { state: 'x' }; },
+					async setMany(_inputs: Action[]) { return { state: 'x' }; },
+				}));
+			}
+			createPlainApi(): PlainApi<Extract<Action, { action: A }>> {
+				return new ApiNamespace(null, 'plain', () => ({
+					async setState(_input: Action) { return { state: 'x' }; },
+				}));
+			}
+			signIn(): Result<K> { return { status: 'done' }; }
+			preference(): Preference<K> { return { enabled: [] }; }
+			plainStep(): PlainStep<K> { return { name: 'newPassword' }; }
+		}
+	`;
+	const INDEX = `
+		import { Block } from './block.js';
+		${API_NS_MOCK}
+
+		const password = new Block(['signIn', 'signOut'], ['sms']);
+		const federated = new Block(['signOut'], ['totp']);
+
+		export const passwordApi = password.createApi();
+		export const federatedApi = federated.createApi();
+		export const plainApi = federated.createPlainApi();
+		export const api = new ApiNamespace(null, 'api', (context) => ({
+			async passwordSignIn() { return password.signIn(); },
+			async federatedSignIn() { return federated.signIn(); },
+			async passwordPreference() { return password.preference(); },
+			async passwordPlainStep() { return password.plainStep(); },
+		}));
+	`;
+	const values = (schema: JsonSchema | undefined, key: string): unknown[] =>
+		(schema?.oneOf ?? (schema ? [schema] : [])).flatMap((arm) => arm.properties?.[key]?.enum ?? []).sort();
+	const extract = (block = BLOCK) => {
+		const dir = createTempProject({ 'tsconfig.json': TSCONFIG, 'block.ts': block, 'index.ts': INDEX });
+		try {
+			return extractMethodTypes(join(dir, 'index.ts'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	};
+
+	it('describes a tagged namespace interface at its default type arguments', () => {
+		const types = extract();
+		const password = types.get('passwordApi.setState');
+		const federated = types.get('federatedApi.setState');
+		assert.ok(password && federated, 'both namespaces are extracted');
+		// Two differently narrowed instances share one schema: the full union.
+		assert.deepStrictEqual(values(password.params[0].schema, 'action'), ['listPasskeys', 'signIn', 'signOut']);
+		assert.deepStrictEqual(federated.params[0].schema, password.params[0].schema);
+		// Nested uses of the type parameter are at the default too.
+		const many = types.get('federatedApi.setMany')?.params[0].schema.items;
+		assert.ok(many && !Array.isArray(many));
+		assert.deepStrictEqual(values(many, 'action'), ['listPasskeys', 'signIn', 'signOut']);
+		// The untagged twin keeps the instantiated type.
+		assert.deepStrictEqual(values(types.get('plainApi.setState')?.params[0].schema, 'action'), ['signOut']);
+	});
+
+	it('describes a tagged alias or interface at its defaults wherever it appears', () => {
+		const types = extract();
+		const sms = types.get('api.passwordSignIn')?.returnType;
+		const totp = types.get('api.federatedSignIn')?.returnType;
+		assert.ok(sms && totp);
+		// Nested inside an untagged union: the tagged `Step<K>` is every step.
+		assert.deepStrictEqual(sms, totp, 'differently narrowed blocks, one schema');
+		const next = sms.oneOf?.find((arm) => arm.properties?.status?.enum?.[0] === 'next');
+		assert.deepStrictEqual(values(next?.properties?.step, 'name'), ['newPassword', 'sms', 'totp']);
+
+		const enabled = types.get('api.passwordPreference')?.returnType.properties?.enabled;
+		assert.ok(enabled?.items && !Array.isArray(enabled.items));
+		assert.deepStrictEqual(enabled.items.enum?.slice().sort(), ['sms', 'totp']);
+
+		// An untagged alias keeps the narrowed instantiation.
+		assert.deepStrictEqual(values(types.get('api.passwordPlainStep')?.returnType, 'name'), ['newPassword', 'sms']);
+	});
+
+	it('rejects a misplaced tag instead of falling back', () => {
+		const misuses: [string, RegExp][] = [
+			[`/** @blocksCodegenDefaultTypeArgs */\nexport interface Bare { x: string }`, /needs a default \(it has none\)/],
+			[`/** @blocksCodegenDefaultTypeArgs */\nexport type NoDefault<T> = { x: T };`, /needs a default \(it has T without one\)/],
+			[`/** @blocksCodegenDefaultTypeArgs */\ntype Hidden<T = string> = { x: T };\nexport type Shown = Hidden;`, /must be exported/],
+		];
+		for (const [declaration, message] of misuses) {
+			assert.throws(
+				() => extract(`${BLOCK}\n${declaration}`),
+				(e: Error) => e instanceof CodegenTagError && message.test(e.message),
+				declaration,
+			);
+		}
+	});
+});
 
 // ── Transferable detection ──────────────────────────────────────────────────
 // A "transferable" is a return type carrying a live handle (e.g.
@@ -1379,6 +1513,65 @@ describe('extractMethodTypes — namespace returned by a factory, then destructu
 			// Each keeps its OWN param schema — the #445 cross-assignment can't happen.
 			assert.strictEqual((w.params[0].schema as any)?.type, 'string', 'widgets.create takes a string');
 			assert.strictEqual((g.params[0].schema as any)?.type, 'number', 'gadgets.create takes a number');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('describeOrWarn — one method whose types cannot be described', () => {
+	it('warns naming the method and falls back to unknown (undefined), so the other methods keep their types', () => {
+		const warned: string[] = [];
+		const original = console.warn;
+		console.warn = (...args: unknown[]) => void warned.push(args.map(String).join(' '));
+		try {
+			assert.strictEqual(
+				describeOrWarn('api.broken', () => {
+					throw new RangeError('Maximum call stack size exceeded');
+				}),
+				undefined,
+			);
+			assert.deepStrictEqual(describeOrWarn('api.fine', () => 42), 42);
+		} finally {
+			console.warn = original;
+		}
+		assert.strictEqual(warned.length, 1);
+		assert.match(warned[0], /Could not describe the types of api\.broken \(Maximum call stack size exceeded\)/);
+	});
+
+	it('rethrows a misused codegen tag rather than hiding it', () => {
+		assert.throws(
+			() =>
+				describeOrWarn('api.tagged', () => {
+					throw new CodegenTagError('bad tag');
+				}),
+			CodegenTagError,
+		);
+	});
+});
+
+describe('extractMethodTypes — warnings of a named type reused from the cache', () => {
+	it('every schema that uses a named type with a deep cut carries its warning', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				interface Deep { a: { b: { c: { d: { e: { f: { g: { h: string } } } } } } } }
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async first(): Promise<Deep> { return {} as Deep; },
+					async second(): Promise<Deep> { return {} as Deep; },
+				}));
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			for (const name of ['api.first', 'api.second']) {
+				const warnings = types.get(name)?.returnWarnings ?? [];
+				assert.strictEqual(warnings.length, 1, `${name}: ${warnings.join('\n')}`);
+				assert.match(warnings[0] ?? '', /`Deep\.a\.b\.c\.d\.e\.f\.g` nests unnamed objects/);
+			}
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

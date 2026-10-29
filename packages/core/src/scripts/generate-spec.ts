@@ -16,11 +16,18 @@
  * @see docs/native-clients/schema-generation-guide-for-devs.md — customer-facing guide and `x-blocks-*` reference
  */
 
+import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
 import { API_NAMESPACE_MARKER } from '../api.js';
-import { extractMethodTypes, extractSkipCodegenMethods, type MethodTypeInfo } from './extract-ts-types.js';
+import {
+	CodegenTagError,
+	extractMethodTypes,
+	extractSkipCodegenMethods,
+	DECLARATION_MARKER,
+	type MethodTypeInfo,
+} from './extract-ts-types.js';
 import {
 	buildNativeCatalogs,
 	NATIVE_BINDINGS_EXTENSION,
@@ -302,8 +309,13 @@ export async function generateSpec(
 	let tsTypes = new Map<string, MethodTypeInfo>();
 	try {
 		tsTypes = extractMethodTypes(foundationPath);
-	} catch {
-		// TS parsing failed — fall back to unknown types
+	} catch (e) {
+		// A misused codegen tag is the author's to fix, not a reason to emit `unknown`.
+		if (e instanceof CodegenTagError) throw e;
+		// The program itself could not be read: every method falls back to `unknown`. Say so.
+		console.warn(
+			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown.`,
+		);
 	}
 
 	// Pure-AST scan for `@blocksSkipCodegen`-tagged methods. Runs even when
@@ -318,6 +330,8 @@ export async function generateSpec(
 
 	const methods: OpenRpcMethod[] = [];
 	const componentSchemas: Record<string, JsonSchema> = {};
+	/** Warnings already printed, so each is printed once however many methods share it. */
+	const printedWarnings = new Set<string>();
 
 	for (const [exportName, exportValue] of Object.entries(backend)) {
 		if (exportName.startsWith('_')) continue;
@@ -384,6 +398,18 @@ export async function generateSpec(
 
 			let params: OpenRpcParam[];
 
+			// The cut warnings of the TS schemas this method's spec uses: its return
+			// type always, its parameters unless Zod describes them.
+			for (const warning of [
+				...(inputJsonSchema ? [] : (tsInfo?.params ?? []).flatMap((p) => p.warnings ?? [])),
+				...(tsInfo?.returnWarnings ?? []),
+			]) {
+				if (!printedWarnings.has(warning)) {
+					printedWarnings.add(warning);
+					console.warn(warning);
+				}
+			}
+
 			if (inputJsonSchema && inputJsonSchema.type === 'object' && inputJsonSchema.properties) {
 				// Zod object schema detected — emit one param per property
 				const required = new Set<string>(
@@ -443,45 +469,14 @@ export async function generateSpec(
 					'x-blocks-transferable': tsInfo.transferable.blocksTag,
 				};
 				if (tsInfo.transferable.typeArgs.length > 0) {
-					// Hoist named type args to components.schemas, build the type-args array
-					const typeArgsSchemas: JsonSchema[] = [];
-					for (const argSchema of tsInfo.transferable.typeArgs) {
-						const argTitle = argSchema.title as string | undefined;
-						if (argTitle && argSchema.type === 'object' && argSchema.properties) {
-							const { title: _t, ...cleanArg } = argSchema;
-							if (!componentSchemas[argTitle]) {
-								componentSchemas[argTitle] = cleanArg;
-							}
-							typeArgsSchemas.push({ $ref: `#/components/schemas/${argTitle}` });
-						} else {
-							typeArgsSchemas.push(argSchema);
-						}
-					}
-					transferableSchema['x-blocks-type-args'] = typeArgsSchemas;
+					// Named type args are hoisted to components.schemas with the rest
+					// (post-process step 2), after title collisions are resolved.
+					transferableSchema['x-blocks-type-args'] = [...tsInfo.transferable.typeArgs];
 				}
 				resultSchema = transferableSchema;
-			} else if (rawResultSchema.title && rawResultSchema.type === 'object' && rawResultSchema.properties) {
-				// Named object type → extract to components.schemas
-				const returnTitle = rawResultSchema.title as string;
-				const { title: _t, ...cleanReturn } = rawResultSchema;
-				if (!componentSchemas[returnTitle]) {
-					componentSchemas[returnTitle] = cleanReturn;
-				}
-				resultSchema = { $ref: `#/components/schemas/${returnTitle}` };
-			} else if (rawResultSchema.type === 'array' && rawResultSchema.items) {
-				// Check if array items have a named type (e.g., Todo[] → extract Todo)
-				const items = rawResultSchema.items as JsonSchema;
-				const itemsTitle = items.title as string | undefined;
-				if (itemsTitle && items.type === 'object' && items.properties) {
-					const { title: _t, ...cleanItems } = items;
-					if (!componentSchemas[itemsTitle]) {
-						componentSchemas[itemsTitle] = cleanItems;
-					}
-					resultSchema = { type: 'array', items: { $ref: `#/components/schemas/${itemsTitle}` } };
-				} else {
-					resultSchema = rawResultSchema;
-				}
 			} else {
+				// A named object type (or an array of one) is hoisted to
+				// components.schemas by post-process step 2.
 				resultSchema = rawResultSchema;
 			}
 
@@ -497,7 +492,16 @@ export async function generateSpec(
 	}
 
 	// Sort methods alphabetically for stable output
+	// The order the methods were found in: `resolveTitleCollisions` needs it to
+	// know which schema the shared name used to go to.
+	const discoveryOrder = [...methods];
 	methods.sort((a, b) => a.name.localeCompare(b.name));
+
+	// Post-process step 0: one component per type name. Two different schemas
+	// under one `title` would otherwise share a component, the first one
+	// winning silently, and a native client would decode the other with the
+	// wrong type.
+	resolveTitleCollisions(methods, discoveryOrder, componentSchemas);
 
 	// Post-process step 1: regroup nested-union arms that share a primary
 	// discriminator. Run BEFORE hoisting so the regrouped wrapper picks up
@@ -526,6 +530,12 @@ export async function generateSpec(
 	for (const [name, schema] of Object.entries(componentSchemas)) {
 		componentSchemas[name] = hoistNamedSchemas(schema, componentSchemas, name);
 	}
+	for (const method of methods) {
+		for (const param of method.params) stripDeclarationMarkers(param.schema);
+		stripDeclarationMarkers(method.result.schema);
+	}
+	for (const schema of Object.values(componentSchemas)) stripDeclarationMarkers(schema);
+	assertRefsResolve(methods, componentSchemas);
 
 	const doc: OpenRpcDocument = {
 		openrpc: '1.3.2',
@@ -554,6 +564,231 @@ export async function generateSpec(
 	return doc;
 }
 
+/** Every schema directly nested in `schema` (properties, items, oneOf, additionalProperties, type args). */
+function childSchemas(schema: JsonSchema): JsonSchema[] {
+	const children: JsonSchema[] = [];
+	if (schema.properties && typeof schema.properties === 'object') {
+		children.push(...(Object.values(schema.properties) as JsonSchema[]));
+	}
+	if (Array.isArray(schema.items)) children.push(...(schema.items as JsonSchema[]));
+	else if (schema.items && typeof schema.items === 'object') children.push(schema.items as JsonSchema);
+	if (Array.isArray(schema.oneOf)) children.push(...(schema.oneOf as JsonSchema[]));
+	if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+		children.push(schema.additionalProperties as JsonSchema);
+	}
+	const typeArgs = schema['x-blocks-type-args'];
+	if (Array.isArray(typeArgs)) children.push(...(typeArgs as JsonSchema[]));
+	return children;
+}
+
+/** `schema` as stable JSON: keys sorted, its own `title` and the declaration marker left out. */
+function canonicalSchema(schema: JsonSchema): string {
+	const { title: _title, ...rest } = schema;
+	return canonicalValue(rest);
+}
+
+/**
+ * The canonical form of each schema object, by identity: a schema reached by
+ * many paths (one named type used throughout a DAG of types, shared by
+ * `extractMethodTypes`) is hashed once. Nested objects stand for their own
+ * hash, so the form stays small however large the tree it describes.
+ */
+const canonicalIds = new WeakMap<object, string>();
+
+function canonicalValue(value: unknown): string {
+	if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
+	const known = canonicalIds.get(value);
+	if (known !== undefined) return known;
+	const body = Array.isArray(value)
+		? `[${value.map(canonicalValue).join(',')}]`
+		: `{${Object.entries(value as Record<string, unknown>)
+				.filter(([key]) => key !== DECLARATION_MARKER)
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([key, v]) => `${JSON.stringify(key)}:${canonicalValue(v)}`)
+				.join(',')}}`;
+	const id = body.length > 64 ? `#${createHash('sha256').update(body).digest('base64url')}` : body;
+	canonicalIds.set(value, id);
+	return id;
+}
+
+/**
+ * The schema each name went to before name collisions were resolved: the
+ * generator used to keep the first schema it hoisted under a name and point
+ * every other use there. This replays that order (Zod components; then, in
+ * discovery order, each named result, array-of-named result and transferable
+ * type argument; then, by method name, each parameter and result depth-first;
+ * then each component's nested schemas) and returns, per title, the winning
+ * schema's canonical form.
+ */
+function previousWinners(
+	sortedMethods: OpenRpcMethod[],
+	discoveryOrder: OpenRpcMethod[],
+	componentSchemas: Record<string, JsonSchema>,
+): Map<string, string> {
+	const winners = new Map<string, string>();
+	const named = (schema: JsonSchema | undefined): schema is JsonSchema & { title: string } =>
+		!!schema &&
+		typeof schema === 'object' &&
+		!schema.$ref &&
+		typeof schema.title === 'string' &&
+		!BUILTIN_TYPES.has(schema.title) &&
+		schema.type === 'object' &&
+		!!schema.properties;
+	/** The schemas that became components, in the order their contents were walked. */
+	const hoisted: JsonSchema[] = [];
+	const claim = (schema: JsonSchema & { title: string }): boolean => {
+		if (winners.has(schema.title)) return false;
+		winners.set(schema.title, canonicalSchema(schema));
+		hoisted.push(schema);
+		return true;
+	};
+	const walked = new Set<JsonSchema>();
+	const hoistWalk = (schema: JsonSchema | undefined): void => {
+		if (!schema || typeof schema !== 'object' || schema.$ref || walked.has(schema)) return;
+		walked.add(schema);
+		if (named(schema)) {
+			if (claim(schema)) for (const child of childSchemas(schema)) hoistWalk(child);
+			return;
+		}
+		for (const child of childSchemas(schema)) hoistWalk(child);
+	};
+	for (const [name, schema] of Object.entries(componentSchemas)) {
+		if (!winners.has(name)) winners.set(name, canonicalSchema(schema));
+	}
+	const pending: JsonSchema[] = [...Object.values(componentSchemas)];
+	for (const method of discoveryOrder) {
+		const result = method.result.schema;
+		const typeArgs = result['x-blocks-type-args'];
+		const candidates = Array.isArray(typeArgs)
+			? (typeArgs as JsonSchema[])
+			: [result, ...(result.type === 'array' && result.items && !Array.isArray(result.items) ? [result.items as JsonSchema] : [])];
+		for (const candidate of candidates) {
+			if (named(candidate) && !winners.has(candidate.title)) {
+				winners.set(candidate.title, canonicalSchema(candidate));
+				pending.push(candidate);
+			}
+		}
+	}
+	for (const method of sortedMethods) {
+		for (const param of method.params) hoistWalk(param.schema);
+		hoistWalk(method.result.schema);
+	}
+	for (const schema of [...pending, ...hoisted]) for (const child of childSchemas(schema)) hoistWalk(child);
+	return winners;
+}
+
+/**
+ * One component per type name. A named object schema (`title`, from a TS
+ * interface or type alias) becomes `components.schemas[title]`; when two
+ * different schemas share a title, the first used to win silently and a
+ * native client decoded the other with its shape. Now the schema that won
+ * before keeps the name (so an app's existing native type `X` stays `X`), and
+ * each other one is described where it is used, without the shared name, so
+ * native generators name it by its method and field:
+ *
+ * - instantiations of one generic type with different type arguments
+ *   (`AuthenticatedUser<A>` and `AuthenticatedUser<B>`, from two differently
+ *   configured blocks), silently;
+ * - two different declarations that share a name (`ScanOptions` of two
+ *   Building Blocks), with a warning naming both.
+ *
+ * (A recursive type is cut after a few levels by `extractMethodTypes`, so no
+ * schema refers to its own component; `assertRefsResolve` checks it.)
+ */
+function resolveTitleCollisions(
+	methods: OpenRpcMethod[],
+	discoveryOrder: OpenRpcMethod[],
+	componentSchemas: Record<string, JsonSchema>,
+): void {
+	type Variant = { declarations: Set<string>; sites: Set<string>; schemas: JsonSchema[]; key: string };
+	const byTitle = new Map<string, Map<string, Variant>>();
+	const record = (title: string, schema: JsonSchema, site: string, declaration: string) => {
+		const variants = byTitle.get(title) ?? new Map<string, Variant>();
+		byTitle.set(title, variants);
+		const key = canonicalSchema(schema);
+		const variant = variants.get(key) ?? { declarations: new Set<string>(), sites: new Set<string>(), schemas: [], key };
+		variants.set(key, variant);
+		variant.declarations.add(declaration);
+		variant.sites.add(site);
+		variant.schemas.push(schema);
+	};
+	// By identity: one schema object (a named type shared across paths) is recorded once.
+	const walked = new Set<JsonSchema>();
+	const walk = (schema: JsonSchema | undefined, site: string) => {
+		if (!schema || typeof schema !== 'object' || schema.$ref || walked.has(schema)) return;
+		walked.add(schema);
+		const title = schema.title;
+		if (typeof title === 'string' && !BUILTIN_TYPES.has(title) && schema.type === 'object' && schema.properties) {
+			const declaration = schema[DECLARATION_MARKER];
+			record(title, schema, site, typeof declaration === 'string' ? declaration : title);
+		}
+		for (const child of childSchemas(schema)) walk(child, site);
+	};
+	for (const [name, schema] of Object.entries(componentSchemas)) {
+		record(name, schema, `components.schemas.${name}`, `components.schemas.${name}`);
+		for (const child of childSchemas(schema)) walk(child, `components.schemas.${name}`);
+	}
+	for (const method of methods) {
+		for (const param of method.params) walk(param.schema, `${method.name}(${param.name})`);
+		walk(method.result.schema, `${method.name} result`);
+	}
+
+	const collisions = [...byTitle].filter(([, variants]) => variants.size > 1);
+	if (collisions.length === 0) return;
+	const winners = previousWinners(methods, discoveryOrder, componentSchemas);
+	for (const [title, variants] of collisions) {
+		const all = [...variants.values()];
+		const declarations = new Set(all.flatMap((v) => [...v.declarations]));
+		const winner = winners.get(title);
+		const others = all.filter((v) => v.key !== winner);
+		if (declarations.size > 1) {
+			console.warn(
+				`[blocks] ${declarations.size} different types are named "${title}" (${[...declarations].sort().join(', ')}). ` +
+					`The first keeps the native type "${title}"; each other is described where it is used, so native clients name it by method and field. ` +
+					'Rename one type, or share one declaration, to keep a single native type.',
+			);
+		}
+		for (const variant of others) for (const schema of variant.schemas) delete schema.title;
+	}
+}
+
+/** Every `$ref` in the spec names a component: a dangling one is a generator bug, not a user error. */
+function assertRefsResolve(methods: OpenRpcMethod[], componentSchemas: Record<string, JsonSchema>): void {
+	const seen = new Set<object>();
+	const check = (schema: unknown, where: string): void => {
+		if (!schema || typeof schema !== 'object' || seen.has(schema)) return;
+		seen.add(schema);
+		if (Array.isArray(schema)) {
+			for (const s of schema) check(s, where);
+			return;
+		}
+		const ref = (schema as JsonSchema).$ref;
+		if (typeof ref === 'string' && ref.startsWith('#/components/schemas/')) {
+			const name = ref.slice('#/components/schemas/'.length);
+			if (!(name in componentSchemas)) {
+				throw new Error(`OpenRPC spec generation produced a $ref to a missing component "${name}" (in ${where}).`);
+			}
+		}
+		for (const value of Object.values(schema)) check(value, where);
+	};
+	for (const method of methods) {
+		check(method.params, method.name);
+		check(method.result, method.name);
+	}
+	for (const [name, schema] of Object.entries(componentSchemas)) check(schema, `components.schemas.${name}`);
+}
+
+/** Strip the declaration marker `extractMethodTypes` puts on named object schemas. */
+function stripDeclarationMarkers(schema: JsonSchema | undefined, seen = new Set<JsonSchema>()): void {
+	if (!schema || typeof schema !== 'object' || seen.has(schema)) return;
+	seen.add(schema);
+	delete schema[DECLARATION_MARKER];
+	for (const child of childSchemas(schema)) stripDeclarationMarkers(child, seen);
+}
+
+/** JS built-ins that never become a component schema. */
+const BUILTIN_TYPES = new Set(['Date', 'RegExp', 'Error', 'Map', 'Set', 'Promise', 'ArrayBuffer', 'URL']);
+
 /**
  * Recursively walk a JSON Schema tree and hoist any named object types
  * (those with a `title` property) to `componentSchemas` with `$ref` pointers.
@@ -565,7 +800,27 @@ export async function generateSpec(
  * @param skipTitle - Don't hoist the schema itself if its title matches this
  *   (prevents a component schema from replacing itself with a self-$ref).
  */
+/** Per components map: each schema object's hoisted form, so one shared across many paths is walked once. */
+const hoistedForms = new WeakMap<Record<string, JsonSchema>, WeakMap<JsonSchema, JsonSchema>>();
+
 function hoistNamedSchemas(
+	schema: JsonSchema,
+	componentSchemas: Record<string, JsonSchema>,
+	skipTitle?: string,
+): JsonSchema {
+	if (!schema || typeof schema !== 'object' || skipTitle !== undefined) {
+		return hoistSchema(schema, componentSchemas, skipTitle);
+	}
+	const forms = hoistedForms.get(componentSchemas) ?? new WeakMap<JsonSchema, JsonSchema>();
+	hoistedForms.set(componentSchemas, forms);
+	const known = forms.get(schema);
+	if (known) return known;
+	const result = hoistSchema(schema, componentSchemas, skipTitle);
+	forms.set(schema, result);
+	return result;
+}
+
+function hoistSchema(
 	schema: JsonSchema,
 	componentSchemas: Record<string, JsonSchema>,
 	skipTitle?: string,
@@ -577,10 +832,10 @@ function hoistNamedSchemas(
 
 	// If this is a named object type, hoist it (unless it's the schema we're currently inside
 	// or it's a built-in JS type that shouldn't become a component schema)
-	const BUILTIN_TYPES = new Set(['Date', 'RegExp', 'Error', 'Map', 'Set', 'Promise', 'ArrayBuffer', 'URL']);
 	const title = schema.title as string | undefined;
 	if (title && title !== skipTitle && !BUILTIN_TYPES.has(title) && schema.type === 'object' && schema.properties) {
 		const { title: _t, ...cleanSchema } = schema as any;
+		// `resolveTitleCollisions` ran first, so every schema under this title is the same one.
 		if (!componentSchemas[title]) {
 			componentSchemas[title] = cleanSchema;
 			// Recursively hoist within the newly added schema
@@ -617,6 +872,16 @@ function hoistNamedSchemas(
 		schema = { ...schema, additionalProperties: hoistNamedSchemas(schema.additionalProperties as JsonSchema, componentSchemas, skipTitle) };
 	}
 
+	// Walk a transferable's type args
+	if (Array.isArray(schema['x-blocks-type-args'])) {
+		schema = {
+			...schema,
+			'x-blocks-type-args': (schema['x-blocks-type-args'] as JsonSchema[]).map((s) =>
+				hoistNamedSchemas(s, componentSchemas, skipTitle),
+			),
+		};
+	}
+
 	return schema;
 }
 
@@ -647,8 +912,19 @@ function cleanJsonSchema(schema: JsonSchema): JsonSchema {
  * one whose literal value differs across the group — is kept per-arm so
  * the inner `oneOf` stays a discriminated union.
  */
-function regroupSharedDiscriminator(schema: JsonSchema): JsonSchema {
-	if (!schema || typeof schema !== 'object') return schema;
+/** Each schema object's regrouped form, so one shared across many paths is regrouped once. */
+const regrouped = new WeakMap<JsonSchema, JsonSchema>();
+
+function regroupSharedDiscriminator(input: JsonSchema): JsonSchema {
+	if (!input || typeof input !== 'object') return input;
+	const known = regrouped.get(input);
+	if (known) return known;
+	const result = regroupSchema(input);
+	regrouped.set(input, result);
+	return result;
+}
+
+function regroupSchema(schema: JsonSchema): JsonSchema {
 
 	// Recurse first so nested oneOfs are normalized bottom-up.
 	if (schema.properties) {

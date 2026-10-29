@@ -334,6 +334,8 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 
 /** Instance methods that must work during synth, so the cdk class implements them for real. */
 const SYNTH_SAFE_METHODS = new Set([
+	// Synth-time wiring: `createApi()` builds the RPC namespace the backend module exports.
+	'Auth.prototype.createApi',
 	'AuthCognito.prototype.createApi',
 	'AuthOIDC.prototype.createApi',
 	// Pure: derived from `callbackPath`.
