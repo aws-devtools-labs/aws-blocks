@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-cron-job": minor
+"@aws-blocks/blocks": patch
 ---
 
 feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
