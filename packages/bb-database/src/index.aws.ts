@@ -9,13 +9,12 @@ import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
-import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID, ENV_VAR_PREFIX, sanitizeDbRoleName, toEnvName } from './constants.js';
-import { DatabaseCore } from './database-core.js';
+import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
+import { DatabaseCore } from './core/index.js';
+import { registerInternalAccess } from './core/internal.js';
 import { DsqlEngine } from './engines/dsql-engine.js';
 import { configError } from './errors.js';
-import { registerInternalAccess } from './internal.js';
-import { registerSchema, registerUniqueId } from './registry.js';
 import type {
 	ClusterRef,
 	ClusterType,

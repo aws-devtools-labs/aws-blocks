@@ -3,17 +3,24 @@
 
 /**
  * The runtime behavior every `Database` entry point shares: the three query
- * methods with their retry policy and `transaction()` with conflict retry. The
- * mock and aws classes differ only in how they produce the engine, so that is
- * injected as an async factory.
+ * methods with their retry policy, `transaction()` with conflict retry, the
+ * `Transaction` handed to a callback, and the validation of rows against the
+ * `schema` option. The mock and aws classes differ only in how they produce
+ * the engine, so that is injected as an async factory.
  */
-import { type DatabaseEngine, type SqlQuery, unwrapQuery } from '@aws-blocks/data-common';
-import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from './constants.js';
-import { runInTransactionScope } from './engines/tx-scope.js';
-import { isSerializationConflict } from './errors.js';
-import { validateRow, validateRows } from './result-schema.js';
-import { asTransactionError, TransactionImpl } from './transaction.js';
-import type { QueryOptions, Transaction, TransactionOptions } from './types.js';
+import { isWireSafeError } from '@aws-blocks/core';
+import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { AUTOCOMMIT_CONFLICT_BACKOFF_MS, DEFAULT_MAX_RETRIES } from '../constants.js';
+import { runInTransactionScope } from '../engines/tx-scope.js';
+import {
+	DatabaseErrors,
+	isKnownDatabaseErrorName,
+	isSerializationConflict,
+	resultValidationFailed,
+	reTagged,
+} from '../errors.js';
+import type { QueryOptions, Transaction, TransactionOptions } from '../types.js';
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -108,4 +115,59 @@ async function runTransaction<T>(engine: DatabaseEngine, fn: (tx: Transaction) =
 		await engine.rollbackTransaction(handle).catch(() => {});
 		throw asTransactionError(e);
 	}
+}
+
+/**
+ * Re-tag an error escaping a transaction. An error meant for the caller passes
+ * through unchanged: an `ApiError` (a 404 from the callback, the 401 from
+ * `requireAuth`), any branded Blocks error (`blocksError`, `brandBlocksError`),
+ * and the block's own `DatabaseErrors`. Anything else, such as a driver error or
+ * a plain `Error`, becomes `TransactionFailed` so its text never leaves the server.
+ */
+function asTransactionError(e: unknown): Error {
+	const error = e instanceof Error ? e : new Error(String(e));
+	if (isKnownDatabaseErrorName(error.name) || isWireSafeError(error)) return error;
+	return reTagged(DatabaseErrors.TransactionFailed, error);
+}
+
+/** Transaction implementation that routes calls through a DatabaseEngine using an opaque handle. */
+class TransactionImpl implements Transaction {
+	constructor(
+		private engine: DatabaseEngine,
+		private handle: TransactionHandle,
+	) {}
+
+	async query<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T[]> {
+		const { sql, params } = unwrapQuery(query);
+		const rows = await this.engine.queryInTransaction<T>(this.handle, sql, params);
+		return validateRows(rows, options?.schema);
+	}
+
+	async queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
+		const { sql, params } = unwrapQuery(query);
+		const rows = await this.engine.queryInTransaction<T>(this.handle, sql, params);
+		if (rows.length === 0) return null;
+		return options?.schema ? validateRow(rows[0], options.schema, 0) : rows[0];
+	}
+
+	async execute(query: SqlQuery): Promise<{ rowCount: number }> {
+		const { sql, params } = unwrapQuery(query);
+		return this.engine.executeInTransaction(this.handle, sql, params);
+	}
+}
+
+/** Validate one row; returns the schema's output. */
+async function validateRow<T>(row: unknown, schema: StandardSchemaV1<unknown, T>, index: number): Promise<T> {
+	const result = schema['~standard'].validate(row);
+	const resolved = result instanceof Promise ? await result : result;
+	if (resolved.issues) throw resultValidationFailed(index, resolved.issues);
+	return resolved.value;
+}
+
+/** Validate every row in order; without a schema the rows pass through unchanged. */
+async function validateRows<T>(rows: T[], schema: StandardSchemaV1<unknown, T> | undefined): Promise<T[]> {
+	if (!schema) return rows;
+	const out: T[] = [];
+	for (const [index, row] of rows.entries()) out.push(await validateRow(row, schema, index));
+	return out;
 }

@@ -16,8 +16,8 @@ import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from 
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
+import { _resetDatabaseRegistry } from './core/construction.js';
 import { Database, DatabaseCluster } from './index.cdk.js';
-import { _resetDatabaseRegistry } from './registry.js';
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly executionRole: cdk.aws_iam.IRole;

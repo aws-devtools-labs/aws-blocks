@@ -8,9 +8,9 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { BINDING_MARKER_FILE, DEFAULT_CLUSTER_ID } from './constants.js';
-import { configError } from './errors.js';
-import type { ClusterType, DatabaseBinding } from './types.js';
+import { BINDING_MARKER_FILE, DEFAULT_CLUSTER_ID } from '../constants.js';
+import { configError } from '../errors.js';
+import type { ClusterType, DatabaseBinding } from '../types.js';
 
 /** A binding change the rule refuses. */
 export interface BindingChange {

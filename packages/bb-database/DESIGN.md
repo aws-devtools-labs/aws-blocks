@@ -37,9 +37,9 @@ A block that owns its cluster uses the `public` schema. A block on a shared clus
 
 ## 3. Type system
 
-`Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'dsql'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
+`Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'dsql'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `core/construction.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
 
-A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`result-schema.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`, naming the row and the first issue's path; the row's values stay on the server. This is the first step of the typed-tables track and leaves the type argument form in place.
+A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`core/index.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`, naming the row and the first issue's path; the row's values stay on the server. This is the first step of the typed-tables track and leaves the type argument form in place.
 
 ## 4. Execution environments
 
@@ -142,13 +142,12 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 | Concern | Files |
 |---|---|
 | Public types and option shapes | `src/types.ts`; constructor overloads in `src/index.mock.ts` |
-| Resolution of the `cluster` option | `src/cluster-ref.ts` (shared by all entry points) |
-| Queries, transactions and retries | `src/database-core.ts`, `src/transaction.ts` |
-| Result schema validation | `src/result-schema.ts` |
-| Test helpers and the internal access channel | `src/testing.ts`, `src/internal.ts` |
+| Constructor checks: resolution of the `cluster` option, unique ids and schemas | `src/core/construction.ts` (shared by all entry points) |
+| Queries, transactions, retries and result schema validation | `src/core/index.ts` |
+| Test helpers and the internal access channel | `src/testing.ts`, `src/core/internal.ts` |
 | DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Local engine, schema switching and the `sys` stub | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
 | DSQL compatibility checks and plan sequencing | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
-| Binding rule (dev-server marker) | `src/bindings.ts` |
+| Binding rule (dev-server marker) | `src/core/bindings.ts` |

@@ -11,13 +11,12 @@
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID } from './constants.js';
+import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
 import { configError } from './errors.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
 import { buildMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
-import { registerSchema, registerUniqueId } from './registry.js';
 import type {
 	ClusterRef,
 	ClusterType,

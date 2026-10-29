@@ -14,17 +14,16 @@ import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
-import { enforceLocalBinding } from './bindings.js';
-import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID, quoteIdent } from './constants.js';
-import { DatabaseCore } from './database-core.js';
+import { enforceLocalBinding } from './core/bindings.js';
+import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
+import { DatabaseCore } from './core/index.js';
+import { registerInternalAccess } from './core/internal.js';
 import { MockEngine } from './engines/mock-engine.js';
 import { sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
-import { registerInternalAccess } from './internal.js';
 import { buildMigrationPlan } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
-import { registerSchema, registerUniqueId } from './registry.js';
 import type {
 	ClusterRef,
 	ClusterType,

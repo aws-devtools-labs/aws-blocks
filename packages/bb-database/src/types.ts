@@ -159,30 +159,3 @@ export interface DatabaseBinding {
 	cluster: string;
 	type: ClusterType;
 }
-
-/** One step of a migration file's plan: a statement from the file, or a wait for the job a statement started. */
-export interface PlanStep {
-	/**
-	 * What the step does. `statement` runs a statement from the file;
-	 * `validate-constraint` runs the file's `ALTER TABLE ASYNC … VALIDATE
-	 * CONSTRAINT`, which returns a job id; `wait-job` waits for the job the
-	 * previous step started (an index build or a constraint validation).
-	 */
-	kind: 'statement' | 'validate-constraint' | 'wait-job';
-	/** The SQL as written in the file. For `wait-job`, a label: the runner polls `sys.jobs` instead of running it. */
-	sql: string;
-	/** Whether this step runs inside the file's shared transaction (`false` → its own implicit transaction). */
-	transactional: boolean;
-}
-
-/** The plan for one migration file. */
-export interface FilePlan {
-	file: string;
-	steps: PlanStep[];
-}
-
-/** The plan for a migration directory against a cluster kind. */
-export interface MigrationPlan {
-	target: ClusterType;
-	files: FilePlan[];
-}

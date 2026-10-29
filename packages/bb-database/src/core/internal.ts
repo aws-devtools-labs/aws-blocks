@@ -8,7 +8,7 @@
  * cdk entry does not, so a synth build fails loudly here.
  */
 import type { DatabaseEngine } from '@aws-blocks/data-common';
-import { configError } from './errors.js';
+import { configError } from '../errors.js';
 
 interface InternalAccess {
 	/** The underlying engine, memoized; may run migrations first. */

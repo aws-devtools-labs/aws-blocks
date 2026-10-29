@@ -13,7 +13,7 @@ import { brandBlocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { DEFAULT_MIGRATIONS_ROOT, quoteIdent } from '../constants.js';
 import { configError } from '../errors.js';
-import type { MigrationPlan, PlanStep } from '../types.js';
+import type { MigrationPlan, PlanStep } from './plan.js';
 
 /** Error name for a migration that failed mid-plan. */
 const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';

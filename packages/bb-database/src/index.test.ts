@@ -13,10 +13,10 @@ import { join } from 'node:path';
 import { after, afterEach, beforeEach, describe, test } from 'node:test';
 import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { _resetDatabaseRegistry } from './core/construction.js';
+import { internalAccess } from './core/internal.js';
 import { _closeAllPgliteClusters } from './engines/pglite-cluster.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
-import { internalAccess } from './internal.js';
-import { _resetDatabaseRegistry } from './registry.js';
 import { simulateConflict } from './testing.js';
 
 const DATA_DIR = join(process.cwd(), '.bb-data');
