@@ -170,7 +170,7 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API through the `'aws-blocks'` import, and keep its `test.before`/`test.after`. The setup starts `npm run dev:server` only when nothing answers on port 3000, waits for `/.blocks-sandbox/config.json`, and stops only a server it started. For API-only work this replaces a manual dev server plus curl probes.
+2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on port 3000, wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
    - Run `npm run test:e2e` as often as needed; it reuses the running server.
