@@ -189,6 +189,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * The handler runs asynchronously — this method returns immediately with a job ID.
 	 * In local dev, the handler executes via `setTimeout`. In AWS, the payload is
 	 * sent to SQS and a dedicated Lambda processes it.
+	 * Both runtimes deliver a JSON snapshot, not a live reference to the input.
 	 *
 	 * @param payload - The job data passed to the handler.
 	 * @param options - Optional. `delaySeconds` defers processing (0–900s).
@@ -197,7 +198,11 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * @throws {AsyncJobErrors.ValidationFailed} If schema validation fails.
 	 */
 	async submit(payload: T, options?: SubmitOptions): Promise<{ jobId: string }> {
-		await this.validatePayload(payload);
+		const messageBody = await this.validatePayload(payload);
+		return this.enqueue(messageBody, options);
+	}
+
+	private async enqueue(messageBody: string, options?: SubmitOptions): Promise<{ jobId: string }> {
 		const jobId = randomUUID().slice(0, 13);
 		const sentAt = new Date().toISOString();
 		const delaySeconds = options?.delaySeconds ?? 0;
@@ -206,7 +211,7 @@ export class AsyncJob<T = unknown> extends Scope {
 
 		const entry: QueueEntry<T> = {
 			jobId,
-			payload,
+			payload: JSON.parse(messageBody) as T,
 			receiveCount: 0,
 			sentAt,
 			delayedUntil: delaySeconds > 0 ? new Date(Date.now() + delaySeconds * 1000).toISOString() : null,
@@ -221,11 +226,11 @@ export class AsyncJob<T = unknown> extends Scope {
 			this._queue.delayed.push(entry);
 			setTimeout(() => {
 				this._queue.delayed = this._queue.delayed.filter(e => e.jobId !== jobId);
-				this.processEntry(entry);
+				this.processEntry(entry, messageBody);
 			}, delaySeconds * 1000);
 		} else {
 			console.log(`[AsyncJob:${this._id}] submitted job ${jobId}`);
-			this.processEntry(entry);
+			this.processEntry(entry, messageBody);
 		}
 
 		return { jobId };
@@ -234,7 +239,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	/**
 	 * Enqueue multiple jobs in a single call.
 	 *
-	 * The mock runtime enqueues each payload via `submit()` in turn; the AWS
+	 * The mock runtime enqueues each validated JSON snapshot in turn; the AWS
 	 * runtime instead packs them into SQS `SendMessageBatch` requests. Either way a
 	 * batch of any size up to {@link MAX_BATCH_PAYLOADS} is accepted — larger
 	 * batches are rejected up front.
@@ -257,21 +262,22 @@ export class AsyncJob<T = unknown> extends Scope {
 			throw blocksError(AsyncJobErrors.BatchTooLarge, `Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`);
 		}
 
-		// Validate every payload before enqueuing any, so one bad payload fails the
-		// whole call rather than half-submitting the batch — matching the AWS runtime.
+		// Keep the validated JSON bodies, as SQS does; do not validate or serialize
+		// again when enqueueing, since the input may have changed in the meantime.
+		const messageBodies: string[] = [];
 		for (const payload of payloads) {
-			await this.validatePayload(payload);
+			messageBodies.push(await this.validatePayload(payload));
 		}
 
 		const jobIds: Array<string | null> = [];
-		for (const payload of payloads) {
-			const { jobId } = await this.submit(payload, options);
+		for (const messageBody of messageBodies) {
+			const { jobId } = await this.enqueue(messageBody, options);
 			jobIds.push(jobId);
 		}
 		return { jobIds, failed: [] };
 	}
 
-	private async validatePayload(payload: T): Promise<void> {
+	private async validatePayload(payload: T): Promise<string> {
 		// StandardSchemaV1 — validate() may return a Promise
 		if (this.schema) {
 			const rawResult = this.schema['~standard'].validate(payload);
@@ -289,9 +295,10 @@ export class AsyncJob<T = unknown> extends Scope {
 			const kb = Math.ceil(bytes / 1024);
 			throw blocksError(AsyncJobErrors.PayloadTooLarge, `Serialized payload is ${kb} KB, exceeds 256 KB limit`);
 		}
+		return serialized;
 	}
 
-	private processEntry(entry: QueueEntry<T>): void {
+	private processEntry(entry: QueueEntry<T>, messageBody: string): void {
 		setTimeout(async () => {
 			entry.receiveCount++;
 			this._queue.pending = this._queue.pending.filter(e => e.jobId !== entry.jobId);
@@ -301,7 +308,9 @@ export class AsyncJob<T = unknown> extends Scope {
 
 			const start = Date.now();
 			try {
-				await this.handler(entry.payload, {
+				// Each SQS delivery parses the original body again, so a failed handler
+				// cannot change the payload of a retry or the retained DLQ entry.
+				await this.handler(JSON.parse(messageBody) as T, {
 					jobId: entry.jobId,
 					receiveCount: entry.receiveCount,
 					sentAt: entry.sentAt,
@@ -326,7 +335,7 @@ export class AsyncJob<T = unknown> extends Scope {
 						`[AsyncJob:${this._id}] job ${entry.jobId} failed (attempt ${entry.receiveCount}/${this.maxRetries}): ${errorMsg}`
 					);
 					console.log(`[AsyncJob:${this._id}] retrying job ${entry.jobId} (attempt ${entry.receiveCount + 1}/${this.maxRetries})`);
-					this.processEntry(entry);
+					this.processEntry(entry, messageBody);
 				}
 			}
 		}, 0);
