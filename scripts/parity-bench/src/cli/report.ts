@@ -5,10 +5,13 @@
  * parity report — diff a local recording against a deployed one and write the scorecard.
  *
  *   parity-report --local .parity/local --deployed .parity/sandbox \
- *     [--baseline .parity/sandbox-2] [--out .parity/report] [--suites <module exporting SUITE_BLOCKS>]
+ *     [--baseline .parity/sandbox-2] [--local-baseline .parity/local-2] \
+ *     [--out .parity/report] [--suites <module exporting SUITE_BLOCKS>]
  *
  * `--baseline` is a second deployed recording: anything whose two deployed runs
  * disagree is noise (eventual consistency, timing) and is excluded from the diff.
+ * `--local-baseline` is a second local recording, used the same way; it costs no
+ * deploy and already removes most run-to-run noise (generated ids, secrets, model output).
  * `--suites` maps the stack's e2e describe() names to blocks (default: the
  * comprehensive app's mapping in ../suites.ts).
  */
@@ -38,12 +41,15 @@ async function main(): Promise<void> {
 			local: { type: 'string' },
 			deployed: { type: 'string' },
 			baseline: { type: 'string' },
+			'local-baseline': { type: 'string' },
 			out: { type: 'string', default: '.parity/report' },
 			suites: { type: 'string' },
 		},
 	});
 	if (!values.local || !values.deployed) {
-		console.error('usage: parity-report --local <dir> --deployed <dir> [--baseline <dir>] [--out <dir>] [--suites <module>]');
+		console.error(
+			'usage: parity-report --local <dir> --deployed <dir> [--baseline <dir>] [--local-baseline <dir>] [--out <dir>] [--suites <module>]',
+		);
 		process.exit(2);
 	}
 	let table = COMPREHENSIVE_SUITE_BLOCKS;
@@ -55,6 +61,7 @@ async function main(): Promise<void> {
 	const deployed = loadRecordings(values.deployed);
 	const findings = diff(local, deployed, {
 		baseline: values.baseline ? loadRecordings(values.baseline) : undefined,
+		localBaseline: values['local-baseline'] ? loadRecordings(values['local-baseline']) : undefined,
 		blockOfTest: suiteMapper(table),
 	});
 	const sweeps = (rs: ParityRecord[]) => rs.filter((r): r is SweepRecord => r.kind === 'sweep');
@@ -62,7 +69,7 @@ async function main(): Promise<void> {
 	writeFileSync(join(values.out, 'findings.json'), `${JSON.stringify(findings, null, 2)}\n`);
 	const md = renderMarkdown(
 		findings,
-		{ local: values.local, deployed: values.deployed, baseline: values.baseline },
+		{ local: values.local, deployed: values.deployed, baseline: values.baseline, localBaseline: values['local-baseline'] },
 		{ local: sweeps(local), deployed: sweeps(deployed) },
 	);
 	writeFileSync(join(values.out, 'report.md'), md);

@@ -15,6 +15,7 @@ source by the test apps. It isn't built or published. The Lambda bundler and
 | Source | What it records | Turned on by |
 |---|---|---|
 | **Recorder** | Every call a stack's existing e2e suites make through the generated client: test name, call ordinal, method, args, outcome, duration | `E2E_PARITY_DIR=<dir>` |
+| **HTTP edge recorder** | Every request the e2e process sends through `fetch` (RPC calls and raw routes: auth redirects, CORS preflights, presigned URLs): status, app-level response headers, cookie attributes, and the JSON body of raw routes. Never cookie values, origins or request ids | `E2E_PARITY_DIR=<dir>` |
 | **Fixed probe cases** | One run of a catalog case that drives a block into territory the e2e suites never reach | `E2E_PARITY_PROBES=true` |
 | **Slider cases** | A breakpoint search over one dimension (rows, bytes, items, seconds). The bench finds the first failing value in each environment and compares it with the documented limit | `E2E_PARITY_PROBES=true` |
 
@@ -34,14 +35,17 @@ npm run parity:report     # diff → .parity/report/report.md + findings.json
 
 `parity:sandbox` needs AWS credentials for a **test** account, like `test:e2e:sandbox`.
 
-To filter out noise (eventual consistency, timing), record the deployed side twice and pass the
-second run as a baseline. Anything whose two deployed runs disagree is reported as `noisy` and
-excluded from the diff:
+To filter out noise, record a side twice and pass the second run as a baseline. Anything whose two
+runs disagree is reported as `noisy` and excluded from the diff. A second **local** run costs no
+deploy and already removes most noise (server-generated secrets, model output, ids the normalizer
+misses); a second **deployed** run also covers eventual consistency and timing:
 
 ```bash
+E2E_PARITY_DIR=.parity/local-2 E2E_PARITY_PROBES=true npm run test:local
 BLOCKS_SANDBOX_KEEP=1 npm run parity:sandbox
 E2E_PARITY_DIR=.parity/sandbox-2 E2E_PARITY_PROBES=true npm run test:sandbox
-npx tsx ../../scripts/parity-bench/src/cli/report.ts --local .parity/local --deployed .parity/sandbox --baseline .parity/sandbox-2
+npx tsx ../../scripts/parity-bench/src/cli/report.ts --local .parity/local --deployed .parity/sandbox \
+  --local-baseline .parity/local-2 --baseline .parity/sandbox-2
 ```
 
 `E2E_PARITY_SES_SANDBOX=true` additionally enables the two email cases that send to an unverified
@@ -50,27 +54,39 @@ With production access the mail would really go out and hard-bounce.
 
 ## Reading the report
 
-The report starts with one row per block. Next comes a **Breakpoints** table for the sliders
-(documented limit · local · deployed), then the non-matching calls and cases per block:
+The report starts with one row per block and one per source (call, http, probe, sweep). Next come a
+**Breakpoints** table for the sliders (documented limit · local · deployed), an **HTTP edge
+differences by facet** table (the same header or cookie difference counted once across every
+exchange that shows it), then the non-matching calls and cases per block, most severe first:
 
 | Verdict | Meaning |
 |---|---|
-| **SILENT** | Works locally, fails deployed. For a slider, the local breakpoint is higher than the deployed one, or doesn't exist. The worst kind: the developer finds out in production |
+| **SILENT** | Works locally, fails deployed (an HTTP status ≥ 400 counts as failing). For a slider, the local breakpoint is higher than the deployed one, or doesn't exist. The worst kind: the developer finds out in production |
 | error shape differs | Both fail (or break at the same point) with a different error `name` or HTTP status, which is what `isBlocksError` matches on |
-| value differs | Both succeed with different results, after normalizing ids, timestamps, URLs and echoed inputs |
+| HTTP edge differs | Same request, different status, app-level header (`content-type`, `cache-control`, `location`, CORS, security headers) or cookie attribute (`Secure`, `SameSite`, `HttpOnly`, `Path`, `Max-Age`, …) |
+| result shape differs | Both succeed, but a field exists on one side only or has another type (`Date` vs ISO string, object vs `null`). The report names the paths |
+| order differs | Both succeed with the same elements in a different order: code that relies on the mock's order breaks deployed |
+| value differs | Both succeed with the same shape and different values, after normalizing ids, timestamps, URLs, generated test inputs and the deployed stack-name prefix |
 | fails locally only | Annoying, but safe |
-| noisy | The two deployed runs disagree; excluded |
-| unmatched | Ran in one environment only, usually because a test failed or was skipped there |
+| noisy | The two runs of one environment disagree (see the baselines above); excluded |
+| unmatched | Ran in one environment only, usually because a test is gated on the environment, failed, or was skipped there |
 
 **Fidelity** = same ÷ compared. Unmatched and noisy entries don't count.
+
+How calls and exchanges line up: per test, by what was called and its ordinal among calls of the
+same thing, not by a global counter, so one extra call doesn't shift the rest. A poll loop (a run of
+calls to one method, nothing else in between) collapses into one observation per distinct argument
+list that keeps the last outcome; when the two environments needed a different number of polls, the
+report shows `[×n]`. Shape and order are judged on what the e2e suites recorded, beyond what their
+assertions check.
 
 ## Layout
 
 ```
-src/core/      pure, no I/O: types (the contract), catalog validation, breakpoint search, differ + report
+src/core/      pure, no I/O: types (the contract), catalog validation, breakpoint search, shape/order comparison, differ + report
 src/kinds/     reusable probe shapes and exact-size payload generators: countLimit, sizeLimit, utf8OfBytes, idBatches
 src/server/    the default-deny `probe` namespace (createProbeMethods), runCase/observe helpers, CDK wiring (./cdk)
-src/client/    the e2e client recorder and the node:test driver for fixed and slider cases
+src/client/    the e2e client and HTTP edge recorders, and the node:test driver for fixed and slider cases
 src/packs/     one pack per block area: <pack>.cases.ts (pure data) + <pack>.probe.ts (runner); catalog.ts
 src/cli/       report.ts, validate-catalog.ts (run through npm scripts / tsx)
 test/          unit tests for the pure core
@@ -92,7 +108,7 @@ enableParityProbes(blocksStack);
 // e2e entry
 import { installParityRecorder, parityProbeTests, recordClient } from '@aws-blocks/parity-bench/client';
 import { PARITY_CASES } from '@aws-blocks/parity-bench/catalog';
-installParityRecorder('main');                 // module top level
+installParityRecorder('main');                 // module top level, before anything else wraps fetch
 api = recordClient(module.api, 'api');          // after importing the generated client
 parityProbeTests(() => module.probe, PARITY_CASES);
 ```
@@ -129,4 +145,5 @@ anyone who can reach that stack's API can run catalog cases against its resource
 on a throwaway sandbox stack in a test account, and let the run destroy the stack afterwards.
 
 Recordings redact values under credential-like keys (`token`, `password`, `cookie`, `session`, …)
-and are written only under `.parity/`, which is git-ignored.
+and are written only under `.parity/`, which is git-ignored. The HTTP edge recorder keeps no cookie
+values, no request headers, and only the app-level response headers listed in `src/client/recorder.ts`.

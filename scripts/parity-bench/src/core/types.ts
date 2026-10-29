@@ -134,4 +134,42 @@ export interface SweepRecord {
 	ms: number;
 }
 
-export type ParityRecord = CallRecord | ProbeRecord | SweepRecord;
+/**
+ * One HTTP exchange the e2e process made through `fetch`, captured by the edge
+ * recorder: the RPC calls the generated client sends plus every raw request a
+ * suite makes (auth redirects, CORS preflights, presigned URLs). It keeps what
+ * a browser or HTTP client acts on and the e2e assertions rarely check: status,
+ * app-level headers and cookie attributes. Values that differ per environment
+ * (cookie values, origins, request ids) are never stored.
+ */
+export interface HttpRecord {
+	kind: 'http';
+	env: string;
+	process: string;
+	test: string;
+	seq: number;
+	/** HTTP method of the request. */
+	method: string;
+	/**
+	 * What was called, comparable across environments: `rpc api.kvGet` for a JSON-RPC call,
+	 * the app-origin path for a raw route (`/aws-blocks/auth/signin/google?code&state`),
+	 * `<presigned>` for a presigned object URL, `<external>/path` for any other origin.
+	 */
+	route: string;
+	/** Identifies the request body within one run, so the differ can collapse a poll loop. Never compared. */
+	requestKey: string;
+	/** An RPC request's params (snapshot, credential-like keys redacted): generated inputs the differ normalizes. Never compared. */
+	params?: unknown;
+	/** Response status, or `null` when the request failed before a response (`error` holds the name). */
+	status: number | null;
+	error?: string;
+	/** Compared response headers, lower-case names, values normalized (see `COMPARED_HEADERS` in the recorder). */
+	headers: Record<string, string>;
+	/** Set-Cookie per cookie name: its attributes in canonical order, never its value. */
+	cookies: Record<string, string>;
+	/** Snapshot of a JSON response body on a non-RPC route (RPC bodies are in the matching `CallRecord`). */
+	body?: unknown;
+	ms: number;
+}
+
+export type ParityRecord = CallRecord | ProbeRecord | SweepRecord | HttpRecord;
