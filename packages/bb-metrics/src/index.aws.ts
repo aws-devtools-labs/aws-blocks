@@ -17,6 +17,8 @@ import { MetricsErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import {
 	validateMetricName,
+	validateMetricValue,
+	validateTimestamp,
 	validateDimensions,
 	validateBatchSize,
 	validateNamespace,
@@ -109,9 +111,11 @@ export class Metrics extends Scope implements MetricsEmitter {
 	 * Record a single metric data point via EMF.
 	 *
 	 * @param name - Metric name (e.g., 'RequestCount', 'Latency'). Non-empty, max 1024 chars.
-	 * @param value - Numeric value to record.
+	 * @param value - Finite numeric value between -2^360 and 2^360.
 	 * @param options - Unit, dimensions, timestamp, and resolution.
 	 * @throws {MetricsErrors.InvalidMetricName} If the metric name is empty or exceeds 1024 characters.
+	 * @throws {MetricsErrors.InvalidMetricValue} If the metric value is non-finite or outside the CloudWatch-supported range.
+	 * @throws {MetricsErrors.InvalidTimestamp} If the timestamp is an invalid Date.
 	 * @throws {MetricsErrors.InvalidDimensions} If dimensions exceed 30 entries or contain empty keys/values.
 	 *
 	 * @example
@@ -126,6 +130,8 @@ export class Metrics extends Scope implements MetricsEmitter {
 	 */
 	emit(name: string, value: number, options?: EmitOptions): void {
 		validateMetricName(name);
+		validateMetricValue(value);
+		validateTimestamp(options?.timestamp);
 		const dims = mergeDimensions(this.defaultDimensions, options?.dimensions);
 		validateDimensions(dims);
 
@@ -145,6 +151,8 @@ export class Metrics extends Scope implements MetricsEmitter {
 	 *
 	 * @param metrics - Array of metric data points (max 100 per call).
 	 * @throws {MetricsErrors.InvalidMetricName} If any metric name is invalid.
+	 * @throws {MetricsErrors.InvalidMetricValue} If any metric value is non-finite or outside the CloudWatch-supported range.
+	 * @throws {MetricsErrors.InvalidTimestamp} If any metric timestamp is an invalid Date.
 	 * @throws {MetricsErrors.InvalidDimensions} If any metric's dimensions are invalid.
 	 * @throws {MetricsErrors.BatchTooLarge} If the batch exceeds 100 metrics.
 	 *
@@ -162,6 +170,8 @@ export class Metrics extends Scope implements MetricsEmitter {
 
 		for (const m of metrics) {
 			validateMetricName(m.name);
+			validateMetricValue(m.value);
+			validateTimestamp(m.timestamp);
 			const dims = mergeDimensions(this.defaultDimensions, m.dimensions);
 			validateDimensions(dims);
 		}
@@ -230,6 +240,8 @@ class ChildMetrics implements MetricsEmitter {
 
 	emit(name: string, value: number, options?: EmitOptions): void {
 		validateMetricName(name);
+		validateMetricValue(value);
+		validateTimestamp(options?.timestamp);
 		const dims = mergeDimensions(this.defaultDimensions, options?.dimensions);
 		validateDimensions(dims);
 
@@ -248,6 +260,8 @@ class ChildMetrics implements MetricsEmitter {
 
 		for (const m of metrics) {
 			validateMetricName(m.name);
+			validateMetricValue(m.value);
+			validateTimestamp(m.timestamp);
 			const dims = mergeDimensions(this.defaultDimensions, m.dimensions);
 			validateDimensions(dims);
 		}
