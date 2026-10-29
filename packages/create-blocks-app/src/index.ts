@@ -297,23 +297,25 @@ async function validateTemplateName(templateName: string): Promise<void> {
   }
 }
 
-// ─── Fresh project creation ──────────────────────────────────────────────────
-
-async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
-  await validateTemplateName(templateName);
-
-  // Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
-  // are auto-selected when the CLI finds a matching existing project and are
-  // flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
-  // overlay snippet — not a full standalone project (no `src/`, no `index.html`,
-  // no `gitignore`) — so a fresh scaffold would fail partway through the copy.
-  // Reject up front. Keying off the catalog flag (not a hardcoded name) means a
-  // new overlay template needs no change here — just the flag in its package.json.
+/**
+ * Exits with an error when `templateName` is an overlay template.
+ *
+ * Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
+ * are auto-selected when the CLI finds a matching existing project and are
+ * flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
+ * overlay snippet — not a full standalone project (no `src/`, no `index.html`,
+ * no `gitignore`, no `cdk.json`) — so both a fresh scaffold and a generic
+ * existing-project integration would fail partway through the copy. Callers
+ * must invoke this before writing anything. Keying off the catalog flag (not a
+ * hardcoded name) means a new overlay template needs no change here — just the
+ * flag in its package.json.
+ */
+async function rejectOverlayTemplate(templateName: string): Promise<void> {
   const overlayEntry = (await loadTemplateCatalog()).find(t => t.name === templateName);
   if (overlayEntry?.overlayOnly) {
     console.error(`Error: The \`${templateName}\` template is an overlay that's auto-selected`);
     console.error('when the CLI detects a compatible existing project. It cannot be');
-    console.error('scaffolded as a fresh app.');
+    console.error('selected explicitly with --template.');
     console.error('');
     console.error('To scaffold a fresh Blocks app, choose a different template:');
     console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
@@ -323,6 +325,13 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.error('  npx @aws-blocks/create-blocks-app');
     process.exit(1);
   }
+}
+
+// ─── Fresh project creation ──────────────────────────────────────────────────
+
+async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
+  await validateTemplateName(templateName);
+  await rejectOverlayTemplate(templateName);
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -594,6 +603,8 @@ frontend:
 // ─── Init into existing project ─────────────────────────────────────────────
 
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
+  await rejectOverlayTemplate(templateName);
+
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
