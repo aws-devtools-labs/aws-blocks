@@ -253,6 +253,11 @@ const authC = new Auth(scope, 'authC', {
 // Separate pool for MFA round-trip tests — `mode: 'optional'` makes signIn
 // issue a TOTP challenge once the user enrolls.
 //
+// `totpVerification: 'rfc6238'`: the local pool checks TOTP codes as Cognito
+// does, so the tests answer with real codes (`totpCodeFor` from
+// `@aws-blocks/blocks/utils`) and a wrong secret fails locally too. Mock-only;
+// the deployed pool always verifies.
+//
 // Only `TOTP` in `types` (stated explicitly: `Auth` would otherwise default to
 // SMS + TOTP) — AWS Cognito Email MFA requires an SES-backed sender (`email`),
 // which this test app doesn't set up. TOTP has no such external dependency and exercises the
@@ -262,7 +267,8 @@ const authCMfa = new Auth(scope, 'authCMfa', {
     selfSignUp: true,
     passwordPolicy: { minLength: 8, requireDigits: true },
   },
-  mfa: { mode: 'optional', types: ['TOTP'] },
+  mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'AWS Blocks e2e' },
+  totpVerification: 'rfc6238',
   codeDelivery: async (username, code, purpose) => {
     await recordDeliveredCode('authCMfa', { username, code, purpose });
     logCodeLocally(`[Auth authCMfa] ${purpose} code for "${username}": ${code}`);
@@ -2761,6 +2767,8 @@ export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
 // Export auth state machine API
 export const authApi = auth.createApi();
 export const authCApi = authC.createApi();
+// TOTP enrolment through the state machine (`setUpTotp`, `verifyTotpSetup`, …).
+export const authCMfaApi = authCMfa.createApi();
 
 // Export OIDC auth state machine API (federated providers appear as
 // `signIn:<id>` actions carrying the sign-in URL)

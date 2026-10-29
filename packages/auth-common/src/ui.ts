@@ -76,7 +76,36 @@ export interface AuthActionPayloadMap {
 	listPasskeys: {};
 	/** Delete a registered passkey by `credentialId`. */
 	deletePasskey: { credentialId: string };
+	/**
+	 * Begin authenticator-app (TOTP) enrolment for the signed-in user. The
+	 * returned state's `verifyTotpSetup` action carries the shared secret
+	 * (`sharedSecret`) and an `otpauth://` URI (`otpauthUri`, the QR code's
+	 * content) as hidden fields, next to the `code` input. Replacing an
+	 * authenticator that is already enrolled needs a recent sign-in (the block
+	 * answers `ReauthenticationRequiredException` otherwise); the old one keeps
+	 * working until the new one is verified.
+	 */
+	setUpTotp: {};
+	/** Finish authenticator-app enrolment with a `code` from the app. */
+	verifyTotpSetup: { code: string };
+	/** Show the signed-in user's MFA settings: one action per change they can make. */
+	getMfaPreference: {};
+	/**
+	 * Change the signed-in user's MFA preference: a per-factor delta (an
+	 * omitted factor is unchanged), at most one factor `'PREFERRED'`. Setting a
+	 * factor `'DISABLED'` needs a recent sign-in (`ReauthenticationRequiredException`
+	 * otherwise).
+	 */
+	updateMfaPreference: { sms?: AuthMfaSetting; totp?: AuthMfaSetting; email?: AuthMfaSetting };
 }
+
+/**
+ * A per-factor setting in the `updateMfaPreference` action (the vocabulary of
+ * Amplify-JS v6's `updateMFAPreference`): `'PREFERRED'` enables the factor and
+ * makes it the default challenge, `'ENABLED'` / `'NOT_PREFERRED'` enable it
+ * without, `'DISABLED'` removes it.
+ */
+export type AuthMfaSetting = 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
 
 /**
  * Discriminated union derived from {@link AuthActionPayloadMap}. Each
@@ -1668,6 +1697,283 @@ function renderExternalAction(action: AuthAction): Node {
 	form.appendChild(btn);
 
 	return form;
+}
+
+// ---------------------------------------------------------------------------
+// MfaSettings
+// ---------------------------------------------------------------------------
+
+/** Options for {@link MfaSettings}. */
+export interface MfaSettingsOptions {
+	/**
+	 * Render the setup QR code. Called with the `otpauth://` URI an
+	 * authenticator app scans; return any node (an `<img>`, `<canvas>` or
+	 * `<svg>` from the QR library of your choice). It is mounted in the
+	 * `mfa-settings-qr` hook. Without it the panel shows the setup key and an
+	 * "Open in authenticator app" link (the URI itself, which opens the app on
+	 * a phone), so no QR dependency ships with the block.
+	 */
+	renderQrCode?: (otpauthUri: string) => Node;
+	/** The heading above the settings. @default 'Two-factor authentication' */
+	heading?: string;
+}
+
+/** The `data-testid` of a rendered MFA settings action form. */
+function mfaActionTestId(action: AuthAction): string {
+	// One `updateMfaPreference` form per change (e.g. totp → DISABLED): name
+	// the change, so each form has its own hook.
+	if (action.name === 'updateMfaPreference') {
+		const change = action.fields.find((f) => f.type === 'hidden' && f.defaultValue);
+		if (change?.defaultValue) {
+			return `mfa-settings-action-updateMfaPreference-${change.name}-${change.defaultValue.toLowerCase()}`;
+		}
+	}
+	return `mfa-settings-action-${action.name}`;
+}
+
+/** Element ids for `MfaSettings`' label associations, unique per page. */
+let mfaSettingsIds = 0;
+
+/** `JBSWY3DPEHPK3PXP` → `JBSW Y3DP EHPK 3PXP`: how authenticator apps show a setup key (they accept the spaces). */
+function groupSetupKey(secret: string): string {
+	return secret.replace(/(.{4})(?=.)/g, '$1 ');
+}
+
+/**
+ * Authenticator-app (TOTP) enrolment and MFA preference settings for the
+ * signed-in user, driven by the same server state machine as the
+ * {@link Authenticator}: it submits `createApi()`'s `getMfaPreference`,
+ * `setUpTotp`, `verifyTotpSetup` and `updateMfaPreference` actions and renders
+ * the `AuthState` each returns.
+ *
+ * - Signed in: loads the settings (`getMfaPreference`) and renders one `<form>`
+ *   per action: "Set up authenticator app" (or "Replace…"), and for each
+ *   enrolled factor "Use … by default" / "Turn off …".
+ * - After "Set up": the setup panel. The QR code (when
+ *   {@link MfaSettingsOptions.renderQrCode} is given), the setup key and an
+ *   `otpauth://` link, and a form for the 6-digit code from the app. A wrong
+ *   code keeps the panel and shows the error.
+ * - Signed out: renders nothing, and re-renders when the user signs in (it
+ *   follows {@link onAuthChange}).
+ *
+ * The block's options gate the actions (`mfa` on, `'TOTP'` in `mfa.types`);
+ * with MFA off the panel shows the server's error.
+ *
+ * Unlike the `Authenticator`, it calls `setAuthState` directly and keeps its
+ * state to itself: these actions never change who is signed in, so nothing
+ * is broadcast and the shared auth-state store (which a mounted
+ * `Authenticator` renders) is left alone.
+ *
+ * Stable `data-testid` hooks: `mfa-settings` (root), `mfa-settings-heading`,
+ * `mfa-settings-error`, `mfa-settings-action-<action>` (each `<form>`; an
+ * `updateMfaPreference` form is `mfa-settings-action-updateMfaPreference-<factor>-<setting>`,
+ * e.g. `…-totp-disabled`), `mfa-settings-<field>` (each input, hidden ones
+ * included, e.g. `mfa-settings-code`, `mfa-settings-sharedSecret`),
+ * `mfa-settings-submit` (each form's button), `mfa-settings-qr`,
+ * `mfa-settings-secret` (the setup key, grouped in fours) and
+ * `mfa-settings-otpauth-uri` (the link). Treat them as public API.
+ *
+ * @param api - The state machine API from `auth.createApi()`.
+ * @param options - See {@link MfaSettingsOptions}.
+ * @returns An HTMLElement to mount on an account / security page.
+ *
+ * @example
+ * ```typescript
+ * import { MfaSettings } from '@aws-blocks/blocks/ui';
+ * import { authApi } from 'aws-blocks';
+ *
+ * declare function qrCodeDataUrl(text: string): string; // from your QR library (optional)
+ *
+ * document.querySelector('#security')!.appendChild(
+ *   MfaSettings(authApi, {
+ *     renderQrCode: (uri) => {
+ *       const img = document.createElement('img');
+ *       img.src = qrCodeDataUrl(uri);
+ *       return img;
+ *     },
+ *   }),
+ * );
+ * ```
+ */
+export function MfaSettings(api: AuthStateApi, options?: MfaSettingsOptions): HTMLElement {
+	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'mfa-settings');
+	container.className = 'bb-authenticator';
+	injectTheme();
+	const opts: MfaSettingsOptions = options ?? {};
+
+	/** The state on screen; a retriable failure overlays its error on it. */
+	let current: AuthState | null = null;
+	/** Bumped on every sign-in / sign-out, so a late answer for a previous user is dropped. */
+	let generation = 0;
+
+	async function submit(input: AuthActionInput): Promise<void> {
+		const mine = generation;
+		try {
+			const next = await api.setAuthState(input);
+			if (mine !== generation) return;
+			if (next.retriable === true && current) {
+				paint({ ...current, error: next.error || 'An error occurred' });
+				return;
+			}
+			paint(next);
+		} catch (e: any) {
+			if (mine !== generation) return;
+			paint({ ...(current ?? { state: 'signedIn', actions: [] }), error: e?.message || 'An error occurred' });
+		}
+	}
+
+	function paint(state: AuthState): void {
+		current = state;
+		const card = document.createElement('div');
+		card.className = 'bb-card';
+		const heading = document.createElement('h3');
+		heading.setAttribute('data-testid', 'mfa-settings-heading');
+		heading.className = 'bb-heading';
+		heading.textContent = opts.heading ?? 'Two-factor authentication';
+		card.appendChild(heading);
+		if (state.error) {
+			const err = document.createElement('div');
+			err.setAttribute('data-testid', 'mfa-settings-error');
+			err.className = 'bb-error';
+			err.textContent = state.error;
+			card.appendChild(err);
+		}
+		// Only a signed-in state carries settings; a signed-out answer (the
+		// session expired) shows just its error. Sign-out is the Authenticator's.
+		if (state.state === 'signedIn') {
+			for (const action of state.actions) {
+				if (action.name === 'signOut' || action.url) continue;
+				if (action.name === 'verifyTotpSetup') card.appendChild(renderSetupKey(action));
+				card.appendChild(renderAction(action));
+			}
+		}
+		container.replaceChildren(card);
+	}
+
+	/** The QR slot, the setup key and the `otpauth://` link for a `verifyTotpSetup` action. */
+	function renderSetupKey(action: AuthAction): Node {
+		const panel = document.createElement('div');
+		panel.className = 'bb-field';
+		const secret = action.fields.find((f) => f.name === 'sharedSecret')?.defaultValue ?? '';
+		const uri = action.fields.find((f) => f.name === 'otpauthUri')?.defaultValue ?? '';
+		const hint = document.createElement('div');
+		hint.className = 'bb-hint';
+		hint.textContent = 'Scan the QR code with your authenticator app, or enter the setup key, then enter the code it shows.';
+		panel.appendChild(hint);
+		if (opts.renderQrCode && uri) {
+			const qr = document.createElement('div');
+			qr.setAttribute('data-testid', 'mfa-settings-qr');
+			qr.appendChild(opts.renderQrCode(uri));
+			panel.appendChild(qr);
+		}
+		// A visible caption, tied to the key for assistive tech.
+		const keyId = `bb-mfa-setup-key-${++mfaSettingsIds}`;
+		const caption = document.createElement('div');
+		caption.className = 'bb-hint';
+		caption.id = `${keyId}-label`;
+		caption.textContent = 'Setup key';
+		panel.appendChild(caption);
+		const key = document.createElement('code');
+		key.setAttribute('data-testid', 'mfa-settings-secret');
+		key.id = keyId;
+		key.setAttribute('aria-labelledby', caption.id);
+		key.textContent = groupSetupKey(secret);
+		panel.appendChild(key);
+		if (uri) {
+			const link = document.createElement('a');
+			link.setAttribute('data-testid', 'mfa-settings-otpauth-uri');
+			link.href = uri;
+			link.textContent = 'Open in authenticator app';
+			panel.appendChild(link);
+		}
+		return panel;
+	}
+
+	/** One action as a `<form>`: its hidden fields, its visible inputs and a submit button. */
+	function renderAction(action: AuthAction): Node {
+		const form = document.createElement('form');
+		form.setAttribute('data-testid', mfaActionTestId(action));
+		form.className = 'bb-field';
+		form.noValidate = true;
+		const inputs: HTMLInputElement[] = [];
+		for (const field of action.fields) {
+			const input = document.createElement('input');
+			input.name = field.name;
+			input.setAttribute('data-testid', `mfa-settings-${field.name}`);
+			if (field.type === 'hidden') {
+				input.type = 'hidden';
+				input.value = field.defaultValue ?? '';
+			} else {
+				// A real <label> for every visible input, not just a placeholder.
+				input.id = `bb-mfa-field-${++mfaSettingsIds}`;
+				const label = document.createElement('label');
+				label.htmlFor = input.id;
+				label.className = 'bb-hint';
+				label.textContent = field.label;
+				form.appendChild(label);
+				input.type = 'text';
+				input.className = 'bb-input';
+				input.placeholder = field.label;
+				if (field.name === 'code') {
+					input.autocomplete = 'one-time-code';
+					input.inputMode = 'numeric';
+				}
+				if (field.defaultValue) input.value = field.defaultValue;
+				input.addEventListener('keydown', (e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						send();
+					}
+				});
+			}
+			inputs.push(input);
+			form.appendChild(input);
+		}
+		const btn = document.createElement('button');
+		btn.setAttribute('data-testid', 'mfa-settings-submit');
+		btn.type = 'submit';
+		btn.textContent = action.label;
+		btn.className = action.name === 'getMfaPreference' ? 'bb-button bb-button-secondary' : 'bb-button bb-button-primary';
+		form.appendChild(btn);
+
+		let sending = false;
+		const send = () => {
+			if (sending) return;
+			sending = true;
+			btn.disabled = true;
+			const values: Record<string, string> = {};
+			for (const input of inputs) values[input.name] = input.value;
+			// Built from the server's runtime `action.fields`, as the
+			// Authenticator's renderer does: the one widening boundary.
+			void submit({ action: action.name, ...values } as AuthActionInput).finally(() => {
+				sending = false;
+				btn.disabled = false;
+			});
+		};
+		btn.addEventListener('click', (e) => {
+			e.preventDefault();
+			send();
+		});
+		form.addEventListener('submit', (e) => {
+			e.preventDefault();
+			send();
+		});
+		return form;
+	}
+
+	let signedInAs: string | null = null;
+	onAuthChange(api, (user) => {
+		const id = user ? user.userId : null;
+		if (id === signedInAs) return;
+		signedInAs = id;
+		generation++;
+		current = null;
+		container.replaceChildren();
+		if (user) void submit({ action: 'getMfaPreference' });
+	});
+
+	return container;
 }
 
 // ---------------------------------------------------------------------------

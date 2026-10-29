@@ -11,7 +11,8 @@
  * `state.json` is exactly the file `AuthCognito`'s mock writes:
  * `{ users, groups, codes, challenges, sessionSecret }`, each user
  * `{ userSub, password, confirmed, disabled, attributes, mfaPreference,
- * totpSharedSecret?, totpVerified, devices, passkeys?, forcePasswordChange? }`.
+ * totpSharedSecret?, totpVerified, devices, passkeys?, forcePasswordChange? }`, plus
+ * `totpPendingSecret?` (a `setUpTotp` secret not yet verified; `Auth` only).
  * An app that switches `AuthCognito` → `Auth` with the same id therefore keeps
  * its local users, groups, MFA enrolments, devices and passkeys — and, because
  * `sessionSecret` is the same field `AuthBase` signs cookies with, its
@@ -95,6 +96,13 @@ export interface MockUserRecord {
 	attributes: Record<string, string>;
 	mfaPreference: { enabled: MfaFactor[]; preferred?: MfaFactor | 'NOMFA' };
 	totpSharedSecret?: string;
+	/**
+	 * The secret `setUpTotp` issued and `verifyTotpSetup` has not yet
+	 * confirmed. Kept apart from `totpSharedSecret`, so an authenticator that
+	 * already works keeps working until the new one is verified (as Cognito
+	 * "disassociates an existing software token when you verify the new token").
+	 */
+	totpPendingSecret?: string;
 	totpVerified: boolean;
 	devices: Record<string, DeviceRecord>;
 	/**
@@ -269,6 +277,8 @@ export function parseUser(v: unknown): MockUserRecord | null {
 	};
 	const secret = optionalString(v.totpSharedSecret);
 	if (secret !== undefined) user.totpSharedSecret = secret;
+	const pending = optionalString(v.totpPendingSecret);
+	if (pending !== undefined) user.totpPendingSecret = pending;
 	if (Array.isArray(v.passkeys)) {
 		user.passkeys = v.passkeys.map(parsePasskey).filter((p): p is MockPasskeyRecord => p !== null);
 	}

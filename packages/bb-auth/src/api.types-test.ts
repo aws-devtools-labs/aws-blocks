@@ -37,6 +37,7 @@ import type {
 	FederatedActionNameOf,
 	MfaFactor,
 	SignInNextStep,
+	TotpEnabled,
 } from './index.mock.js';
 import { Auth } from './index.mock.js';
 
@@ -68,6 +69,8 @@ type PasskeyActionName =
 	| 'completePasskeyRegistration'
 	| 'listPasskeys'
 	| 'deletePasskey';
+type TotpActionName = 'setUpTotp' | 'verifyTotpSetup';
+type MfaPreferenceActionName = 'getMfaPreference' | 'updateMfaPreference';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // (1) emailPassword: false + one OIDC provider — the reviewer's repro. The
@@ -120,6 +123,14 @@ async function passwordOnly() {
 	await authApi.setAuthState({ action: 'confirmSignIn', challenge: 'mfaType', session, mfaType: 'TOTP' });
 	// @ts-expect-error — USER_PASSWORD_AUTH has no first-factor selection
 	await authApi.setAuthState({ action: 'confirmSignIn', challenge: 'firstFactor', session, firstFactor: 'PASSWORD' });
+	// @ts-expect-error — MFA is off: no authenticator enrolment
+	await authApi.setAuthState({ action: 'setUpTotp' });
+	// @ts-expect-error — MFA is off: no authenticator enrolment
+	await authApi.setAuthState({ action: 'verifyTotpSetup', code: '123456' });
+	// @ts-expect-error — MFA is off: no MFA settings
+	await authApi.setAuthState({ action: 'getMfaPreference' });
+	// @ts-expect-error — MFA is off: no MFA settings
+	await authApi.setAuthState({ action: 'updateMfaPreference', totp: 'ENABLED' });
 	type _actions = Expect<Equal<ActionsOf<typeof auth>, PasswordActionName | 'signOut'>>;
 	type _challenges = Expect<Equal<ChallengesOf<OptionsOf<typeof auth>>, 'newPassword'>>;
 }
@@ -146,6 +157,53 @@ async function mfaTotpOnly() {
 	type _challenges = Expect<
 		Equal<ChallengesOf<OptionsOf<typeof auth>>, 'newPassword' | 'code' | 'mfaType' | 'totpSetup'>
 	>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (3b) MFA enrolment actions: authenticator setup follows 'TOTP' in
+//      `mfa.types`; the preference actions follow MFA, and their factors follow
+//      `mfa.types`.
+// ─────────────────────────────────────────────────────────────────────────────
+async function mfaEnrolmentActions() {
+	const auth = new Auth(scope, 'mfa-totp-actions', { mfa: { mode: 'optional', types: ['TOTP'] } });
+	const authApi = auth.createApi();
+	await authApi.setAuthState({ action: 'setUpTotp' });
+	await authApi.setAuthState({ action: 'verifyTotpSetup', code: '123456' });
+	await authApi.setAuthState({ action: 'getMfaPreference' });
+	await authApi.setAuthState({ action: 'updateMfaPreference', totp: 'PREFERRED' });
+	await submitAuthAction(authApi, { action: 'updateMfaPreference', totp: 'DISABLED' });
+	// @ts-expect-error — verifyTotpSetup needs the code
+	await authApi.setAuthState({ action: 'verifyTotpSetup' });
+	// @ts-expect-error — not an MFA setting
+	await authApi.setAuthState({ action: 'updateMfaPreference', totp: 'ON' });
+	// @ts-expect-error — 'SMS' is not in mfa.types
+	await authApi.setAuthState({ action: 'updateMfaPreference', sms: 'ENABLED' });
+	type _actions = Expect<
+		Equal<ActionsOf<typeof auth>, PasswordActionName | TotpActionName | MfaPreferenceActionName | 'signOut'>
+	>;
+
+	// Default `mfa.types` (SMS + TOTP) includes TOTP.
+	const byDefault = new Auth(scope, 'mfa-default-types', { mfa: 'required' });
+	await byDefault.createApi().setAuthState({ action: 'setUpTotp' });
+
+	const smsOnly = new Auth(scope, 'mfa-sms-actions', { mfa: { mode: 'optional', types: ['SMS'] } });
+	const smsApi = smsOnly.createApi();
+	await smsApi.setAuthState({ action: 'updateMfaPreference', sms: 'PREFERRED' });
+	// @ts-expect-error — 'TOTP' is not in mfa.types: no authenticator enrolment
+	await smsApi.setAuthState({ action: 'setUpTotp' });
+	// @ts-expect-error — 'TOTP' is not in mfa.types: no authenticator enrolment
+	await smsApi.setAuthState({ action: 'verifyTotpSetup', code: '123456' });
+	// @ts-expect-error — 'TOTP' is not in mfa.types
+	await smsApi.setAuthState({ action: 'updateMfaPreference', totp: 'ENABLED' });
+	type _smsActions = Expect<Equal<ActionsOf<typeof smsOnly>, PasswordActionName | MfaPreferenceActionName | 'signOut'>>;
+
+	// MFA needs email + password.
+	const oidc = new Auth(scope, 'mfa-oidc', { emailPassword: false, oidcProviders: { okta }, mfa: 'optional' });
+	type _oidcActions = Expect<Equal<ActionsOf<typeof oidc>, 'signOut'>>;
+	type _totp = Expect<Equal<TotpEnabled<{ mfa: { mode: 'optional'; types: ['TOTP'] } }>, true>>;
+	type _noTotp = Expect<Equal<TotpEnabled<{ mfa: { mode: 'optional'; types: ['EMAIL'] } }>, false>>;
+	type _off = Expect<Equal<TotpEnabled<{ mfa: 'off' }>, false>>;
+	type _unknown = Expect<Equal<TotpEnabled<AuthOptions>, boolean>>;
 }
 
 function mfaEmailOnly() {
@@ -350,6 +408,9 @@ function unseenSettingsStayWide(flag: boolean, flow: 'USER_PASSWORD_AUTH' | 'USE
 	type _factorMfaType = Expect<
 		Equal<Extract<ConfirmSignInInputOf<OptionsOf<typeof widened>>, { challenge: 'mfaType' }>['mfaType'], MfaFactor>
 	>;
+	type _factorActions = Expect<
+		Equal<ActionsOf<typeof widened>, PasswordActionName | TotpActionName | MfaPreferenceActionName | 'signOut'>
+	>;
 	type _factorSteps = Expect<
 		Equal<
 			Extract<
@@ -364,6 +425,7 @@ function unseenSettingsStayWide(flag: boolean, flow: 'USER_PASSWORD_AUTH' | 'USE
 void oidcOnly;
 void passwordOnly;
 void mfaTotpOnly;
+void mfaEnrolmentActions;
 void mfaEmailOnly;
 void passkeysOn;
 void unknownGates;

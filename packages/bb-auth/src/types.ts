@@ -903,6 +903,15 @@ export interface MfaOptions {
 	 * @default ['SMS', 'TOTP']
 	 */
 	types?: readonly ('SMS' | 'TOTP' | 'EMAIL')[];
+	/**
+	 * The issuer an authenticator app shows next to this app's codes: the
+	 * `issuer` of the `otpauth://` URI (the QR code) that `createApi()`'s
+	 * `setUpTotp` action returns. Runtime-only: changing it changes no
+	 * infrastructure, and codes already enrolled keep working.
+	 *
+	 * @default the id of the app's root `Scope` (`new Scope('my-app')` → `'my-app'`)
+	 */
+	totpIssuer?: string;
 }
 
 /** Settings for {@link AuthOptions.passkeys}. */
@@ -1436,6 +1445,18 @@ export type MfaGate<O extends AuthOptions, T extends unknown[] = []> = [MfaEnabl
 		: T | [ERROR_mfa_is_off_on_this_Auth_instance: never];
 
 /**
+ * Whether options `O` enable authenticator-app (TOTP) MFA: MFA is on
+ * ({@link MfaEnabled}) and `mfa.types` includes `'TOTP'` (as it does by
+ * default). `boolean` when unknown at compile time — see {@link MfaEnabled}.
+ * Gates `createApi()`'s `setUpTotp` and `verifyTotpSetup` actions.
+ */
+export type TotpEnabled<O extends AuthOptions> = [MfaEnabled<O>] extends [false]
+	? false
+	: 'TOTP' extends MfaTypeOf<O>
+		? MfaEnabled<O>
+		: false;
+
+/**
  * Whether options `O` enable passkeys (`passkeys` is an options object, and
  * email + password is enabled). `boolean` when unknown at compile time,
  * including the wide `AuthOptions` — see {@link MfaEnabled} for why.
@@ -1546,6 +1567,11 @@ export type ConfirmSignInInputOf<O extends AuthOptions> =
  * - `signInWithPasskey`, `startPasskeyRegistration`,
  *   `completePasskeyRegistration`, `listPasskeys`, `deletePasskey` — passkeys
  *   are enabled ({@link PasskeysEnabled}).
+ * - `setUpTotp`, `verifyTotpSetup` — MFA is on and `mfa.types` includes
+ *   `'TOTP'` ({@link TotpEnabled}).
+ * - `getMfaPreference`, `updateMfaPreference` — MFA is on ({@link MfaEnabled});
+ *   `updateMfaPreference` takes only the factors in `mfa.types`
+ *   ({@link MfaPreferenceInput}).
  *
  * A gate the compiler cannot resolve (a `boolean`-typed option, or the wide
  * `AuthOptions`) keeps its actions, and the wide type is exactly
@@ -1597,6 +1623,12 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
 									| 'deletePasskey';
 							}
 						>
+					: never)
+			| (true extends TotpEnabled<O> ? Extract<AuthActionInput, { action: 'setUpTotp' | 'verifyTotpSetup' }> : never)
+			| (true extends MfaEnabled<O>
+					?
+							| Extract<AuthActionInput, { action: 'getMfaPreference' }>
+							| (Extract<AuthActionInput, { action: 'updateMfaPreference' }> & MfaPreferenceInput<O>)
 					: never);
 
 /**
@@ -2159,6 +2191,33 @@ export interface AuthMockOptions extends AuthOptions {
 	 * out-of-band (e.g. by capturing it in a local variable).
 	 */
 	codeDelivery?: CodeDeliveryFn;
+	/**
+	 * Mock-only. How the local user pool checks authenticator-app (TOTP)
+	 * codes — in `verifyTotpSetup`, the `createApi()` `verifyTotpSetup`
+	 * action, the sign-in TOTP challenge and the mid-sign-in TOTP setup:
+	 *
+	 * - `'any'` (default) — any six digits pass, so a test can type a fixed
+	 *   code.
+	 * - `'rfc6238'` — the code must be the shared secret's RFC 6238 code
+	 *   (HMAC-SHA-1, 6 digits, 30 s steps, one step of clock skew either way),
+	 *   as Cognito and authenticator apps compute it. Compute one in a test
+	 *   with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils`.
+	 *   Catches a wrong secret or `otpauth://` URI locally instead of only on a
+	 *   deployed pool.
+	 *
+	 * In AWS Cognito always verifies the code; the AWS runtime ignores this.
+	 *
+	 * @default 'any'
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', {
+	 *   mfa: { mode: 'optional', types: ['TOTP'] },
+	 *   totpVerification: 'rfc6238',
+	 * });
+	 * ```
+	 */
+	totpVerification?: 'any' | 'rfc6238';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

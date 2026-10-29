@@ -11,7 +11,7 @@ Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAu
 | Export Path | What it provides |
 |---|---|
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField`, `AuthErrorName`. Values: `AuthErrors`, `isAuthError`, `isAuthErrorName` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `StatusMessage`. Custom UI: `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `MfaSettings`, `StatusMessage`. Custom UI: `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
 
@@ -173,6 +173,19 @@ document.body.appendChild(
 ```
 
 When no fallback is provided the container renders nothing while signed out (backward-compatible).
+
+## MfaSettings
+
+Authenticator-app (TOTP) enrolment and MFA preferences for the signed-in user, on an account page. It drives the auth block's `setUpTotp`, `verifyTotpSetup`, `getMfaPreference` and `updateMfaPreference` actions (`Auth` with `mfa` on) and renders nothing while signed out:
+
+```typescript
+import { MfaSettings } from '@aws-blocks/auth-common/ui';
+import { authApi } from 'aws-blocks';
+
+document.querySelector('#security')!.appendChild(MfaSettings(authApi));
+```
+
+Pass `renderQrCode: (otpauthUri) => Node` to draw the setup QR code with a library of your choice; without it the panel shows the setup key and an `otpauth://` link. Test hooks and details: [Customizing Auth UI](../bb-auth/CUSTOMIZING-AUTH-UI.md#mfa-settings).
 
 ## StatusMessage
 

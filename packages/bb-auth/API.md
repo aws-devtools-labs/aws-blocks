@@ -184,7 +184,13 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O ? A
     action: 'signIn' | 'signUp' | 'confirmSignUp' | 'resendSignUpCode' | 'autoSignIn' | 'resetPassword' | 'confirmResetPassword';
 }> | ConfirmSignInInputOf<O> : never) | (true extends PasskeysEnabled<O> ? Extract<AuthActionInput, {
     action: 'signInWithPasskey' | 'startPasskeyRegistration' | 'completePasskeyRegistration' | 'listPasskeys' | 'deletePasskey';
-}> : never);
+}> : never) | (true extends TotpEnabled<O> ? Extract<AuthActionInput, {
+    action: 'setUpTotp' | 'verifyTotpSetup';
+}> : never) | (true extends MfaEnabled<O> ? Extract<AuthActionInput, {
+    action: 'getMfaPreference';
+}> | (Extract<AuthActionInput, {
+    action: 'updateMfaPreference';
+}> & MfaPreferenceInput<O>) : never);
 
 // @public
 export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope implements AuthShape<O> {
@@ -292,6 +298,7 @@ export type AuthFlowOf<O extends AuthOptions> = O extends {
 // @public
 export interface AuthMockOptions extends AuthOptions {
     codeDelivery?: CodeDeliveryFn;
+    totpVerification?: 'any' | 'rfc6238';
 }
 
 // @public
@@ -669,6 +676,7 @@ export type MfaModeOfOption<M> = M extends MfaMode ? M : M extends {
 // @public
 export interface MfaOptions {
     mode?: MfaMode;
+    totpIssuer?: string;
     types?: readonly ('SMS' | 'TOTP' | 'EMAIL')[];
 }
 
@@ -1022,6 +1030,9 @@ export interface StubUser {
     readonly name: string;
     readonly sub: string;
 }
+
+// @public
+export type TotpEnabled<O extends AuthOptions> = [MfaEnabled<O>] extends [false] ? false : 'TOTP' extends MfaTypeOf<O> ? MfaEnabled<O> : false;
 
 // @public
 export type UpdateAttributeOutcome = {

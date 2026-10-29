@@ -173,7 +173,7 @@ export function createTestClient<const T extends object>(clients: T): T {
   });
 }
 
-export { type GetLastAuthCodeOptions, getLastAuthCode } from '@aws-blocks/bb-auth/testing';
+export { type GetLastAuthCodeOptions, getLastAuthCode, totpCodeFor } from '@aws-blocks/bb-auth/testing';
 
 /**
  * Returns true if a server is already listening on the given port.

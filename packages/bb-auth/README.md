@@ -82,49 +82,52 @@ A lint rule is not a substitute. Biome's `noFloatingPromises` (a nursery rule) d
 
 ### MFA with an authenticator app (TOTP)
 
-Turn MFA on, then let a signed-in user enrol an authenticator app through two methods of your own:
+Turn MFA on. The sign-in state machine (`authApi = auth.createApi()`) then also enrols an authenticator app for a signed-in user, so there is no backend code to write:
 
 ```ts
 // aws-blocks/index.ts
-import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+import { Auth, Scope } from '@aws-blocks/blocks';
 
 const scope = new Scope('my-app');
 const auth = new Auth(scope, 'auth', {
-  mfa: { mode: 'optional', types: ['TOTP'] },
+  // totpIssuer: the name authenticator apps show next to the codes (default: the root Scope id, 'my-app').
+  mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'My App' },
 });
 export const authApi = auth.createApi();
-
-export const account = new ApiNamespace(scope, 'account', (context) => ({
-  /** Step 1: show `otpauthUri` as a QR code, or `sharedSecret` as a setup key. */
-  async startTotpSetup() {
-    const user = await auth.requireAuth(context);
-    const { sharedSecret } = await auth.setUpTotp(context);
-    const label = encodeURIComponent(`MyApp:${user.attributes.email ?? user.username}`);
-    return { sharedSecret, otpauthUri: `otpauth://totp/${label}?secret=${sharedSecret}&issuer=MyApp` };
-  },
-  /** Step 2: the first code from the app. TOTP is then enrolled, and challenged at every sign-in. */
-  async finishTotpSetup(code: string) {
-    await auth.verifyTotpSetup(context, code);
-    return auth.getMfaPreference(context);
-  },
-}));
 ```
 
-The sign-in UI handles the challenge: the `Authenticator` asks for the 6-digit code at the next sign-in (and, with `mode: 'required'`, walks a user with no factor through TOTP setup mid-sign-in). Nothing else to write:
+The `Authenticator` asks for the 6-digit code at sign-in once a user is enrolled (and, with `mode: 'required'`, walks a user with no factor through TOTP setup mid-sign-in). `MfaSettings` is the enrolment panel for your account page: "Set up authenticator app", then the setup key, an `otpauth://` link and, if you pass `renderQrCode`, a QR code from the library of your choice, then the code from the app; once enrolled, "Use authenticator app by default" / "Turn off authenticator app":
 
 ```ts
 // src/main.ts
-import { Authenticator } from '@aws-blocks/blocks/ui';
-import { account, authApi } from 'aws-blocks';
+import { Authenticator, MfaSettings } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
 
 document.body.appendChild(Authenticator(authApi));
 
-// In your account settings page, once signed in:
-const { otpauthUri } = await account.startTotpSetup(); // render it as a QR code
-await account.finishTotpSetup('123456'); // the code the user typed
+// On the account settings page (it renders nothing while signed out):
+document.body.appendChild(MfaSettings(authApi));
 ```
 
-Locally the user pool accepts any 6-digit code (see [Local development](#local-development)); deployed, Cognito verifies it.
+A custom UI submits the same actions. Each returns an `AuthState`: `setUpTotp`'s `verifyTotpSetup` action carries the `sharedSecret` and the `otpauthUri` (the QR code's content) as hidden fields; the others return the settings, one `updateMfaPreference` action per change the user can make. A wrong code comes back `retriable`; a signed-out caller gets the `NotAuthenticatedException` state. Replacing an enrolled authenticator (`setUpTotp` again) and turning a factor off (`'DISABLED'`) need a recent sign-in (within `session.freshAgeSeconds`, default 15 minutes): otherwise they answer the `ReauthenticationRequiredException` state with the sign-in form, so a stolen session cookie cannot swap the authenticator or turn MFA off. An abandoned replacement leaves the current authenticator working:
+
+```ts
+// src/account.ts
+import { authApi } from 'aws-blocks';
+
+const setup = await authApi.setAuthState({ action: 'setUpTotp' });
+const verify = setup.actions.find((a) => a.name === 'verifyTotpSetup');
+const otpauthUri = verify?.fields.find((f) => f.name === 'otpauthUri')?.defaultValue; // render it as a QR code
+
+const done = await authApi.setAuthState({ action: 'verifyTotpSetup', code: '123456' }); // the code the user typed
+if (done.retriable) console.log(done.error); // a wrong code: ask again
+await authApi.setAuthState({ action: 'updateMfaPreference', totp: 'PREFERRED' });
+console.log(otpauthUri);
+```
+
+The actions follow the options, in the frontend too: with MFA off, `setUpTotp` is a compile error (and answers `MfaNotEnabledException`), and `updateMfaPreference` takes only the factors in `mfa.types`. The server-side methods (`auth.setUpTotp(context)`, `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`) do the same for your own API methods.
+
+Locally the user pool accepts any 6-digit code unless you opt in to real verification with `totpVerification: 'rfc6238'`; deployed, Cognito always verifies it (see [Local development](#local-development)).
 
 ### Roles and an admin-only user list
 
@@ -453,7 +456,7 @@ The compiler knows which methods a configuration supports:
 - When the options set `mfa` to anything but `'optional'` / `'required'` (or omit it), the MFA methods (`setUpTotp`, `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`) are compile errors (`ERROR_mfa_is_off_on_this_Auth_instance`); when they configure no `passkeys` options object, so are the passkey methods (`ERROR_passkeys_are_not_enabled_on_this_Auth_instance`). With `mfa.types` listed inline, `updateMfaPreference` rejects a factor it leaves out (`ERROR_SMS_is_not_in_mfa_types`, and the same for `TOTP` / `EMAIL`).
 - `auth.admin` is unusable unless the options include `admin: {}`: its methods are compile errors (`ERROR_admin_is_not_enabled__construct_Auth_with_admin_options`). With `admin: { actions: ['groups'] }`, the lifecycle methods are compile errors (`ERROR_admin_action_not_granted`), and vice versa.
 - `signIn`, `confirmSignIn` and `autoSignIn` return only the `nextStep` values the configuration can produce, so a `switch` on `nextStep.name` handles just those: the MFA steps need `mfa` on (and each factor's steps that factor in `mfa.types`), `CONFIRM_SIGN_IN_WITH_WEB_AUTHN` needs `passkeys`, and the first-factor steps need `users.authFlow: 'USER_AUTH'`. With `userPool: Auth.fromExisting(…)` every step stays, since the wrapped pool's own settings decide them. The full list is in `SignInNextStep`'s documentation.
-- The sign-in UI's `authApi = auth.createApi()` takes only the actions the configuration allows (`AuthActionInputOf<O>`), in the frontend too: `authApi.setAuthState({ action: 'signIn', … })` and `submitAuthAction(authApi, { action: 'signIn', … })` are compile errors with `emailPassword: false`, the passkey actions need `passkeys`, and `confirmSignIn` takes only the challenges that answer the steps above (`mfaType` one of `mfa.types`).
+- The sign-in UI's `authApi = auth.createApi()` takes only the actions the configuration allows (`AuthActionInputOf<O>`), in the frontend too: `authApi.setAuthState({ action: 'signIn', … })` and `submitAuthAction(authApi, { action: 'signIn', … })` are compile errors with `emailPassword: false`, the passkey actions need `passkeys`, `setUpTotp` / `verifyTotpSetup` need `mfa` on with `'TOTP'` in `mfa.types`, `getMfaPreference` / `updateMfaPreference` need `mfa` on (and take only the factors in `mfa.types`), and `confirmSignIn` takes only the challenges that answer the steps above (`mfaType` one of `mfa.types`).
 - A narrowly configured instance is still assignable to the plain `Auth` type, so helpers typed `(auth: Auth)` keep working. On the plain type, federation and `auth.admin` are closed (type such a helper with the instance's own type, `typeof auth`), while the email + password, MFA and passkey methods stay callable and are checked at runtime. That includes `new Auth(scope, 'auth')` with no options, which the compiler cannot tell apart from the plain type.
 
 The gates are TypeScript-only. What the OpenRPC spec gives a native client (Swift, Kotlin, Dart):
@@ -461,7 +464,7 @@ The gates are TypeScript-only. What the OpenRPC spec gives a native client (Swif
 - The types the mode options narrow, in their wide form whatever the options, so differently configured blocks generate the same native type: `setAuthState`'s input (every action and `confirmSignIn` challenge) and its `AuthState`, a sign-in result's `nextStep` (every step), and `getMfaPreference` / `updateMfaPreference` (every factor).
 - The signed-in user (`AuthenticatedUser`, from `requireAuth`, `getCurrentUser` or a sign-in result your API returns) with its block's own schema: `signInProvider` lists that block's provider ids and `groups` its declared groups. Blocks whose users have the same schema share one `AuthenticatedUser` type; a user whose schema differs (other providers, declared groups) is described where it is used, so a native client never decodes it with another block's type.
 
-The server enforces each block's configuration, whatever the caller's language: an action or factor it does not offer is answered with an error (for `setAuthState`, an error state such as `EmailPasswordNotEnabledException`). A passkey action or the `webauthn` challenge without `passkeys` answers `PasskeysNotEnabledException`; an MFA method or challenge with MFA off answers `MfaNotEnabledException` (both 409); a factor outside `mfa.types`, or a `USER_AUTH` challenge without `users.authFlow: 'USER_AUTH'`, answers `InvalidParameterException` naming the option. A sign-in step the options do not enable is an `InternalErrorException` naming it.
+The server enforces each block's configuration, whatever the caller's language: an action or factor it does not offer is answered with an error (for `setAuthState`, an error state such as `EmailPasswordNotEnabledException`). A passkey action or the `webauthn` challenge without `passkeys` answers `PasskeysNotEnabledException`; an MFA method, action or challenge with MFA off answers `MfaNotEnabledException` (both 409); a factor outside `mfa.types`, or a `USER_AUTH` challenge without `users.authFlow: 'USER_AUTH'`, answers `InvalidParameterException` naming the option. A sign-in step the options do not enable is an `InternalErrorException` naming it.
 
 The cause is not on the first line of the error. A gated call is an arity error, and the gate's name is in the related-information line (`auth.signIn('alice', 'pw', context)` with `emailPassword: false`):
 
@@ -502,9 +505,26 @@ const auth = new Auth(scope, 'auth', {
 
 The AWS runtime ignores `codeDelivery`: Cognito delivers the codes. ⚠️ Local passwords are stored in plain text in `.bb-data/` (git-ignored) — never point the local runtime at real credentials. The local pool also accepts any 6-digit authenticator-app code and does not verify passkey signatures; see the mock-vs-AWS table in [DESIGN.md](./DESIGN.md#mock-vs-aws-behaviour-differences).
 
+To check authenticator-app codes locally as Cognito does (RFC 6238: HMAC-SHA-1, 6 digits, 30-second steps), set the local-only `totpVerification: 'rfc6238'`. A wrong secret or `otpauth://` URI then fails in `npm run dev` and in tests, not only on a deployed pool. Tests answer with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils` (also `@aws-blocks/bb-auth/testing`), the code an authenticator app would show:
+
+```typescript
+// aws-blocks/index.ts
+const auth = new Auth(scope, 'auth', {
+  mfa: { mode: 'optional', types: ['TOTP'] },
+  totpVerification: 'rfc6238', // local only; the default 'any' accepts any six digits
+});
+
+// test/mfa.test.ts
+import { totpCodeFor } from '@aws-blocks/blocks/utils';
+
+const setup = await authApi.setAuthState({ action: 'setUpTotp' });
+const sharedSecret = setup.actions[0]?.fields.find((f) => f.name === 'sharedSecret')?.defaultValue ?? '';
+await authApi.setAuthState({ action: 'verifyTotpSetup', code: totpCodeFor(sharedSecret) });
+```
+
 ## Sign-in UI
 
-`@aws-blocks/bb-auth/ui` re-exports the shared sign-in UI from `@aws-blocks/auth-common/ui` (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`, `onAuthChange`, `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`) and adds `authOverrides()`, which type-checks `Authenticator` options against `Auth`'s action, next-step and field names. Federated providers appear as `signIn:<id>` actions that carry a `url`, so the `Authenticator` renders them as plain "Sign in with …" buttons and the RPC surface stays `getAuthState` / `setAuthState`.
+`@aws-blocks/bb-auth/ui` re-exports the shared sign-in UI from `@aws-blocks/auth-common/ui` (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`, `MfaSettings`, `onAuthChange`, `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`) and adds `authOverrides()`, which type-checks `Authenticator` options against `Auth`'s action, next-step and field names. Federated providers appear as `signIn:<id>` actions that carry a `url`, so the `Authenticator` renders them as plain "Sign in with …" buttons and the RPC surface stays `getAuthState` / `setAuthState`.
 
 `signIn:<id>` is a URL action, not an RPC action, because federated sign-in is a browser redirect. The browser has to navigate to the identity provider, and come back to `/aws-blocks/auth/callback` carrying the pending-auth cookie the `signin/<id>` route set, so a JSON-RPC call cannot perform it. That is why `setAuthState` does not accept it (the server answers `{ action: 'signIn:<id>' }` with an `InvalidParameterException` state): follow the action's `url` instead. Its typed names are `FederatedActionNameOf<O>`, `` `signIn:${id}` `` for each configured provider id:
 

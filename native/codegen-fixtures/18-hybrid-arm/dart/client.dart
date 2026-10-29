@@ -573,6 +573,42 @@ class WebauthnConfirmSignInInputChallenge extends ConfirmSignInInputChallenge {
 
 
 
+enum UpdateMfaPreferenceInputSms {
+  ENABLED,
+  DISABLED,
+  PREFERRED,
+  NOT_PREFERRED
+;
+
+  String toJson() => name;
+  static UpdateMfaPreferenceInputSms fromJson(String json) => values.byName(json);
+}
+
+
+enum UpdateMfaPreferenceInputTotp {
+  ENABLED,
+  DISABLED,
+  PREFERRED,
+  NOT_PREFERRED
+;
+
+  String toJson() => name;
+  static UpdateMfaPreferenceInputTotp fromJson(String json) => values.byName(json);
+}
+
+
+enum UpdateMfaPreferenceInputEmail {
+  ENABLED,
+  DISABLED,
+  PREFERRED,
+  NOT_PREFERRED
+;
+
+  String toJson() => name;
+  static UpdateMfaPreferenceInputEmail fromJson(String json) => values.byName(json);
+}
+
+
 // --- API Namespaces ---
 
 class AuthState {
@@ -652,6 +688,10 @@ sealed class AuthApiSetAuthStateInput {
       case 'completePasskeyRegistration': return CompletePasskeyRegistrationInput.fromJson(json);
       case 'listPasskeys': return ListPasskeysInput.fromJson(json);
       case 'deletePasskey': return DeletePasskeyInput.fromJson(json);
+      case 'setUpTotp': return SetUpTotpInput.fromJson(json);
+      case 'verifyTotpSetup': return VerifyTotpSetupInput.fromJson(json);
+      case 'getMfaPreference': return GetMfaPreferenceInput.fromJson(json);
+      case 'updateMfaPreference': return UpdateMfaPreferenceInput.fromJson(json);
       default: throw ArgumentError('Unknown action: ${json['action']}');
     }
   }
@@ -1160,6 +1200,140 @@ class DeletePasskeyInput extends AuthApiSetAuthStateInput {
 
   @override
   String toString() => 'DeletePasskeyInput(credentialId: $credentialId)';
+}
+
+class SetUpTotpInput extends AuthApiSetAuthStateInput {
+
+  const SetUpTotpInput();
+
+  factory SetUpTotpInput.fromJson(Map<String, dynamic> json) {
+    return SetUpTotpInput(
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'action': 'setUpTotp',
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SetUpTotpInput;
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() => 'SetUpTotpInput()';
+}
+
+class VerifyTotpSetupInput extends AuthApiSetAuthStateInput {
+  final String code;
+
+  const VerifyTotpSetupInput({
+    required this.code,
+  });
+
+  factory VerifyTotpSetupInput.fromJson(Map<String, dynamic> json) {
+    return VerifyTotpSetupInput(
+      code: json['code'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'action': 'verifyTotpSetup',
+      'code': code,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VerifyTotpSetupInput &&
+          code == other.code;
+
+  @override
+  int get hashCode => code.hashCode;
+
+  @override
+  String toString() => 'VerifyTotpSetupInput(code: $code)';
+}
+
+class GetMfaPreferenceInput extends AuthApiSetAuthStateInput {
+
+  const GetMfaPreferenceInput();
+
+  factory GetMfaPreferenceInput.fromJson(Map<String, dynamic> json) {
+    return GetMfaPreferenceInput(
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'action': 'getMfaPreference',
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GetMfaPreferenceInput;
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() => 'GetMfaPreferenceInput()';
+}
+
+class UpdateMfaPreferenceInput extends AuthApiSetAuthStateInput {
+  final UpdateMfaPreferenceInputSms? sms;
+  final UpdateMfaPreferenceInputTotp? totp;
+  final UpdateMfaPreferenceInputEmail? email;
+
+  const UpdateMfaPreferenceInput({
+    this.sms,
+    this.totp,
+    this.email,
+  });
+
+  factory UpdateMfaPreferenceInput.fromJson(Map<String, dynamic> json) {
+    return UpdateMfaPreferenceInput(
+      sms: json['sms'] != null ? UpdateMfaPreferenceInputSms.fromJson(json['sms'] as String) : null,
+      totp: json['totp'] != null ? UpdateMfaPreferenceInputTotp.fromJson(json['totp'] as String) : null,
+      email: json['email'] != null ? UpdateMfaPreferenceInputEmail.fromJson(json['email'] as String) : null,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'action': 'updateMfaPreference',
+      if (sms != null) 'sms': sms?.toJson(),
+      if (totp != null) 'totp': totp?.toJson(),
+      if (email != null) 'email': email?.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UpdateMfaPreferenceInput &&
+          sms == other.sms &&
+          totp == other.totp &&
+          email == other.email;
+
+  @override
+  int get hashCode => Object.hash(sms, totp, email);
+
+  @override
+  String toString() => 'UpdateMfaPreferenceInput(sms: $sms, totp: $totp, email: $email)';
 }
 
 

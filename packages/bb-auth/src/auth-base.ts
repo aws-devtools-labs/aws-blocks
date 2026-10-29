@@ -100,10 +100,12 @@ import {
 	confirmingSignIn,
 	confirmingSignUp,
 	displayNameOf,
+	managingMfa,
 	managingPasskeys,
 	type ProviderAction,
 	registeringPasskey,
 	retriableFailure,
+	settingUpTotp,
 	signedIn,
 	signedOut,
 } from './state-machine.js';
@@ -163,6 +165,9 @@ const DEFAULT_FRESH_AGE_SECONDS = 900;
 const AUTO_SIGN_IN_TTL_SECONDS = 15 * 60;
 const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
 const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
+
+/** The per-factor settings `updateMfaPreference` accepts. */
+const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED', 'NOT_PREFERRED'];
 
 /** Brand-cased provider names for default labels. */
 const KNOWN_PROVIDER_NAMES: Record<string, string> = {
@@ -2329,8 +2334,76 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		| 'confirmSignIn'
 		| 'resetPassword'
 		| 'confirmResetPassword'
+		| 'setUpTotp'
+		| 'verifyTotpSetup'
+		| 'updateMfaPreference'
+		| 'getMfaPreference'
 	> {
 		return this;
+	}
+
+	/**
+	 * The `otpauth://` URI an authenticator app reads from the setup QR code
+	 * (the Key Uri Format authenticator apps share): issuer `mfa.totpIssuer`,
+	 * else the app's root `Scope` id; account the user's display name.
+	 */
+	private otpauthUri(user: AuthStateUser<O>, sharedSecret: string): string {
+		const mfa = this.config.mfa;
+		const issuer = (typeof mfa === 'object' ? mfa.totpIssuer : undefined) || this.rootScopeId();
+		const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(user.displayName)}`;
+		const query = `secret=${encodeURIComponent(sharedSecret)}&issuer=${encodeURIComponent(issuer)}`;
+		return `otpauth://totp/${label}?${query}&algorithm=SHA1&digits=6&period=30`;
+	}
+
+	/** The id of the outermost `Scope` this block is nested in (the app: `new Scope('my-app')`). */
+	private rootScopeId(): string {
+		let scope: Scope = this;
+		while (scope.parent instanceof Scope) scope = scope.parent;
+		if (scope !== this) return scope.id;
+		// Constructed directly under a plain parent: its id, else this block's.
+		const parentId: unknown = Reflect.get(this.parent, 'id');
+		return typeof parentId === 'string' && parentId ? parentId : this.id;
+	}
+
+	/** The MFA settings state: the user's preference, as the actions that change it. */
+	private async mfaSettingsState(
+		user: AuthenticatedUser<O>,
+		context: BlocksContext,
+	): Promise<AuthState<AuthStateUser<O>>> {
+		const pref = await this.wide.getMfaPreference(context);
+		return managingMfa(this.stateUser(user), {
+			types: this.mfaTypes,
+			enabled: pref.enabled,
+			...(pref.preferred ? { preferred: pref.preferred } : {}),
+		});
+	}
+
+	/**
+	 * The `updateMfaPreference` action's delta: only the factor keys, each an
+	 * `MfaSetting`. A form submits strings, so anything else is a 400 here
+	 * rather than an engine error; so is a delta that changes nothing.
+	 */
+	private mfaPreferenceDelta(input: Record<string, unknown>): MfaPreferenceInput {
+		const delta: MfaPreferenceInput = {};
+		for (const key of ['sms', 'totp', 'email'] as const) {
+			const value = input[key];
+			if (value === undefined) continue;
+			const setting = MFA_SETTINGS.find((s) => s === value);
+			if (!setting) {
+				throw new ApiError(
+					`updateMfaPreference: '${key}' must be one of ${MFA_SETTINGS.join(', ')}, got ${JSON.stringify(value)}`,
+					400,
+					{ name: AuthErrors.InvalidParameter },
+				);
+			}
+			delta[key] = setting;
+		}
+		if (Object.keys(delta).length === 0) {
+			throw new ApiError('updateMfaPreference needs at least one factor: sms, totp or email', 400, {
+				name: AuthErrors.InvalidParameter,
+			});
+		}
+		return delta;
 	}
 
 	private signInResultState(r: SignInResult): AuthState<AuthStateUser<O>> {
@@ -2347,6 +2420,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * passkey sign-in, `Code expired` for an MFA code.
 	 *
 	 * - Passkey actions and the `webauthn` challenge: 409 `PasskeysNotEnabled`.
+	 * - The MFA actions (`setUpTotp`, `verifyTotpSetup`, `getMfaPreference`,
+	 *   `updateMfaPreference`) with MFA off: 409 `MfaNotEnabled`; the TOTP
+	 *   setup actions without `'TOTP'` in `mfa.types`: 400 `InvalidParameter`.
 	 * - The MFA challenges (`code`, `mfaType`, `totpSetup`, `email`) with MFA
 	 *   off: 409 `MfaNotEnabled` (`code` is also a `USER_AUTH` first factor).
 	 * - A factor outside `mfa.types`, or `password` / `firstFactor` without
@@ -2365,6 +2441,21 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			case 'listPasskeys':
 			case 'deletePasskey':
 				this.requirePasskeys(input.action, what);
+				return;
+			case 'setUpTotp':
+			case 'verifyTotpSetup':
+				this.requireMfa(input.action, what);
+				if (!this.mfaTypes.includes('TOTP')) {
+					throw new ApiError(
+						`${what} needs the TOTP factor, which is not one of this Auth instance's mfa.types (${this.mfaTypes.join(', ')}).`,
+						400,
+						{ name: AuthErrors.InvalidParameter },
+					);
+				}
+				return;
+			case 'getMfaPreference':
+			case 'updateMfaPreference':
+				this.requireMfa(input.action, what);
 				return;
 			case 'confirmSignIn':
 				break;
@@ -2507,6 +2598,32 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					const user = await this.requireAuth(context);
 					await this.passkeyDelete(context, input.credentialId);
 					return managingPasskeys(this.stateUser(user), await this.passkeyList(context));
+				}
+				case 'setUpTotp': {
+					let user = await this.requireAuth(context);
+					// Replacing an authenticator that is already an enabled factor
+					// needs a recent sign-in, so a stolen session cookie cannot swap
+					// it for the attacker's (first-time setup does not).
+					const { enabled } = await this.wide.getMfaPreference(context);
+					if (enabled.includes('TOTP')) user = await this.requireAuth(context, { fresh: true });
+					const { sharedSecret } = await this.wide.setUpTotp(context);
+					const stateUser = this.stateUser(user);
+					return settingUpTotp(stateUser, sharedSecret, this.otpauthUri(stateUser, sharedSecret));
+				}
+				case 'verifyTotpSetup': {
+					const user = await this.requireAuth(context);
+					await this.wide.verifyTotpSetup(context, input.code);
+					return await this.mfaSettingsState(user, context);
+				}
+				case 'getMfaPreference':
+					return await this.mfaSettingsState(await this.requireAuth(context), context);
+				case 'updateMfaPreference': {
+					let user = await this.requireAuth(context);
+					const delta = this.mfaPreferenceDelta(input);
+					// Turning a factor off weakens the account: it needs a recent sign-in.
+					if (Object.values(delta).includes('DISABLED')) user = await this.requireAuth(context, { fresh: true });
+					await this.wide.updateMfaPreference(context, delta);
+					return await this.mfaSettingsState(user, context);
 				}
 				case 'resetPassword':
 					await this.wide.resetPassword(input.username);

@@ -5,14 +5,16 @@
  * Test helpers for apps that use `Auth` locally: `@aws-blocks/bb-auth/testing`
  * (also re-exported from `@aws-blocks/blocks/utils`).
  *
- * **Node only.** These read the local (mock) user pool's files under
- * `.bb-data/`. Import them from test code, never from a frontend or a backend
+ * **Node only.** `getLastAuthCode` reads the local (mock) user pool's files
+ * under `.bb-data/`; `totpCodeFor` computes an authenticator app's code with
+ * `node:crypto`. Import them from test code, never from a frontend or a backend
  * module.
  *
  * @module
  */
 
 import { join } from 'node:path';
+import { totpCode } from './engines/totp.js';
 import {
 	dataDirOf,
 	isLocalPoolState,
@@ -201,4 +203,38 @@ export async function getLastAuthCode(username: string, options: GetLastAuthCode
 	}
 	candidates.sort((a, b) => b.at - a.at);
 	return candidates[0].code;
+}
+
+/**
+ * The 6-digit code an authenticator app shows for `sharedSecret` at `time`:
+ * RFC 6238 TOTP with HMAC-SHA-1 and a 30-second step — what Cognito verifies,
+ * and what the local `Auth` mock verifies when it is created with
+ * `totpVerification: 'rfc6238'` (the mock's own check uses this same code).
+ *
+ * For tests and scripts: answer a TOTP challenge (`CONFIRM_SIGN_IN_WITH_TOTP_CODE`)
+ * or finish an enrolment (`verifyTotpSetup`) without a phone. Node.js only
+ * (`node:crypto`): `@aws-blocks/bb-auth/testing` and `@aws-blocks/blocks/utils`
+ * (which re-exports it) have no browser build, and the browser entries never
+ * import them. A test that sends two codes for the same secret within one
+ * 30-second step can pass the next step's code (`Date.now() + 30_000`): Cognito
+ * refuses a code that was already used.
+ *
+ * @param sharedSecret - The base32 secret from `setUpTotp` (or the `sharedSecret` field of the TOTP setup state).
+ * @param time - When the code is for: a `Date`, or milliseconds since the epoch. Defaults to now.
+ * @returns The code, six digits with leading zeros.
+ * @throws {Error} when `sharedSecret` is not base32.
+ *
+ * @example
+ * ```typescript
+ * import { totpCodeFor } from '@aws-blocks/blocks/utils';
+ *
+ * const setup = await authApi.setAuthState({ action: 'setUpTotp' });
+ * const sharedSecret = setup.actions[0]?.fields.find((f) => f.name === 'sharedSecret')?.defaultValue ?? '';
+ * await authApi.setAuthState({ action: 'verifyTotpSetup', code: totpCodeFor(sharedSecret) });
+ * ```
+ */
+export function totpCodeFor(sharedSecret: string, time: Date | number = Date.now()): string {
+	const code = totpCode(sharedSecret, time instanceof Date ? time.getTime() : time);
+	if (code === null) throw new Error('totpCodeFor: the shared secret must be a base32 string (A–Z, 2–7)');
+	return code;
 }
