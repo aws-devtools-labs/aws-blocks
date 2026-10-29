@@ -3,6 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
+import { APP_ID_PATTERN, isValidAppId, RESERVED_APP_ID_PREFIXES, RESERVED_APP_IDS } from '../cdk/app-isolation-rules.js';
 import {
 	EXECUTION_POLICY_SPLIT_CHARS,
 	generateBoundaryPolicy,
@@ -584,4 +585,150 @@ describe('blocks-iam-policies — splitting a large execution policy', () => {
 		for (const part of parts) assert.ok(policySize(part) <= MANAGED_POLICY_MAX_CHARS, `${policySize(part)} characters`);
 		assert.deepStrictEqual(parts.flatMap((p) => p.Statement), document.Statement);
 	});
+});
+
+describe('blocks-iam-policies — reserved app ids: no usable id reaches a shared namespace', () => {
+	/** Every resource type a rule handles, so the execution policy below has every by-name rule. */
+	const everyType = [
+		'AWS::Lambda::Function',
+		'AWS::Lambda::LayerVersion',
+		'AWS::Logs::LogGroup',
+		'AWS::DynamoDB::Table',
+		'AWS::SQS::Queue',
+		'AWS::S3::Bucket',
+		'AWS::SSM::Parameter',
+		'Custom::CrossRegionExportReader',
+		'AWS::SecretsManager::Secret',
+		'AWS::ApiGateway::RestApi',
+		'AWS::Scheduler::Schedule',
+		'AWS::Events::Rule',
+		'AWS::Cognito::UserPool',
+		'AWS::KMS::Key',
+		'AWS::StepFunctions::StateMachine',
+		'AWS::ResourceGroups::Group',
+		'AWS::CloudWatch::Dashboard',
+		'AWS::CloudWatch::Alarm',
+		'AWS::SNS::Topic',
+		'AWS::IAM::ManagedPolicy',
+		'AWS::S3Vectors::VectorBucket',
+		'AWS::DSQL::Cluster',
+		'AWS::Bedrock::KnowledgeBase',
+		'AWS::RDS::DBCluster',
+		'AWS::EC2::VPC',
+		'AWS::CloudFront::Distribution',
+		'AWS::CloudFront::KeyValueStore',
+		'AWS::CloudFront::Function',
+	];
+	const ssm = (name: string) => `${A}:ssm:us-east-1:${acct}:parameter${name}`;
+	const s3 = (bucket: string) => `${A}:s3:::${bucket}/object`;
+	const role = (name: string) => `${A}:iam::${acct}:role/${name}`;
+	const stack = (name: string) => `${A}:cloudformation:us-east-1:${acct}:stack/${name}/uuid`;
+	const cfFunction = (region: string) => `${A}:cloudfront::${acct}:function/${region}MyStackHostingFnA1B2C3D4`;
+
+	/**
+	 * Names in namespaces no app owns (or that only `owner` owns): AWS Blocks', CDK's
+	 * and AWS's. Each is checked against every id-shaped token in it, since a policy
+	 * pattern puts the app id between separators (`<id>-…`, `/<id>/…`, `cdk-<id>-…`).
+	 */
+	const shared: { action: string; arn: string; owner?: string }[] = [
+		// CDK bootstrap and CDK-owned parameters.
+		{ action: 's3:PutObject', arn: s3(`cdk-appb-assets-${acct}-us-east-1`), owner: 'appb' },
+		{ action: 'ssm:PutParameter', arn: ssm('/cdk-bootstrap/appb/version'), owner: 'appb' },
+		{ action: 'ssm:PutParameter', arn: ssm('/cdk/exports/appb-edge/x'), owner: 'appb' },
+		{ action: 'ssm:PutParameter', arn: ssm('/cdk/EdgeFunctionArn/eu-west-1/appb/Hosting/Fn'), owner: 'appb' },
+		{ action: 'iam:UpdateAssumeRolePolicy', arn: role(`cdk-appb-cfn-exec-role-${acct}-us-east-1`), owner: 'appb' },
+		{ action: 'iam:PassRole', arn: role(`cdk-appb-deploy-role-${acct}-us-east-1`), owner: 'appb' },
+		{ action: 'cloudformation:CreateChangeSet', arn: stack('CDKToolkit-appb'), owner: 'appb' },
+		// Hosting's values: per app, and the shared ones of apps without a stackId.
+		{ action: 'ssm:PutParameter', arn: ssm('/blocks/appb/config/FEATURE_FLAGS'), owner: 'appb' },
+		{ action: 'ssm:PutParameter', arn: ssm('/blocks/config/FEATURE_FLAGS') },
+		{ action: 'ssm:PutParameter', arn: ssm('/blocks/secrets/DEMO') },
+		{ action: 'secretsmanager:PutSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/appb/secrets/DEMO-AbCdEf`, owner: 'appb' },
+		{ action: 'secretsmanager:PutSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/secrets/DEMO-AbCdEf` },
+		// AWS-owned names.
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1::parameter/aws/service/ami-amazon-linux-latest/x` },
+		{ action: 's3:GetObject', arn: s3(`aws-cloudtrail-logs-${acct}-abcd1234`) },
+		{ action: 's3:GetObject', arn: s3(`aws-athena-query-results-us-east-1-${acct}`) },
+		{ action: 'cloudformation:DeleteStack', arn: stack('aws-sam-cli-managed-default') },
+		{ action: 'cloudformation:DeleteStack', arn: stack('awseb-e-abc123-stack') },
+		{ action: 'lambda:UpdateFunctionCode', arn: `${A}:lambda:us-east-1:${acct}:function:aws-controltower-NotificationForwarder` },
+		{ action: 'logs:DeleteLogGroup', arn: `${A}:logs:us-east-1:${acct}:log-group:aws-controltower/CloudTrailLogs` },
+		{ action: 'sns:Publish', arn: `${A}:sns:us-east-1:${acct}:aws-controltower-SecurityNotifications` },
+		{ action: 'events:PutRule', arn: `${A}:events:us-east-1:${acct}:rule/aws-controltower-ConfigComplianceChangeEventRule` },
+		{ action: 'iam:UpdateAssumeRolePolicy', arn: role('aws-controltower-AdministratorExecutionRole') },
+		{ action: 'iam:UpdateAssumeRolePolicy', arn: role('aws-reserved/sso.amazonaws.com/AWSReservedSSO_Admin_0123456789abcdef') },
+		{ action: 'iam:DeleteRole', arn: role('aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS') },
+		{ action: 's3:GetObject', arn: s3('cf-templates-abc123def456-us-east-1') },
+		{ action: 's3:GetObject', arn: s3(`config-bucket-${acct}`) },
+		{ action: 's3:GetObject', arn: s3(`sagemaker-us-east-1-${acct}`) },
+		// AWS Amplify's stacks and the resources in them.
+		{ action: 'cloudformation:DeleteStack', arn: stack('amplify-d1abc-main-branch-0123456789') },
+		{ action: 'lambda:UpdateFunctionCode', arn: `${A}:lambda:us-east-1:${acct}:function:amplify-d1abc-main-branch-Fn` },
+		{ action: 's3:GetObject', arn: s3('amplify-d1abc-main-branch-0123-deployment') },
+		{ action: 'iam:UpdateAssumeRolePolicy', arn: role('amplify-d1abc-main-branch-0123-authRole') },
+		// CloudFront Functions CDK named `<region>…` (any app's, before `defaults.app`).
+		...['af-south-1', 'ap-southeast-2', 'ca-central-1', 'cn-north-1', 'eu-west-1', 'eusc-de-east-1', 'il-central-1', 'me-south-1', 'mx-central-1', 'sa-east-1', 'us-east-1', 'us-gov-west-1'].map((region) => ({
+			action: 'cloudfront:DeleteFunction',
+			arn: cfFunction(region),
+		})),
+	];
+
+	/** Whether app `id`'s roles, execution role or deploy role may act on `r` (validator bypassed). */
+	const reaches = (id: string, r: { action: string; arn: string }) => {
+		const req = { action: r.action, arn: r.arn, principalApp: id };
+		if (r.arn.includes(':cloudformation:')) {
+			// Deny-only: the deploy role can act unless the guard denies it.
+			const ownExec = `${A}:iam::${acct}:role/cdk-${id}-cfn-exec-role-${acct}-us-east-1`;
+			const guard = generateGuardUnchecked(id);
+			return !(guard.Statement as Statement[]).some((s) => s.Effect === 'Deny' && matches(s, { ...req, roleArn: ownExec }));
+		}
+		return allowed(generateBoundaryPolicy(), req) || allowed(generateExecutionUnchecked(id), req);
+	};
+	// The generators reject reserved ids, so these build the documents as if the validator allowed them.
+	const generateExecutionUnchecked = (id: string) =>
+		JSON.parse(JSON.stringify(generateExecutionPolicy(everyType, { appId: 'zzzz', account: acct }).document).replaceAll('zzzz', id)) as PolicyDocument;
+	const generateGuardUnchecked = (id: string) =>
+		JSON.parse(JSON.stringify(generateDeployGuardPolicy({ appId: 'zzzz', account: acct })).replaceAll('zzzz', id)) as PolicyDocument;
+	const tokens = (arn: string) => arn.split(/[^A-Za-z0-9]+/).filter((t) => APP_ID_PATTERN.test(t));
+
+	for (const r of shared) {
+		test(`no usable app id other than its owner reaches ${r.action} ${r.arn}`, () => {
+			const reaching = tokens(r.arn).filter((id) => id !== r.owner && isValidAppId(id) && reaches(id, r));
+			assert.deepStrictEqual(reaching, []);
+		});
+	}
+
+	test('each reserved id is needed: it reaches some shared name the policies would otherwise give it', () => {
+		for (const id of Object.keys(RESERVED_APP_IDS)) {
+			assert.ok(
+				shared.some((r) => r.owner !== id && reaches(id, r)),
+				`"${id}" is reserved but reaches nothing in the shared list: add the name it protects, or drop it`,
+			);
+		}
+		assert.ok(shared.some((r) => reaches('aws', r)), 'the "aws" prefix protects AWS-owned names');
+		assert.ok(shared.some((r) => reaches('awseb', r)), 'the "aws" prefix also covers awseb-… stacks');
+	});
+
+	test('the generators and the validator reject every reserved id and prefix', () => {
+		for (const id of [...Object.keys(RESERVED_APP_IDS), ...Object.keys(RESERVED_APP_ID_PREFIXES), 'awsapp', 'ssmx']) {
+			assert.strictEqual(isValidAppId(id), false, id);
+			assert.throws(() => generateExecutionPolicy(everyType, { appId: id, account: acct }), /reserved/, id);
+			assert.throws(() => generateDeployGuardPolicy({ appId: id, account: acct }), /reserved/, id);
+		}
+	});
+
+	// A normal id: the shared boundary keeps it out of other apps' bootstrap and Hosting values.
+	for (const r of [
+		{ action: 's3:PutObject', arn: s3(`cdk-appb-assets-${acct}-us-east-1`) },
+		{ action: 's3:GetObject', arn: s3(`cdk-appb-assets-${acct}-us-east-1`) },
+		{ action: 'ssm:PutParameter', arn: ssm('/cdk/exports/appb-edge/x') },
+		{ action: 'ssm:GetParameter', arn: ssm('/cdk-bootstrap/appb/version') },
+		{ action: 'ssm:GetParameter', arn: ssm('/blocks/appb/config/FEATURE_FLAGS') },
+		{ action: 'ssm:PutParameter', arn: ssm('/blocks/config/FEATURE_FLAGS') },
+		{ action: 'secretsmanager:GetSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/secrets/DEMO-AbCdEf` },
+	]) {
+		test(`the boundary denies app "regx": ${r.action} ${r.arn.split(':').slice(5).join(':')}`, () => {
+			assert.strictEqual(allowed(generateBoundaryPolicy(), { ...r, principalApp: 'regx' }), false);
+		});
+	}
 });

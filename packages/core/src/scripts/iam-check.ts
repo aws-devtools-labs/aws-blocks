@@ -23,6 +23,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
 	type AppViolation,
+	appIdProblem,
 	checkManagedPolicies,
 	checkResourcePolicy,
 	checkRole,
@@ -191,9 +192,14 @@ function findStacks(root: string, dir: string, unreadable: IamCheckViolation[]):
  * @param dir the cloud assembly directory (`cdk.out`).
  * @param expectedApp the app id the pipeline expects (from its own registry, not
  *   the app's code). Without it, the id in the IAM report is used.
- * @throws IamCheckUsageError when `dir` has no manifest or no IAM report.
+ * @throws IamCheckUsageError when `dir` has no manifest or no IAM report, or
+ *   `expectedApp` isn't a usable app id (malformed or reserved).
  */
 export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckResult {
+	if (expectedApp !== undefined) {
+		const problem = appIdProblem(expectedApp);
+		if (problem) throw new IamCheckUsageError(`--app: ${problem}`);
+	}
 	if (!existsSync(join(dir, 'manifest.json'))) {
 		throw new IamCheckUsageError(`${dir} is not a cloud assembly (no manifest.json). Run \`cdk synth\` first.`);
 	}
@@ -217,6 +223,11 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 				rule: 'app-id-mismatch',
 				message: `${file} has no app identity. Set defaults.app on the app's BlocksStack/BlocksBackend.`,
 			});
+		} else if (!expectedApp && appIdProblem(reported)) {
+			// Without --app the report's id is used for every check, so a reserved one
+			// (whose prefix covers other apps' names) must not be trusted.
+			violations.push({ source: file, rule: 'invalid-app-id', message: `${file}: ${appIdProblem(reported)}` });
+			continue;
 		} else if (expectedApp && reported !== expectedApp) {
 			violations.push({
 				source: file,

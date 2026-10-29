@@ -12,7 +12,7 @@ This is the **api-only** service, set up to run on a **shared app platform**: on
 | `package.json` | `npm run check:iam` | Runs `blocks-iam-check --app "$APP_ID"`, the check the pipeline runs. |
 | `AGENTS.md` | "Platform rules" | Rules for coding agents. |
 
-`APP_ID` (1–10 lowercase letters and digits) is set by the platform's pipeline, from its own registry. For a sandbox, export it yourself: `APP_ID=<your app id> npm run sandbox`.
+`APP_ID` (1–10 lowercase letters and digits, not a reserved id such as `cdk`, `blocks` or one starting with `aws`; see the `@aws-blocks/core` README) is set by the platform's pipeline, from its own registry. For a sandbox, export it yourself: `APP_ID=<your app id> npm run sandbox`.
 
 ## What the platform team provides
 

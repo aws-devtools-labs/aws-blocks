@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -144,6 +144,25 @@ describe('blocks-iam-check', () => {
 		assert.strictEqual(run([clean, '--app', 'appa']), 0);
 		assert.strictEqual(run([bad, '--app', 'appa']), 1);
 		assert.strictEqual(run([clean, '--app']), 2);
+		// A reserved id: its `<id>-…` names would cover other apps' resources.
+		assert.strictEqual(run([clean, '--app', 'cdk']), 2);
+	});
+
+	test('a reserved app id: --app is a usage error, and a report that claims one is a violation', async () => {
+		const clean = await synth('app-identity-backend.js', appDefaults);
+		assert.throws(() => checkCloudAssembly(clean, 'blocks'), /--app: "blocks" is reserved/);
+		assert.throws(() => checkCloudAssembly(clean, 'awsapp'), /reserved prefix "aws"/);
+		// The report is written by the app's own synth: a reserved id in it isn't trusted.
+		const forged = mkdtempSync(join(tmpdir(), 'blocks-iam-check-reserved-'));
+		dirs.push(forged);
+		cpSync(clean, forged, { recursive: true });
+		for (const file of readdirSync(forged).filter((f) => f.endsWith('.blocks-iam.json'))) {
+			const report = JSON.parse(readFileSync(join(forged, file), 'utf8'));
+			report.app.id = 'cdk';
+			writeFileSync(join(forged, file), JSON.stringify(report));
+		}
+		const result = checkCloudAssembly(forged);
+		assert.ok(result.violations.some((v) => v.rule === 'invalid-app-id' && /"cdk" is reserved/.test(v.message)));
 	});
 
 	test('an app that calls execute-api (a WebSocket API) gets a note, not a violation', async () => {

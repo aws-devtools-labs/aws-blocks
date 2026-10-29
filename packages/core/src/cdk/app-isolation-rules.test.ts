@@ -5,6 +5,10 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import {
 	APP_ID_PATTERN,
+	appIdProblem,
+	isValidAppId,
+	RESERVED_APP_ID_PREFIXES,
+	RESERVED_APP_IDS,
 	checkApiChild,
 	checkLayer,
 	checkResourcePolicy,
@@ -22,6 +26,25 @@ describe('app-isolation rules — statements fail closed', () => {
 	test('an app id is at most 10 characters (CDK qualifier limit)', () => {
 		assert.ok(APP_ID_PATTERN.test('inventory1'));
 		assert.ok(!APP_ID_PATTERN.test('inventoryab'));
+	});
+
+	test('reserved ids and prefixes are rejected, with the reason', () => {
+		for (const [id, why] of Object.entries(RESERVED_APP_IDS)) {
+			assert.ok(APP_ID_PATTERN.test(id), `${id} is id-shaped, so only the reserved list stops it`);
+			assert.strictEqual(isValidAppId(id), false, id);
+			assert.ok(appIdProblem(id)?.includes(why), id);
+		}
+		for (const [prefix, why] of Object.entries(RESERVED_APP_ID_PREFIXES)) {
+			for (const id of [prefix, `${prefix}app`]) {
+				assert.strictEqual(isValidAppId(id), false, id);
+				assert.ok(appIdProblem(id)?.includes(why), id);
+			}
+		}
+		for (const ok of ['orders', 'app42', 'regx', 'cdkapp', 'blocksapp', 'usa', 'awesome']) {
+			assert.strictEqual(appIdProblem(ok), undefined, ok);
+		}
+		assert.match(appIdProblem('app-a') ?? '', /1–10 lowercase letters/);
+		assert.match(appIdProblem(undefined) ?? '', /isn't an app id/);
 	});
 
 	test('NotResource on a data service is an inverse grant', () => {

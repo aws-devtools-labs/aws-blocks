@@ -48,6 +48,8 @@
  * The generator only writes JSON; it never calls AWS.
  */
 
+import { appIdProblem } from '../cdk/app-isolation-rules.js';
+
 /** Options for {@link generateBoundaryPolicy} / {@link generateExecutionPolicy}. */
 export interface IamPolicyOptions {
 	/** The app id (`defaults.app.id`). Required for the execution policy. */
@@ -835,11 +837,13 @@ export interface ExecutionPolicy {
  * The per-app CloudFormation execution policy (see the module doc), for the
  * resource types in `resourceTypes` (from the app's synthesized templates).
  *
- * @throws Error when `appId` or `account` is missing.
+ * @throws Error when `appId` or `account` is missing, or `appId` isn't a usable app id (malformed or reserved).
  */
 export function generateExecutionPolicy(resourceTypes: Iterable<string>, options: IamPolicyOptions): ExecutionPolicy {
 	const { appId: id, account: acct } = options;
 	if (!id) throw new Error('The execution policy needs the app id (--app).');
+	const executionIdProblem = appIdProblem(id);
+	if (executionIdProblem) throw new Error(`--app: ${executionIdProblem}`);
 	if (!acct || !/^\d{12}$/.test(acct)) throw new Error('The execution policy needs the 12-digit AWS account (--account).');
 	const p = options.partition ?? 'aws';
 	const boundaryArn = `arn:${p}:iam::${acct}:policy/${options.boundaryName ?? DEFAULT_BOUNDARY}`;
@@ -1010,11 +1014,13 @@ const STACK_ACTIONS = [
  * to another stack's role. Deleting one of the app's own stacks may omit the role
  * (CDK does so for a failed first deploy), but a role it names must be the app's own.
  *
- * @throws Error when `appId` or `account` is missing.
+ * @throws Error when `appId` or `account` is missing, or `appId` isn't a usable app id (malformed or reserved).
  */
 export function generateDeployGuardPolicy(options: IamPolicyOptions): PolicyDocument {
 	const { appId: id, account: acct } = options;
 	if (!id) throw new Error('The deploy guard needs the app id (--app).');
+	const guardIdProblem = appIdProblem(id);
+	if (guardIdProblem) throw new Error(`--app: ${guardIdProblem}`);
 	if (!acct || !/^\d{12}$/.test(acct)) throw new Error('The deploy guard needs the 12-digit AWS account (--account).');
 	const p = options.partition ?? 'aws';
 	const ownExecRole = `arn:${p}:iam::${acct}:role/cdk-${id}-cfn-exec-role-${acct}-*`;
