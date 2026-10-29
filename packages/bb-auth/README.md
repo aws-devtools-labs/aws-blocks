@@ -83,7 +83,26 @@ export const adminApi = new ApiNamespace(scope, 'adminApi', (context) => ({
 
 ### The first admin
 
-`auth.admin.addUserToGroup` is the supported way to put a user in a group. To bootstrap the first admin, call it from `onSignIn` for an allowlisted email, and check that the pool has **verified** that address:
+`requireRole(context, 'admin')` needs someone in `admin` already. Make the first one with the `users` command, once: sign up as yourself, then add your account to the group. It works the same on the local pool and on a deployed one:
+
+```sh
+# Local pool (.bb-data/): stop the dev server first (npm run dev:stop), start it again afterwards.
+npx @aws-blocks/bb-auth users add-to-group you@example.com admin
+
+# The pool a deployed stage owns, with your AWS credentials (--profile / --region, or AWS_PROFILE / AWS_REGION).
+# Without --yes it checks the stack, the user and the group, prints what it would do, and changes nothing.
+npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --yes
+```
+
+- `<user>` is the username, or the user's **verified** email or phone number. An unverified one is refused (see the first point below). A value that is one user's username and another user's verified email is refused as ambiguous: on a pool that signs in with usernames, anyone can register the username `you@example.com`. Name the account outright with `--username <name>` or `--email <address>` (verified only) in place of `<user>`.
+- The group must be one the block declares in `users.groups`; the command refuses any other, and a user the pool does not have. On a deployed stage the groups are read from the stack. Locally they are the groups the local pool holds, which keeps a group dropped from `users.groups` until `.bb-data/` is reset.
+- On a deployed stage the command first prints the pool with the AWS account and Region your credentials point at, so a wrong `--profile` shows before you add `--yes`. `--stage sandbox` is this checkout's sandbox and `--stage prod` the production stack (the names `npm run sandbox` and `npm run deploy` give them); `--stack <name>` names any other stack. The pool and its groups are read from the stack itself, so a block with `userPool: Auth.fromExisting(…)` is refused: manage that pool's groups where it is managed.
+- With more than one `Auth` block, pick one with `--block <id>` (its id, or its full id when ids overlap, e.g. `auth` and `oidc-auth`).
+- `remove-from-group <user> <group>` undoes it, and `list-groups [<user>]` lists the block's groups, or the groups a user is in. Every write to a deployed pool needs `--yes`. Run `npx @aws-blocks/bb-auth users --help` for the rest.
+
+`requireRole` sees the change on the user's next request. Once the first admin exists, have them manage groups through an admin-only method that calls `auth.admin.addUserToGroup` / `removeUserFromGroup` (the [Roles](#roles-and-an-admin-only-user-list) recipe).
+
+**Alternative: from `onSignIn`.** To make the first admin in code instead — for example when no one can run commands against the deployed stage — call `auth.admin.addUserToGroup` from `onSignIn` for an allowlisted email, and check that the pool has **verified** that address:
 
 - `user.attributes.email` is not proof that the user owns the address. A signed-in user can change their own email (`updateUserAttributes`), and a pool this block creates does not turn on Cognito's verification-before-update, so the new address applies at once, unverified (`email_verified: false` until the user confirms the code). `user.attributes` does not carry `email_verified`, so read the pool's record with `auth.admin.getUser` (or, for the signed-in user, `getUserAttributes`) and require `email_verified === 'true'`. The same holds for `phone_number`.
 - A federated user's email is the identity provider's claim, not a verification by this pool: leave federated users out, or trust only a provider whose claims you control.
@@ -112,7 +131,7 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 ```
 
-The hook works the same locally and deployed, and `requireRole` sees the new group on the user's next request. Once the first admin exists, have them manage groups through an admin-only method that calls `auth.admin.addUserToGroup` / `removeUserFromGroup`, and empty the allowlist.
+The hook works the same locally and deployed, and `requireRole` sees the new group on the user's next request. Once the first admin exists, have them manage groups through an admin-only method that calls `auth.admin.addUserToGroup` / `removeUserFromGroup`, and empty the allowlist: unlike the command, the allowlist stays in the code after it has done its job.
 
 ### Social sign-in: the client secret and the callback URL
 
