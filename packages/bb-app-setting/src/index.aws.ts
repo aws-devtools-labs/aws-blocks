@@ -4,8 +4,10 @@
 import {
 	SSMClient,
 	GetParameterCommand,
+	ParameterNotFound,
 	PutParameterCommand,
 } from '@aws-sdk/client-ssm';
+import type { GetParameterCommandOutput } from '@aws-sdk/client-ssm';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -114,15 +116,24 @@ export class AppSetting<T = string> extends Scope {
 	 * ```
 	 */
 	async get(): Promise<T> {
-		const result = await this.client.send(new GetParameterCommand({
-			Name: getSdkIdentifiers(this).parameterName,
-			WithDecryption: this.isSecret,
-		}));
+		const parameterName = getSdkIdentifiers(this).parameterName;
+		let result: GetParameterCommandOutput;
+		try {
+			result = await this.client.send(new GetParameterCommand({
+				Name: parameterName,
+				WithDecryption: this.isSecret,
+			}));
+		} catch (e) {
+			if (e instanceof ParameterNotFound || (e instanceof Error && e.name === 'ParameterNotFound')) {
+				throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${parameterName}" does not exist`);
+			}
+			throw e;
+		}
 
 		this.client.config.customUserAgent = this.buildUserAgentChain();
 		const raw = result.Parameter?.Value;
 		if (raw === undefined || raw === null) {
-			throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${getSdkIdentifiers(this).parameterName}" has no value`);
+			throw blocksError(AppSettingErrors.ParameterNotFound, `Parameter "${parameterName}" has no value`);
 		}
 
 		let value: T;
