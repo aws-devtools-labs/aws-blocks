@@ -4,7 +4,7 @@ Status: implemented, preview (`dsql` clusters). Usage is documented in [README.m
 
 ## Abstract
 
-`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` either owns an Aurora DSQL cluster or attaches to a shared `DatabaseCluster` of type `dsql` (Aurora DSQL). The query interface is the same in both cases. One set of ordinary PostgreSQL migration files serves the cluster through a rewriting step that produces a plan DSQL accepts and that resumes at a failed step. The principal trade-off is that a block is bound to its cluster for its lifetime: changing clusters requires a new block and a data copy, and a deploy-time check enforces this without a production override. A second cluster type, `provisioned` (Aurora Serverless v2, all of PostgreSQL), is designed and not yet shipped; this document notes where the code keeps room for it.
+`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` either owns an Aurora DSQL cluster or attaches to a shared `DatabaseCluster` of type `dsql` (Aurora DSQL). The query interface is the same in both cases. Migration files are written in DSQL, as AWS documents it; the block checks them with `dsql-lint`, sequences them into a plan that runs one DDL statement per transaction and waits for the jobs that asynchronous statements start, and resumes a failed file at the failed step. The principal trade-off is that a block is bound to its cluster for its lifetime: changing clusters requires a new block and a data copy, and a deploy-time check enforces this without a production override. A second cluster type, `provisioned` (Aurora Serverless v2, all of PostgreSQL), is designed and not yet shipped; this document notes where the code keeps room for it.
 
 ## 1. Introduction
 
@@ -49,7 +49,7 @@ Locally, each cluster is one PGlite instance on disk, whether a block owns it or
 
 PGlite provides a single session, which imposes two constraints. First, work is serialized by a mutex held for each auto-commit statement or for an entire `BEGIN … COMMIT`, so one block's `SET search_path` cannot occur inside another block's transaction. Second, a query issued from within a block's own `transaction()` callback joins the open transaction instead of waiting on the mutex. The open transaction is tracked with `AsyncLocalStorage`.
 
-Each local engine is wrapped by `MockEngine`, which implements `simulateConflict()` and applies the DSQL checks: `dsql-lint` on each distinct statement (§5.1), the DML-only guard that matches the deployed app role, and the per-transaction limits. The limits are enforced for explicit transactions and for auto-commit DML statements alike, before the change is committed, so a statement that would exceed them rolls back as on DSQL. Rows removed by an `ON DELETE CASCADE` foreign key are counted by comparing the child tables' row counts before and after the statement; `SET NULL` and `SET DEFAULT` fan-out is not counted. The 10 MiB limit is approximated from the statement text and its parameters.
+Each local engine is wrapped by `MockEngine`, which implements `simulateConflict()` and applies the DSQL checks: `dsql-lint` on each distinct statement (§5.1), the DML-only guard that matches the deployed app role, and the per-transaction limits. It also runs the two asynchronous DDL forms synchronously by stripping the `ASYNC` keyword, and the cluster installs a stub of DSQL's `sys` schema at init (`sys.wait_for_job()` returns `true`, `sys.jobs` is empty) so a job wait written into a migration the way the AWS examples show runs as a no-op (§9). The limits are enforced for explicit transactions and for auto-commit DML statements alike, before the change is committed, so a statement that would exceed them rolls back as on DSQL. Rows removed by an `ON DELETE CASCADE` foreign key are counted by comparing the child tables' row counts before and after the statement; `SET NULL` and `SET DEFAULT` fan-out is not counted. The 10 MiB limit is approximated from the statement text and its parameters.
 
 ### 4.2 Schema scoping on AWS
 
@@ -59,25 +59,21 @@ The DSQL engine is a `pg` pool authenticated with IAM tokens. It sets `search_pa
 
 ### 5.1 The compatibility checker
 
-Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`dsql-lint.ts`), the linter the Aurora DSQL team maintains. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on the rewritten SQL of each migration file at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text (about 8 ms per uncached statement). It is never run on AWS: the migration Lambda builds its plan with `validate: false`, because the files were validated at synth and the binary is not deployed; the app runtime does no validation.
+Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`dsql-lint.ts`), the linter the Aurora DSQL team maintains. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on each migration file as written, at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text (about 8 ms per uncached statement). It is never run on AWS: the migration Lambda builds its plan with `validate: false`, because the files were validated at synth and the binary is not deployed; the app runtime does no validation.
 
-Three checks stay in the block because they need more than one statement, exist for the rewriter's sake, or cover a gap in the linter: dropping a primary-key column, detected from the `CREATE TABLE` seen earlier in the same plan; an unnamed `ADD CHECK` / `ADD FOREIGN KEY`, which the rewriter could not validate by name; and `GRANT … ON SCHEMA public`, which dsql-lint 0.2.20 accepts but DSQL rejects at runtime (`public` is a system schema). The sandbox run found the third when every block that owned its cluster failed to deploy on that grant. `validation.test.ts` pins the rule ids the integration must report and the SQL it must accept, so a `dsql-lint` upgrade that changes a rule shows up there. The baseline is `@aws/dsql-lint` 0.2.20 and the DSQL user guide as of 2026-10-11.
+dsql-lint marks some findings as fixable (`fix_result.status` of `fixed` or `fixed_with_warning`: `serial_type`, `index_async`, `foreign_key_not_valid`, `check_not_valid`, `sequence_cache_missing`, `alter_add_unique_collapse`). The block treats them exactly like the unfixable ones: the file stops with the linter's message and suggestion, and the author makes the change (§5.2).
+
+One check stays in the block because it covers a gap in the linter: `GRANT … ON SCHEMA public`, which dsql-lint 0.2.20 accepts but DSQL rejects at runtime (`public` is a system schema). The sandbox run found it when every block that owned its cluster failed to deploy on that grant. `validation.test.ts` pins the rule ids the integration must report and the SQL it must accept, so a `dsql-lint` upgrade that changes a rule shows up there. The baseline is `@aws/dsql-lint` 0.2.20 and the DSQL user guide as of 2026-10-11.
 
 ### 5.2 Plan construction
 
-Each block has one directory of ordinary PostgreSQL migration files. `buildMigrationPlan` converts them into an ordered list of steps for a `dsql` cluster, applying these rewrites:
+Each block has one directory of migration files written in DSQL, as AWS documents it, and the block runs what the file says. The engine is a framework default rather than the application's choice, so the block carries the engine's differences in its runner and its checks; it does not change the SQL text a customer wrote, because a file that reads one way in the repository and runs another way on the cluster cannot be reviewed. `buildMigrationPlan` therefore only sequences. It splits each file into statements with the shared lexer (string literals, dollar-quoted bodies and comments are respected), gives every DDL statement its own transaction while consecutive DML statements share one (DSQL allows one DDL statement per transaction and no DDL with DML), and follows the two asynchronous forms a file contains, `CREATE [UNIQUE] INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`, with a wait for the job DSQL returns. Nothing else is touched or generated; the SQL of every step is the file's statement.
 
-- `SERIAL`, `BIGSERIAL` and `SMALLSERIAL`, and identity columns on `smallint` or `integer`, become `BIGINT GENERATED … AS IDENTITY (CACHE 65536)`; an identity column or `CREATE SEQUENCE` without a cache gets `CACHE 65536`, and a sequence typed smaller than `bigint` becomes `bigint`;
-- `CREATE INDEX` becomes `CREATE INDEX ASYNC` followed by a wait on the index job;
-- `ALTER TABLE … ADD CONSTRAINT … CHECK` and `… FOREIGN KEY` gain `NOT VALID`, followed by `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` and a wait on the validation job. A `REFERENCES` inside `CREATE TABLE` is left as written; the table is empty.
-
-Each DDL statement also runs in its own transaction. The rewritten statements are then checked with `dsql-lint` (§5.1), which rejects exactly the forms the rewriter produces when they are missing (`serial_type`, `index_async`, `check_not_valid`, `foreign_key_not_valid`, `identity_cache_missing`), so the two compose: the rewriter fixes what has a mechanical fix, the linter reports what is left, naming the file and the rule. The rewriter never touches string literals, dollar-quoted bodies, or comments. `CACHE 65536` is the author's choice over the `CACHE 1` that `dsql-lint --fix` writes; `CACHE 1` gives strict ordering at the cost of a coordination round per value, and a user who needs it writes it.
-
-Still to do, and safe to leave as rejections meanwhile: `ADD COLUMN … DEFAULT` as add, set default and backfill; `TRUNCATE` as batched deletes; index `ASC` / `DESC` removed; DML split at 3,000 rows.
+The first cut of this package rewrote PostgreSQL files into those forms at deploy time: `SERIAL` to an identity column with a cache, `CREATE INDEX` to `ASYNC` plus a wait, a named `ADD CONSTRAINT` to `NOT VALID` plus a synthesized validation. It was removed. The rewrite chose values the author had not written (a cache of 65536), left an unnamed constraint `NOT VALID` with no validation, tracked DSQL's grammar in regular expressions, and made the SQL that ran on the cluster differ from the file in the repository, visible only through a CLI that printed the plan. With the rewrite gone, dsql-lint's findings for those spellings stop the file like any other, with the linter's own suggestion (§5.1). An author with an existing PostgreSQL file can run `dsql-lint --fix` once and review the result; the block does not do it silently.
 
 ### 5.3 Resumable execution
 
-The runner records progress after each step in a `_migration_progress` table in the block's schema. A file that fails at step 4 of 6 resumes at step 4 on the next run. Replaying earlier steps would re-execute DDL that already succeeded, which DSQL does not run transactionally and so cannot roll back. Completed files are recorded in `_migrations`. A wait step records the DSQL job it is waiting on, so a later run can check `sys.jobs` instead of re-issuing the DDL; a job missing from `sys.jobs` is treated as completed, because DSQL purges finished jobs after 30 minutes.
+The runner records progress after each step in a `_migration_progress` table in the block's schema. A file that fails at step 4 of 6 resumes at step 4 on the next run. Replaying earlier steps would re-execute DDL that already succeeded, which DSQL does not run transactionally and so cannot roll back. Completed files are recorded in `_migrations`. A wait step records the DSQL job it is waiting on, so a later run can check `sys.jobs` instead of re-issuing the DDL; a job missing from `sys.jobs` is treated as completed, because DSQL purges finished jobs after 30 minutes. Locally the wait step is a no-op: PGlite runs the asynchronous forms synchronously and returns no job id, so there is nothing to poll.
 
 ### 5.4 Deployment
 
@@ -97,7 +93,9 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 
 **Static factory methods** (`Database.dsql()`, `Database.aurora()`). This retains a single class with concise call sites. It exposes service names in the public interface and provides no value that several blocks could share, so R3 would need a second mechanism.
 
-**A hand-written compatibility rule table.** The first cut of this package kept `bb-distributed-data`'s regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments. #446 had already shown `dsql-lint` working in `bb-distributed-data`'s mock and at synth; this package follows it and adds the rewrite-then-lint order.
+**A hand-written compatibility rule table.** The first cut of this package kept `bb-distributed-data`'s regex rules, re-baselined by hand against the DSQL docs. Comparing that table with `dsql-lint` on the same examples found two errors in the table within minutes (array types and `USING btree` are unsupported) and no case the linter missed. A regex table also cannot parse, so it guesses at literals and comments. #446 had already shown `dsql-lint` working in `bb-distributed-data`'s mock and at synth; this package follows it.
+
+**Rewriting PostgreSQL migrations into DSQL at deploy time.** The first cut did this, so that an application written for PostgreSQL could keep its files. §5.2 records why it was removed: the SQL that ran was not the SQL in the repository.
 
 **Waiting on DDL jobs inside one Lambda invocation.** Simpler than two handlers, but a Lambda runs for at most 15 minutes, and an index build on a large table can take longer. The provider's `isComplete` polling has a two-hour budget.
 
@@ -117,7 +115,7 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 |---|---|---|
 | Concurrency | Serialized per cluster (one PGlite session) | Concurrent; DSQL may raise `40001` at commit |
 | DSQL feature gaps | Rejected by `dsql-lint` before PGlite | Rejected by DSQL (`42501`, reported as `QueryFailed`) |
-| `ASYNC` DDL | Runs synchronously | Asynchronous job followed by a poll |
+| `ASYNC` DDL (`CREATE INDEX ASYNC`, `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`) | Runs synchronously: the mock strips `ASYNC`; the job wait is a no-op. `sys.wait_for_job()` returns `true` at once and `sys.jobs` is empty, so a wait written into a file runs unchanged | DSQL returns a job id; the runner polls `sys.jobs` every 30 seconds for up to two hours |
 | 3,000-row and 10 MiB transaction limits | Enforced by the mock, cascades counted; size approximated | Enforced by DSQL (`54000`); both reported as `TransactionRowLimitExceeded` |
 | `simulateConflict()` (`@aws-blocks/bb-database/testing`) | Available | Throws |
 | `bigint` results (identity columns, `count(*)`, `sum()` over integers) | PGlite: a `number`, or a `BigInt` beyond ±2^53 | pg would return a string; `dsql-engine.ts` installs a parser that matches PGlite |
@@ -136,7 +134,7 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 1. **`type: 'provisioned'`** (Aurora Serverless v2), `DatabaseCluster.fromExisting()`, `withRLS()` and `crud()`: the second pull request of the design.
 2. **Safe replacement**, a `replaces` option naming a previous binding. The same need exists for `KVStore`, `FileBucket` and `DistributedTable`, so it warrants one design across data blocks.
 3. **Compile-time binding verification** from a lock file written by deploys. The per-application uniqueness of short ids (§2.2) allows a block to be identified by the literal in its constructor. Revisit once deploys can write files back to the repository.
-4. **A `bb-database copy` command.** The README procedure suffices until copies are a recurring request.
+4. **A copy command.** The README procedure suffices until copies are a recurring request.
 5. **Multi-region DSQL** (`regions`, `witnessRegion`). Revisit when the feature is scheduled.
 
 ## Appendix A. Source map
@@ -149,9 +147,8 @@ A block is bound to its cluster by id and type (R4). The dev server writes the b
 | Result schema validation | `src/result-schema.ts` |
 | Test helpers and the internal access channel | `src/testing.ts`, `src/internal.ts` |
 | DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
-| Local engine and schema switching | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
-| DSQL compatibility checks and the migration rewriter | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
+| Local engine, schema switching and the `sys` stub | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
+| DSQL compatibility checks and plan sequencing | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
 | Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
-| DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Binding rule (dev-server marker) | `src/bindings.ts` |
