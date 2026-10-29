@@ -6,6 +6,11 @@ import * as os from 'os';
 import { spawn } from './spawn.js';
 import { nitroAdapter } from './nitro.js';
 import { withComputeTarget } from './shared/compute_target.js';
+import {
+  buildKvsEntries,
+  generateKvsRouterRequestCode,
+  ORIGIN_ID,
+} from '../constructs/kvs_router.js';
 
 /**
  * Build a minimal `.output/` layout that nitroAdapter accepts. Caller
@@ -1001,3 +1006,128 @@ void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () =>
     assert.strictEqual(manifest.basePath, undefined);
   });
 });
+
+/**
+ * Route a request through the real CloudFront router function, using the KVS
+ * entries built from `manifest`, and return the origin it picks.
+ */
+const originFor = async (
+  manifest: ReturnType<typeof nitroAdapter>,
+  uri: string,
+): Promise<string | null> => {
+  const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
+  let selected: string | null = null;
+  const cf = {
+    kvs: () => ({
+      get: async (key: string) => {
+        if (!(key in entries)) throw new Error('NoSuchKey');
+        return entries[key];
+      },
+    }),
+    selectRequestOriginById: (id: string) => {
+      selected = id;
+    },
+  };
+  // The source is the repo's own generated router function, not external input.
+  const body = generateKvsRouterRequestCode().replace(/^import cf from 'cloudfront';\n?/, '');
+  const handler = new Function('cf', `${body}\nreturn handler;`)(cf);
+  await handler({
+    request: { uri, method: 'GET', headers: { host: { value: 'example.com' } }, cookies: {}, querystring: {} },
+  });
+  return selected;
+};
+
+void describe('nitroAdapter — a public folder under an ISR/SWR rule', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-isr-dir-'));
+    mock.method(spawn, 'sync', () => undefined);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  const build = (
+    bundledRouteRules: Record<string, unknown>,
+    publicFiles: Record<string, string>,
+  ): ReturnType<typeof nitroAdapter> => {
+    writeMinimalNitroOutput(tmpDir, { bundledRouteRules, publicFiles });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    return nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+  };
+
+  void it('flat: on-demand pages reach the server; files and the frozen page stay on S3', async () => {
+    const manifest = build(
+      { '/blog/**': { isr: 60 }, '/blog/featured': { prerender: true } },
+      {
+        'blog/featured/index.html': '<html></html>',
+        'blog/featured/_payload.json': '{}',
+        'blog/hero.png': 'png',
+        'blog/img/a.png': 'png',
+        '_nuxt/app.js': 'js',
+      },
+    );
+    assert.ok(
+      !manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'),
+      'no blanket /blog/* static row',
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/any-other-post'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/featured'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/featured/_payload.json'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/img/a.png'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/_nuxt/app.js'), ORIGIN_ID.s3);
+  });
+
+  void it('nested: a frozen page one folder deeper does not shadow its siblings', async () => {
+    const manifest = build(
+      { '/blog/**': { isr: 60 }, '/blog/2024/featured': { prerender: true } },
+      {
+        'blog/2024/featured/index.html': '<html></html>',
+        'blog/hero.png': 'png',
+      },
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/any-other-post'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/2024/other'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/2024/featured'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+  });
+
+  void it('crawl-prerendered pages under ISR stay mergeable (one server wildcard, bounded table)', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 30; i++) files[`blog/post-${i}/index.html`] = '<html></html>';
+    const manifest = build({ '/blog/**': { isr: 60 } }, files);
+    assert.ok(
+      manifest.routes.every((r) => r.exact !== true),
+      'no exact rows: nothing was frozen by an explicit prerender rule',
+    );
+    const rows = JSON.parse(
+      buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false }).r0,
+    ) as [string, string][];
+    assert.deepStrictEqual(
+      rows.filter(([p]) => p.startsWith('/blog')),
+      [['/blog/*', 'c']],
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/post-3'), ORIGIN_ID.server);
+  });
+
+  void it('a site-wide ISR rule (/**) keeps the blanket folder rows', () => {
+    const manifest = build({ '/**': { isr: 60 } }, { 'blog/hero.png': 'png', '_nuxt/app.js': 'js' });
+    assert.ok(manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'));
+    assert.ok(manifest.routes.some((r) => r.pattern === '/_nuxt/*' && r.target === 'static'));
+  });
+
+  void it('without an ISR rule the folder keeps its blanket static row', async () => {
+    const manifest = build(
+      { '/blog/featured': { prerender: true } },
+      { 'blog/featured/index.html': '<html></html>', 'blog/hero.png': 'png' },
+    );
+    assert.ok(manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'));
+    assert.ok(manifest.routes.every((r) => r.exact !== true));
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+  });
+});
+
