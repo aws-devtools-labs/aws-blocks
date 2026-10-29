@@ -96,7 +96,9 @@ container `AsyncJob`:
    (the worker is terminated at the deadline).
 2. A tick that throws or times out is retried, up to 3 attempts in total, then
    moved to a dead-letter queue. That matches the serverless path's 3 attempts.
-3. The container keeps at least `minInstances` tasks running between ticks.
+3. The container keeps at least `minInstances` tasks running between ticks. With
+   `minInstances: 0` it scales to zero between ticks, and each tick starts a task,
+   which delays the tick by a few minutes.
 
 In local dev the assignment is transparent — handlers run in-process. See
 `@aws-blocks/bb-compute`.

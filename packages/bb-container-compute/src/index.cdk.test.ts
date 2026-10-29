@@ -289,3 +289,97 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 		});
 	});
 });
+
+describe('ContainerCompute — scale from zero (minInstances: 0)', () => {
+	async function makeScalingStack(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	/** Build a compute that drains one queue, finalize it, and return the template. */
+	async function synthWithQueue(id: string, scaling: { minInstances: number; maxInstances: number }) {
+		const stack = await makeScalingStack(id);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	/** Alarms whose metric math reads only the Visible count: the wake policy's alarm. */
+	function wakeAlarms(template: Template) {
+		return Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+			.map((a) => (a as { Properties: Record<string, unknown> }).Properties)
+			.filter((p) => {
+				const s = JSON.stringify(p.Metrics ?? []);
+				return s.includes('ApproximateNumberOfMessagesVisible') && !s.includes('NotVisible');
+			});
+	}
+
+	test('deploys at zero tasks and adds a task when a message is waiting', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZero', { minInstances: 0, maxInstances: 2 });
+
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0 });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 2,
+		});
+
+		// The wake alarm fires at one or more waiting (Visible) messages. It must
+		// not count in-flight messages, or a running job would keep adding tasks.
+		const alarms = wakeAlarms(template);
+		assert.strictEqual(alarms.length, 1, `one wake alarm; got ${JSON.stringify(alarms)}`);
+		assert.strictEqual(alarms[0].ComparisonOperator, 'GreaterThanOrEqualToThreshold');
+		assert.strictEqual(alarms[0].Threshold, 1);
+
+		// Its policy adds one task.
+		const policies = Object.values(template.findResources('AWS::ApplicationAutoScaling::ScalingPolicy')).map(
+			(p) => (p as { Properties: Record<string, any> }).Properties,
+		);
+		const wake = policies.find((p) => String(p.PolicyName).includes('WakeOnWaitingMessages'));
+		assert.ok(wake, `a wake policy exists; got ${policies.map((p) => p.PolicyName).join(', ')}`);
+		assert.deepStrictEqual(
+			wake.StepScalingPolicyConfiguration.StepAdjustments.map(
+				(s: { ScalingAdjustment: number }) => s.ScalingAdjustment,
+			),
+			[1],
+		);
+	});
+
+	test('wires autoscaling for minInstances 0 even when maxInstances is 1', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZeroMaxOne', { minInstances: 0, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 1,
+		});
+		assert.strictEqual(wakeAlarms(template).length, 1);
+	});
+
+	test('a compute that keeps at least one task gets no wake policy', async () => {
+		const template = await synthWithQueue('ContainerNoWake', { minInstances: 1, maxInstances: 3 });
+		assert.strictEqual(wakeAlarms(template).length, 0);
+	});
+
+	test('a single fixed instance still gets no autoscaling', async () => {
+		const template = await synthWithQueue('ContainerFixedOne', { minInstances: 1, maxInstances: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('rejects instance bounds that would fail at deploy', async () => {
+		const stack = await makeScalingStack('ContainerBadBounds');
+		const cases: Array<[{ minInstances: number; maxInstances: number }, RegExp]> = [
+			[{ minInstances: -1, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0.5, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0, maxInstances: 0 }, /maxInstances must be an integer of 1 or more/],
+			[{ minInstances: 3, maxInstances: 2 }, /minInstances \(3\) must not exceed maxInstances \(2\)/],
+		];
+		cases.forEach(([scaling, message], i) => {
+			assert.throws(() => new ContainerCompute(stack as never, `bad${i}`, { scaling }), message);
+		});
+	});
+});

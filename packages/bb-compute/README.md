@@ -59,7 +59,9 @@ type is a compile error.
 - `scaling?` — `{ minInstances, maxInstances, strategy? }`. Wires real
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
-  otherwise).
+  otherwise). Set `minInstances: 0` to scale to zero tasks between jobs; a
+  waiting job or CronJob tick then starts a task, which takes a few minutes. See
+  [DESIGN.md](../bb-container-compute/DESIGN.md#scaling-to-zero-mininstances-0).
 - `image?` — the container image to run (public or ECR URI), used **verbatim**
   (pulled by ECS at task start). Blocks builds **no** image and deploying needs
   **no local Docker**: your application code is shipped separately as an S3 asset

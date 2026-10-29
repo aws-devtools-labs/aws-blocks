@@ -90,6 +90,27 @@ const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
 const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
 
+/**
+ * Reject instance bounds Application Auto Scaling or ECS would refuse at deploy
+ * time, so the failure names the compute at synth instead of surfacing minutes
+ * into a CloudFormation deploy. `minInstances: 0` is allowed: the service then
+ * scales to zero between jobs (see `ContainerCompute.finalize`).
+ */
+function validateScaling(id: string, scaling: ContainerScaling): void {
+	const { minInstances, maxInstances } = scaling;
+	if (!Number.isInteger(minInstances) || minInstances < 0) {
+		throw new Error(`Compute "${id}": scaling.minInstances must be an integer of 0 or more, got: ${minInstances}`);
+	}
+	if (!Number.isInteger(maxInstances) || maxInstances < 1) {
+		throw new Error(`Compute "${id}": scaling.maxInstances must be an integer of 1 or more, got: ${maxInstances}`);
+	}
+	if (minInstances > maxInstances) {
+		throw new Error(
+			`Compute "${id}": scaling.minInstances (${minInstances}) must not exceed maxInstances (${maxInstances})`,
+		);
+	}
+}
+
 export class ContainerCompute extends ComputeBase {
 	/**
 	 * Brand enabling cross-copy identification via {@link ContainerCompute.isContainerCompute}.
@@ -119,6 +140,7 @@ export class ContainerCompute extends ComputeBase {
 		const size = options?.size;
 		this.vcpu = size?.vcpu ?? DEFAULT_VCPU;
 		this.scalingConfig = options?.scaling;
+		if (this.scalingConfig) validateScaling(id, this.scalingConfig);
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a
 		// census of the app still shows a VPC is needed), then resolve one now —
@@ -263,6 +285,10 @@ export class ContainerCompute extends ComputeBase {
 	 * Overrides the base finalize hook so queue-depth scaling can see every
 	 * AsyncJob queue registered via {@link registerOwnedQueue} during the backend
 	 * import. No-op when scaling is absent or bounded to a single instance.
+	 *
+	 * With `minInstances: 0` the service can sit at zero tasks, where nothing
+	 * polls the owned queues. A separate wake policy then adds a task whenever
+	 * messages are waiting to be received (see {@link wakeOnWaitingMessages}).
 	 */
 	override finalize(): void {
 		// Order the service after the config upload: the container parent loads
@@ -277,7 +303,11 @@ export class ContainerCompute extends ComputeBase {
 		}
 
 		const cfg = this.scalingConfig;
-		if (!this.service || !cfg || cfg.maxInstances <= 1) return;
+		if (!this.service || !cfg) return;
+		// A single fixed instance needs no autoscaling. `minInstances: 0` always
+		// does, even with `maxInstances: 1`: something has to start the first task.
+		const scalesToZero = cfg.minInstances === 0;
+		if (cfg.maxInstances <= 1 && !scalesToZero) return;
 
 		const scalable = this.service.autoScaleTaskCount({
 			minCapacity: cfg.minInstances,
@@ -347,6 +377,51 @@ export class ContainerCompute extends ComputeBase {
 				});
 			}
 		}
+
+		if (scalesToZero && ownedQueues.length > 0) {
+			this.wakeOnWaitingMessages(scalable, ownedQueues);
+		}
+	}
+
+	/**
+	 * Add a task whenever messages are waiting to be received, so a service at
+	 * zero tasks wakes for its first message.
+	 *
+	 * The queue-depth policy above can't do this: its steps are relative to the
+	 * current task count and only add capacity past `backlogPerInstance`, so a
+	 * small backlog at zero tasks changes the count by 0 and the service stays at
+	 * zero. This policy watches only Visible messages (waiting, not in flight):
+	 * while a task is running and has capacity it receives a message within
+	 * seconds, so Visible stays at 0 and the policy is idle. At zero tasks, or
+	 * when every task is busy, messages wait and it adds a task per cooldown up
+	 * to `maxInstances`. Scale-in stays with the queue-depth policy, which counts
+	 * in-flight messages and so never removes the last task from a running job.
+	 *
+	 * Wiring only applies with `minInstances: 0`, so services that keep at least
+	 * one task synthesize the same policies as before.
+	 */
+	private wakeOnWaitingMessages(scalable: cdk.aws_ecs.ScalableTaskCount, ownedQueues: sqs.IQueue[]): void {
+		const using: Record<string, cloudwatch.IMetric> = {};
+		ownedQueues.forEach((q, i) => {
+			using[`v${i}`] = q.metricApproximateNumberOfMessagesVisible();
+		});
+		const waiting = new cloudwatch.MathExpression({
+			expression: Object.keys(using).join(' + '),
+			usingMetrics: using,
+			label: 'Waiting',
+			period: cdk.Duration.minutes(1),
+		});
+		scalable.scaleOnMetric('WakeOnWaitingMessages', {
+			metric: waiting,
+			// One alarm: at or above 1 waiting message, add a task. The `change: 0`
+			// interval below it means no scale-in action from this policy.
+			scalingSteps: [
+				{ upper: 1, change: 0 },
+				{ lower: 1, change: +1 },
+			],
+			adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+			cooldown: cdk.Duration.minutes(1),
+		});
 	}
 
 	/**

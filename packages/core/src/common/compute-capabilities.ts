@@ -96,7 +96,13 @@ export type ScalingSignal =
  * a compute that drains AsyncJob queues, CPU otherwise.
  */
 export interface ContainerScaling {
+	/**
+	 * Fewest running instances. `0` lets the compute scale to zero between jobs:
+	 * a waiting AsyncJob message or CronJob tick then starts an instance, which
+	 * takes a few minutes. Only meaningful for a compute that drains jobs.
+	 */
 	minInstances: number;
+	/** Most running instances. At least 1. */
 	maxInstances: number;
 	strategy?: ScalingSignal | ScalingSignal[];
 }

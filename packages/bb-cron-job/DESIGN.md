@@ -108,7 +108,7 @@ Local Mock
 - **Same options, same meaning** — `timeoutSeconds` passes straight to the runner, so it means what it means on `AsyncJob`.
 - **Lambda path is untouched** — existing stacks synthesize the same schedule, target, and role (one invoke statement per target function).
 
-**Alternative considered: EventBridge Scheduler → ECS `RunTask` per tick.** Starting a one-off Fargate task per tick costs nothing between ticks, where this design keeps the container's `minInstances` tasks running. It was rejected for now because it is not the same compute object (a one-off task ignores the service's scaling and poller), it needs a new run-one-handler boot mode, and it would rebuild the timeout, retry, and DLQ handling AsyncJob already has. It can be added later as an option if pay-per-run matters.
+**Alternative considered: EventBridge Scheduler → ECS `RunTask` per tick.** Starting a one-off Fargate task per tick costs nothing between ticks. This design instead keeps the container's `minInstances` tasks running, or with `minInstances: 0` scales to zero and starts a task when a tick is waiting (a few minutes of delay per tick). `RunTask` was rejected for now because it is not the same compute object (a one-off task ignores the service's scaling and poller), it needs a new run-one-handler boot mode, and it would rebuild the timeout, retry, and DLQ handling AsyncJob already has. It can be added later as an option if starting each tick promptly without an always-on task matters.
 
 **Consequences:**
 - The child shows up as an `AsyncJob` in the block census and telemetry.
