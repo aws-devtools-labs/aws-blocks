@@ -499,7 +499,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       'blocks:stop': 'tsx aws-blocks/scripts/stop.ts',
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
     },
-    gitignoreEntries: ['.blocks-sandbox'],
+    gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
   });
 
@@ -666,7 +666,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'dev:server': 'tsx watch aws-blocks/scripts/server.ts',
       'dev:stop': 'tsx aws-blocks/scripts/stop.ts',
     },
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json'],
+    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
   });
 
