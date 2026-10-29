@@ -151,6 +151,14 @@ if (options.appId || options.account) {
 				result.accepted.map((t) => `  • ${t}\n`).join(''),
 		);
 	}
+	if (result.tagScoped.length > 0) {
+		process.stdout.write(
+			`\nManaged only once tagged app=${options.appId} — existing resources of these types must already carry the tag ` +
+				"(an app adopting defaults.app: an admin tags them once before the first deploy; see the core README's " +
+				'"Adopting defaults.app in an existing app"):\n' +
+				result.tagScoped.map((t) => `  • ${t}\n`).join(''),
+		);
+	}
 	if (result.unscoped.length > 0) {
 		process.stdout.write(
 			`\nNo scoped rule for these resource types — add statements for them to execution-${options.appId}.json by hand:\n` +

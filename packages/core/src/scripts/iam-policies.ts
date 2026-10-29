@@ -328,6 +328,12 @@ interface RuleDef {
 	accepted?: true;
 	/** Service-linked roles CloudFormation creates for these types (`iam:AWSServiceName`). */
 	serviceLinkedRoles?: string[];
+	/**
+	 * The rule manages an existing resource of these types only once it is tagged
+	 * `app=<id>`: reported in `tagScoped`, because a resource created before the app
+	 * set `defaults.app` must be tagged by an admin first.
+	 */
+	tagScoped?: true;
 }
 
 /** `ec2:Describe*` takes only `*`; shared by the rules that need it (emitted once). */
@@ -428,6 +434,7 @@ const RULES: Record<string, RuleDef> = {
 		],
 	},
 	SecretsManager: {
+		tagScoped: true,
 		types: /^AWS::SecretsManager::(Secret|SecretTargetAttachment|ResourcePolicy|RotationSchedule)$/,
 		statements: ({ id, p, acct }) => [
 			...byTag('Secrets', id, {
@@ -445,6 +452,7 @@ const RULES: Record<string, RuleDef> = {
 	// Account-level types (`AWS::ApiGateway::Account`, domain names, usage plans) aren't
 	// per-app and are left to `unscoped`.
 	ApiGateway: {
+		tagScoped: true,
 		types:
 			/^AWS::ApiGateway::(RestApi|Deployment|Stage|Resource|Method|Authorizer|Model|RequestValidator|GatewayResponse|DocumentationPart|DocumentationVersion)$|^AWS::ApiGatewayV2::(Api|Integration|IntegrationResponse|Route|RouteResponse|Stage|Authorizer|Deployment|Model)$/,
 		statements: ({ id, p, apiIds }) => [
@@ -497,6 +505,7 @@ const RULES: Record<string, RuleDef> = {
 		statements: ({ id, p, acct }) => [byName('Rules', 'events:*', [`arn:${p}:events:*:${acct}:rule/${id}-*`])],
 	},
 	Cognito: {
+		tagScoped: true,
 		types: /^AWS::Cognito::UserPool(Client|Group|Domain|User|UserToGroupAttachment|IdentityProvider|ResourceServer|RiskConfigurationAttachment|UICustomizationAttachment)?$/,
 		statements: ({ id, p, acct }) =>
 			byTag('UserPools', id, {
@@ -507,6 +516,7 @@ const RULES: Record<string, RuleDef> = {
 			}),
 	},
 	KMS: {
+		tagScoped: true,
 		types: /^AWS::KMS::(Key|Alias)$/,
 		statements: ({ id, p, acct }) => [
 			...byTag('Keys', id, {
@@ -519,6 +529,7 @@ const RULES: Record<string, RuleDef> = {
 		],
 	},
 	StepFunctions: {
+		tagScoped: true,
 		types: /^AWS::StepFunctions::StateMachine$/,
 		statements: ({ id, p, acct }) =>
 			byTag('StateMachines', id, {
@@ -605,6 +616,7 @@ const RULES: Record<string, RuleDef> = {
 		],
 	},
 	DSQL: {
+		tagScoped: true,
 		types: /^AWS::DSQL::Cluster$/,
 		serviceLinkedRoles: ['dsql.amazonaws.com'],
 		statements: ({ id, p, acct }) =>
@@ -617,6 +629,7 @@ const RULES: Record<string, RuleDef> = {
 	},
 	// A data source is authorized against its knowledge base (there's no data-source resource type).
 	KnowledgeBases: {
+		tagScoped: true,
 		types: /^AWS::Bedrock::(KnowledgeBase|DataSource)$/,
 		statements: ({ id, p, acct }) =>
 			byTag('KnowledgeBases', id, {
@@ -655,6 +668,7 @@ const RULES: Record<string, RuleDef> = {
 	// once tagged as the app. Creating a subnet, route table or security group also
 	// checks the VPC it goes into, which must be the app's own.
 	EC2: {
+		tagScoped: true,
 		types:
 			/^AWS::EC2::(VPC|Subnet|RouteTable|Route|SubnetRouteTableAssociation|SecurityGroup|SecurityGroupIngress|SecurityGroupEgress|InternetGateway|VPCGatewayAttachment|NatGateway|EIP)$/,
 		statements: ({ id, p, acct }) => {
@@ -697,6 +711,7 @@ const RULES: Record<string, RuleDef> = {
 	},
 	// Distributions and KeyValueStores are named by id and support tag conditions.
 	CloudFrontDistributions: {
+		tagScoped: true,
 		types: /^AWS::CloudFront::Distribution$/,
 		statements: ({ id, p, acct }) =>
 			byTag('CfDistributions', id, {
@@ -721,6 +736,7 @@ const RULES: Record<string, RuleDef> = {
 			}),
 	},
 	CloudFrontKeyValueStores: {
+		tagScoped: true,
 		types: /^AWS::CloudFront::KeyValueStore$/,
 		statements: ({ id, p, acct }) => {
 			const kvs = `arn:${p}:cloudfront::${acct}:key-value-store/*`;
@@ -831,6 +847,13 @@ export interface ExecutionPolicy {
 	 * exceptions, in a statement whose Sid says so.
 	 */
 	accepted: string[];
+	/**
+	 * Resource types the policy manages by the `app` tag (only once a resource is
+	 * tagged `app=<id>`). An existing resource of one of these types that predates
+	 * `defaults.app` can't be updated (not even to add the tag) until an admin tags
+	 * it `app=<id>`.
+	 */
+	tagScoped: string[];
 }
 
 /**
@@ -943,6 +966,7 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 
 	const unscoped = new Set<string>();
 	const accepted = new Set<string>();
+	const tagScoped = new Set<string>();
 	const applied = new Set<string>();
 	const serviceLinkedRoles = new Set<string>();
 	const types = [...new Set(resourceTypes)].sort();
@@ -954,6 +978,7 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 		}
 		const rule = RULES[key];
 		if (rule.accepted) accepted.add(type);
+		if (rule.tagScoped) tagScoped.add(type);
 		for (const service of rule.serviceLinkedRoles ?? []) serviceLinkedRoles.add(service);
 		if (applied.has(key)) continue;
 		applied.add(key);
@@ -985,6 +1010,7 @@ export function generateExecutionPolicy(resourceTypes: Iterable<string>, options
 		document: { Version: '2012-10-17', Statement: unique },
 		unscoped: [...unscoped].sort(),
 		accepted: [...accepted].sort(),
+		tagScoped: [...tagScoped].sort(),
 	};
 }
 
