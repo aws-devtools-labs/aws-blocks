@@ -1,5 +1,7 @@
 package com.aws.blocks.kotlin.oidc
 
+import kotlinx.serialization.Serializable
+
 /**
  * A provider an [OidcClient] can sign in with.
  *
@@ -22,5 +24,10 @@ interface OidcProvider {
  *
  * `OidcClient<AnyProvider>` signs in with a name rather than a generated provider, and its
  * [signIn] and [exchange] take that name directly: `client.signIn("google")`.
+ *
+ * It is serializable so that a model can hold an `OidcClient<AnyProvider>` in a list or map: the
+ * serialization plugin wants a serializer for every type argument of a `@Contextual` type usage,
+ * although the client's own serializer never uses it.
  */
+@Serializable
 data class AnyProvider(override val providerName: String) : OidcProvider
