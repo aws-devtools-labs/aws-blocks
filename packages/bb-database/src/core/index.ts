@@ -61,9 +61,7 @@ export class DatabaseCore {
 	}
 
 	async queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
-		const rows = await this.fetch<T>(query);
-		if (rows.length === 0) return null;
-		return options?.schema ? validateRow(rows[0], options.schema, 0) : rows[0];
+		return firstRow(await this.fetch<T>(query), options?.schema);
 	}
 
 	async execute(query: SqlQuery): Promise<{ rowCount: number }> {
@@ -120,9 +118,7 @@ class TransactionImpl implements Transaction {
 
 	async queryOne<T>(query: SqlQuery, options?: QueryOptions<T>): Promise<T | null> {
 		const { sql, params } = unwrapQuery(query);
-		const rows = await this.engine.queryInTransaction<T>(this.handle, sql, params);
-		if (rows.length === 0) return null;
-		return options?.schema ? validateRow(rows[0], options.schema, 0) : rows[0];
+		return firstRow(await this.engine.queryInTransaction<T>(this.handle, sql, params), options?.schema);
 	}
 
 	async execute(query: SqlQuery): Promise<{ rowCount: number }> {
@@ -131,16 +127,33 @@ class TransactionImpl implements Transaction {
 	}
 }
 
-async function validateRow<T>(row: unknown, schema: StandardSchemaV1<unknown, T>, index: number): Promise<T> {
-	const result = schema['~standard'].validate(row);
-	const resolved = result instanceof Promise ? await result : result;
-	if (resolved.issues) throw resultValidationFailed(index, resolved.issues);
-	return resolved.value;
+async function firstRow<T>(rows: T[], schema: StandardSchemaV1<unknown, T> | undefined): Promise<T | null> {
+	if (rows.length === 0) return null;
+	return schema ? (await validateRows([rows[0]], schema))[0] : rows[0];
 }
 
+function settled<T>(result: StandardSchemaV1.Result<T>, index: number): T {
+	if (result.issues) throw resultValidationFailed(index, result.issues);
+	return result.value;
+}
+
+// Most schema libraries validate synchronously; only a Promise result is awaited, all of them together.
 async function validateRows<T>(rows: T[], schema: StandardSchemaV1<unknown, T> | undefined): Promise<T[]> {
 	if (!schema) return rows;
 	const out: T[] = [];
-	for (const [index, row] of rows.entries()) out.push(await validateRow(row, schema, index));
+	const pending: Promise<void>[] = [];
+	for (const [index, row] of rows.entries()) {
+		const result = schema['~standard'].validate(row);
+		if (result instanceof Promise) {
+			pending.push(
+				result.then((r) => {
+					out[index] = settled(r, index);
+				}),
+			);
+		} else {
+			out[index] = settled(result, index);
+		}
+	}
+	await Promise.all(pending);
 	return out;
 }

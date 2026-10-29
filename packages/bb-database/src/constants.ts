@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-
-const ENV_NAME_SANITIZE_PATTERN = /[^a-zA-Z0-9]/g;
-
-export const ENV_VAR_PREFIX = 'BLOCKS';
+import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
 
@@ -51,4 +48,9 @@ export const sanitizeSchemaName = (id: string): string => {
 
 export const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 
-export const toEnvName = (fullId: string): string => fullId.replace(ENV_NAME_SANITIZE_PATTERN, '_');
+// `public` is a DSQL system entity: it needs no search_path, no CREATE SCHEMA and no schema-level grant.
+export const searchPathFor = (schema: string): string | undefined => (schema === DEFAULT_SCHEMA ? undefined : schema);
+
+// The config bucket key the CDK layer writes and the Lambda runtime reads; both sides derive it here.
+export const clusterConfigKey = (clusterFullId: string, suffix: 'ENDPOINT' | 'REGION'): string =>
+	`BLOCKS_${sanitizeConfigKey(clusterFullId)}_${suffix}`;

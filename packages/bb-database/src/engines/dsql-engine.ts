@@ -32,15 +32,17 @@ export const dsqlTypeParsers: pg.CustomTypesConfig = {
 		oid === INT8_OID && format !== 'binary' ? parseInt8 : pg.types.getTypeParser(oid, format),
 };
 
-// DSQL reports a stale schema cache as SQLSTATE OC001; one retry refreshes the catalog.
-async function withStaleCacheRetry<T>(fn: () => Promise<T>): Promise<T> {
-	try {
-		return await fn();
-	} catch (e) {
-		if (!isStaleSchemaCache(e)) throw e;
-		return fn();
-	}
+interface Queryable {
+	query(sql: string, params?: unknown[]): Promise<pg.QueryResult>;
 }
+
+const translated = <T>(fn: () => Promise<T>): Promise<T> => fn().catch((e) => translatePgError(e, 'DsqlEngine'));
+
+// DSQL reports a stale schema cache as SQLSTATE OC001; one retry refreshes the catalog.
+const statement = (client: Queryable, sql: string, params?: unknown[]): Promise<pg.QueryResult> =>
+	translated(() =>
+		client.query(sql, params).catch((e) => (isStaleSchemaCache(e) ? client.query(sql, params) : Promise.reject(e))),
+	);
 
 export class DsqlEngine implements DatabaseEngine {
 	private readonly pool: pg.Pool;
@@ -68,39 +70,25 @@ export class DsqlEngine implements DatabaseEngine {
 	}
 
 	async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-		try {
-			return await withStaleCacheRetry(async () => (await this.pool.query(sql, params)).rows);
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
-		}
+		return (await statement(this.pool, sql, params)).rows;
 	}
 
 	async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-		try {
-			return await withStaleCacheRetry(async () => ({
-				rowCount: (await this.pool.query(sql, params)).rowCount ?? 0,
-			}));
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
-		}
+		return { rowCount: (await statement(this.pool, sql, params)).rowCount ?? 0 };
 	}
 
-	async beginTransaction(): Promise<TransactionHandle> {
-		try {
+	beginTransaction(): Promise<TransactionHandle> {
+		return translated(async () => {
 			const client = await this.pool.connect();
 			await client.query('BEGIN');
 			return client;
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
-		}
+		});
 	}
 
 	async commitTransaction(handle: TransactionHandle): Promise<void> {
 		const client = handle as pg.PoolClient;
 		try {
-			await client.query('COMMIT');
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
+			await translated(() => client.query('COMMIT'));
 		} finally {
 			client.release();
 		}
@@ -118,11 +106,7 @@ export class DsqlEngine implements DatabaseEngine {
 	}
 
 	async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-		try {
-			return await withStaleCacheRetry(async () => (await (handle as pg.PoolClient).query(sql, params)).rows);
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
-		}
+		return (await statement(handle as pg.PoolClient, sql, params)).rows;
 	}
 
 	async executeInTransaction(
@@ -130,13 +114,7 @@ export class DsqlEngine implements DatabaseEngine {
 		sql: string,
 		params?: unknown[],
 	): Promise<{ rowCount: number }> {
-		try {
-			return await withStaleCacheRetry(async () => ({
-				rowCount: (await (handle as pg.PoolClient).query(sql, params)).rowCount ?? 0,
-			}));
-		} catch (e) {
-			translatePgError(e, 'DsqlEngine');
-		}
+		return { rowCount: (await statement(handle as pg.PoolClient, sql, params)).rowCount ?? 0 };
 	}
 
 	async destroy(): Promise<void> {

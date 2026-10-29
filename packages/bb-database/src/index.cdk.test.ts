@@ -149,7 +149,13 @@ describe('Database (CDK)', () => {
 		const functions = template.findResources('AWS::Lambda::Function') as Resources;
 		const stub = Object.entries(functions).find(([id]) => id.startsWith('StubHandler'));
 		assert.ok(stub);
-		for (const id of migrationIds) assert.ok(stub[1].DependsOn?.includes(id), `StubHandler depends on ${id}`);
+		// Through the chain: a block's resource depends on the previous block's on the same cluster.
+		const all = template.toJSON().Resources as Resources;
+		const reaches = (from: string[] = [], target: string, seen = new Set<string>()): boolean =>
+			from.some(
+				(id) => id === target || (!seen.has(id) && seen.add(id) && reaches(all[id]?.DependsOn, target, seen)),
+			);
+		for (const id of migrationIds) assert.ok(reaches(stub[1].DependsOn, id), `StubHandler waits for ${id}`);
 		for (const [id, fn] of Object.entries(functions)) {
 			if (id.startsWith('StubHandler')) continue;
 			assert.ok(

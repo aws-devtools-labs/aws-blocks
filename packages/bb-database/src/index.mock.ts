@@ -6,14 +6,14 @@ import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
-import { DEFAULT_CLUSTER_ID, quoteIdent } from './constants.js';
-import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
+import { DEFAULT_SCHEMA, quoteIdent } from './constants.js';
+import { registerDatabase, registerUniqueId } from './core/construction.js';
 import { DatabaseCore } from './core/index.js';
 import { registerInternalAccess } from './core/internal.js';
 import { MockEngine } from './engines/mock-engine.js';
 import { sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
-import { buildMigrationPlan } from './migrations/plan.js';
+import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
 import type {
 	ClusterRef,
@@ -29,6 +29,10 @@ import type {
 import { BB_NAME, BB_VERSION } from './version.js';
 
 assertNotMockInDeployedEnv('bb-database');
+
+function pgliteEngine(dataDir: string, schemaName: string): DatabaseEngine {
+	return sharedPgliteCluster(join(dataDir, 'pglite')).forSchema(schemaName);
+}
 
 /**
  * A cluster several `Database` blocks share, each in its own schema. `type: 'dsql'`
@@ -54,7 +58,7 @@ export class DatabaseCluster extends Scope {
 
 	/** @internal */
 	engineFor(schemaName: string): DatabaseEngine {
-		return sharedPgliteCluster(join(getMockDataDir(this), 'pglite')).forSchema(schemaName);
+		return pgliteEngine(getMockDataDir(this), schemaName);
 	}
 }
 
@@ -93,21 +97,17 @@ export class Database extends Scope {
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
-		registerUniqueId('Database', id, this.fullId);
-
-		const resolved = resolveCluster(id, this.fullId, options);
+		const resolved = registerDatabase(id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
-		const clusterKey = resolved.owned ? this.fullId : resolved.ref.id;
-		registerSchema(clusterKey, this.schemaName, this.fullId);
 
 		const dataDir = getMockDataDir(this);
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 
 		const buildEngine = async (): Promise<DatabaseEngine> => {
 			let inner: DatabaseEngine;
-			if (resolved.owned) {
-				inner = sharedPgliteCluster(join(dataDir, 'pglite')).forSchema(this.schemaName);
+			if (!resolved.shared) {
+				inner = pgliteEngine(dataDir, this.schemaName);
 			} else if (resolved.shared instanceof DatabaseCluster) {
 				inner = resolved.shared.engineFor(this.schemaName);
 			} else {
@@ -120,9 +120,11 @@ export class Database extends Scope {
 			this.mock = mock;
 			await mock.withDdl(async () => {
 				if (this.migrationsPath) {
-					const plan = buildMigrationPlan(loadMigrationFiles(this.migrationsPath));
+					const files = loadMigrationFiles(this.migrationsPath);
+					lintMigrationFiles(files);
+					const plan = buildMigrationPlan(files);
 					await runMigrationPlan(mock, plan, { schemaName: this.schemaName, log: (m) => this.log.info(m) });
-				} else if (this.schemaName !== 'public') {
+				} else if (this.schemaName !== DEFAULT_SCHEMA) {
 					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
 				}
 			});
@@ -138,12 +140,7 @@ export class Database extends Scope {
 			},
 			migrationsPath: this.migrationsPath,
 		});
-		// Derived here as the cdk and aws entries derive it: an owned cluster is named after its block, a
-		// shared one after the DatabaseCluster.
-		registerSdkIdentifiers(this.fullId, {
-			clusterId: resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id,
-			schemaName: this.schemaName,
-		});
+		registerSdkIdentifiers(this.fullId, { clusterId: resolved.clusterFullId, schemaName: this.schemaName });
 	}
 
 	/**

@@ -112,15 +112,6 @@ describe('dsql-lint integration', () => {
 });
 
 describe('TransactionTracker', () => {
-	test('one DDL per transaction, never with DML', () => {
-		const t = new TransactionTracker();
-		t.recordStatement('CREATE TABLE a (id INT)');
-		assert.throws(() => t.recordStatement('CREATE TABLE b (id INT)'), /only 1 DDL statement/);
-		const u = new TransactionTracker();
-		u.recordStatement('INSERT INTO a VALUES (1)');
-		assert.throws(() => u.recordStatement('CREATE TABLE b (id INT)'), /DDL and DML in the same transaction/);
-	});
-
 	test('3,000 rows and 10 MiB per transaction, reported as TransactionRowLimitExceeded', () => {
 		const t = new TransactionTracker();
 		t.recordRowCount(3000);
@@ -130,7 +121,7 @@ describe('TransactionTracker', () => {
 		);
 		const u = new TransactionTracker();
 		assert.throws(
-			() => u.recordStatement('INSERT INTO t (blob) VALUES ($1)', ['x'.repeat(11 * 1024 * 1024)]),
+			() => u.recordStatement('dml', 'INSERT INTO t (blob) VALUES ($1)', ['x'.repeat(11 * 1024 * 1024)]),
 			(e: Error) => e.name === 'TransactionRowLimitExceededException' && /10 MiB/.test(e.message),
 		);
 	});

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ApiError, brandBlocksError } from '@aws-blocks/core';
+import { ApiError, blocksError, brandBlocksError } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 /**
@@ -61,11 +61,10 @@ export function resultValidationFailed(rowIndex: number, issues: ReadonlyArray<S
 	const first = issues[0];
 	const path = first?.path?.map((segment) => (typeof segment === 'object' ? segment.key : segment)).join('.');
 	const detail = first ? `${path ? `${path}: ` : ''}${first.message}` : 'the row did not match the schema';
-	const error = new Error(
-		`${DatabaseErrors.ResultValidationFailed}: row ${rowIndex} did not match the result schema (${detail})`,
+	return blocksError(
+		DatabaseErrors.ResultValidationFailed,
+		`row ${rowIndex} did not match the result schema (${detail})`,
 	);
-	error.name = DatabaseErrors.ResultValidationFailed;
-	return brandBlocksError(error);
 }
 
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
@@ -74,29 +73,20 @@ export function isKnownDatabaseErrorName(name: string): boolean {
 	return knownErrors.has(name);
 }
 
-const RE_TAG_MESSAGES: Record<string, string> = {
+const RE_TAG_MESSAGES = {
 	[DatabaseErrors.QueryFailed]: 'The database query failed',
 	[DatabaseErrors.ConnectionFailed]: 'The database connection failed',
 	[DatabaseErrors.TransactionFailed]: 'The database transaction failed',
-	[DatabaseErrors.UniqueConstraintViolation]: 'The item violates a unique constraint',
-	[DatabaseErrors.SerializationFailure]: 'The transaction failed due to a serialization conflict',
 	[DatabaseErrors.TransactionRowLimitExceeded]:
 		'The transaction changed more rows, or more data, than the cluster allows in one transaction',
-};
+} as const;
 
 // Only the name and a fixed message cross the wire; the driver error, with its SQLSTATE, stays on the
 // server-side `cause`.
-export function reTagged(name: string, cause: Error): Error {
-	const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DatabaseErrors.QueryFailed];
-	const wrapped = new Error(`${name}: ${message}`, { cause });
+export function reTagged(name: keyof typeof RE_TAG_MESSAGES, cause: Error): Error {
+	const wrapped = new Error(`${name}: ${RE_TAG_MESSAGES[name]}`, { cause });
 	wrapped.name = name;
 	return brandBlocksError(wrapped);
-}
-
-function wrapError(e: unknown): never {
-	const error = e instanceof Error ? e : new Error(String(e));
-	const name = knownErrors.has(error.name) ? error.name : DatabaseErrors.QueryFailed;
-	throw reTagged(name, error);
 }
 
 export function pgErrorCode(e: unknown): string | undefined {
@@ -112,19 +102,17 @@ function isDsqlTransactionLimit(e: unknown): boolean {
 }
 
 export function translatePgError(e: unknown, engineName: string): never {
-	if (e instanceof Error) {
-		const code = pgErrorCode(e);
-		if (code === PG_SERIALIZATION_FAILURE) throw serializationConflict(e);
-		if (code === PG_UNIQUE_VIOLATION) throw uniqueConstraintConflict(e);
-		if (isKnownDatabaseErrorName(e.name)) throw e;
-		if (isDsqlTransactionLimit(e)) throw reTagged(DatabaseErrors.TransactionRowLimitExceeded, e);
-		const name = code?.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
-			? DatabaseErrors.ConnectionFailed
-			: DatabaseErrors.QueryFailed;
-		console.debug(`[${engineName}] ${name}`, { code });
-		throw reTagged(name, e);
-	}
-	wrapError(e);
+	if (!(e instanceof Error)) throw reTagged(DatabaseErrors.QueryFailed, new Error(String(e)));
+	const code = pgErrorCode(e);
+	if (code === PG_SERIALIZATION_FAILURE) throw serializationConflict(e);
+	if (code === PG_UNIQUE_VIOLATION) throw uniqueConstraintConflict(e);
+	if (isKnownDatabaseErrorName(e.name)) throw e;
+	if (isDsqlTransactionLimit(e)) throw reTagged(DatabaseErrors.TransactionRowLimitExceeded, e);
+	const name = code?.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
+		? DatabaseErrors.ConnectionFailed
+		: DatabaseErrors.QueryFailed;
+	console.debug(`[${engineName}] ${name}`, { code });
+	throw reTagged(name, e);
 }
 
 export function isStaleSchemaCache(e: unknown): boolean {
@@ -138,7 +126,5 @@ export function isSerializationConflict(e: unknown): boolean {
 }
 
 export function configError(message: string): Error {
-	const err = new Error(message);
-	err.name = 'DatabaseConfigurationError';
-	return brandBlocksError(err);
+	return blocksError('DatabaseConfigurationError', message);
 }

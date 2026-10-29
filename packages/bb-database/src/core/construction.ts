@@ -18,33 +18,42 @@ function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
 interface ResolvedCluster {
 	ref: ClusterRef;
 	schemaName: string;
-	owned: boolean;
+	/** The `DatabaseCluster` the block runs on; absent when the block owns its cluster. */
 	shared?: DatabaseClusterLike;
 }
 
-export function resolveCluster(
-	blockId: string,
-	blockFullId: string,
-	options: DatabaseOptions | undefined,
-): ResolvedCluster {
+function resolveCluster(blockId: string, blockFullId: string, options: DatabaseOptions | undefined): ResolvedCluster {
 	const cluster = options?.cluster;
 	const explicitSchema = options?.schemaName;
 	if (cluster === undefined || cluster === null) {
-		return {
-			ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID },
-			schemaName: explicitSchema ?? DEFAULT_SCHEMA,
-			owned: true,
-		};
+		return { ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID }, schemaName: explicitSchema ?? DEFAULT_SCHEMA };
 	}
 	if (isDatabaseClusterLike(cluster)) {
 		return {
 			ref: { kind: cluster.type, id: cluster.fullId },
 			schemaName: explicitSchema ?? sanitizeSchemaName(blockId),
-			owned: false,
 			shared: cluster,
 		};
 	}
 	throw configError(`Database '${blockFullId}': 'cluster' must be a DatabaseCluster.`);
+}
+
+export interface DatabaseRegistration extends ResolvedCluster {
+	/** The fullId the cluster's resources are named after: the block's own, or the shared cluster's. */
+	clusterFullId: string;
+}
+
+/** The construction sequence every entry point runs: unique id, cluster, then a schema claim on that cluster. */
+export function registerDatabase(
+	id: string,
+	fullId: string,
+	options: DatabaseOptions | undefined,
+): DatabaseRegistration {
+	registerUniqueId('Database', id, fullId);
+	const resolved = resolveCluster(id, fullId, options);
+	const clusterFullId = resolved.shared ? resolved.shared.fullId : fullId;
+	registerSchema(clusterFullId, resolved.schemaName, fullId);
+	return { ...resolved, clusterFullId };
 }
 
 interface RegistryState {
@@ -77,7 +86,7 @@ export function registerUniqueId(kind: 'Database' | 'DatabaseCluster', id: strin
 	map.set(id, fullId);
 }
 
-export function registerSchema(clusterId: string, schemaName: string, blockFullId: string): void {
+function registerSchema(clusterId: string, schemaName: string, blockFullId: string): void {
 	const s = state();
 	let bySchema = s.schemas.get(clusterId);
 	if (!bySchema) {

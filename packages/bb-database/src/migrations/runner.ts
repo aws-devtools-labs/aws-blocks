@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { brandBlocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DEFAULT_MIGRATIONS_ROOT, quoteIdent } from '../constants.js';
+import { DEFAULT_MIGRATIONS_ROOT, DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
 import { configError } from '../errors.js';
 import type { MigrationPlan, PlanStep } from './plan.js';
 
@@ -28,7 +28,7 @@ interface RunPlanResult {
 }
 
 export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: string): Promise<void> {
-	if (schemaName !== 'public') await engine.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schemaName)}`);
+	if (schemaName !== DEFAULT_SCHEMA) await engine.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schemaName)}`);
 	await engine.execute(
 		'CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT NOW())',
 	);
@@ -155,7 +155,7 @@ export async function runMigrationPlan(
 				}
 				if (step.kind === 'wait-job') {
 					// Without a job id there is nothing to wait for: PGlite ran the statement synchronously
-					// (the mock strips ASYNC).
+					// (pglite-cluster.ts strips ASYNC).
 					if (lastJobId) {
 						const status = await jobStatus(engine, lastJobId);
 						if (status.status === 'failed')

@@ -3,11 +3,10 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import { DEFAULT_CLUSTER_ID } from './constants.js';
-import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
+import { registerDatabase, registerUniqueId } from './core/construction.js';
 import { configError } from './errors.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
-import { buildMigrationPlan } from './migrations/plan.js';
+import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
 import type {
 	ClusterRef,
@@ -24,6 +23,12 @@ const VPC_REQUIREMENTS = { requiresEgress: true };
 function projectRootOf(scope: BuildingBlockScope): string {
 	const ctx = scope.node.tryGetContext('projectRoot');
 	return typeof ctx === 'string' && ctx ? ctx : process.cwd();
+}
+
+function clusterInfra(owner: BuildingBlockScope, options: DatabaseClusterOptions): ClusterInfra {
+	const infra = new ClusterInfra({ owner, fullId: owner.fullId, options });
+	for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(owner, key, value);
+	return infra;
 }
 
 /**
@@ -44,14 +49,7 @@ export class DatabaseCluster extends BuildingBlockScope {
 		super(id, { parent: scope, vpc: VPC_REQUIREMENTS });
 		this.type = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
-		this.infra = new ClusterInfra({
-			owner: this,
-			fullId: this.fullId,
-			options,
-			defaults: this.defaults,
-		});
-		for (const [key, value] of Object.entries(this.infra.configEntries)) registerConfig(this, key, value);
-		this.infra.grantRuntime(this.executionRole);
+		this.infra = clusterInfra(this, options);
 	}
 }
 
@@ -68,43 +66,25 @@ export class Database extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
-		registerUniqueId('Database', id, this.fullId);
-
-		const resolved = resolveCluster(id, this.fullId, options);
+		const resolved = registerDatabase(id, this.fullId, options);
 		this.cluster = resolved.ref;
 		this.schemaName = resolved.schemaName;
-		const clusterFullId = resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id;
-		registerSchema(clusterFullId, this.schemaName, this.fullId);
-		const projectRoot = projectRootOf(this);
-		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId, projectRoot);
-		// Check the files with dsql-lint here, before any deploy: the migration
-		// Lambda runs them without the linter, which is not deployed with it.
-		if (this.migrationsPath) buildMigrationPlan(loadMigrationFiles(this.migrationsPath));
+		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId, projectRootOf(this));
+		// Checked with dsql-lint here, before any deploy: the migration Lambda runs the files without the
+		// linter, which is not deployed with it.
+		const migrations = this.migrationsPath ? loadMigrationFiles(this.migrationsPath) : undefined;
+		if (migrations) lintMigrationFiles(migrations);
 
-		if (resolved.owned) {
+		let infra: ClusterInfra;
+		if (!resolved.shared) {
 			const owned = options as OwnedDatabaseOptions;
-			const infra = new ClusterInfra({
-				owner: this,
-				fullId: this.fullId,
-				options: { type: 'dsql', removalPolicy: owned.removalPolicy },
-				defaults: this.defaults,
-			});
-			for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(this, key, value);
-			infra.grantRuntime(this.executionRole);
-			infra.attach(
-				{ scope: this, fullId: this.fullId, schemaName: this.schemaName, migrationsPath: this.migrationsPath },
-				this.executionRole,
-			);
-			return;
-		}
-
-		if (!(resolved.shared instanceof DatabaseCluster)) {
+			infra = clusterInfra(this, { type: 'dsql', removalPolicy: owned.removalPolicy });
+		} else if (resolved.shared instanceof DatabaseCluster) {
+			infra = resolved.shared.infra;
+		} else {
 			throw configError(`Database '${this.fullId}': 'cluster' must be a DatabaseCluster.`);
 		}
-		resolved.shared.infra.attach(
-			{ scope: this, fullId: this.fullId, schemaName: this.schemaName, migrationsPath: this.migrationsPath },
-			this.executionRole,
-		);
+		infra.attach({ scope: this, fullId: this.fullId, schemaName: this.schemaName, migrations });
 	}
 
 	query(..._a: unknown[]): never {

@@ -5,7 +5,7 @@ import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
-import { quoteIdent } from './constants.js';
+import { DEFAULT_SCHEMA, quoteIdent, searchPathFor } from './constants.js';
 import { DsqlEngine } from './engines/dsql-engine.js';
 import { DatabaseErrors, pgErrorCode } from './errors.js';
 import { buildMigrationPlan } from './migrations/plan.js';
@@ -67,7 +67,7 @@ export async function provisionAppRole(
 	}
 	await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
 	// `public` is a DSQL system entity: a schema-level grant on it is rejected, and custom roles can use it without one.
-	if (schemaName !== 'public')
+	if (schemaName !== DEFAULT_SCHEMA)
 		await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(dbRoleName)}`);
 	const tables = await engine.query<{ tablename: string }>(
 		`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename NOT IN ('_migrations', '_migration_progress')`,
@@ -127,20 +127,18 @@ function buildEngine(schemaName: string): DatabaseEngine {
 		endpoint,
 		role: 'admin',
 		getAuthToken: () => signer.getDbConnectAdminAuthToken(),
-		searchPath: schemaName !== 'public' ? schemaName : undefined,
+		searchPath: searchPathFor(schemaName),
 		poolSize: 1,
 	});
 }
 
 async function migrateBlock(props: MigrationProperties): Promise<boolean> {
-	const schemaName = props.schemaName || 'public';
+	const schemaName = props.schemaName || DEFAULT_SCHEMA;
 	const engine = buildEngine(schemaName);
 	try {
 		if (props.migrationsBucket && props.migrationsKey) {
-			// Validated at synth; the dsql-lint binary is not deployed with the Lambda.
-			const plan = buildMigrationPlan(await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey), {
-				validate: false,
-			});
+			// Linted at synth; the dsql-lint binary is not deployed with the Lambda.
+			const plan = buildMigrationPlan(await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey));
 			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName }));
 			console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');
 			if (result.waitingOn) {

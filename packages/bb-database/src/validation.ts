@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-blocks/core';
 import { DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
 import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from './constants.js';
 import { formatDiagnostic, type LintDiagnostic, lintSql } from './dsql-lint.js';
@@ -9,8 +9,12 @@ import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from './errors.js';
 
 const DOCS = 'https://docs.aws.amazon.com/aurora-dsql/latest/userguide';
 const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;
-const DDL_DOC = `${DOCS}/working-with-ddl.html`;
 const QUOTAS_DOC = `${DOCS}/CHAP_quotas.html`;
+
+// DSQL's asynchronous DDL: `CREATE [UNIQUE] INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE CONSTRAINT`
+// (the only ALTER TABLE form that takes ASYNC). Each returns a job id instead of finishing in the statement.
+// Group 1 is the statement without ASYNC, so `replace(ASYNC_DDL, '$1')` is the synchronous spelling.
+export const ASYNC_DDL = /^(\s*(?:CREATE\s+(?:UNIQUE\s+)?INDEX|ALTER\s+TABLE))\s+ASYNC\b/i;
 
 export function stripLiteralsAndComments(sql: string): string {
 	let result = '';
@@ -99,38 +103,41 @@ export function validateStatement(sql: string): void {
 	throw validationError(issues.map((i) => i.message).join(' '), issues[0].doc);
 }
 
-export function classifyStatement(sql: string): 'ddl' | 'dml' | 'other' {
-	const cleaned = stripLiteralsAndComments(sql).trim();
-	if (/^\s*(CREATE|ALTER|DROP)\b/i.test(cleaned)) return 'ddl';
-	if (/^\s*(INSERT|UPDATE|DELETE|MERGE)\b/i.test(cleaned)) return 'dml';
-	return 'other';
+export type StatementKind = 'ddl' | 'dml' | 'other';
+
+export interface StatementInfo {
+	/** The statement with comments removed and every literal replaced, for keyword matching. */
+	cleaned: string;
+	kind: StatementKind;
+}
+
+export function inspectStatement(sql: string): StatementInfo {
+	const cleaned = stripLiteralsAndComments(sql);
+	let kind: StatementKind = 'other';
+	if (/^\s*(CREATE|ALTER|DROP)\b/i.test(cleaned)) kind = 'ddl';
+	else if (/^\s*(INSERT|UPDATE|DELETE|MERGE)\b/i.test(cleaned)) kind = 'dml';
+	return { cleaned, kind };
+}
+
+export function classifyStatement(sql: string): StatementKind {
+	return inspectStatement(sql).kind;
 }
 
 function transactionLimitError(detail: string): Error {
-	const err = new Error(`${detail} Split the work into smaller transactions. (${QUOTAS_DOC})`);
-	err.name = DatabaseErrors.TransactionRowLimitExceeded;
-	return brandBlocksError(err);
+	return blocksError(
+		DatabaseErrors.TransactionRowLimitExceeded,
+		`${detail} Split the work into smaller transactions. (${QUOTAS_DOC})`,
+	);
 }
 
+// Only the per-transaction data limits: DDL never reaches a tracker (the mock refuses it outside a
+// migration, and the migration runner runs DDL outside any transaction).
 export class TransactionTracker {
-	private ddlCount = 0;
-	private hasDml = false;
 	private rowCount = 0;
 	private bytes = 0;
 
-	recordStatement(sql: string, params?: unknown[]): void {
-		const type = classifyStatement(sql);
-		if (type === 'ddl') {
-			if (this.hasDml) throw validationError('DSQL does not allow DDL and DML in the same transaction.', DDL_DOC);
-			this.ddlCount++;
-			if (this.ddlCount > 1) throw validationError('DSQL allows only 1 DDL statement per transaction.', DDL_DOC);
-		}
-		if (type === 'dml') {
-			if (this.ddlCount > 0)
-				throw validationError('DSQL does not allow DDL and DML in the same transaction.', DDL_DOC);
-			this.hasDml = true;
-			this.recordBytes(sql, params);
-		}
+	recordStatement(kind: StatementKind, sql: string, params?: unknown[]): void {
+		if (kind === 'dml') this.recordBytes(sql, params);
 	}
 
 	// An approximation: DSQL counts the data actually modified; locally the statement text and parameters
@@ -160,15 +167,11 @@ export class TransactionTracker {
 	}
 
 	reset(): void {
-		this.ddlCount = 0;
-		this.hasDml = false;
 		this.rowCount = 0;
 		this.bytes = 0;
 	}
 }
 
 function validationError(message: string, doc: string): Error {
-	const err = new Error(`${message} (${doc})`);
-	err.name = DSQL_VALIDATION_ERROR_NAME;
-	return brandBlocksError(err);
+	return blocksError(DSQL_VALIDATION_ERROR_NAME, `${message} (${doc})`);
 }

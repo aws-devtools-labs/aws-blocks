@@ -3,10 +3,10 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { buildMigrationPlan } from './migrations/plan.js';
+import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
 
-const plan = (sql: string) => buildMigrationPlan({ '001.sql': sql });
-const steps = (sql: string) => plan(sql).files[0].steps;
+const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }).files[0].steps;
+const lint = (sql: string) => lintMigrationFiles({ '001.sql': sql });
 
 describe('migration plan (dsql): sequencing', () => {
 	test('DDL runs outside the transaction, DML inside', () => {
@@ -34,11 +34,11 @@ describe('migration plan (dsql): sequencing', () => {
 		assert.strictEqual(uniqueWait.kind, 'wait-job');
 	});
 
-	test('ALTER TABLE ASYNC … VALIDATE CONSTRAINT is a validate-constraint step followed by a wait', () => {
+	test('ALTER TABLE ASYNC … VALIDATE CONSTRAINT is followed by a wait on the job DSQL returns', () => {
 		const s = steps('ALTER TABLE ASYNC t VALIDATE CONSTRAINT c;');
 		assert.deepStrictEqual(
 			s.map((x) => x.kind),
-			['validate-constraint', 'wait-job'],
+			['statement', 'wait-job'],
 		);
 		assert.strictEqual(s[0].sql, 'ALTER TABLE ASYNC t VALIDATE CONSTRAINT c');
 		assert.ok(s.every((x) => !x.transactional));
@@ -80,7 +80,7 @@ describe('migration plan (dsql): sequencing', () => {
 				'statement',
 				'statement',
 				'statement',
-				'validate-constraint',
+				'statement',
 				'wait-job',
 				'statement',
 				'wait-job',
@@ -111,12 +111,11 @@ describe('migration plan (dsql): sequencing', () => {
 			p.files.map((f) => f.file),
 			['001_init.sql', '002_seed.sql'],
 		);
-		assert.strictEqual(p.target, 'dsql');
 	});
 });
 
-describe('migration plan (dsql): what stops it', () => {
-	test('the PostgreSQL spelling of a DSQL form stops the plan with dsql-lint’s rule, message and suggestion, naming the file', () => {
+describe('migration lint (dsql): what stops it', () => {
+	test('the PostgreSQL spelling of a DSQL form stops the lint with dsql-lint’s rule, message and suggestion, naming the file', () => {
 		const cases: [file: string, sql: string, rule: string, suggestion: RegExp][] = [
 			[
 				'001_serial.sql',
@@ -148,7 +147,7 @@ describe('migration plan (dsql): what stops it', () => {
 		];
 		for (const [file, sql, rule, suggestion] of cases) {
 			assert.throws(
-				() => buildMigrationPlan({ [file]: sql }),
+				() => lintMigrationFiles({ [file]: sql }),
 				(e: Error) =>
 					e.name === 'DsqlMigrationValidationError' &&
 					e.message.includes(`${file}: ${rule}: `) &&
@@ -158,9 +157,9 @@ describe('migration plan (dsql): what stops it', () => {
 		}
 	});
 
-	test('what DSQL cannot run at all stops the plan the same way, with the doc page', () => {
+	test('what DSQL cannot run at all stops the lint the same way, with the doc page', () => {
 		assert.throws(
-			() => buildMigrationPlan({ '002_rls.sql': 'CREATE POLICY p ON t USING (true);' }),
+			() => lintMigrationFiles({ '002_rls.sql': 'CREATE POLICY p ON t USING (true);' }),
 			(e: Error) =>
 				e.name === 'DsqlMigrationValidationError' &&
 				/002_rls\.sql: unsupported_create_policy: CREATE POLICY \(Row-Level Security\) is not supported/.test(
@@ -169,17 +168,17 @@ describe('migration plan (dsql): what stops it', () => {
 				/docs\.aws\.amazon\.com\/aurora-dsql/.test(e.message),
 		);
 		assert.throws(
-			() => plan('ALTER TABLE t ALTER COLUMN a SET NOT NULL;'),
+			() => lint('ALTER TABLE t ALTER COLUMN a SET NOT NULL;'),
 			/at_unsupported_alter_column_set_not_null/,
 		);
-		assert.throws(() => plan('CREATE TABLE t (id TEXT PRIMARY KEY, tags TEXT[]);'), /array_type/);
-		assert.throws(() => plan('GRANT USAGE ON SCHEMA public TO blocks_app_x;'), /grant_on_public_schema/);
+		assert.throws(() => lint('CREATE TABLE t (id TEXT PRIMARY KEY, tags TEXT[]);'), /array_type/);
+		assert.throws(() => lint('GRANT USAGE ON SCHEMA public TO blocks_app_x;'), /grant_on_public_schema/);
 	});
 
 	test('every finding across every file is listed, so one deploy attempt shows them all', () => {
 		assert.throws(
 			() =>
-				buildMigrationPlan({
+				lintMigrationFiles({
 					'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nCREATE INDEX t_id ON t (id);',
 					'002.sql': 'TRUNCATE t;',
 				}),
@@ -194,8 +193,9 @@ describe('migration plan (dsql): what stops it', () => {
 		);
 	});
 
-	test('validate: false skips the linter (the migration Lambda, whose files were checked at synth)', () => {
-		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' }, { validate: false });
+	test('a clean file lints without error; the plan itself never lints (the migration Lambda plans files checked at synth)', () => {
+		lintMigrationFiles({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
+		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' });
 		assert.strictEqual(p.files[0].steps[0].sql, 'CREATE TABLE t (id SERIAL PRIMARY KEY)');
 	});
 });

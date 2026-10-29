@@ -107,7 +107,10 @@ export function lintSql(sql: string): LintDiagnostic[] {
 				line: d.line,
 				statementPreview: d.statement_preview,
 			}));
-	if (cache.size >= CACHE_LIMIT) cache.clear();
+	if (cache.size >= CACHE_LIMIT) {
+		const oldest = cache.keys().next();
+		if (!oldest.done) cache.delete(oldest.value);
+	}
 	cache.set(sql, diagnostics);
 	return diagnostics;
 }

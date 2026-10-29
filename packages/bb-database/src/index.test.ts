@@ -503,11 +503,13 @@ async function withMigrations(db: Database, files: Record<string, string>): Prom
 	const dir = join(DATA_DIR, `${db.fullId}-migrations`);
 	mkdirSync(dir, { recursive: true });
 	for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
-	const { buildMigrationPlan } = await import('./migrations/plan.js');
+	const { buildMigrationPlan, lintMigrationFiles } = await import('./migrations/plan.js');
 	const { loadMigrationFiles, runMigrationPlan } = await import('./migrations/runner.js');
 	const { MockEngine } = await import('./engines/mock-engine.js');
 	const engine = (await internalAccess(db, 'withMigrations').engine()) as InstanceType<typeof MockEngine>;
-	const plan = buildMigrationPlan(loadMigrationFiles(dir));
+	const migrations = loadMigrationFiles(dir);
+	lintMigrationFiles(migrations);
+	const plan = buildMigrationPlan(migrations);
 	await engine.withDdl(() => runMigrationPlan(engine, plan, { schemaName: db.schemaName, log: () => {} }));
 }
 

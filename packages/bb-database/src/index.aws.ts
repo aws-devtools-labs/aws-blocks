@@ -5,8 +5,8 @@ import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
-import { DEFAULT_CLUSTER_ID, ENV_VAR_PREFIX, sanitizeDbRoleName, toEnvName } from './constants.js';
-import { registerSchema, registerUniqueId, resolveCluster } from './core/construction.js';
+import { clusterConfigKey, sanitizeDbRoleName, searchPathFor } from './constants.js';
+import { registerDatabase, registerUniqueId } from './core/construction.js';
 import { DatabaseCore } from './core/index.js';
 import { registerInternalAccess } from './core/internal.js';
 import { DsqlEngine } from './engines/dsql-engine.js';
@@ -26,9 +26,10 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Keyed by cluster, not by block, so every block on one cluster reads the same config.
 function readClusterConfig(clusterFullId: string): Record<string, string> {
-	const env = toEnvName(clusterFullId);
-	const read = (suffix: string) => process.env[`${ENV_VAR_PREFIX}_${env}_${suffix}`] ?? '';
-	return { clusterEndpoint: read('ENDPOINT'), region: read('REGION') };
+	return {
+		clusterEndpoint: process.env[clusterConfigKey(clusterFullId, 'ENDPOINT')] ?? '',
+		region: process.env[clusterConfigKey(clusterFullId, 'REGION')] ?? '',
+	};
 }
 
 /** At runtime a cluster only names the deployed resource; each block opens its own connections. */
@@ -61,13 +62,9 @@ export class Database extends Scope {
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
-		registerUniqueId('Database', id, this.fullId);
-
-		const resolved = resolveCluster(id, this.fullId, options);
-		this.cluster = resolved.ref;
-		this.schemaName = resolved.schemaName;
-		const clusterFullId = resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id;
-		registerSchema(clusterFullId, this.schemaName, this.fullId);
+		const { ref, schemaName, clusterFullId } = registerDatabase(id, this.fullId, options);
+		this.cluster = ref;
+		this.schemaName = schemaName;
 
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: clusterFullId,
@@ -75,13 +72,11 @@ export class Database extends Scope {
 			...readClusterConfig(clusterFullId),
 		});
 
-		const searchPath = this.schemaName !== 'public' ? this.schemaName : undefined;
-
 		const buildEngine = async (): Promise<DatabaseEngine> => {
 			const { clusterEndpoint, region } = getSdkIdentifiers(this);
 			if (!clusterEndpoint || !region) {
 				throw configError(
-					`Database '${this.fullId}' is not configured: missing ${ENV_VAR_PREFIX}_${toEnvName(clusterFullId)}_ENDPOINT / _REGION. Ensure the cluster is provisioned.`,
+					`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
 				);
 			}
 			const signer = new DsqlSigner({ hostname: clusterEndpoint, region });
@@ -89,7 +84,7 @@ export class Database extends Scope {
 				endpoint: clusterEndpoint,
 				role: sanitizeDbRoleName(clusterFullId),
 				getAuthToken: () => signer.getDbConnectAuthToken(),
-				searchPath,
+				searchPath: searchPathFor(this.schemaName),
 			});
 		};
 
