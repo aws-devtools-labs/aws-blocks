@@ -72,13 +72,13 @@ Every run used its own stack name, checked unused first, and touched nothing tha
 | L44 | **(c):** keep `stubIdp()` as shipped and document the env-switch pattern; no `{ local, deployed }` option unless users ask | R102; `bb-auth/README.md` |
 | L69 | **(b):** build a browser helper on the existing `/aws-blocks/auth/*` routes, in a separate PR | R103; built on `auth/browser-helper` (R121) |
 | D1 | `AuthBasic` users must sign up again: **signed off** (no AWS Blocks app runs in production yet) | R104; backlog L74 |
-| Q2 | Every deployed sign-up confirms with an emailed code: **signed off** | R104; follow-up L75 |
+| Q2 | Every deployed sign-up confirms with an emailed code: **signed off** | R104; follow-up L75 built (R122) |
 | L54 | Raise it in the #blocks Slack channel | open, below |
 
 ## Follow-ups (not in this PR)
 
 - ~~**F-L69 — browser sign-in helper**~~ Built on `auth/browser-helper` (R121): `createAuthClient()` from `@aws-blocks/bb-auth/browser-client`. Its own PR, stacked on #711. Open from it: L79.
-- **L75 — an SES option on `AuthOptions`** (CDK `UserPoolEmail.withSES()`), before GA, so the default path can reach production without `Auth.fromExisting`.
+- **L75 — an SES option on `AuthOptions`:** built as `email` on branch `auth/ses-email`, for its own PR stacked on #711 (R122). Needs a real-AWS run before merge.
 - **L74 — "import existing users on first sign-in"** through Cognito's User Migration trigger. Backlog.
 - **Client-driven apps (R105, additive):** an `appClients` option, an `auth` section in the generated frontend config (or an Amplify-outputs-compatible file), an Identity Pool option, a Cognito-tokens → session route for SSR, a Kotlin `AuthProvider`, and `phase: 'signIn'` through Cognito triggers (L77).
 

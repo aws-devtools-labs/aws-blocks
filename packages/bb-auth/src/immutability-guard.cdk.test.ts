@@ -67,6 +67,9 @@ const PERMITTED: Record<string, string> = {
 	// Q10: `validateUser` adds the PreSignUp trigger (`LambdaConfig`), an in-place pool update.
 	'adding validateUser (PreSignUp trigger, LambdaConfig)':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, validateUser: async () => {} })",
+	// L75: an SES sender (`EmailConfiguration`) is an in-place pool update ("No interruption").
+	'adding an SES email sender (email, EmailConfiguration)':
+		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, email: { fromAddress: 'no-reply@example.com', fromName: 'Example' } })",
 };
 
 const GUARDED: Record<string, { build: string; property: string; message: RegExp }> = {
