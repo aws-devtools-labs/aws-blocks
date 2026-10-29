@@ -18,7 +18,7 @@ import {
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
-import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
+import { resolveApiNamespace, resolveApiMethod, rpcErrorHttpStatus } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -644,6 +644,9 @@ function createHandler(backend: any) {
     // Declared outside the try so the error path can still deliver cookies the
     // method set before throwing (e.g. clearing a dead session on a 401).
     let responseHeaders: Headers | undefined;
+    // Also outside the try: an `httpErrorStatus` namespace answers a 4xx error
+    // with that HTTP status (see rpcErrorHttpStatus).
+    let apiHandler: unknown;
 
     try {
       const headers = new Headers(event.headers || {});
@@ -672,7 +675,7 @@ function createHandler(backend: any) {
 
       // Get the API by export name. resolveApiNamespace refuses exported Building
       // Block instances and `_`-private exports, so only an API surface is callable.
-      const apiHandler = resolveApiNamespace(backend, apiNamespace);
+      apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -705,7 +708,7 @@ function createHandler(backend: any) {
       // The body is unchanged (message/name only — never SDK metadata).
       const cookies = errorResponseSetCookies(responseHeaders);
       return {
-        statusCode: 200,
+        statusCode: rpcErrorHttpStatus(apiHandler, error),
         headers: rpcHeaders,
         ...(cookies.length > 0 ? cookieResponseFields(event, cookies) : {}),
         body: errorResponseFromCatch(error, rpcId),

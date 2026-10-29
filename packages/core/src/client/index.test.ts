@@ -192,6 +192,46 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
   });
 });
 
+describe('ApiNamespaceClient — an RPC error decodes the same whatever the HTTP status', () => {
+  // A namespace with `httpErrorStatus: true` answers a 4xx ApiError with that
+  // HTTP status; the body is unchanged. The client must read the body either
+  // way, so the error a caller sees does not depend on the option.
+  const errorBody = JSON.stringify({
+    jsonrpc: '2.0',
+    error: { code: 401, message: 'Authentication required', data: { name: 'NotAuthenticated' } },
+    id: 1,
+  });
+
+  async function callWithStatus(status: number): Promise<unknown> {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(errorBody, { status, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ whoami(): Promise<string> }>('api', { url: '/aws-blocks/api' });
+      await api.whoami();
+      assert.fail('expected the call to reject');
+    } catch (e) {
+      return e;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it('a 401 body on HTTP 401 and on HTTP 200 rejects with the same ApiError', async () => {
+    const { ApiError, isBlocksError } = await import('./index.js');
+    const on401 = await callWithStatus(401);
+    const on200 = await callWithStatus(200);
+    for (const e of [on401, on200]) {
+      assert.ok(e instanceof ApiError);
+      assert.strictEqual(e.status, 401);
+      assert.strictEqual(e.name, 'NotAuthenticated');
+      assert.strictEqual(e.message, 'Authentication required');
+      assert.ok(isBlocksError(e, 'NotAuthenticated'));
+    }
+  });
+});
+
 describe('ApiNamespaceClient namespace identity', () => {
   it('answers Symbol.for("aws-blocks.apiNamespace") with its namespace, plus the URL when overridden', async () => {
     const { ApiNamespaceClient } = await import('./index.js');

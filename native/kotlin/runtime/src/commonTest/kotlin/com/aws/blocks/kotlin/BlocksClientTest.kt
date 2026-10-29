@@ -9,8 +9,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import com.aws.blocks.kotlin.exceptions.ApiException
+import com.aws.blocks.kotlin.exceptions.NetworkException
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 
 class BlocksClientTest {
 
@@ -50,5 +54,52 @@ class BlocksClientTest {
     fun `rpcUrl leaves the base for a method without namespace`() {
         rpcUrl("https://a.example/aws-blocks/api", "greet") shouldBe "https://a.example/aws-blocks/api"
         rpcUrl("https://a.example/aws-blocks/api", ".greet") shouldBe "https://a.example/aws-blocks/api"
+    }
+
+    private fun clientAnswering(status: HttpStatusCode, body: String) = BlocksClient(
+        BlocksServer("local", "http://localhost:3000/aws-blocks/api"),
+        defaultHttpClient(
+            MockEngine {
+                respond(
+                    content = ByteReadChannel(body),
+                    status = status,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            },
+            cookiesStorage = AcceptAllCookiesStorage(),
+        ),
+    )
+
+    private val unauthenticatedBody =
+        """{"jsonrpc":"2.0","error":{"code":401,"message":"Authentication required","data":{"name":"NotAuthenticatedException"}},"id":1}"""
+
+    @Test
+    fun `a JSON-RPC error on HTTP 401 (httpErrorStatus) is the same ApiException as on HTTP 200`() = runTest {
+        for (status in listOf(HttpStatusCode.Unauthorized, HttpStatusCode.OK)) {
+            val e = assertFailsWith<ApiException> {
+                clientAnswering(status, unauthenticatedBody)
+                    .execute(BlocksRequest(method = "api.authRequired", params = emptyList(), id = 1))
+            }
+            e.code shouldBe 401
+            e.message shouldBe "Authentication required"
+            e.data?.get("name")?.jsonPrimitive?.content shouldBe "NotAuthenticatedException"
+        }
+    }
+
+    @Test
+    fun `a non-2xx response without a JSON-RPC error stays a NetworkException`() = runTest {
+        val routeError = assertFailsWith<NetworkException> {
+            clientAnswering(HttpStatusCode.NotFound, """{"error":"Not Found"}""")
+                .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        }
+        routeError.statusCode shouldBe 404
+        routeError.message shouldBe "Not Found"
+
+        val notJson = assertFailsWith<NetworkException> {
+            clientAnswering(HttpStatusCode.BadGateway, "<html>bad gateway</html>")
+                .execute(BlocksRequest(method = "api.x", params = emptyList(), id = 1))
+        }
+        notJson.statusCode shouldBe 502
+        notJson.message shouldBe "HTTP 502"
     }
 }
