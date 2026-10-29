@@ -9,8 +9,10 @@ import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks
 
 export const api = __BLOCKS_ApiNamespaceClient__('api');
 export const authApi = __BLOCKS_ApiNamespaceClient__('authApi');
+export const isolatedApi = __BLOCKS_ApiNamespaceClient__('isolatedApi');
 
 export const generateClient = (config) => ({
     api: __BLOCKS_ApiNamespaceClient__('api', config),
     authApi: __BLOCKS_ApiNamespaceClient__('authApi', config),
+    isolatedApi: __BLOCKS_ApiNamespaceClient__('isolatedApi', config),
 });

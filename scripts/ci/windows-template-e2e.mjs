@@ -29,13 +29,22 @@ function shutdown() {
 /** Run a one-shot command; throw on non-zero exit. */
 const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 
-/** Run a one-shot command; never throw (best-effort cleanup). */
-function runBestEffort(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (best-effort, cwd: ${opts.cwd ?? ROOT})`);
+/** Teardown commands that failed; a failed teardown leaves a stack deployed. */
+const teardownFailures = [];
+
+/**
+ * Run a teardown command without throwing, so a failed destroy can't mask the
+ * phase's own result or skip the next teardown. Failures are recorded and fail
+ * the job at the end: a silently ignored destroy leaked one stack per run.
+ */
+function runTeardown(cmd, args, opts = {}) {
+  console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? ROOT})`);
   try {
     runSpawn(cmd, args, opts, ROOT, { log: false });
   } catch (e) {
-    console.warn(`  (cleanup ignored: ${e?.message ?? e})`);
+    const failure = `${cmd} ${args.join(' ')}: ${e?.message ?? e}`;
+    teardownFailures.push(failure);
+    console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
   }
 }
 
@@ -78,11 +87,22 @@ async function main() {
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
   writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
-  const env = { ...process.env, NPM_CONFIG_USERCONFIG: userNpmrc, npm_config_cache: join(work, '.npm-cache') };
+  // This harness is test traffic, not real usage; suppress CLI telemetry so a
+  // local run (no CI env var set) is not counted as a real user. See the
+  // cross-platform driver templates-e2e.mjs for the full rationale.
+  const env = {
+    ...process.env,
+    NPM_CONFIG_USERCONFIG: userNpmrc,
+    npm_config_cache: join(work, '.npm-cache'),
+    AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+  };
 
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
-  const app = join(work, 'my-app');
+  // The app name becomes the stack-name prefix (.blocks/config.json stackId).
+  // Keep it under `bb-test-`: the CI role can only delete stacks with the test
+  // prefixes, so cleanup-stacks.yml can reclaim a stack a failed run leaves.
+  const app = join(work, 'bb-test-win');
   // `backend` template is backend-only (no DynamoDB/GSI/Aurora) → fast deploy.
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
 
@@ -106,7 +126,7 @@ async function main() {
     killTree(sb.pid);
     console.log('OK: npm run sandbox deployed');
   } finally {
-    runBestEffort('npm', ['run', 'sandbox:destroy'], inApp);
+    runTeardown('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
   // Phase 3: production deploy → destroy.
@@ -114,9 +134,12 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    runBestEffort('npm', ['run', 'destroy'], inApp);
+    runTeardown('npm', ['run', 'destroy'], inApp);
   }
 
+  if (teardownFailures.length > 0) {
+    throw new Error(`teardown failed, stack(s) may be left deployed:\n  ${teardownFailures.join('\n  ')}`);
+  }
   console.log(`\nOK: scaffolded backend template dev + sandbox + deploy all work on ${process.platform}.`);
 }
 

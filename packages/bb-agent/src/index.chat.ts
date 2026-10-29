@@ -28,7 +28,7 @@
 
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
-import { AgentErrors, blocksAgentError } from './errors.js';
+import { AgentErrors, agentErrorFromChunk, blocksAgentError } from './errors.js';
 
 export type { ChatTransport, ChunkStream, TurnRequest, RealtimeChannelDescriptor } from './transport.js';
 export { realtimeTransport } from './transport.js';
@@ -121,7 +121,9 @@ export interface CreateChatOptions {
 	 * Called when the agent encounters an error. `error` is the message; `cause` is the
 	 * original error object when the failure was a rejected attach/run (undefined for a
 	 * stream `error` chunk, which carries only a message), so a call site can
-	 * `isBlocksError(cause, ...)` to branch on error type.
+	 * `isBlocksError(cause, ...)` to branch on error type. An `error` chunk the server
+	 * classified (e.g. a Bedrock model the account cannot invoke) does carry a `cause`:
+	 * the branded error it maps to, such as `AgentErrors.ModelUnavailable`.
 	 */
 	onError?: (error: string, cause?: unknown) => void;
 	/** Called when the agent pauses for human approval. Continue with `sendMessage({ interruptResponses })`.
@@ -527,8 +529,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 			clearFailsafe();
 			setLoading(false);
 			// Report at most once per turn: a prior send-rejection may have already surfaced
-			// onError for this same (server-started) turn.
-			reportError(chunk.error ?? 'Unknown error');
+			// onError for this same (server-started) turn. A server-classified failure (errorName)
+			// also passes the branded error as `cause`, so call sites can isBlocksError() on it.
+			reportError(chunk.error ?? 'Unknown error', chunk.errorName ? agentErrorFromChunk(chunk) : undefined);
 		}
 
 		if (chunk.type === 'interrupt' && chunk.interrupts) {

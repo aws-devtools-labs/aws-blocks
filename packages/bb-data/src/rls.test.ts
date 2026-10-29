@@ -143,3 +143,23 @@ test('withRLS: rolls back on query failure', async () => {
   const rollback = calls.find(c => c.method === 'rollbackTransaction');
   assert.ok(rollback, 'Expected rollbackTransaction to be called');
 });
+
+// A caller-supplied `sub` or `role` in `claims` (for example passed through from
+// an identity provider) must not change what reaches request.jwt.claims: an RLS
+// policy that reads either claim must see the server-derived value.
+test('withRLS: claims cannot override the server-derived sub and role', async () => {
+  const { engine, calls } = createMockEngine();
+  const db = new RLSEnabledDatabase(engine);
+
+  await db.withRLS({
+    userId: 'user-1',
+    role: 'anon',
+    claims: { sub: 'victim', role: 'service_role', email: 'a@example.com' },
+  }).query(sql`SELECT 1`);
+
+  assert.strictEqual((calls[1].args as any[])[1], 'SET LOCAL ROLE anon');
+  const claims = JSON.parse((calls[2].args as any[])[2][0]);
+  assert.strictEqual(claims.sub, 'user-1');
+  assert.strictEqual(claims.role, 'anon');
+  assert.strictEqual(claims.email, 'a@example.com', 'non-reserved claims still pass through');
+});

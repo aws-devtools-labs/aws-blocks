@@ -69,16 +69,19 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 /**
  * **Single application configuration value backed by SSM Parameter Store.**
  *
- * Use for feature flags, API URLs, thresholds, or structured config objects.
- * Set `secret: true` for sensitive values (API keys, tokens) — stored as SSM
- * SecureString encrypted with the `aws/ssm` KMS key. Each instance maps to
- * exactly one SSM parameter. Supports schema validation for typed objects.
+ * Use for non-sensitive config — feature flags, API URLs, thresholds, or
+ * structured config objects. `secret: true` stores the value encrypted at rest,
+ * a free fallback for a low-value secret; for a production secret (API keys,
+ * OAuth secrets, connection strings) prefer `Secret`, the recommended home for
+ * credentials. Each instance maps to exactly one SSM parameter. Supports schema
+ * validation for typed objects.
  *
  * Package: `@aws-blocks/bb-app-setting`
  * Full docs: `README.md` in the package directory above.
  */
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	AsyncJobState,
@@ -89,17 +92,43 @@ export type {
 	WaitUntilCompleteOptions,
 } from '@aws-blocks/bb-async-job';
 /**
- * **Background job processing backed by SQS and Lambda.**
+ * **Background job processing backed by SQS, run on Lambda or a container.**
  *
  * Use for fire-and-forget async work: sending emails, processing uploads,
- * generating reports, or any task that shouldn't block an API response.
- * Supports single and batch submission (up to 10), optional delay, schema
- * validation, and automatic retries with dead-letter queue.
+ * generating reports, or any task that shouldn't block an API response. Runs on
+ * the app's default serverless compute, or assign a container `Compute` (Fargate)
+ * for long-running or high-memory jobs. Supports single and batch submission (up
+ * to 10,000 per call), optional delay, schema validation, and automatic retries
+ * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
  * Full docs: `README.md` in the package directory above.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+/**
+ * **`Compute` — choose where a workload runs by stating its type.**
+ *
+ * Construct a `Compute` with an explicit `type` (`'serverless'` | `'container'`)
+ * and that type's options; Blocks maps the type to the AWS service that backs it
+ * (`serverless` → Lambda, `container` → Fargate) — the service name never appears
+ * in your code. Options are a discriminated union on `type`, so an attribute that
+ * doesn't apply to the chosen type is a compile error. Hand the result to a
+ * handler-bearing block via its `compute` option (e.g. `AsyncJob`); omit it and
+ * the workload uses the app default (serverless).
+ *
+ * Package: `@aws-blocks/bb-compute`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
+export type {
+	ComputeOptions,
+	ComputeType,
+	ContainerComputeOptions,
+	ContainerScaling,
+	ContainerSize,
+	ScalingSignal,
+	ServerlessComputeOptions,
+} from '@aws-blocks/core';
 /**
  * **Username/password authentication with JWT sessions.**
  *
@@ -298,11 +327,13 @@ export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
 	CorsRule,
 	ExternalBucketRef as FBExternalBucketRef,
+	ExternalKmsKeyRef as FBExternalKmsKeyRef,
 	FileBucketOptions,
 	FileContent,
 	FileInfo,
 	GetUrlOptions,
 	LifecycleRule,
+	ObjectLockOptions,
 	PutOptions as FBPutOptions,
 	PutUrlOptions,
 	ScanOptions as FBScanOptions,
@@ -418,6 +449,26 @@ export type {
  * Full docs: `README.md` in the package directory above.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
+export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
+/**
+ * **Single application secret backed by AWS Secrets Manager.**
+ *
+ * Use for high-value credentials — third-party API keys, OAuth client secrets,
+ * database connection strings, webhook signing keys, encryption keys. Each
+ * instance maps to exactly one Secrets Manager secret with scoped read/write
+ * IAM grants. `get()` returns `null` when unset; `put()` sets the value at
+ * runtime. Supports an optional schema for typed JSON secrets, and
+ * `Secret.fromExisting(arn)` to wrap a secret owned outside the stack.
+ *
+ * This is the recommended home for production secrets — any credential that
+ * protects a production app. For non-sensitive configuration, use `AppSetting`
+ * instead; `AppSetting` with `secret: true` is only a free, encrypted fallback
+ * for a low-value secret (e.g. a prototype).
+ *
+ * Package: `@aws-blocks/bb-secret`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
 /**
  * **Distributed tracing backed by AWS X-Ray.**

@@ -150,6 +150,22 @@ void describe('ComputeConstruct', () => {
         InvokeMode: 'RESPONSE_STREAM',
       });
     });
+
+    void it("creates a BUFFERED Function URL for a streaming function built with responseMode 'buffered'", () => {
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'image-optimization',
+        computeResource: handlerResource(bundle),
+        responseMode: 'buffered',
+      });
+
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Url', {
+        AuthType: 'AWS_IAM',
+        InvokeMode: 'BUFFERED',
+      });
+    });
   });
 
   // ---- HTTP Server type ----
@@ -383,6 +399,29 @@ void describe('ComputeConstruct', () => {
       // Synthesizing the app materializes the shared edge-lambda-stack; if the
       // ids collided this would throw.
       assert.doesNotThrow(() => App.of(stack)?.synth());
+    });
+
+    void it('throws EdgeComputeRequiresRegionError on a stack with no explicit region', () => {
+      // Without a concrete region, experimental.EdgeFunction fails synth with
+      // CDK's generic "stacks which use EdgeFunctions must have an explicitly
+      // set region", which names neither the edge route nor the fix.
+      const bundle = createBundleDir();
+      const stack = createStack();
+
+      assert.throws(
+        () =>
+          new ComputeConstruct(stack, 'Compute', {
+            name: 'edge1',
+            computeResource: edgeResource(bundle),
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof HostingError);
+          assert.strictEqual(err.name, 'EdgeComputeRequiresRegionError');
+          assert.ok(err.message.includes("'edge1'"), err.message);
+          assert.ok(err.resolution.includes('CDK_DEFAULT_REGION'), err.resolution);
+          return true;
+        },
+      );
     });
   });
 

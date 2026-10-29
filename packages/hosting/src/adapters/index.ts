@@ -10,6 +10,13 @@ import { sveltekitAdapter } from './sveltekit.js';
 import { DeployManifest } from '../manifest/types.js';
 
 export { spaAdapter } from './spa.js';
+export {
+  type ComputeArch,
+  type ComputeTarget,
+  targetCompute,
+  targetComputeArch,
+  withComputeTarget,
+} from './shared/compute_target.js';
 export type { SpaAdapterOptions } from './spa.js';
 export { nextjsAdapter } from './nextjs.js';
 export type { NextjsAdapterOptions } from './nextjs.js';

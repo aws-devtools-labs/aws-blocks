@@ -2,11 +2,13 @@
 
 package com.aws.blocks.kotlin.e2e
 
-import blocks.e2e.OidcAuthApi
+import blocks.e2e.oidcAuthApi
 import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
+import com.aws.blocks.kotlin.oidc.OidcSignInOptions
+import com.aws.blocks.kotlin.oidc.OidcSignInOutcome
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
@@ -22,7 +24,10 @@ import kotlinx.coroutines.test.runTest
  */
 private class RedirectFollowingLauncher : OidcPlatformLauncher {
 
-    override suspend fun openSession(configuredRelayTo: String): OidcRedirectSession =
+    override suspend fun openSession(
+        configuredRelayTo: String,
+        options: OidcSignInOptions,
+    ): OidcRedirectSession =
         object : OidcRedirectSession {
             override val relayTo: String = configuredRelayTo
 
@@ -51,6 +56,8 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
                 }
             }
 
+            override fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+
             override fun close() = Unit
         }
 
@@ -61,7 +68,7 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
 
 class OidcE2ETest {
 
-    private val api = OidcAuthApi(server = e2eServer())
+    private val api = e2eBlocks().oidcAuthApi
 
     @Test
     fun signInReachesSignedIn() = runTest {

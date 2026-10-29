@@ -10,6 +10,7 @@ export const computeResourceSchema = z
     bundle: z.string().min(1, 'Bundle path must not be empty'),
     handler: z.string().optional(),
     entrypoint: z.string().optional(),
+    serverEntry: z.string().optional(),
     port: z.number().positive().optional(),
     placement: z.enum(['regional', 'global']),
     streaming: z.boolean().optional(),
@@ -50,6 +51,7 @@ export const routeBehaviorSchema = z.object({
   pattern: z.string().min(1, 'Route pattern must not be empty'),
   target: z.string().min(1, 'Route target must not be empty'),
   fallback: z.string().optional(),
+  exact: z.boolean().optional(),
 });
 
 /**

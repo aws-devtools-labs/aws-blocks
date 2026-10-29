@@ -151,6 +151,8 @@ Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPres
 
 **Bring-your-own / shared CMK.** `encryption: 'customer-managed'` provisions a **dedicated CMK per table**, so an app with many customer-managed tables accrues one key (and one monthly charge) each. To share a single key across tables, callers pass `DistributedTable.fromKmsKey(keyArn)` — a branded `ExternalKmsKeyRef` — as the `encryption` value; the CDK layer resolves it with `Key.fromKeyArn(...)` and sets it as the table's `encryptionKey` (no new key is minted). The `encryption` option is therefore a three-way value (`'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`) rather than a separate `encryptionKey` field — folding it into one knob avoids a contradictory state (e.g. `encryption: 'aws-managed'` alongside a customer key). This follows the same branded-reference pattern as `fromExisting()` (`ExternalTableRef`) and deliberately keeps the CDK `IKey` type out of the public `types.ts`, which must stay runtime-agnostic across the four export layers — the public surface only ever sees the key's ARN string wrapped in a brand.
 
+**A dedicated CMK follows the table on teardown.** The auto-created key (`encryption: 'customer-managed'` with no imported key) takes the table's resolved removal policy — destroyed with a `disposable` table, retained otherwise — so it is never less durable than the table it encrypts and a sandbox teardown leaves no orphaned, billed key. When PITR is on and the table is `disposable` (production default, or sandbox + `pointInTimeRecovery: true`), destroying the key also makes that table's DynamoDB system backup and any on-demand/AWS Backup copies unrestorable once the KMS 30-day pending-deletion window elapses. This is intentional — a `disposable` table opts out of durable backups — and mirrors `bb-kv-store`. An imported `fromKmsKey` key is owned by the caller and left untouched.
+
 **`fromExisting` is untouched.** When binding to a pre-existing table these options don't apply — the customer owns that table's durability/encryption configuration, exactly as they own its GSIs.
 
 ## Infrastructure (CDK)
@@ -180,6 +182,19 @@ DynamoDB only allows one GSI change per `UpdateTable` call, and each change can 
   2. If the table is idle and matches the desired state, returns `IsComplete: true`.
   3. If the table is idle but doesn't match, initiates the next GSI change and returns `IsComplete: false`.
 
+**Delete:** CloudFormation sends the same Delete request whether `indexes` was removed from the config or the table itself is leaving the stack, and the custom resource (which depends on the table) is deleted while the table still exists in both cases. A `retained`/`locked` table that leaves the stack is orphaned with its data and must keep its indexes (rebuilding a GSI on a large table takes hours); a table that stays must lose the indexes no longer configured. On Delete, `onEvent` therefore reads its own stack with `cloudformation:DescribeStacks` and, during an update's cleanup phase, `cloudformation:GetTemplate` (the current template: the new one after an update, the restored one after a rollback):
+
+| Stack status at Delete | Cause | Table in current template? | Indexes |
+|---|---|---|---|
+| `DELETE_IN_PROGRESS` | stack delete (also a retried delete, or a nested stack removed by its parent) | (not read) | kept |
+| `ROLLBACK_IN_PROGRESS` | the stack's first create failed | (not read) | kept |
+| `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS` | `indexes` removed from the config | yes | dropped one at a time |
+| `UPDATE_COMPLETE_CLEANUP_IN_PROGRESS` | the DistributedTable removed from the app | no | kept |
+| `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS` | a failed update had added `indexes` | yes | dropped one at a time |
+| `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS` | a failed update had added the whole table | no | kept |
+
+A `disposable` table that leaves the stack is deleted right after, so keeping its indexes also spares the stack delete the wait for each drop. If a lookup fails (after the SDK's retries), the indexes are kept: the worst case is an unwanted index left in place, visible and removable, rather than a rebuild on a retained table. A `DescribeStacks` failure (status unknown) keeps them and succeeds. A `GetTemplate` failure in one of the two cleanup statuses keeps them and fails the Delete with a message naming the table and its indexes: a failed delete in the cleanup phase is reported as a `DELETE_FAILED` event and does not roll the update back, so the leftover is visible instead of silent. A stack delete never reaches `GetTemplate`, so the failure cannot block one. `onEvent` passes the "keep" verdict to `isCompleteHandler` through its result (the Provider framework merges it into every isComplete call), so only the `onEvent` role holds the permissions. A Delete whose table no longer exists (`ResourceNotFoundException`) succeeds instead of failing the stack operation; Create and Update still fail on a missing table. A stack created before this behaviour shipped gets it once the upgraded GSI manager code is deployed.
+
 **Ordering:** Creations are performed before deletions when possible. This ensures new access patterns are available before old ones are removed. The one exception is schema-mismatched GSIs — if a desired GSI has the same name as an existing GSI but different key schema, the old one must be deleted first because DynamoDB doesn't support in-place GSI modification.
 
 **IAM policies are split by environment:**
@@ -192,6 +207,7 @@ DynamoDB only allows one GSI change per `UpdateTable` call, and each change can 
 | `dynamodb:CreateTable` | ❌ | ✅ |
 | `dynamodb:Scan` | ❌ | ✅ |
 | `dynamodb:BatchWriteItem` | ❌ | ✅ |
+| `cloudformation:DescribeStacks`, `cloudformation:GetTemplate` (own stack only, `onEvent` role only) | ✅ | ✅ |
 
 Production deployments can only add/remove GSIs via `UpdateTable`. The GSI manager lambda cannot drop or recreate the table, scan its data, or batch-write items. This prevents accidental data loss from a misconfigured custom resource.
 
@@ -206,7 +222,7 @@ Sandbox deployments use a **drop-and-recreate** fast path that bypasses the sequ
 5. Wait for the table and all GSIs to become ACTIVE
 6. Restore all items via `BatchWriteItem`
 
-This is dramatically faster than sequential GSI creation (seconds vs. minutes/hours) but **destroys and recreates the table**. It is only used when `SandboxMode` is `true` (set by the CDK layer based on the `sandboxMode` context variable). The IAM policy for production deployments does not grant the permissions needed for this path, so it cannot execute in production even if `SandboxMode` were accidentally set.
+This is dramatically faster than sequential GSI creation (seconds vs. minutes/hours) but **destroys and recreates the table**. It is only used when `SandboxMode` is `true` (set by the CDK layer based on the `sandboxMode` context variable). The CDK layer reads that context via core's `isSandboxContext()`, so both the string `'true'` (`--context sandboxMode=true`) and a boolean `true` (`cdk.json` or `node.setContext`) select sandbox mode; previously only the string `'true'` did. The IAM policy for production deployments does not grant the permissions needed for this path, so it cannot execute in production even if `SandboxMode` were accidentally set.
 
 ⚠️ **Data loss risk in sandbox:** If the Lambda times out during step 1 (scan) on a very large table, or if the restore in step 6 fails partway through, data may be lost. This is acceptable for sandbox (ephemeral dev environments) but is why the fast path is never used in production.
 

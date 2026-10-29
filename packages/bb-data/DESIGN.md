@@ -46,6 +46,15 @@ bb-data (this package)
 - `pg.Pool` with connection string
 - Used for `fromExisting()` databases (external/managed PostgreSQL providers)
 - Translates pg error codes via shared `translatePgError()`
+- On the AWS runtime, reports the block's BB user-agent chain as the Postgres
+  `application_name` (`Scope.formatUserAgentString()`, e.g.
+  `aws-blocks/<core> bb/Database/<version>`), visible in `pg_stat_activity` on
+  servers that expose it and in provider dashboards (Supabase, Neon). Supplied
+  as pg's `fallback_application_name`, so an `application_name` from the
+  caller's connection string or `PGAPPNAME` wins. Capped at the Postgres
+  63-byte limit, dropping whole parent entries rather than truncating
+  mid-token. Attribution only — no query-behavior impact. Not set on the
+  `DataApiEngine` path (RDS Data API is HTTP, not a pg wire connection).
 
 ## Error Translation
 
@@ -55,10 +64,18 @@ Error translation happens at the engine layer, not the database layer. Each engi
 |---------------|-------------------|
 | `40001` | `SerializationFailure` (→ `ApiError` 409, retriable) |
 | `23505` | `UniqueConstraintViolation` (→ `ApiError` 409, not retriable) |
+| `42501` | `PermissionDenied` (→ `ApiError` 403, not retriable): the caller's statement hit a row-level-security `WITH CHECK` rejection or a missing grant |
+| `23514` | `CheckViolation` (→ `ApiError` 400, not retriable) |
+| `23502` | `NotNullViolation` (→ `ApiError` 400, not retriable) |
+| `23503` | `ForeignKeyViolation` (→ `ApiError` 409, not retriable) |
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
 
 Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
+
+The four request errors (`42501`, `23514`, `23502`, `23503`) are built by the shared `requestError()` helper in `errors.ts`, used by the PGlite, pg-client and Data API engines (the Data API path parses the SQLState from the message), so all three produce an identically shaped `ApiError` with a fixed client message and the driver error kept as `cause`, whether the error is raised by a statement or at `COMMIT` (a deferred constraint). PGlite enforces every constraint and policy, and enforces grants once a statement runs under `SET ROLE` (PGlite itself runs as superuser), so these mappings are verified by engine unit tests against real PGlite and by an over-the-wire e2e test (`test-apps/comprehensive/test/database.test.ts`).
+
+`42501` from `withRLS()`'s own `SET LOCAL ROLE` is not a caller error: it means the database user isn't a member of the role (on PostgreSQL 16+, the role's creator gets only `ADMIN`, not `SET`), which fails every `withRLS()` call. `setRLSContext()` (`rls.ts`) catches that case and re-tags it as a 500 `QueryFailed`, logging the `GRANT <role> TO CURRENT_USER` that fixes it. Only `rls.ts` knows the statement came from the framework, which is why the classification lives there and not in the engine translators.
 
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
 
@@ -168,6 +185,8 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
+| `application_name` on the pg connection | Not reported by the mock/local engine; the AWS `PgClientEngine` path reports the BB user-agent chain (see above) | Intentional. Attribution-only. Unset on the RDS Data API path. |
+| `tsvector` in the select list | PGlite returns it; the RDS Data API cannot represent it and the whole query fails | Keep `tsvector` out of the select list — it is used in `WHERE` / `ORDER BY`, not read back as a value (see the "Local vs. AWS: column types" note in `README.md`) |
 
 ## Relationship to data-common
 

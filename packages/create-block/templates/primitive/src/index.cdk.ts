@@ -4,6 +4,7 @@
 import { Scope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { __BB_CLASS__Options } from './types.js';
+import { BB_NAME } from './version.js';
 
 // ── Public types + errors ────────────────────────────────────────────────────
 export { __BB_CLASS__Errors } from './errors.js';
@@ -16,12 +17,12 @@ export type { __BB_CLASS__Options } from './types.js';
  */
 export class __BB_CLASS__ extends Scope {
 	constructor(scope: ScopeParent, id: string, _options?: __BB_CLASS__Options) {
-		super(id, { parent: scope });
-		// TODO: provision your infrastructure and grant the shared Lambda access.
+		super(id, { parent: scope, bbName: BB_NAME });
+		// TODO: provision your infrastructure and grant the shared execution role access.
 		// Name resources off `this.fullId` so the runtime can derive the same name.
 		// Example:
 		//   const table = new Table(this, 'table', { tableName: this.fullId.substring(0, 255), ... });
-		//   table.grantReadWriteData(this.handler);
+		//   table.grantReadWriteData(this.executionRole);
 		//   registerConfig(this, 'BLOCKS_THING_FLAG', '...'); // extra (non-name) config only
 	}
 

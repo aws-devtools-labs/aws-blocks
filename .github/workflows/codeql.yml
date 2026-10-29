@@ -1,0 +1,92 @@
+name: CodeQL
+
+# Advanced setup: Swift and Kotlin need explicit build steps that CodeQL's
+# default setup can't express (its autobuilder picks an app target that can't
+# build in a clean checkout, and Kotlin can't be analyzed without a build).
+# Categories match default setup's (`/language:<lang>`), so existing alerts carry over.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+            runs-on: ubuntu-latest
+          - language: javascript-typescript
+            build-mode: none
+            runs-on: ubuntu-latest
+          - language: python
+            build-mode: none
+            runs-on: ubuntu-latest
+          - language: java-kotlin
+            build-mode: manual
+            runs-on: ubuntu-latest
+          # Pinned to macos-26: traced Swift extraction doesn't support Xcode 27 yet.
+          - language: swift
+            build-mode: manual
+            runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        if: matrix.language == 'java-kotlin'
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        if: matrix.language == 'java-kotlin'
+        with:
+          cache-read-only: true
+
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # CodeQL extracts Kotlin while it compiles, so the build must actually run:
+      # no daemon, no build cache, and the Kotlin compiler in-process.
+      - name: Build Kotlin (codegen, plugin, JVM runtime)
+        if: matrix.language == 'java-kotlin'
+        working-directory: native/kotlin
+        run: >-
+          ./gradlew --no-daemon --no-build-cache --no-configuration-cache
+          -Pkotlin.compiler.execution.strategy=in-process
+          clean :codegen:compileKotlin :plugin:compileKotlin :runtime:compileKotlinJvm
+
+      # Builds the Swift package directly; the demo and test apps need generated
+      # sources that aren't committed.
+      - name: Build Swift package
+        if: matrix.language == 'swift'
+        working-directory: native/swift
+        run: swift build
+
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

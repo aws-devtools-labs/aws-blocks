@@ -2,29 +2,40 @@ name: Supabase Keep-Alive
 on:
   schedule:
     - cron: '0 0 */3 * *' # Every 3 days
+  workflow_dispatch: # run by hand to check the e2e account wiring
 permissions:
   id-token: write
   contents: read
 jobs:
   ping:
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          sparse-checkout: |
+            .github/actions/e2e-aws-credentials
+            packages/bb-data/test/fixtures/supabase-ca.crt
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          # Not a PR run, so always E2E account 1 (see .github/actions/e2e-slot).
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
 
       - name: Ping Supabase
+        env:
+          # Same pinned Supabase Root 2021 CA as the E2E Supabase job.
+          PGSSLROOTCERT: packages/bb-data/test/fixtures/supabase-ca.crt
+          PGSSLMODE: verify-full
         run: |
-          SECRET=$(aws secretsmanager get-secret-value \
+          DB_URL=$(aws secretsmanager get-secret-value \
             --secret-id blocks/supabase-e2e \
-            --query SecretString --output text)
-          PROJECT_REF=$(echo "$SECRET" | jq -r .SUPABASE_PROJECT_REF)
-          ANON_KEY=$(echo "$SECRET" | jq -r .SUPABASE_ANON_KEY)
-          curl -sf "https://${PROJECT_REF}.supabase.co/rest/v1/" \
-            -H "apikey: ${ANON_KEY}" \
-            -H "Authorization: Bearer ${ANON_KEY}" \
-            > /dev/null
+            --query SecretString --output text | jq -r .SUPABASE_DB_URL)
+          echo "::add-mask::$DB_URL"
+          # A query, not an HTTP health check: the Auth health endpoint doesn't
+          # touch Postgres, so it may not count as project activity.
+          psql "$DB_URL" -tAc 'select 1' > /dev/null
           echo "✓ Supabase project is alive"

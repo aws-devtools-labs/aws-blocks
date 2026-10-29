@@ -18,20 +18,21 @@ import { BB_NAME, BB_VERSION } from './version.js';
 import { validatePresignedUrlExpiry } from './presigned-url.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef,
+	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { assertValidKey } from './validation.js';
+import { assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
+import { deriveBucketName } from './bucket-name.js';
 
 // Re-export public types
 import { FileBucketErrors } from './errors.js';
 export { FileBucketErrors } from './errors.js';
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -62,6 +63,8 @@ export type {
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	readonly bbName = BB_NAME;
 	private s3: S3Client;
+	/** Set when this bucket was declared with `objectLock` (presigned uploads can't satisfy its checksum requirement). */
+	private readonly objectLocked: boolean;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -70,7 +73,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
-		const bucketName = options?.bucket ? options.bucket.bucketName : this.fullId;
+		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
+		// Same name the CDK layer provisions: `fullId` when it fits S3's 63 characters, else shortened.
+		const bucketName = options?.bucket ? options.bucket.bucketName : deriveBucketName(this.fullId);
 		registerSdkIdentifiers(this.fullId, { bucketName });
 		this.s3 = new S3Client({
 			customUserAgent: this.buildUserAgentChain(),
@@ -176,6 +181,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
 		assertValidKey(path);
+		this.assertPresignedUploadSupported();
 		const expiresIn = validatePresignedUrlExpiry(options?.expiresIn ?? 3600);
 		return getSignedUrl(this.s3, new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: options?.contentType,
@@ -285,7 +291,24 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		}
 	}
 
+	private assertPresignedUploadSupported(): void {
+		if (this.objectLocked) {
+			throw blocksError(FileBucketErrors.PresignedUploadUnsupported, presignedUploadUnsupportedMessage(this.fullId));
+		}
+	}
+
 	static fromExisting(bucketName: string): ExternalBucketRef {
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option. Encryption is applied at deploy time; the
+	 * runtime only needs the reference to keep code shared with the CDK build.
+	 *
+	 * @param keyArn - The ARN of the existing KMS key.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 }

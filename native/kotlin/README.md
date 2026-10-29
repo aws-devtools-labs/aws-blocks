@@ -53,6 +53,11 @@ awsBlocks {
         custom("staging", "https://staging.example.com")
     }
 
+    // Logical identities from x-blocks-native-packages that keep the
+    // UnknownTransferable fallback instead of a declared type (optional).
+    // An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
+    excludeNativePackages = setOf("example-iot-native")
+
     // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
     // registered with the operating system. Must match an entry in the backend's
     // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
@@ -69,22 +74,107 @@ On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBun
 ## Using the Generated Code
 
 ```kotlin
-import com.example.myapp.generated.Api
+import com.aws.blocks.kotlin.Blocks
+import com.example.myapp.generated.Api.ListTodos
+import com.example.myapp.generated.Api.UpdateTodo
 import com.example.myapp.generated.Todo
+import com.example.myapp.generated.api
+import com.example.myapp.generated.authApi
+import com.example.myapp.generated.invoke
 
-val api = Api()
+val blocks = Blocks()
 
-// Create a todo
-val todo: Todo = api.createTodo(title = "Buy groceries", priority = 1.0)
+suspend fun todos() {
+    // Create a todo
+    val todo: Todo = blocks.api.createTodo(title = "Buy groceries", priority = 1.0)
 
-// List todos with optional sorting
-val todos: List<Todo> = api.listTodos(sortBy = ListTodos.SortBy.Priority)
+    // List todos with optional sorting
+    val todos: List<Todo> = blocks.api.listTodos(sortBy = ListTodos.SortBy.Priority)
 
-// Update a todo
-api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+    // Update a todo
+    blocks.api.updateTodo(todoId = todo.todoId, updates = UpdateTodo.Updates(completed = true))
+
+    // A second namespace in the same spec
+    val authState = blocks.authApi.getAuthState()
+}
 ```
 
-When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable result still fails code generation.
+`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
+call site alone — the `invoke` import is what brings it into scope, and without it the compiler
+reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+
+Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
+realtime channels still open their own. `close()` shuts that engine down, after which calls through
+the instance report it rather than failing inside the HTTP client.
+
+The accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one spec is assumed per
+compilation scope. Two generated packages visible in the same file make `Blocks()` ambiguous, and
+an accessor imported from one while `Blocks()` comes from the other would send its calls to the
+wrong backend. A module that generates a client for its own use should set its own `packageName`
+and `visibility = GeneratedVisibility.Internal`, so that its accessors stay out of its consumers'
+scope and its generated types do not share fully qualified names with another module's — two
+modules both left on the default `packageName` ship the same ones.
+
+### Transferable Results
+
+When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
+
+When `x-blocks-native-bindings` binds the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
+
+A nullable built-in result now returns null for a JSON-null body as well, where it previously threw.
+
+The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
+
+## Signing In with OIDC
+
+```kotlin
+val auth = AuthApi()
+val client = auth.getClient()
+val user = client.signIn("google")
+```
+
+On the JVM target the system browser is left open on a loopback address once sign-in finishes,
+so the runtime serves a page there. By default that is a built-in styled page. An app can
+replace it per outcome, from a JVM source set:
+
+```kotlin
+client.signIn(
+    provider = "google",
+    options = OidcSignInOptions(
+        OidcSignInPlatformOptions(
+            // Send the browser to your own page, so the user ends on a real domain.
+            successPage = OidcLandingPage.Redirect("https://app.example.com/signed-in"),
+            // Or serve your own markup, with nothing to host.
+            errorPage = OidcLandingPage.Html(myLocalizedFailurePage),
+        ),
+    ),
+)
+```
+
+`OidcSignInPlatformOptions` has a different shape on each target, so it is only constructible
+where it applies — from `jvmMain` or `desktopMain`, not from `commonMain`. Shared code that
+calls `signIn(provider)` with no options needs no platform code and gets the built-in pages.
+
+| `OidcLandingPage` | Effect |
+|---|---|
+| `BuiltIn` (default) | The runtime's own page. The failure variant shows the provider's error, HTML-escaped. |
+| `Redirect(url)` | A 302 to `url`. Requires `https`, except on a loopback host for local development. |
+| `Html(document)` | `document` served verbatim. Must be a complete HTML document. |
+
+A `Redirect` is sent a clean URL: the callback query is dropped on success, so the
+authorization code and `state` are not appended to it, and on failure only `error` and
+`error_description` are. An `Html` page receives nothing, so use `Redirect` if you need the
+provider's reason.
+
+`BuiltIn` and `Html` are served as the response to the callback itself, so the callback query
+stays in the address bar and in `document.location` while that page is open. Markup you supply
+through `Html` can therefore read the authorization code; prefer `Redirect` if the page runs
+anything you would not want to see it, such as third-party analytics.
+
+Android and iOS have no options to set — their in-app browser dismisses itself.
+
+Bringing your window to the front after sign-in is the app's job; `signIn` returning is the
+signal.
 
 ## Gradle Tasks
 

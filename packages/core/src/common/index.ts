@@ -7,6 +7,10 @@ import type { BlocksDefaults } from '../cdk/blocks-defaults.js';
 import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from './lambda-event-handlers.js';
+
+/** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
+const PG_APPLICATION_NAME_MAX_BYTES = 63;
 
 export interface ScopeOptions {
   parent?: ScopeParent;
@@ -53,7 +57,7 @@ export type ScopeParent = Scope | { id: string };
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
  * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Simple key-value storage (DynamoDB)
  * - **`DistributedTable`** from `@aws-blocks/bb-distributed-table` - Type-safe tables with Zod schemas, indexes, and queries (DynamoDB)
- * - **`AuthBasic`** from `@aws-blocks/bb-auth-basic` - Username/password authentication with JWT tokens and built-in UI components
+ * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
  * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
  * 
  * Read each Building Block's class and method docstrings for detailed documentation.
@@ -61,8 +65,8 @@ export type ScopeParent = Scope | { id: string };
  * ## Choosing the Right Building Block
  * 
  * **For authentication:**
- * - Use `AuthBasic` for username/password auth (includes built-in UI component)
- * - Provides JWT tokens, password hashing, and session management
+ * - Use `Auth` for every kind of sign-in: email + password, social, OIDC and SAML (includes built-in UI components)
+ * - Provides sessions, the `requireAuth` / `requireRole` guards, and sign-up / sign-in flows; see its README's "Which option and why"
  * 
  * **For data storage, choose based on your access patterns:**
  * 
@@ -125,11 +129,23 @@ export type ScopeParent = Scope | { id: string };
  * BBs that want to participate in user-agent chains must set these on their class.
  */
 export interface BuildingBlockMeta {
-	/** Short BB name used in user-agent strings, e.g. "KVStore", "AuthCognito" */
+	/** Short BB name used in user-agent strings, e.g. "KVStore", "Auth" */
 	readonly bbName: string;
 	/** Package version from the BB's own package.json (build-time generated) */
 	readonly bbVersion: string;
 }
+
+/**
+ * The Building Block registry: block names and instance counts collected as
+ * blocks are constructed, plus the deferred default block. Module-level so
+ * {@link registryEntries} / {@link mergeRegistry} can read it without being
+ * `Scope` members.
+ */
+const bbRegistry: {
+  blocks: Map<string, { version: string; count: number }>;
+  /** Deferred default block, folded in by {@link Scope.getRegisteredBlocks}. */
+  defaultBlock: { name: string; version: string } | undefined;
+} = { blocks: new Map(), defaultBlock: undefined };
 
 export class Scope {
   public readonly id: string;
@@ -140,11 +156,9 @@ export class Scope {
   /** Package version from the BB's own package.json. Set by subclass BBs. */
   readonly bbVersion?: string;
 
-  /** Static registry — collects BB names as they're instantiated */
-  private static _bbRegistry: Map<string, { version: string; count: number }> = new Map();
 
-  /** Deferred default block, folded in by {@link getRegisteredBlocks}. */
-  private static _defaultBlock: { name: string; version: string } | undefined;
+  /** Framework read from the synth sink for the process's telemetry event. */
+  private static _framework: string | undefined;
 
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
@@ -155,8 +169,8 @@ export class Scope {
     if (options?.bbName) {
       this.bbName = options.bbName;
       this.bbVersion = options.bbVersion;
-      const existing = Scope._bbRegistry.get(options.bbName);
-      Scope._bbRegistry.set(options.bbName, {
+      const existing = bbRegistry.blocks.get(options.bbName);
+      bbRegistry.blocks.set(options.bbName, {
         version: options.bbVersion || 'unknown',
         count: (existing?.count || 0) + 1,
       });
@@ -176,7 +190,7 @@ export class Scope {
     const blocks: Array<{ name: string; version: string }> = [];
     let totalCount = 0;
     let customBlocksCount = 0;
-    for (const [name, { version, count }] of Scope._bbRegistry.entries()) {
+    for (const [name, { version, count }] of bbRegistry.blocks.entries()) {
       totalCount += count;
       if (OFFICIAL_BB_NAMES.has(name)) {
         blocks.push({ name, version });
@@ -184,8 +198,8 @@ export class Scope {
         customBlocksCount += count;
       }
     }
-    const fallback = Scope._defaultBlock;
-    if (fallback && !Scope._bbRegistry.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
+    const fallback = bbRegistry.defaultBlock;
+    if (fallback && !bbRegistry.blocks.has(fallback.name) && OFFICIAL_BB_NAMES.has(fallback.name)) {
       blocks.push(fallback);
       totalCount += 1;
     }
@@ -200,13 +214,28 @@ export class Scope {
    * @internal
    */
   static _setDefaultBlockForTelemetry(name: string, version: string): void {
-    Scope._defaultBlock = { name, version };
+    bbRegistry.defaultBlock = { name, version };
+  }
+
+  /**
+   * @internal Set by the deploy/sandbox orchestrator from the synth sink. Holds the
+   * resolved framework name unvalidated, including a customAdapter name; buildEvent
+   * gates it against REPORTED_FRAMEWORKS.
+   */
+  static _setFrameworkForTelemetry(framework: string): void {
+    Scope._framework = framework;
+  }
+
+  /** @internal */
+  static _getRegisteredFramework(): string | undefined {
+    return Scope._framework;
   }
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
-    Scope._bbRegistry.clear();
-    Scope._defaultBlock = undefined;
+    bbRegistry.blocks.clear();
+    bbRegistry.defaultBlock = undefined;
+    Scope._framework = undefined;
   }
 
   get fullId(): string {
@@ -219,16 +248,45 @@ export class Scope {
    * Used by Building Blocks that consume event sources (e.g., AsyncJob → SQS,
    * Realtime → API Gateway WebSocket).
    *
+   * A Cognito user pool trigger registers under `EventSourceMapping.COGNITO_USER_POOL`
+   * with the **user pool id** as `identifier` (the trigger event carries
+   * `userPoolId`, not a block id). Its handler accepts by resolving and rejects
+   * by throwing; the Lambda returns the event unchanged.
+   *
+   * **One handler per key.** A second registration for the same
+   * `{eventSource}:{identifier}` throws instead of replacing the first: every
+   * event is routed to exactly one handler, so a silent last-one-wins would let
+   * one block quietly take over another's events — for a user pool trigger,
+   * that disables the owner's check. Two blocks that both claim one queue or
+   * one pool are a configuration error. A deployed app reports it at **synth**:
+   * the CDK layer of each event-consuming block claims the same key, and the CDK
+   * `Scope` applies this rule (`cdk synth` fails). In the Lambda the error is
+   * thrown when the second block is constructed, which a synthesized app never
+   * reaches.
+   *
    * @param eventSource - Event source prefix (e.g., 'blocks.asyncjob', 'blocks.websocket').
    * @param identifier - Building Block's fullId (scope-qualified ID, e.g., 'myapp-rt').
    *                     Combined with eventSource to form the registry key '{eventSource}:{identifier}'.
    * @param handler - Async function that processes the raw Lambda event.
+   * @throws {Error} When a handler is already registered for `{eventSource}:{identifier}`
+   * (in the Lambda, when the second block is constructed; for a deployed app the
+   * CDK layer reports the same conflict at synth).
    */
   registerLambdaEventHandler(eventSource: string, identifier: string, handler: (record: any) => Promise<void>): void {
     if (!(globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__) {
       (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = new Map<string, (record: any) => Promise<void>>();
     }
-    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__.set(`${eventSource}:${identifier}`, handler);
+    if (!(globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__) {
+      (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__ = new Map<string, string>();
+    }
+    const handlers: Map<string, (record: any) => Promise<void>> = (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    const owners: Map<string, string> = (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLER_OWNERS__;
+    const key = lambdaEventHandlerKey(eventSource, identifier);
+    if (handlers.has(key)) {
+      throw duplicateLambdaEventHandlerError(key, this.fullId, owners.get(key));
+    }
+    handlers.set(key, handler);
+    owners.set(key, this.fullId);
   }
 
   /**
@@ -281,13 +339,50 @@ export class Scope {
 
     const parents = collectBBParents(this.parent);
     for (const parent of parents) {
-      chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      if (parent.bbName && parent.bbVersion) {
+        chain.push(['bb', `${parent.bbName}/${parent.bbVersion}`]);
+      }
     }
 
     if (this.bbName && this.bbVersion && OFFICIAL_BB_NAMES.has(this.bbName)) {
       chain.push(['bb', `${this.bbName}/${this.bbVersion}`]);
     }
     return chain;
+  }
+
+  /**
+   * Render {@link buildUserAgentChain} as a single space-delimited string,
+   * suitable for a string-typed field such as the Postgres `application_name`
+   * connection parameter (`aws-blocks/<core> bb/Auth/<version> bb/Database/<version>`).
+   *
+   * Shortened here rather than left to the server: Postgres truncates an
+   * over-long `application_name` by raw bytes, cutting mid-token, and preserves
+   * only printable ASCII — any other byte reaches `pg_stat_activity` as a `\xNN`
+   * escape, which is why the gap marker is ASCII `...` and not `…`.
+   *
+   * Returns `''` for an empty chain (e.g. the CDK context), so callers can use a
+   * simple truthiness guard before setting the field.
+   *
+   * @param maxBytes - Byte budget for the rendered string. Defaults to the
+   *   Postgres `application_name` limit. Override for other string sinks.
+   */
+  protected formatUserAgentString(maxBytes = PG_APPLICATION_NAME_MAX_BYTES): string {
+    const entries = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`);
+    if (entries.length === 0) return '';
+
+    const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
+    const full = entries.join(' ');
+    if (byteLen(full) <= maxBytes) return full;
+
+    const origin = entries[0];
+    const leaf = entries[entries.length - 1];
+    const parents = entries.slice(1, -1);
+    while (parents.length > 0) {
+      parents.pop();
+      const elided = [origin, ...parents, '...', leaf].join(' ');
+      if (byteLen(elided) <= maxBytes) return elided;
+    }
+    return byteLen(origin) <= maxBytes ? origin : '';
   }
 }
 
@@ -331,7 +426,59 @@ function isOfficialBuildingBlock(obj: unknown): obj is BuildingBlockMeta {
   return isBuildingBlock(obj) && OFFICIAL_BB_NAMES.has(obj.bbName);
 }
 
-export function computeScopeFullId(scope: { id: string; parent?: any }) {
+/**
+ * Raw snapshot of the BB registry (custom BB names included), so a child
+ * process that imported the backend can hand its registrations back to the
+ * parent CLI via {@link mergeRegistry}. Local only — never sent anywhere;
+ * {@link Scope.getRegisteredBlocks} still applies the telemetry privacy filter.
+ * The default block (`Scope._setDefaultBlockForTelemetry`) is included as one
+ * instance when no constructed block has its name, the same way
+ * {@link Scope.getRegisteredBlocks} folds it in.
+ *
+ * Not re-exported from the package root.
+ * @internal
+ */
+export function registryEntries(): Array<[string, { version: string; count: number }]> {
+  const entries: Array<[string, { version: string; count: number }]> = [...bbRegistry.blocks.entries()].map(
+    ([name, entry]) => [name, { ...entry }],
+  );
+  const fallback = bbRegistry.defaultBlock;
+  if (fallback && !bbRegistry.blocks.has(fallback.name)) {
+    entries.push([fallback.name, { version: fallback.version, count: 1 }]);
+  }
+  return entries;
+}
+
+/**
+ * Merge entries produced by {@link registryEntries} (typically in another
+ * process) into this process's registry, adding instance counts.
+ *
+ * Not re-exported from the package root.
+ * @internal
+ */
+export function mergeRegistry(entries: Array<[string, { version: string; count: number }]>): void {
+  for (const [name, { version, count }] of entries) {
+    const existing = bbRegistry.blocks.get(name);
+    bbRegistry.blocks.set(name, { version, count: (existing?.count || 0) + count });
+  }
+}
+
+/**
+ * The fully-qualified ID of a scope: its parent's `fullId` (or `id`) joined to its own.
+ *
+ * This is what `Scope.fullId` returns. Call it directly only when a block must know its
+ * own `fullId` before `super()` has run — a block that builds a child in its constructor
+ * cannot reach `this.fullId` yet, and must not restate the rule.
+ *
+ * @param scope - The scope's own `id` and its optional parent
+ * @returns The fully-qualified ID, e.g. `"myApp-auth"`
+ *
+ * @example
+ * ```typescript
+ * const fullId = computeScopeFullId({ id, parent: scope });
+ * ```
+ */
+export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
     if ('fullId' in scope.parent && scope.parent.fullId) {
       return `${scope.parent.fullId}-${scope.id}`;
@@ -341,6 +488,63 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
     }
   }
   return scope.id;
+}
+
+/**
+ * A Building Block standing in as its own child's parent, for a block that must
+ * construct a child before `super()` has run and so cannot pass `this`.
+ *
+ * `bbName`/`bbVersion` are required because the chain walk skips a parent without
+ * them. It also skips a name outside `OFFICIAL_BB_NAMES`, so a custom block is not
+ * attributed by supplying them alone. `fullId` is derived here so the child's own
+ * `fullId`, and any resource name taken from it, is the same as under a real parent.
+ *
+ * @param meta - The block's own `id`, its parent scope, and its name and version
+ * @returns A parent carrying the identity and the user-agent metadata
+ *
+ * @example
+ * ```typescript
+ * const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+ * const child = new KVStore(self, 'sessions');
+ * ```
+ */
+export function buildingBlockParent(
+  meta: BuildingBlockMeta & { id: string; parent: ScopeParent },
+): BuildingBlockMeta & { id: string; parent: ScopeParent; fullId: string } {
+  return { ...meta, fullId: computeScopeFullId(meta) };
+}
+
+/**
+ * How a Blocks backend's API is exposed to clients: `'apigateway'` (the API
+ * Gateway endpoint itself, the default) or `'cloudfront'` (a Blocks-managed
+ * CloudFront distribution in front of it). See {@link BlocksStackProps.apiFrontDoor}.
+ */
+export type ApiFrontDoorTier = 'apigateway' | 'cloudfront';
+
+/**
+ * AWS WAF protection for the backend API. See {@link BlocksStackProps.apiWaf}.
+ *
+ * Either let Blocks create a web ACL (`enabled: true`, optionally with a
+ * `rateLimit`), or bring your own (`webAclArn`). The two are mutually exclusive.
+ */
+export interface ApiWafOptions {
+  /**
+   * Create a Blocks-managed web ACL with the AWS managed Common and Known Bad
+   * Inputs rule groups and a per-IP rate limit. Default: `false`.
+   */
+  enabled?: boolean;
+  /**
+   * Requests allowed per client IP in any 5-minute window before the rate rule
+   * blocks it. At least 100 (an AWS WAF minimum). Default: 1000. Only with
+   * `enabled: true`.
+   */
+  rateLimit?: number;
+  /**
+   * ARN of an existing web ACL to attach instead of creating one. Its scope must
+   * match where it attaches: `REGIONAL` under `apiFrontDoor: 'apigateway'`,
+   * `CLOUDFRONT` (created in us-east-1) under `apiFrontDoor: 'cloudfront'`.
+   */
+  webAclArn?: string;
 }
 
 export interface BlocksStackProps extends StackProps {
@@ -354,6 +558,84 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: BlocksDefaults;
+  /**
+   * How the app's API is exposed to clients. Default: `'apigateway'`.
+   *
+   * - `'apigateway'` — clients call the stack's API Gateway endpoint directly, on
+   *   its own `execute-api` domain. Nothing extra to deploy.
+   * - `'cloudfront'` — Blocks puts a CloudFront distribution in front of the
+   *   gateway (built as a regional endpoint, so traffic passes through one
+   *   CloudFront layer), and clients call the distribution's domain instead.
+   *
+   * Whichever tier you pick, `publicApiUrl` (and the `ApiUrl` stack output) is the
+   * URL clients should call. When a CloudFront-backed `Hosting` door (the default
+   * CloudFront door, or the stacked door's edge) fronts the API, the API is served
+   * from Hosting's distribution; under `'cloudfront'` Blocks then creates no second
+   * distribution. Behind any other `Hosting` door (ALB, API Gateway, your own), the
+   * browser still reaches the API same-origin through the door, and under
+   * `'cloudfront'` the API keeps its own distribution for every other client.
+   *
+   * The default is a constant `'apigateway'` — it is NEVER derived from the app's
+   * shape, so adding or removing Building Blocks never silently changes how the
+   * API is exposed.
+   *
+   * ⚠️ **Switching tiers — or adding or removing `Hosting` under `'cloudfront'` —
+   * changes the API's endpoint domain.** Browser auth cookies and sessions are
+   * bound to the origin they were set on, so the change invalidates every existing
+   * cookie/session — users are signed out and must sign in again. (A stable custom
+   * domain — a future feature — would avoid this.) Pick a tier, and decide on
+   * Hosting, before you have real users, and treat a later change as a breaking
+   * migration.
+   */
+  apiFrontDoor?: ApiFrontDoorTier;
+  /**
+   * Put AWS WAF in front of the backend API. Default: off.
+   *
+   * The web ACL attaches to whichever front door clients reach the API through:
+   *
+   * - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the API Gateway
+   *   stage. Works in any region, and covers every caller of `ApiUrl`. When a
+   *   `Hosting` door also forwards browser traffic to the stage, the rate rule
+   *   adapts so browser users aren't counted as one client: a claiming
+   *   CloudFront `Hosting` marks its requests with a header the rate rule
+   *   exempts, and behind any other door (ALB, API Gateway, your own, or a
+   *   CloudFront edge over a router) the rate rule is left off and synth warns;
+   *   rate-limit those on the door's own WAF. Either way, browser requests
+   *   arriving through a `Hosting` door aren't rate-limited by `apiWaf`: turn on
+   *   the door's own WAF to rate-limit them.
+   * - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed
+   *   distribution. AWS only creates CloudFront web ACLs in us-east-1, so outside
+   *   us-east-1 pass the ARN of one you created there (`webAclArn`); `enabled:
+   *   true` fails synth in any other region.
+   * - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting
+   *   the API: the API is served from Hosting's distribution, so set the WAF
+   *   there (`frontDoor.features.waf`). `apiWaf` then creates nothing, and synth
+   *   warns.
+   *
+   * Not covered:
+   * - The gateway's own `execute-api` endpoint under `apiFrontDoor: 'cloudfront'`
+   *   (only the distribution has the web ACL), including browser traffic that a
+   *   non-CloudFront `Hosting` door forwards straight to `execute-api`.
+   * - `bb-realtime`'s WebSocket API: AWS WAF can't attach to API Gateway
+   *   WebSocket APIs.
+   *
+   * The Blocks-managed web ACL runs the AWS managed Common rule set and Known
+   * Bad Inputs rule set, plus a per-IP rate limit. The Common rule set's body
+   * rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`,
+   * `GenericRFI_BODY`) count instead of block, because RPC bodies routinely
+   * exceed 8 KB and carry user-written HTML, Markdown or paths as data; their
+   * query-string, URI and header variants still block. For a stricter or
+   * custom rule set, pass your own `webAclArn` (its scope and region are checked
+   * at synth). A `webAclArn` is attached as-is: behind a `Hosting` door its IP
+   * rate rules count CloudFront edge or proxy IPs for browser traffic, and it
+   * can't use the internal marker header to exempt them. WAF is billed per web ACL, per rule and per request.
+   *
+   * @example
+   * ```ts
+   * await BlocksStack.create(app, 'my-app', { ...props, apiWaf: { enabled: true, rateLimit: 2000 } });
+   * ```
+   */
+  apiWaf?: ApiWafOptions;
 }
 
 export class BlocksStack {
