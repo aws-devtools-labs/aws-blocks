@@ -167,6 +167,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
 - `npm run sandbox:deploy` — deploy backend to AWS once and exit (no watch, no dev server); use this from scripts and CI
+- `npm run sandbox:preview` — deploy the sandbox backend plus a hosted preview of the frontend once and exit; prints the preview URL. It is the same stack as `sandbox` / `sandbox:deploy`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL
 - `npm run deploy` — full production deploy to AWS
 - `npm run sandbox:destroy` — tear down sandbox resources
 
