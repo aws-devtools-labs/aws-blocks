@@ -9,7 +9,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDenialNotice, formatDeploySignal } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
@@ -295,6 +295,13 @@ export async function deploy(options: DeployOptions) {
             // deliberately differs from the final `🌐 Frontend URL:` line so a
             // naive grep does not match both — the early line says "converging".
             console.log(`\n🌐 Frontend deploying to: ${url}`);
+          },
+          // Explained while CloudFormation is still rolling back (minutes before
+          // the CDK CLI exits), on stdout with the progress so a stdout-only
+          // capture sees it. The CDK output keeps the details; the deploy's
+          // outcome is unchanged.
+          onDenial: (kind) => {
+            console.log(`\n${formatDenialNotice(kind, 'deploy')}`);
           },
         }
       );

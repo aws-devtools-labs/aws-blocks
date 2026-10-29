@@ -21,6 +21,29 @@ const RCP_DENY = `${USER} is not authorized to perform: secretsmanager:GetSecret
 const IDENTITY_DENY = `${USER} is not authorized to perform: ssm:GetParameter on resource: arn:aws:ssm:us-east-1:123456789012:parameter/app because no identity-based policy allows the ssm:GetParameter action`;
 const IMPLICIT_SCP_DENY = `${USER} is not authorized to perform: codecommit:ListRepositories because no service control policy allows the codecommit:ListRepositories action`;
 
+// CDK's DeploymentError block for a CloudFormation resource that an SCP denied, as
+// the CDK CLI prints it: the reason is hard-wrapped mid-phrase, so neither the
+// explicit-deny phrase nor "is not authorized to perform" is on one line.
+const EXEC_ROLE =
+	'arn:aws:sts::123456789012:assumed-role/cdk-hnb659fds-cfn-exec-role-123456789012-us-east-1/AWSCloudFormation';
+const WRAPPED_SCP_DENY = [
+	'‣ DeploymentError: Resource updates failed:',
+	'my-app-prod/DefaultCompute/API/Resource  (AWS::ApiGateway::RestApi DefaultComputeAPI5E5CE44A)',
+	'  Resource handler returned message: "User:',
+	`  ${EXEC_ROLE} is not`,
+	'  authorized to perform: apigateway:POST on resource: arn:aws:apigateway:us-east-1::/restapis with an explicit deny in a',
+	'  service control policy: arn:aws:organizations::777788889999:policy/o-exampleorgid/service_control_policy/p-examplepolicyid123',
+	'  (Service: ApiGateway, Status Code: 403, Request ID: 11111111-2222-3333-4444-555555555555) (SDK Attempt Count: 1)"',
+	'  (RequestToken: 66666666-7777-8888-9999-000000000000, HandlerErrorCode: GeneralServiceException)',
+];
+// The notes that the CDK CLI prints after a failure. Each names AccessDenied only as an example.
+const CDK_DIAGNOSE_HINT =
+	'   CloudTrail delivery can lag up to 15 minutes behind the failure; re-run `cdk diagnose` in a few minutes to check for additional control-plane errors (e.g. AccessDenied).';
+const CDK_LOOKUP_HINT =
+	'Could not query CloudTrail for control-plane errors: the lookup role is missing the `cloudtrail:LookupEvents` permission. Grant it to surface errors (e.g. AccessDenied) that resource logs may not show.';
+const EC2_SCP_DENY = `You are not authorized to perform this operation. User: ${USER.slice(6)} is not authorized to perform: ec2:RunInstances on resource: arn:aws:ec2:us-east-1:123456789012:instance/* with an explicit deny in a service control policy. Encoded authorization failure message: example`;
+const SNS_SCP_DENY = `${USER} is not authorized to perform: SNS:CreateTopic on resource: arn:aws:sns:us-east-1:123456789012:app-topic with an explicit deny in a service control policy`;
+
 describe('classifyDenialError', () => {
 	for (const [name, message, expected] of [
 		['AccessDenied', SCP_DENY, 'organization-policy'],
@@ -28,6 +51,10 @@ describe('classifyDenialError', () => {
 		['AccessDeniedException', RCP_DENY, 'organization-policy'],
 		['AccessDeniedException', IDENTITY_DENY, 'denied'],
 		['AccessDenied', 'Access Denied', 'denied'],
+		['UnauthorizedOperation', EC2_SCP_DENY, 'organization-policy'],
+		['UnauthorizedOperation', 'You are not authorized to perform this operation.', 'denied'],
+		['AuthorizationError', SNS_SCP_DENY, 'organization-policy'],
+		['AuthorizationError', IDENTITY_DENY, 'denied'],
 	] as const) {
 		it(`classifies ${name}: ${message.slice(-60)} as ${expected}`, () => {
 			assert.strictEqual(classifyDenialError(namedError(name, message)), expected);
@@ -69,6 +96,25 @@ describe('classifyDenialText', () => {
 			'Resource handler returned message: "Access Denied (Service: S3, Status Code: 403)"',
 			'denied',
 		],
+		['a hard-wrapped CDK DeploymentError block', WRAPPED_SCP_DENY.join('\n'), 'organization-policy'],
+		['a hard-wrapped block with CRLF line endings', WRAPPED_SCP_DENY.join('\r\n'), 'organization-policy'],
+		[
+			'a colored CDK error line',
+			`\u001b[33m‣ AccessDenied: ${SCP_DENY.replace('explicit deny', '\u001b[1mexplicit\u001b[22m deny')}\u001b[39m`,
+			'organization-policy',
+		],
+		[
+			'a KMS denial that names no policy',
+			`Resource handler returned message: "Access denied for operation 'CreateKey'." (RequestToken: 66666666-7777-8888-9999-000000000000, HandlerErrorCode: AccessDenied)`,
+			'denied',
+		],
+		['an EC2 denial', 'UnauthorizedOperation: You are not authorized to perform this operation.', 'denied'],
+		['an SNS denial', `AuthorizationError: ${SNS_SCP_DENY}`, 'organization-policy'],
+		[
+			'a denial next to the CDK diagnose hint',
+			`${WRAPPED_SCP_DENY.join('\n')}\n\n${CDK_DIAGNOSE_HINT}`,
+			'organization-policy',
+		],
 	] as const) {
 		it(`classifies ${name} as ${expected}`, () => {
 			assert.strictEqual(classifyDenialText(text), expected);
@@ -79,6 +125,12 @@ describe('classifyDenialText', () => {
 		'Resource handler returned message: "app-bucket already exists (Service: S3, Status Code: 409)"',
 		'cdk deploy exited with code 1',
 		'',
+		CDK_DIAGNOSE_HINT,
+		// The same hint, wrapped where a narrower terminal would break it.
+		CDK_DIAGNOSE_HINT.replace('(e.g. ', '(e.g.\n   '),
+		CDK_LOOKUP_HINT,
+		'ExpiredToken: The security token included in the request is expired',
+		'Resource handler returned message: "Rate exceeded (Service: Lambda, Status Code: 429)"',
 	]) {
 		it(`does not classify ${JSON.stringify(text)}`, () => {
 			assert.strictEqual(classifyDenialText(text), undefined);

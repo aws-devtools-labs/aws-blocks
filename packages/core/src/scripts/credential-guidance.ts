@@ -86,6 +86,80 @@ export function classifyCredentialError(label: string): CredentialCheckFailure {
 	return 'inconclusive';
 }
 
+/** A credential failure found in CDK CLI output: the error name to print, and how the credentials failed. */
+export interface CredentialFailureInText {
+	errorName: string;
+	failure: Extract<CredentialFailure, 'expired' | 'rejected'>;
+	/**
+	 * The text is the sign-in instruction of an AWS SDK credential provider (IAM
+	 * Identity Center or `aws login`). It wraps the error that stopped the provider,
+	 * which can be an `AccessDeniedException` from the sign-in service, so such
+	 * text is a credential failure even when it quotes a denial.
+	 */
+	fromProvider?: boolean;
+}
+
+/**
+ * Error names for expired or rejected credentials, matched only where CDK CLI
+ * output names an error: as `<Name>:` at the start of a message or after `‣`, in
+ * an `Error Code:` field, and after `Assuming role failed:`. A resource or file
+ * named like one is not a failure. `RequestExpired` is left out: Amazon EC2 also
+ * returns it for a request whose time is more than 15 minutes off.
+ */
+const CREDENTIAL_ERROR_NAMES =
+	'ExpiredToken(?:Exception)?|TokenRefreshRequired|InvalidClientTokenId|UnrecognizedClientException';
+const CREDENTIAL_ERROR_IN_TEXT = new RegExp(
+	`(?:^\\s*|‣\\s*)(${CREDENTIAL_ERROR_NAMES}):|(?:Error ?Code:|Assuming role failed:)\\s*(${CREDENTIAL_ERROR_NAMES})\\b`,
+);
+
+/**
+ * The sign-in instructions of the AWS SDK credential providers that the CDK CLI
+ * bundles: IAM Identity Center (SSO) sessions and tokens, and `aws login`
+ * sessions, including a failed refresh ("Failed to refresh token: <error>.
+ * Please re-authenticate using aws login").
+ */
+const CREDENTIAL_PROVIDER_WORDING: ReadonlyArray<[RegExp, CredentialFailureInText]> = [
+	[
+		/SSO session associated with this profile (?:has expired|is invalid)/i,
+		{ errorName: 'CredentialsProviderError', failure: 'expired', fromProvider: true },
+	],
+	[
+		/Token is expired\. To refresh this SSO session/i,
+		{ errorName: 'TokenProviderError', failure: 'expired', fromProvider: true },
+	],
+	[
+		/Your session has expired\. Please reauthenticate|Please re-authenticate using `?aws login/i,
+		{ errorName: 'CredentialsProviderError', failure: 'expired', fromProvider: true },
+	],
+];
+
+/** AWS's wording, without an error name, for an expired or invalid security token. */
+const CREDENTIAL_SERVICE_WORDING: ReadonlyArray<[RegExp, CredentialFailureInText]> = [
+	[/security token included in the request is expired/i, { errorName: 'ExpiredToken', failure: 'expired' }],
+	[/security token included in the request is invalid/i, { errorName: 'InvalidClientTokenId', failure: 'rejected' }],
+];
+
+/**
+ * Find a credential failure in a piece of CDK CLI output, such as a failed asset
+ * upload or the cause in its error block. Returns `undefined` when the text shows
+ * none. A credential provider's sign-in instruction comes first (see
+ * {@link CredentialFailureInText.fromProvider}); then an error name, classified
+ * with {@link classifyCredentialError}; then AWS's wording. The result never
+ * contains text from the failure.
+ */
+export function classifyCredentialFailureText(text: string): CredentialFailureInText | undefined {
+	const normalized = text.replace(/\s+/g, ' ');
+	const provider = CREDENTIAL_PROVIDER_WORDING.find(([wording]) => wording.test(normalized));
+	if (provider) return provider[1];
+	const named = CREDENTIAL_ERROR_IN_TEXT.exec(normalized);
+	if (named) {
+		const errorName = named[1] ?? named[2];
+		const failure = classifyCredentialError(errorName);
+		if (failure === 'expired' || failure === 'rejected') return { errorName, failure };
+	}
+	return CREDENTIAL_SERVICE_WORDING.find(([wording]) => wording.test(normalized))?.[1];
+}
+
 /** Where the SDK gets the deployment credentials. */
 export type CredentialSource =
 	/** Access keys in `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. */
@@ -469,6 +543,42 @@ export interface CredentialFailureMessageOptions {
 	readAwsCliVersion?: AwsCliVersionReader;
 	/** The deployment Region. The message names it, and `aws login` guidance sets the profile to it first. */
 	region?: string;
+	/**
+	 * The command keeps running (`npm run sandbox` in `cdk watch`), so the last line
+	 * says how the fix reaches it instead of asking to re-run it; see {@link watchNextStep}.
+	 */
+	watching?: boolean;
+}
+
+/**
+ * Credential sources whose credentials expire and that the CDK CLI loads again
+ * when they do, reading the AWS config and the SSO or sign-in token cache again,
+ * so a running `cdk watch` uses them after the user signs in again.
+ */
+const RELOADED_SOURCES: Record<string, true> = {
+	sso: true,
+	login: true,
+	'web-identity': true,
+	workload: true,
+	none: true,
+};
+
+/**
+ * The last line of the message while `cdk watch` runs. `cdk watch` stays running
+ * after a failed deploy and deploys again on the next file change. The CDK CLI
+ * caches credentials until they expire, and caches credentials without an expiry
+ * (access keys in the environment or a profile, most `credential_process` output)
+ * for the life of the process, so those need a restart of the command. A
+ * profile that assumes a role with `source_profile` gets role credentials with
+ * an expiry, which the CDK CLI requests again, reading the profiles again, so
+ * it picks up fixed source credentials too.
+ */
+function watchNextStep(command: string, source: CredentialSource | undefined): string {
+	const assumesRole = source !== undefined && 'sourceProfile' in source && source.sourceProfile !== undefined;
+	if (source && (assumesRole || Object.hasOwn(RELOADED_SOURCES, source.type))) {
+		return 'Then save a file in the project: `cdk watch` deploys again with the new credentials.';
+	}
+	return `Then stop \`npm run ${command}\` (Ctrl-C) and run it again: the running watch keeps the credentials that it loaded.`;
 }
 
 /**
@@ -483,6 +593,9 @@ export interface CredentialFailureMessageOptions {
  * prints the `aws configure set region` command that sets the deployment Region.
  * When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region (for example
  * because `cdk.json` sets the Region), the `aws login` command adds `--region`.
+ *
+ * The last line asks to re-run the command, or with `watching`, says whether
+ * saving a file or restarting the command picks up the fixed credentials.
  */
 export async function credentialFailureMessage({
 	command,
@@ -492,6 +605,7 @@ export async function credentialFailureMessage({
 	profile,
 	readAwsCliVersion: read = readAwsCliVersion,
 	region,
+	watching = false,
 }: CredentialFailureMessageOptions): Promise<string> {
 	const cliRegion = env.AWS_REGION || env.AWS_DEFAULT_REGION;
 	const pin = Boolean(cliRegion) && cliRegion !== region;
@@ -503,8 +617,9 @@ export async function credentialFailureMessage({
 				: { value: region, name: JSON.stringify(region), arg: '<region>', pin };
 	const inRegion = printed ? ` in Region ${printed.name}` : '';
 	let lines: string[];
+	let source: CredentialSource | undefined;
 	try {
-		const source = await describeCredentialSource(env, profile);
+		source = await describeCredentialSource(env, profile);
 		const login =
 			source.type === 'none' || source.type === 'login' || source.type === 'missing-profile'
 				? await awsCliLoginSupport(read)
@@ -526,6 +641,6 @@ export async function credentialFailureMessage({
 	return [
 		`AWS credentials could not be verified for \`npm run ${command}\` (${errorName}).`,
 		...lines.map((line) => `  ${line}`),
-		`Then re-run \`npm run ${command}\`.`,
+		watching ? watchNextStep(command, source) : `Then re-run \`npm run ${command}\`.`,
 	].join('\n');
 }

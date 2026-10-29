@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { classifyCredentialFailureText, type CredentialFailureInText } from './credential-guidance.js';
+import { classifyDenialText, type DenialKind, denialGuidance, stripTerminalControls } from './denial-guidance.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -301,6 +303,261 @@ export function createResourceTracker(): {
   };
 }
 
+/** Which of the CDK CLI's output streams a line came from. */
+export type CdkOutputStream = 'stdout' | 'stderr';
+
+/** Reads CDK CLI output for authorization failures; see {@link createDenialMonitor}. */
+export interface DenialMonitor {
+  /** Feed one whole line of CDK CLI output, as a {@link createLineAssembler} returns it. */
+  observe(line: string, stream: CdkOutputStream): void;
+  /** The deploy attempt failed (for example the CDK CLI exited non-zero): report a denial still held back. */
+  failed(): void;
+  /** A new deploy attempt starts: forget the current one, including what was reported. */
+  reset(): void;
+}
+
+/** Optional reports of {@link createDenialMonitor}. */
+export interface DenialMonitorOptions {
+  /**
+   * Called when the failure output shows expired or rejected credentials (see
+   * {@link classifyCredentialFailureText}), at most once per deploy attempt. A
+   * denial is never reported here, and a credential failure never as a denial.
+   */
+  onCredentialFailure?: (failure: CredentialFailureInText) => void;
+}
+
+// `cdk watch` lines that start another deployment (the CDK CLI's watch loop).
+const CDK_WATCH_DEPLOY_START = /Triggering (?:initial )?'cdk deploy'|Invoking 'cdk deploy' again/;
+// A CloudWatch Logs event that `cdk watch` prints once a deployment is done:
+// `[<log group>] <time> <message>`. App logs are not deploy output, whatever
+// they quote, so these lines are skipped before anything else is matched.
+const CDK_WATCH_LOG_LINE = /^\[[^\]\s]+\] /;
+// The reason column of a failed event line: what follows the resource's
+// construct path and its `(LogicalId)`. Only this column is classified, so a
+// resource type, logical ID or path that contains `AccessDenied` is not.
+const CDK_FAILED_EVENT_REASON =
+  /\b[A-Z][A-Z0-9_]*_FAILED\s*\|\s*[A-Za-z0-9]+::[A-Za-z0-9:]+\s*\|\s*[^\s|]+(?:\s+\([^\s()]*\))?(.*)$/;
+// Lines of the CDK CLI's error output: `❌  <stack> failed to deploy`, then one
+// `‣ <ErrorName>: <message>` line per cause, whose message can span lines.
+const CDK_FAILURE_LINE = /^(?:❌|‣ )/;
+// The banner part of a `❌` line: `❌  <stack> failed to deploy`, or in older
+// CDK CLIs `❌  <stack> failed: <error>`. It names the stack, which can contain
+// `AccessDenied` (stackId `AccessDenied` gives `AccessDenied-prod`), so only
+// what follows it is classified.
+const CDK_STACK_FAILED_BANNER = /^❌\s+\S+(?: \([^\s()]+\))? failed(?: to deploy)?:?/;
+// A failed asset build or upload, `<stack>: fail: <message>`, which the CDK CLI
+// prints at error level. It is the failure output that `cdk watch` shows: it
+// does not print the error block of a failed deployment.
+const CDK_ASSET_FAIL_LINE = /^\S+: fail: (.*)$/;
+// In the error block, the heading of each failed resource,
+// `<construct path>  (<resource type> <logical ID>)`, and the `Source Location:`
+// stack trace that ends its section only name the resource: not classified.
+const CDK_FAILED_RESOURCE_HEADING = /^\S+ +\([A-Za-z0-9]+::[A-Za-z0-9:]+ [^\s()]+\)$/;
+const CDK_SOURCE_LOCATION = /^Source Location:/;
+// An error block is read as paragraphs. A longer one is read in parts.
+const MAX_PARAGRAPH_LINES = 40;
+
+/**
+ * Watch CDK CLI output for an AWS authorization failure (access denied), and
+ * call `report` while the CDK CLI is still running, so that the explanation
+ * does not wait for a rollback that can take minutes.
+ *
+ * Only failure output is read, so a denial quoted in progress output or in an
+ * app's logs is not reported:
+ * - the reason column of a CloudFormation event line (`--progress events`)
+ *   whose status ends in `_FAILED`, which holds the whole reason on one line;
+ * - the CDK CLI's error block, from a `❌` or `‣` line on. Its reason is
+ *   hard-wrapped mid-phrase, so the block is classified by paragraph (lines up
+ *   to a blank line), separately for stdout and stderr so that interleaved
+ *   output from the other stream cannot split a phrase. Resource headings and
+ *   `Source Location:` traces are left out;
+ * - the message of a failed asset build or upload (`<stack>: fail: <message>`),
+ *   which ends the deploy attempt.
+ *
+ * The same output is read for expired or rejected credentials when
+ * `options.onCredentialFailure` is given (see {@link DenialMonitorOptions}). An
+ * explicit deny wins over a credential provider's sign-in instruction (which can
+ * quote a denial of the sign-in service), and that wins over an ordinary denial.
+ *
+ * Terminal colors are ignored and a carriage return (a redrawn line) separates
+ * lines. Each deploy attempt reports at most once per {@link DenialKind}:
+ * - `organization-policy` (the explicit-deny phrase) is reported at once.
+ * - `denied` is held until the attempt is known to fail: a stack-level failure
+ *   or rollback event, a failed paragraph of the error block, or
+ *   {@link DenialMonitor.failed}. An explicit deny of another resource in the
+ *   same attempt often follows, and the advice to check IAM permissions would
+ *   then be wrong. An explicit deny after a reported `denied` is still reported.
+ *
+ * A `cdk watch` line that starts another deployment starts a new attempt.
+ */
+export function createDenialMonitor(
+  report: (kind: DenialKind) => void,
+  options: DenialMonitorOptions = {},
+): DenialMonitor {
+  let reported: DenialKind | undefined;
+  let credentialReported = false;
+  let pending = false;
+  let attemptFailed = false;
+  // Per stream: the error paragraph being read, what it showed so far (an
+  // explicit deny, an ordinary denial, a credential failure), and whether it is
+  // in a `Source Location:` trace.
+  const paragraphs = new Map<
+    CdkOutputStream,
+    { lines: string[]; policy: boolean; denied: boolean; credential?: CredentialFailureInText; inLocation: boolean }
+  >();
+
+  const evidence = (kind: DenialKind | undefined): void => {
+    if (kind === 'organization-policy') {
+      pending = false;
+      if (reported !== kind) {
+        reported = kind;
+        report(kind);
+      }
+    } else if (kind === 'denied' && !reported) {
+      pending = true;
+      if (attemptFailed) markFailed();
+    }
+  };
+  const markFailed = (): void => {
+    attemptFailed = true;
+    if (pending && !reported) {
+      reported = 'denied';
+      report('denied');
+    }
+    pending = false;
+  };
+  // Classify one piece of complete failure output, in this order: an explicit
+  // deny by an Organizations policy, which signing in again cannot get past;
+  // then a credential provider's sign-in instruction, which also quotes the
+  // error that stopped the provider (an AccessDeniedException from the sign-in
+  // service, say); then an ordinary denial; then any other credential failure.
+  const failureText = (text: string): void => {
+    const kind = classifyDenialText(text);
+    const credential = kind === 'organization-policy' ? undefined : classifyCredentialFailureText(text);
+    if (credential?.fromProvider) credentials(credential);
+    else if (kind) evidence(kind);
+    else if (credential) credentials(credential);
+  };
+  const credentials = (failure: CredentialFailureInText): void => {
+    if (credentialReported || !options.onCredentialFailure) return;
+    credentialReported = true;
+    options.onCredentialFailure(failure);
+  };
+  // A paragraph is decided when it ends, in the order of failureText: a later
+  // line can still complete an explicit-deny phrase or add an explicit deny.
+  const closeParagraph = (stream: CdkOutputStream): void => {
+    const paragraph = paragraphs.get(stream);
+    if (!paragraph) return;
+    const { policy, denied, credential } = paragraph;
+    paragraph.lines = [];
+    paragraph.policy = false;
+    paragraph.denied = false;
+    paragraph.credential = undefined;
+    paragraph.inLocation = false;
+    if (policy) return;
+    if (credential?.fromProvider) credentials(credential);
+    else if (denied) evidence('denied');
+    else if (credential) credentials(credential);
+  };
+
+  const observeSegment = (text: string, stream: CdkOutputStream): void => {
+    if (CDK_WATCH_LOG_LINE.test(text)) {
+      closeParagraph(stream);
+      paragraphs.delete(stream);
+      return;
+    }
+    if (CDK_WATCH_DEPLOY_START.test(text)) {
+      monitor.reset();
+      return;
+    }
+    const event = parseCdkEventLine(text);
+    if (event) {
+      const reason = CDK_FAILED_EVENT_REASON.exec(text);
+      if (reason) failureText(reason[1]);
+      if (
+        event.resourceType === 'AWS::CloudFormation::Stack' &&
+        (event.status.endsWith('_FAILED') || isRollbackStatus(event.status))
+      ) {
+        markFailed();
+      }
+      return;
+    }
+    const trimmed = text.trim();
+    const assetFailure = CDK_ASSET_FAIL_LINE.exec(trimmed);
+    if (assetFailure) {
+      markFailed();
+      failureText(assetFailure[1]);
+      return;
+    }
+    if (CDK_FAILURE_LINE.test(trimmed)) {
+      if (trimmed.startsWith('❌')) closeParagraph(stream);
+      if (!paragraphs.has(stream)) {
+        paragraphs.set(stream, { lines: [], policy: false, denied: false, inLocation: false });
+      }
+      markFailed();
+    }
+    const paragraph = paragraphs.get(stream);
+    if (!paragraph) return;
+    if (trimmed === '' || paragraph.lines.length >= MAX_PARAGRAPH_LINES) closeParagraph(stream);
+    if (trimmed === '') return;
+    if (CDK_FAILED_RESOURCE_HEADING.test(trimmed)) {
+      paragraph.inLocation = false;
+      return;
+    }
+    if (CDK_SOURCE_LOCATION.test(trimmed)) paragraph.inLocation = true;
+    if (paragraph.inLocation) return;
+    // A banner sets the paragraph up (above) but is not evidence itself.
+    const evidenceText = CDK_STACK_FAILED_BANNER.test(trimmed)
+      ? trimmed.replace(CDK_STACK_FAILED_BANNER, '')
+      : text;
+    if (evidenceText.trim() === '') return;
+    paragraph.lines.push(evidenceText);
+    const joined = paragraph.lines.join('\n');
+    const kind = classifyDenialText(joined);
+    // An explicit deny is reported at once; anything else when the paragraph ends.
+    if (kind === 'organization-policy') {
+      paragraph.policy = true;
+      evidence(kind);
+      return;
+    }
+    paragraph.denied = kind === 'denied';
+    paragraph.credential = classifyCredentialFailureText(joined);
+  };
+
+  const monitor: DenialMonitor = {
+    observe(line, stream) {
+      const plain = stripTerminalControls(line);
+      for (const segment of plain.split('\r')) {
+        if (segment !== '' || plain === '') observeSegment(segment, stream);
+      }
+    },
+    failed() {
+      for (const stream of paragraphs.keys()) closeParagraph(stream);
+      markFailed();
+    },
+    reset() {
+      reported = undefined;
+      credentialReported = false;
+      pending = false;
+      attemptFailed = false;
+      paragraphs.clear();
+    },
+  };
+  return monitor;
+}
+
+/**
+ * What the deploy commands print when {@link createDenialMonitor} reports a
+ * denial: which command AWS denied, and {@link denialGuidance}. It adds to the
+ * CDK CLI's output, which has the details, and contains nothing from it.
+ */
+export function formatDenialNotice(kind: DenialKind, command: string): string {
+  return [
+    `⚠️  AWS denied a request during \`npm run ${command}\`. The CDK output above has the details.`,
+    ...denialGuidance(kind).map((line) => `   ${line}`),
+  ].join('\n');
+}
+
 // CDK prints the stack's CloudFront/hosting URL as an Outputs line once the
 // distribution is created, e.g.  `Foo.HostingDistributionUrl = https://d123.cloudfront.net`
 // — which lands on stdout well BEFORE full CREATE_COMPLETE and the post-run
@@ -425,6 +682,15 @@ export interface RunStreamingOptions {
    * survives a caller-timeout kill. Fired at most once.
    */
   onHostingUrl?: (url: string) => void;
+  /**
+   * Called when the streamed CDK output shows that AWS denied a request (see
+   * {@link createDenialMonitor}): an explicit deny by an AWS Organizations
+   * policy as soon as its failure line arrives, any other denial once the
+   * deploy is known to fail, at the latest when the child exits non-zero. Each
+   * kind is reported at most once, after the line that showed it was relayed.
+   * The output itself is relayed unchanged, and the outcome of the run is too.
+   */
+  onDenial?: (kind: DenialKind) => void;
 }
 
 /** Raised when the child exits non-zero, is killed, or the operator aborts. */
@@ -475,6 +741,9 @@ export class DeployProcessError extends Error {
  *   their own sinks and never merged, so a deploy failure reason (which the CDK
  *   CLI keeps on stderr even under `--ci`) stays on stderr while progress is on
  *   stdout.
+ * - **Authorization failures are explained early.** With `onDenial`, both
+ *   streams are also read for an AWS access denied, so a caller can explain it
+ *   while CloudFormation is still rolling back instead of after the exit.
  *
  * Resolves when the child exits 0; otherwise throws {@link DeployProcessError}.
  */
@@ -493,6 +762,7 @@ export async function runStreaming(
     now = Date.now,
     signalTarget = process,
     onHostingUrl,
+    onDenial,
   } = options;
 
   const startedAt = now();
@@ -509,6 +779,8 @@ export async function runStreaming(
   // deferred SIGHUP neither consumes the SIGTERM abort budget nor silently
   // swallows its own log line.
   const deferredAt = new Map<NodeJS.Signals, number>();
+  // Reads both streams for an authorization failure; see onDenial.
+  const denials = onDenial ? createDenialMonitor(onDenial) : undefined;
 
   const child: ChildProcess = spawnCommand(command, args, {
     cwd,
@@ -522,23 +794,22 @@ export async function runStreaming(
   const relay = (
     stream: NodeJS.ReadableStream | null | undefined,
     sink: OutputSink,
-    trackProgress: boolean,
+    source: CdkOutputStream,
   ): void => {
     if (!stream) return;
     const assembler = createLineAssembler();
     stream.setEncoding('utf-8');
+    const relayLine = (line: string): void => {
+      if (source === 'stdout') observeProgressLine(line);
+      sink.write(`${line}\n`);
+      denials?.observe(line, source);
+    };
     stream.on('data', (chunk: string) => {
       lastOutputAt = now();
-      for (const line of assembler.push(chunk)) {
-        if (trackProgress) observeProgressLine(line);
-        sink.write(`${line}\n`);
-      }
+      for (const line of assembler.push(chunk)) relayLine(line);
     });
     stream.on('end', () => {
-      for (const line of assembler.flush()) {
-        if (trackProgress) observeProgressLine(line);
-        sink.write(`${line}\n`);
-      }
+      for (const line of assembler.flush()) relayLine(line);
     });
   };
   // Update the converging-resource tracker and surface the hosting URL the first
@@ -553,8 +824,8 @@ export async function runStreaming(
       }
     }
   };
-  relay(child.stdout, stdout, true);
-  relay(child.stderr, stderr, false);
+  relay(child.stdout, stdout, 'stdout');
+  relay(child.stderr, stderr, 'stderr');
 
   const heartbeat =
     heartbeatMs > 0
@@ -650,6 +921,8 @@ export async function runStreaming(
       });
     }
     if (code !== 0) {
+      // The CDK CLI reported a failure: a denial it showed is now worth explaining.
+      denials?.failed();
       throw new DeployProcessError(
         `${command} ${args.join(' ')} exited with code ${code}`,
         { exitCode: code },
