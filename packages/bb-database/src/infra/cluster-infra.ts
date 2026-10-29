@@ -1,15 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Provisions one Aurora DSQL cluster and the migration Lambdas its blocks
- * share. Each block calls {@link ClusterInfra.attach}, which publishes the
- * block's migrations as an S3 asset and adds a CustomResource; resources on one
- * cluster are chained so they never run concurrently, and every app function
- * that assumes the stack's execution role is made to depend on the resource, so
- * new code never runs against the old schema. Used by `DatabaseCluster` and by
- * a `Database` that owns its cluster.
- */
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,7 +35,6 @@ const REMOVAL_POLICY_MAP = {
 	retain: cdk.RemovalPolicy.RETAIN,
 } as const;
 
-/** Hash all .sql files in a directory to detect changes. */
 function hashMigrationsDir(dir: string): string {
 	const hash = createHash('sha256');
 	const files = readdirSync(dir)
@@ -58,28 +48,21 @@ function hashMigrationsDir(dir: string): string {
 }
 
 interface ClusterInfraProps {
-	/** The construct the cluster's resources are created under (the `DatabaseCluster`, or the owning `Database`). */
 	owner: BuildingBlockScope;
-	/** Names the cluster; drives resource names and the `BLOCKS_{id}_*` config keys. */
 	fullId: string;
 	options: DatabaseClusterOptions;
 	defaults: BlocksDefaults;
 }
 
-/** A block attached to the cluster. */
 interface AttachedBlock {
 	scope: Construct;
 	fullId: string;
 	schemaName: string;
-	/** Absolute path, when the block has migrations. */
 	migrationsPath?: string;
 }
 
-/**
- * Makes every Lambda function that assumes the app's execution role depend on a
- * block's migration resource. Applied as an aspect because the functions (the
- * default compute, job handlers) may be constructed after the block.
- */
+// Every function on the app's execution role waits for the migration, so new code never runs against the
+// old schema. An aspect, because those functions (default compute, job handlers) may be constructed later.
 class FunctionsWaitForMigration implements cdk.IAspect {
 	constructor(
 		private readonly migration: cdk.CfnResource,
@@ -98,9 +81,7 @@ class FunctionsWaitForMigration implements cdk.IAspect {
 }
 
 export class ClusterInfra {
-	/** Config entries the runtime reads (`BLOCKS_{id}_*` → token). */
 	readonly configEntries: Record<string, string>;
-	/** The PostgreSQL role the app connects as on a `dsql` cluster. */
 	readonly dbRole: string;
 
 	private readonly clusterResource: cdk.CfnResource;
@@ -174,19 +155,12 @@ export class ClusterInfra {
 		});
 	}
 
-	/** Grant the app's execution role what it needs to query the cluster. */
 	grantRuntime(grantee: iam.IGrantable): void {
 		grantee.grantPrincipal.addToPrincipalPolicy(
 			new iam.PolicyStatement({ actions: ['dsql:DbConnect'], resources: [this.clusterArn] }),
 		);
 	}
 
-	/**
-	 * Attach a `Database` block: publish its migrations as an asset and add the
-	 * CustomResource that creates its schema, applies its migrations, and
-	 * provisions the app role's grants, at deploy time. Every function that
-	 * assumes `appRole` then waits for that resource.
-	 */
 	attach(block: AttachedBlock, appRole: iam.IRole): void {
 		const migrationsHash = block.migrationsPath ? hashMigrationsDir(block.migrationsPath) : 'no-migrations';
 		const asset = block.migrationsPath ? this.migrationsAsset(block.scope, block.migrationsPath) : undefined;
@@ -209,13 +183,13 @@ export class ClusterInfra {
 		});
 		const cfn = resource.node.defaultChild as cdk.CfnResource;
 		cfn.addDependency(this.clusterResource);
+		// Chained so two blocks' migrations on one cluster never run concurrently.
 		if (this.lastCustomResource) cfn.addDependency(this.lastCustomResource);
 		this.lastCustomResource = cfn;
 		const stack = cdk.Stack.of(block.scope);
 		cdk.Aspects.of(stack).add(new FunctionsWaitForMigration(cfn, appRole.roleArn, stack));
 	}
 
-	/** A block's migrations as one `{ fileName: sql }` JSON asset (uploaded as-is, no unzip). */
 	private migrationsAsset(scope: Construct, migrationsPath: string): Asset {
 		const files: Record<string, string> = {};
 		for (const file of readdirSync(migrationsPath)

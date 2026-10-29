@@ -1,13 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The runtime behavior every `Database` entry point shares: the three query
- * methods with their retry policy, `transaction()` with conflict retry, the
- * `Transaction` handed to a callback, and the validation of rows against the
- * `schema` option. The mock and aws classes differ only in how they produce
- * the engine, so that is injected as an async factory.
- */
 import { isWireSafeError } from '@aws-blocks/core';
 import { type DatabaseEngine, type SqlQuery, type TransactionHandle, unwrapQuery } from '@aws-blocks/data-common';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -25,7 +18,6 @@ import type { QueryOptions, Transaction, TransactionOptions } from '../types.js'
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface DatabaseCoreOptions {
-	/** Produces (and memoizes) the engine; may run migrations first. */
 	engine: () => Promise<DatabaseEngine>;
 }
 
@@ -34,24 +26,19 @@ export class DatabaseCore {
 
 	constructor(private readonly options: DatabaseCoreOptions) {}
 
-	/** @internal The underlying engine, for adapters and tests. Not part of the public API. */
+	/** @internal */
 	getEngine(): Promise<DatabaseEngine> {
 		if (!this.engine) {
 			this.engine = this.options.engine();
 			this.engine.catch(() => {
-				// A failed initialization is not cached: the next call retries.
 				this.engine = null;
 			});
 		}
 		return this.engine;
 	}
 
-	/**
-	 * Retry a single auto-commit statement that fails with a serialization
-	 * conflict: three times at 50, 100 and 200 ms. Only auto-commit statements
-	 * are retried here; a `transaction()` callback is re-run only with
-	 * `retryOnConflict`.
-	 */
+	// A single auto-commit statement is safe to re-run; a transaction() callback may have side effects,
+	// so it is re-run only with `retryOnConflict`.
 	private async withConflictRetry<T>(fn: () => Promise<T>): Promise<T> {
 		for (let attempt = 0; ; attempt++) {
 			try {
@@ -63,7 +50,6 @@ export class DatabaseCore {
 		}
 	}
 
-	/** Run a query with the auto-commit conflict retry; rows come back as the engine returned them. */
 	private async fetch<T>(query: SqlQuery): Promise<T[]> {
 		const engine = await this.getEngine();
 		const { sql, params } = unwrapQuery(query);
@@ -100,11 +86,6 @@ export class DatabaseCore {
 	}
 }
 
-/**
- * One attempt at a transaction. Runs the callback inside the transaction scope
- * so a `db.query()` from within it joins the open transaction on the
- * serialized local engine instead of deadlocking.
- */
 async function runTransaction<T>(engine: DatabaseEngine, fn: (tx: Transaction) => Promise<T>): Promise<T> {
 	const handle = await engine.beginTransaction();
 	try {
@@ -117,20 +98,14 @@ async function runTransaction<T>(engine: DatabaseEngine, fn: (tx: Transaction) =
 	}
 }
 
-/**
- * Re-tag an error escaping a transaction. An error meant for the caller passes
- * through unchanged: an `ApiError` (a 404 from the callback, the 401 from
- * `requireAuth`), any branded Blocks error (`blocksError`, `brandBlocksError`),
- * and the block's own `DatabaseErrors`. Anything else, such as a driver error or
- * a plain `Error`, becomes `TransactionFailed` so its text never leaves the server.
- */
+// An ApiError, a branded Blocks error or one of DatabaseErrors passes through. Anything else (a driver
+// error, a plain Error) becomes TransactionFailed so its text never leaves the server.
 function asTransactionError(e: unknown): Error {
 	const error = e instanceof Error ? e : new Error(String(e));
 	if (isKnownDatabaseErrorName(error.name) || isWireSafeError(error)) return error;
 	return reTagged(DatabaseErrors.TransactionFailed, error);
 }
 
-/** Transaction implementation that routes calls through a DatabaseEngine using an opaque handle. */
 class TransactionImpl implements Transaction {
 	constructor(
 		private engine: DatabaseEngine,
@@ -156,7 +131,6 @@ class TransactionImpl implements Transaction {
 	}
 }
 
-/** Validate one row; returns the schema's output. */
 async function validateRow<T>(row: unknown, schema: StandardSchemaV1<unknown, T>, index: number): Promise<T> {
 	const result = schema['~standard'].validate(row);
 	const resolved = result instanceof Promise ? await result : result;
@@ -164,7 +138,6 @@ async function validateRow<T>(row: unknown, schema: StandardSchemaV1<unknown, T>
 	return resolved.value;
 }
 
-/** Validate every row in order; without a schema the rows pass through unchanged. */
 async function validateRows<T>(rows: T[], schema: StandardSchemaV1<unknown, T> | undefined): Promise<T[]> {
 	if (!schema) return rows;
 	const out: T[] = [];

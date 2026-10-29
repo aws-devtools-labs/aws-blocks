@@ -1,18 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The DSQL compatibility checker: AWS's `dsql-lint`, the linter the Aurora DSQL
- * team maintains (https://github.com/awslabs/aurora-dsql-tools). It parses the
- * SQL, so a keyword inside a string literal is never a false positive, and its
- * rule set tracks DSQL releases. `@aws/dsql-lint` ships a native binary per
- * platform as optional dependencies; this module locates it, runs it on a
- * statement or a file's worth of SQL, and caches the result per text, because
- * the local mock checks every statement a handler issues.
- *
- * The binary is never needed on AWS: the migration Lambda runs plans that were
- * validated at synth, and the app runtime does no validation.
- */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -21,7 +9,6 @@ import { configError } from './errors.js';
 
 const require = createRequire(import.meta.url);
 
-/** Mirrors the platform table in `@aws/dsql-lint`'s own `bin/dsql-lint` wrapper. */
 const PLATFORM_PACKAGES: Record<string, string> = {
 	'darwin-arm64': '@aws/dsql-lint-darwin-arm64',
 	'darwin-x64': '@aws/dsql-lint-darwin-x64',
@@ -30,13 +17,10 @@ const PLATFORM_PACKAGES: Record<string, string> = {
 	'win32-x64': '@aws/dsql-lint-win32-x64',
 };
 
-/** One finding from `dsql-lint --format json`. */
 export interface LintDiagnostic {
-	/** The rule id, e.g. `truncate`, `foreign_key_not_valid`, `parse_error`. */
 	rule: string;
 	message: string;
 	suggestion: string;
-	/** 1-based line in the linted text. */
 	line?: number;
 	statementPreview?: string;
 }
@@ -53,7 +37,7 @@ const CACHE_LIMIT = 2000;
 const cache = new Map<string, LintDiagnostic[]>();
 let binaryPath: string | undefined;
 
-/** @internal Path to the `dsql-lint` binary for this platform; `DSQL_LINT_PATH` overrides the lookup. */
+/** @internal */
 export function dsqlLintBinary(): string {
 	if (binaryPath) return binaryPath;
 	const override = process.env.DSQL_LINT_PATH;
@@ -83,7 +67,7 @@ export function dsqlLintBinary(): string {
 	return binaryPath;
 }
 
-/** @internal Whether the binary can be found (does not run it). */
+/** @internal */
 export function isDsqlLintAvailable(): boolean {
 	try {
 		dsqlLintBinary();
@@ -93,11 +77,6 @@ export function isDsqlLintAvailable(): boolean {
 	}
 }
 
-/**
- * Lint SQL (one statement or a whole file) for Aurora DSQL compatibility.
- * Returns dsql-lint's diagnostics, empty when the SQL is accepted. A text that
- * does not parse comes back as one `parse_error` diagnostic.
- */
 export function lintSql(sql: string): LintDiagnostic[] {
 	const cached = cache.get(sql);
 	if (cached) return cached;
@@ -133,7 +112,6 @@ export function lintSql(sql: string): LintDiagnostic[] {
 	return diagnostics;
 }
 
-/** Render a diagnostic for an error message. */
 export function formatDiagnostic(d: LintDiagnostic): string {
 	return `${d.rule}: ${d.message}${d.suggestion ? ` ${d.suggestion}` : ''}`;
 }

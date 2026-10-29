@@ -1,18 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * `provisionAppRole` against a scripted engine, pinning the statement set per
- * schema. DSQL rejects a schema-level grant on `public` (a system entity), so
- * a block that owns its cluster must get no `GRANT USAGE ON SCHEMA` — the e2e
- * failure that pinned this ran `GRANT USAGE ON SCHEMA "public"` on deploy.
- */
+// DSQL rejects a schema-level grant on `public` (a system entity): the deploy that pinned this ran
+// `GRANT USAGE ON SCHEMA "public"`.
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { provisionAppRole } from './migration-lambda.js';
 
-/** Captures statements; answers the catalog queries `provisionAppRole` makes. */
 class GrantEngine implements DatabaseEngine {
 	readonly statements: string[] = [];
 
@@ -21,7 +16,7 @@ class GrantEngine implements DatabaseEngine {
 	async query<T>(sql: string): Promise<T[]> {
 		this.statements.push(sql);
 		if (/FROM pg_tables/.test(sql)) return this.tables.map((tablename) => ({ tablename })) as T[];
-		return []; // no existing role, no views, no sequences
+		return [];
 	}
 
 	async execute(sql: string): Promise<{ rowCount: number }> {
@@ -52,7 +47,6 @@ describe('provisionAppRole', () => {
 		const engine = new GrantEngine(['notes']);
 		await provisionAppRole(engine, 'blocks_app_x', 'arn:aws:iam::123:role/app', 'public');
 		assert.ok(!engine.statements.some((s) => s.includes('ON SCHEMA')), engine.statements.join('\n'));
-		// The role itself and the table-level DML grants still happen.
 		assert.ok(engine.statements.some((s) => s.startsWith('CREATE ROLE')));
 		assert.ok(engine.statements.some((s) => s.startsWith('AWS IAM GRANT')));
 		assert.ok(

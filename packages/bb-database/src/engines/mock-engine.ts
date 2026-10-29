@@ -1,18 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The local-mode decorator every mock `Database` wraps its engine in.
- *
- * - `simulateConflict()` makes the next commit raise `SerializationFailure`, so
- *   retry tests need no deployed cluster.
- * - It runs each statement through dsql-lint, so unsupported statements are
- *   rejected before they reach PGlite, DDL on the app connection is refused
- *   (parity with the deployed DML-only grant), `ASYNC` DDL is run synchronously,
- *   and the per-transaction limits (one DDL statement, no DDL with DML, 3,000
- *   changed rows with cascades counted, 10 MiB of data) are enforced, for
- *   explicit transactions and for auto-commit statements alike.
- */
 import { brandBlocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import {
@@ -24,7 +12,6 @@ import {
 import { classifyStatement, stripLiteralsAndComments, TransactionTracker, validateStatement } from '../validation.js';
 import { currentTransactionHandle } from './tx-scope.js';
 
-/** Stable, BB-authored message for the mock's DDL guard. */
 const DDL_NOT_ALLOWED_MESSAGE =
 	'DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime of a DSQL cluster. ' +
 	'Put them in a migration file; the migration Lambda runs DDL with dsql:DbConnectAdmin.';
@@ -41,12 +28,10 @@ export class MockEngine implements DatabaseEngine {
 
 	constructor(private readonly inner: DatabaseEngine) {}
 
-	/** Test helper: make the next commit raise `SerializationFailure`. */
 	simulateConflict(): void {
 		this.shouldConflict = true;
 	}
 
-	/** Allow DDL for the duration of `fn` (the migration runner). */
 	async withDdl<T>(fn: () => Promise<T>): Promise<T> {
 		const previous = this.allowDdl;
 		this.allowDdl = true;
@@ -57,15 +42,15 @@ export class MockEngine implements DatabaseEngine {
 		}
 	}
 
-	/** Validate, guard, and normalize a statement for the local mock. */
 	private preprocess(sql: string): string {
 		validateStatement(sql);
+		// Parity with the deployed grant: the app role has DML only, so DDL is refused here as well.
 		if (!this.allowDdl && classifyStatement(sql) === 'ddl') {
 			const err = new Error(DDL_NOT_ALLOWED_MESSAGE);
 			err.name = DSQL_PERMISSION_ERROR_NAME;
 			throw brandBlocksError(err);
 		}
-		// PGlite runs the asynchronous DDL forms synchronously.
+		// PGlite rejects ASYNC; it runs the asynchronous DDL forms synchronously.
 		return sql
 			.replace(/\b(CREATE\s+(?:UNIQUE\s+)?INDEX)\s+ASYNC\b/gi, '$1')
 			.replace(/\b(ALTER\s+TABLE)\s+ASYNC\b/gi, '$1');
@@ -79,7 +64,6 @@ export class MockEngine implements DatabaseEngine {
 		const normalized = this.preprocess(sql);
 		if (classifyStatement(sql) !== 'dml') return this.inner.execute(normalized, params);
 
-		// Inside a transaction() callback: the statement joins the open transaction; count it there.
 		const ambient = currentTransactionHandle() as TrackedHandle | undefined;
 		if (ambient) {
 			ambient.tracker?.recordStatement(sql, params);
@@ -154,11 +138,8 @@ export class MockEngine implements DatabaseEngine {
 		return result;
 	}
 
-	/**
-	 * Tables whose rows an `ON DELETE CASCADE` foreign key removes when rows of
-	 * the statement's target table are deleted, transitively. DSQL counts those
-	 * rows toward the 3,000-row transaction limit; so does the mock.
-	 */
+	// DSQL counts the rows an `ON DELETE CASCADE` removes, transitively, toward its 3,000-row transaction
+	// limit; so does the mock.
 	private async cascadeTargets(handle: TransactionHandle, sql: string): Promise<string[]> {
 		const target = DELETE_TARGET.exec(stripLiteralsAndComments(sql))?.[1];
 		if (!target) return [];

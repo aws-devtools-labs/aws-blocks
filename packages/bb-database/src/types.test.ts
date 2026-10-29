@@ -1,12 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Compile-time contract of the `Database` / `DatabaseCluster` surface. Every
- * `@ts-expect-error` below is a rule of the public surface: if the compiler
- * stops rejecting the line, `tsc --build` fails. The runtime test only confirms
- * the file was compiled, so the assertions can never be skipped.
- */
+// Each `@ts-expect-error` is a rule of the public surface: if the compiler stops rejecting the line,
+// `tsc --build` fails. The runtime test only confirms the file compiled, so the rules cannot be skipped.
 import assert from 'node:assert';
 import { test } from 'node:test';
 import type { Scope } from '@aws-blocks/core';
@@ -20,25 +16,21 @@ declare const DatabaseCluster: typeof DatabaseClusterType;
 declare const scope: Scope;
 
 function typeChecks(): void {
-	// 1. Default: the block owns a DSQL cluster. The classes are not generic.
 	const owned = new Database(scope, 'db');
 	type _Owned = Expect<Equal<typeof owned, DatabaseType>>;
 	const ownedWithOptions = new Database(scope, 'db2', { migrationsPath: './x', removalPolicy: 'destroy' });
 	type _OwnedOpts = Expect<Equal<typeof ownedWithOptions, DatabaseType>>;
 
-	// 2. A shared cluster. `type` is required so a second category is an additive change.
 	const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 	type _Shared = Expect<Equal<typeof shared, DatabaseClusterType>>;
 	const onShared = new Database(scope, 'orders', { cluster: shared, schemaName: 'orders_v2' });
 	type _OnShared = Expect<Equal<typeof onShared, DatabaseType>>;
 
-	// query / queryOne / execute / transaction on every kind; the descriptor carries the kind.
 	void onShared.query;
 	void owned.transaction;
 	type _Ref = Expect<Equal<typeof onShared.cluster.kind, 'dsql'>>;
 	type _RefId = Expect<Equal<typeof onShared.cluster.id, string>>;
 
-	// Cluster options are narrowed by `type`.
 	// @ts-expect-error: capacity options do not belong to a DSQL cluster
 	new DatabaseCluster(scope, 'c1', { type: 'dsql', minCapacity: 1 });
 	// @ts-expect-error: snapshot is not a DSQL removal policy
@@ -51,7 +43,6 @@ function typeChecks(): void {
 	new DatabaseCluster(scope, 'c5', { type: 'provisioned' });
 	new DatabaseCluster(scope, 'c6', { type: 'dsql', removalPolicy: 'retain' });
 
-	// Block options.
 	// @ts-expect-error: removalPolicy lives on the cluster once `cluster` is set
 	new Database(scope, 'b1', { cluster: shared, removalPolicy: 'destroy' });
 	// @ts-expect-error: a cluster must be a DatabaseCluster

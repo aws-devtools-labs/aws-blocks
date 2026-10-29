@@ -1,14 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * CDK infrastructure entry point (`cdk synth --conditions=cdk`).
- *
- * A `DatabaseCluster` provisions an Aurora DSQL cluster plus its migration
- * Lambdas. A `Database` either owns a `dsql` cluster or attaches to a
- * shared one, adding the CustomResource that creates its schema and runs its
- * migrations at deploy time.
- */
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import { DEFAULT_CLUSTER_ID } from './constants.js';
@@ -26,10 +18,9 @@ import type {
 	OwnedDatabaseOptions,
 } from './types.js';
 
-/** VPC requirements per cluster type: DSQL is reached over the public endpoint, so a VPC app needs egress. */
+// DSQL is reached over its public endpoint, so an app in a VPC needs egress.
 const VPC_REQUIREMENTS = { requiresEgress: true };
 
-/** Project root passed to synth (`--context projectRoot=…`), falling back to the cwd. */
 function projectRootOf(scope: BuildingBlockScope): string {
 	const ctx = scope.node.tryGetContext('projectRoot');
 	return typeof ctx === 'string' && ctx ? ctx : process.cwd();
@@ -76,7 +67,6 @@ export class Database extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
-		// A shared cluster declared its own requirements; an owned one needs egress to DSQL.
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
 		registerUniqueId('Database', id, this.fullId);
 

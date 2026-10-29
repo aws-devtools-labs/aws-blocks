@@ -1,12 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Runs a {@link MigrationPlan} in the block's schema. `_migrations` records
- * finished files; `_migration_progress` records the last completed step of an
- * unfinished one (and the DSQL job it is waiting on, if any), so a re-run
- * resumes where it failed or where it left off waiting.
- */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { brandBlocksError } from '@aws-blocks/core';
@@ -15,36 +9,24 @@ import { DEFAULT_MIGRATIONS_ROOT, quoteIdent } from '../constants.js';
 import { configError } from '../errors.js';
 import type { MigrationPlan, PlanStep } from './plan.js';
 
-/** Error name for a migration that failed mid-plan. */
 const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
 
 interface RunPlanOptions {
-	/** The block's schema. Created if missing (unless `public`). */
 	schemaName: string;
-	/** Where progress lines go. @default console.log */
 	log?: (message: string) => void;
 }
 
-/** A DSQL job the plan is waiting on. */
 interface PendingJob {
 	file: string;
-	/** Index of the `wait-job` step. */
 	step: number;
 	jobId: string;
 }
 
 interface RunPlanResult {
-	/** Files applied to completion in this call. */
 	applied: string[];
-	/**
-	 * The DSQL job the plan stopped at because it was still running. The job is
-	 * recorded in `_migration_progress`; call again later to resume (the
-	 * custom-resource provider's `isComplete` poll does).
-	 */
 	waitingOn?: PendingJob;
 }
 
-/** Create the schema (when not `public`) and the tracking tables. */
 export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: string): Promise<void> {
 	if (schemaName !== 'public') await engine.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schemaName)}`);
 	await engine.execute(
@@ -55,16 +37,13 @@ export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: 
 	);
 }
 
-/** Names of the files already recorded in `_migrations`. */
 async function appliedMigrations(engine: DatabaseEngine): Promise<Set<string>> {
 	const rows = await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY name');
 	return new Set(rows.map((r) => r.name));
 }
 
 interface Progress {
-	/** Steps completed so far (the index of the next step to run). */
 	step: number;
-	/** The job the step at `step` is waiting on, if any. */
 	jobId?: string;
 }
 
@@ -104,11 +83,8 @@ function failed(file: string, index: number, total: number, step: PlanStep, caus
 
 type JobStatus = 'running' | 'completed' | 'failed';
 
-/**
- * Status of a DSQL asynchronous DDL job from `sys.jobs`. A job missing from the
- * view is treated as completed: DSQL purges finished jobs after 30 minutes, and
- * a failed index or constraint would have failed the job while it was listed.
- */
+// A job missing from `sys.jobs` counts as completed: DSQL purges finished jobs after 30 minutes, and a
+// failed index or constraint would have failed the job while it was still listed.
 async function jobStatus(engine: DatabaseEngine, jobId: string): Promise<{ status: JobStatus; details?: string }> {
 	const rows = await engine.query<{ status: string; details: string | null }>(
 		'SELECT status, details FROM sys.jobs WHERE job_id = $1',
@@ -121,20 +97,6 @@ async function jobStatus(engine: DatabaseEngine, jobId: string): Promise<{ statu
 	return { status: 'running' };
 }
 
-/**
- * Apply every pending file of `plan`. Returns the names applied and, when a
- * DSQL job is still running, the job it stopped at.
- *
- * Consecutive transactional steps share one transaction; a non-transactional
- * step (DDL on a `dsql` cluster, a job wait, a constraint validation)
- * runs on its own. Progress is recorded after every unit of work so a failure
- * resumes where it stopped.
- *
- * A `wait-job` step polls `sys.jobs` for the job id the statement before it
- * returned. When that statement returned none, the wait is a no-op: the local
- * PGlite runs `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE
- * CONSTRAINT` synchronously (the mock strips `ASYNC`), so there is no job.
- */
 export async function runMigrationPlan(
 	engine: DatabaseEngine,
 	plan: MigrationPlan,
@@ -152,7 +114,6 @@ export async function runMigrationPlan(
 		let startAt = progress.step;
 
 		if (progress.jobId !== undefined) {
-			// Resuming at a wait-job step: the job was started by the previous run.
 			const step = file.steps[startAt];
 			const status = await jobStatus(engine, progress.jobId);
 			if (status.status === 'running') {
@@ -193,6 +154,8 @@ export async function runMigrationPlan(
 					handle = null;
 				}
 				if (step.kind === 'wait-job') {
+					// Without a job id there is nothing to wait for: PGlite ran the statement synchronously
+					// (the mock strips ASYNC).
 					if (lastJobId) {
 						const status = await jobStatus(engine, lastJobId);
 						if (status.status === 'failed')
@@ -230,7 +193,6 @@ export async function runMigrationPlan(
 	return { applied: results };
 }
 
-/** Load `*.sql` files from a directory, sorted by name. */
 export function loadMigrationFiles(dir: string): Record<string, string> {
 	const files = readdirSync(dir)
 		.filter((f) => f.endsWith('.sql'))
@@ -240,11 +202,6 @@ export function loadMigrationFiles(dir: string): Record<string, string> {
 	return migrations;
 }
 
-/**
- * Resolve a block's migrations directory. An explicit `migrationsPath` must
- * exist; the default `./aws-blocks/migrations/{id}` may be absent (a new block
- * has no migrations yet), in which case `undefined` is returned.
- */
 export function resolveMigrationsPath(
 	explicit: string | undefined,
 	blockId: string,

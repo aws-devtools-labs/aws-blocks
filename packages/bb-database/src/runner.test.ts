@@ -1,12 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The resumable runner against a scripted engine: a running DSQL job stops the
- * run and is picked up by the next call (the custom-resource provider's
- * `isComplete` polls), progress is recorded per step, and a failed job fails
- * the file at its wait step.
- */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
@@ -15,7 +9,6 @@ import { runMigrationPlan } from './migrations/runner.js';
 
 type JobState = 'submitted' | 'processing' | 'completed' | 'failed';
 
-/** An in-memory engine that knows only the statements the runner issues. */
 class ScriptedEngine implements DatabaseEngine {
 	readonly statements: string[] = [];
 	readonly migrations = new Set<string>();
@@ -94,7 +87,6 @@ describe('migration runner', () => {
 		assert.ok(engine.statements.includes('CREATE INDEX ASYNC t_n ON t (n)'));
 		assert.ok(!engine.statements.some((s) => /INSERT INTO t VALUES/.test(s)), 'the next file has not started');
 
-		// Still running: the same answer, nothing re-run.
 		const before = engine.statements.length;
 		const second = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(second.waitingOn, first.waitingOn);
@@ -103,7 +95,6 @@ describe('migration runner', () => {
 			'DDL is not replayed',
 		);
 
-		// Completed: the file finishes, the seed runs in one transaction, both files are recorded.
 		engine.jobs.set('job1', { status: 'completed' });
 		const third = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.deepStrictEqual(third.applied, ['001_t.sql', '002_seed.sql']);
@@ -151,7 +142,6 @@ describe('migration runner', () => {
 			return ScriptedEngine.prototype.execute.call(engine, sql, params);
 		};
 		const plan = buildMigrationPlan(files);
-		// The first run stops at the index job; once it completes, the seed file fails at its second statement.
 		const first = await runMigrationPlan(engine, plan, { schemaName: 'public', ...quiet });
 		assert.strictEqual(first.waitingOn?.jobId, 'job1');
 		engine.jobs.set('job1', { status: 'completed' });

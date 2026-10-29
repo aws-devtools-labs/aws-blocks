@@ -22,40 +22,23 @@ export const DatabaseErrors = {
 	ResultValidationFailed: 'ResultValidationFailedException',
 } as const;
 
-/**
- * Raised by the local mock when DDL runs on a `dsql` app connection.
- * Deployed DSQL raises SQLSTATE 42501 instead (→ `QueryFailed`), so this name
- * is not on the public {@link DatabaseErrors}.
- */
+// Local mock only: deployed DSQL raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
+// name is not on the public DatabaseErrors.
 export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
 
-/** Error name raised when a statement or migration uses a feature a `dsql` cluster lacks. */
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
-/** Serialization failure (an OCC conflict). SQLSTATE class 40, transaction rollback. */
 export const PG_SERIALIZATION_FAILURE = '40001';
-/** Unique constraint violation. SQLSTATE class 23 (Integrity Constraint Violation). */
 const PG_UNIQUE_VIOLATION = '23505';
-/** Connection exception class prefix. SQLSTATE class 08. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
-/** Program limit exceeded. DSQL reports its per-transaction row and size limits with this SQLSTATE. */
 const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
-/** Aurora DSQL stale schema cache. Retried once, anywhere: the retry refreshes the catalog. */
 const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 
-/**
- * The messages DSQL attaches to SQLSTATE 54000 when a transaction exceeds its
- * limits: `transaction row limit exceeded` (3,000 rows) and
- * `transaction size limit 10mb exceeded`. Both map to `TransactionRowLimitExceeded`.
- * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html
- */
+// DSQL reports both per-transaction limits as SQLSTATE 54000; only the message tells them apart:
+// `transaction row limit exceeded` (3,000 rows) and `transaction size limit 10mb exceeded`.
+// https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html
 const DSQL_TRANSACTION_LIMIT_MESSAGE = /transaction (row|size) limit/i;
 
-/**
- * Build the 409 ApiError for a serialization-failure (SQLSTATE 40001) conflict.
- * Preserves the `SerializationFailure` name, keeps the driver error as `cause`
- * (server-side only), and flags the conflict retriable.
- */
 export function serializationConflict(cause: Error): ApiError {
 	return new ApiError('The transaction failed due to a serialization conflict', 409, {
 		name: DatabaseErrors.SerializationFailure,
@@ -64,10 +47,7 @@ export function serializationConflict(cause: Error): ApiError {
 	});
 }
 
-/**
- * Build the 409 ApiError for a unique-constraint violation (SQLSTATE 23505).
- * Not retriable: a duplicate key is deterministic.
- */
+// Not retriable: a duplicate key is deterministic.
 function uniqueConstraintConflict(cause: Error): ApiError {
 	return new ApiError('The item violates a unique constraint', 409, {
 		name: DatabaseErrors.UniqueConstraintViolation,
@@ -75,11 +55,8 @@ function uniqueConstraintConflict(cause: Error): ApiError {
 	});
 }
 
-/**
- * Build the error for a row that failed the result `schema`. The message names
- * the row and the schema's first issue (its path and text), which describe the
- * expected shape, not the data; the row itself stays on the server.
- */
+// The message carries the row index and the schema's first issue (path and text), which describe the
+// expected shape, not the data; the row itself stays on the server.
 export function resultValidationFailed(rowIndex: number, issues: ReadonlyArray<StandardSchemaV1.Issue>): Error {
 	const first = issues[0];
 	const path = first?.path?.map((segment) => (typeof segment === 'object' ? segment.key : segment)).join('.');
@@ -93,12 +70,10 @@ export function resultValidationFailed(rowIndex: number, issues: ReadonlyArray<S
 
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
 
-/** Whether `name` is one of the {@link DatabaseErrors} names (an already-translated BB error). */
 export function isKnownDatabaseErrorName(name: string): boolean {
 	return knownErrors.has(name);
 }
 
-/** Client-facing message per error name. Driver text stays on the server-side `cause`. */
 const RE_TAG_MESSAGES: Record<string, string> = {
 	[DatabaseErrors.QueryFailed]: 'The database query failed',
 	[DatabaseErrors.ConnectionFailed]: 'The database connection failed',
@@ -109,7 +84,8 @@ const RE_TAG_MESSAGES: Record<string, string> = {
 		'The transaction changed more rows, or more data, than the cluster allows in one transaction',
 };
 
-/** A branded error with a BB `name` and stable message; the driver error is kept as `cause`. */
+// Only the name and a fixed message cross the wire; the driver error, with its SQLSTATE, stays on the
+// server-side `cause`.
 export function reTagged(name: string, cause: Error): Error {
 	const message = RE_TAG_MESSAGES[name] ?? RE_TAG_MESSAGES[DatabaseErrors.QueryFailed];
 	const wrapped = new Error(`${name}: ${message}`, { cause });
@@ -117,19 +93,16 @@ export function reTagged(name: string, cause: Error): Error {
 	return brandBlocksError(wrapped);
 }
 
-/** Wrap an unknown caught value with a standardized {@link DatabaseErrors} name. */
 function wrapError(e: unknown): never {
 	const error = e instanceof Error ? e : new Error(String(e));
 	const name = knownErrors.has(error.name) ? error.name : DatabaseErrors.QueryFailed;
 	throw reTagged(name, error);
 }
 
-/** Read a pg driver error's SQLSTATE `code` without a cast. */
 export function pgErrorCode(e: unknown): string | undefined {
 	return typeof e === 'object' && e !== null && 'code' in e && typeof e.code === 'string' ? e.code : undefined;
 }
 
-/** Whether a driver error is DSQL's per-transaction row or size limit (SQLSTATE 54000 with the DSQL message). */
 function isDsqlTransactionLimit(e: unknown): boolean {
 	return (
 		e instanceof Error &&
@@ -138,11 +111,6 @@ function isDsqlTransactionLimit(e: unknown): boolean {
 	);
 }
 
-/**
- * Translate a PostgreSQL-protocol driver error (pg against DSQL, or PGlite) to a
- * {@link DatabaseErrors} name. Only the name and a fixed message reach the
- * client; the driver error, with its SQLSTATE, stays on the server-side `cause`.
- */
 export function translatePgError(e: unknown, engineName: string): never {
 	if (e instanceof Error) {
 		const code = pgErrorCode(e);
@@ -159,19 +127,16 @@ export function translatePgError(e: unknown, engineName: string): never {
 	wrapError(e);
 }
 
-/** Whether an error (or its `cause`) is the DSQL stale-schema-cache condition worth a transparent retry. */
 export function isStaleSchemaCache(e: unknown): boolean {
 	const cause = e instanceof Error && e.cause instanceof Error ? e.cause : undefined;
 	return pgErrorCode(e) === DSQL_STALE_SCHEMA_CACHE || pgErrorCode(cause) === DSQL_STALE_SCHEMA_CACHE;
 }
 
-/** Whether an error is a serialization conflict (translated or raw). */
 export function isSerializationConflict(e: unknown): boolean {
 	if (!(e instanceof Error)) return false;
 	return e.name === DatabaseErrors.SerializationFailure || pgErrorCode(e) === PG_SERIALIZATION_FAILURE;
 }
 
-/** Build a branded configuration/usage error with a BB-authored message. */
 export function configError(message: string): Error {
 	const err = new Error(message);
 	err.name = 'DatabaseConfigurationError';

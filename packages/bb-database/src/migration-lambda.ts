@@ -1,17 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Custom-resource handlers, one resource per `Database` block: create the
- * block's schema, apply its migrations (read from the S3 asset in the resource
- * properties), and grant the app role DML on the schema.
- *
- * Two handlers share this bundle. `handler` (the provider's `onEvent`) runs the
- * plan until it finishes or reaches a DSQL job that is still running (an index
- * build or a constraint validation). `isComplete` is then polled by the
- * provider, up to its total timeout, and resumes the plan each time; so a long
- * index build is bounded by the provider's two hours, not by one invocation.
- */
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
@@ -26,10 +15,6 @@ const MAX_RETRIES = 8;
 const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
-/**
- * True when the cluster is not accepting statements yet (just created, endpoint
- * not reachable), as opposed to a bad statement.
- */
 function isRetryableMigrationError(e: unknown): boolean {
 	if (!(e instanceof Error)) return false;
 	const raw = e.cause instanceof Error ? e.cause : undefined;
@@ -42,7 +27,6 @@ function isRetryableMigrationError(e: unknown): boolean {
 	return matches(e) || (raw !== undefined && matches(raw));
 }
 
-/** Exponential backoff while the cluster is unreachable. */
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		try {
@@ -63,11 +47,7 @@ function escapeString(value: string): string {
 	return value.replace(/'/g, "''");
 }
 
-/**
- * Provision the app's DML-only role on a `dsql` cluster and grant it the
- * block's schema. Idempotent; runs on every deploy so new tables get grants.
- * @internal
- */
+/** @internal Idempotent and run on every deploy, so tables a new migration adds get their grants. */
 export async function provisionAppRole(
 	engine: DatabaseEngine,
 	dbRoleName: string,
@@ -127,13 +107,11 @@ interface MigrationProperties {
 	migrationsKey?: string;
 }
 
-/** The provider's `isComplete` event: the `onEvent` event plus what `onEvent` returned. */
 type IsCompleteEvent = CloudFormationCustomResourceEvent & {
 	PhysicalResourceId?: string;
 	Data?: { migrationsComplete?: string };
 };
 
-/** Read a block's migration files from its S3 asset. */
 async function loadMigrationsAsset(bucket: string, key: string): Promise<Record<string, string>> {
 	const result = await new S3Client({}).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
 	const body = await result.Body?.transformToString();
@@ -154,11 +132,6 @@ function buildEngine(schemaName: string): DatabaseEngine {
 	});
 }
 
-/**
- * One pass over the block's plan: apply what is pending, stop at a running DSQL
- * job, and when everything is applied grant the app role. Returns whether the
- * block is fully migrated.
- */
 async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 	const schemaName = props.schemaName || 'public';
 	const engine = buildEngine(schemaName);
@@ -188,7 +161,6 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 	}
 }
 
-/** The provider's `onEvent` handler. */
 export const handler = async (
 	event: CloudFormationCustomResourceEvent,
 ): Promise<{ PhysicalResourceId: string; Data?: { migrationsComplete: string } }> => {
@@ -203,7 +175,6 @@ export const handler = async (
 	return { PhysicalResourceId: physicalId, Data: { migrationsComplete: String(complete) } };
 };
 
-/** The provider's `isComplete` handler: resumes the plan until no DSQL job is left running. */
 export const isComplete = async (event: IsCompleteEvent): Promise<{ IsComplete: boolean }> => {
 	if (event.RequestType === 'Delete' || event.Data?.migrationsComplete === 'true') return { IsComplete: true };
 	const props = (event.ResourceProperties ?? {}) as MigrationProperties;

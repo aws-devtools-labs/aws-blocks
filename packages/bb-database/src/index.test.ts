@@ -1,12 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Local-mode behavior of `Database` / `DatabaseCluster`: owned and shared
- * clusters, schema isolation, dsql-lint and the DSQL limits, conflict simulation
- * and retry, DSQL migration files run as written, and the three
- * two construction-time rules (unique ids, schema collisions).
- */
 import assert from 'node:assert';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -42,9 +36,7 @@ describe('Database (owned DSQL cluster)', () => {
 		const db = new Database(app(), 'db');
 		assert.deepStrictEqual(db.cluster, { kind: 'dsql', id: 'default' });
 		assert.strictEqual(db.schemaName, 'public');
-		// DDL at runtime is refused on a DSQL cluster (parity with the deployed grant)…
 		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT PRIMARY KEY)`), /DDL statements .* not allowed/);
-		// …so the schema comes from a migration.
 		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);' });
 		const { rowCount } = await db.execute(sql`INSERT INTO t (id, n) VALUES (${'a'}, ${1})`);
 		assert.strictEqual(rowCount, 1);
@@ -109,7 +101,6 @@ describe('Database (owned DSQL cluster)', () => {
 		const db = new Database(app(), 'db');
 		await withMigrations(db, { '001.sql': 'CREATE TABLE acct (id TEXT PRIMARY KEY, balance INTEGER NOT NULL);' });
 		await db.execute(sql`INSERT INTO acct VALUES (${'a'}, ${100})`);
-		// What a handler does: a 404 (or the 401 from requireAuth) from inside the callback.
 		await assert.rejects(
 			db.transaction(async (tx) => {
 				await tx.execute(sql`UPDATE acct SET balance = 0 WHERE id = ${'a'}`);
@@ -117,14 +108,12 @@ describe('Database (owned DSQL cluster)', () => {
 			}),
 			(e: unknown) => e instanceof ApiError && e.status === 404 && e.message === 'no such customer',
 		);
-		// A branded named error (blocksError / brandBlocksError) keeps its name too.
 		await assert.rejects(
 			db.transaction(async () => {
 				throw blocksError('InsufficientFundsException', 'not enough');
 			}),
 			(e: Error) => e.name === 'InsufficientFundsException' && e.message.includes('not enough'),
 		);
-		// An unbranded error still becomes TransactionFailed (its message never leaves the server).
 		await assert.rejects(
 			db.transaction(async () => {
 				throw new Error('driver text');
@@ -154,7 +143,6 @@ describe('Database (owned DSQL cluster)', () => {
 		type _One = Expect<Equal<typeof one, { id: string; n: number } | null>>;
 		assert.deepStrictEqual(one, { id: 'a', n: 1 });
 		assert.strictEqual(await db.queryOne(sql`SELECT id, n FROM t WHERE id = ${'zzz'}`, { schema: Row }), null);
-		// The schema's output is what comes back, so a transform applies.
 		const Upper = {
 			'~standard': {
 				version: 1,
@@ -169,7 +157,6 @@ describe('Database (owned DSQL cluster)', () => {
 			{ id: 'A' },
 			{ id: 'B' },
 		]);
-		// A mismatch names the error and the row.
 		const Wrong = schemaOf(
 			(v): v is { id: number } => isRecord(v) && typeof v.id === 'number',
 			'id must be a number',
@@ -179,7 +166,6 @@ describe('Database (owned DSQL cluster)', () => {
 			assert.match(e.message, /id must be a number/);
 			return true;
 		});
-		// Inside a transaction the same error passes through and the write is rolled back.
 		await assert.rejects(
 			db.transaction(async (tx) => {
 				await tx.execute(sql`UPDATE t SET n = 99 WHERE id = ${'a'}`);
@@ -264,12 +250,11 @@ describe('Database (owned DSQL cluster)', () => {
 				'CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT REFERENCES parent(id) ON DELETE CASCADE);',
 				'CREATE TABLE grandchild (id INTEGER PRIMARY KEY, child_id INTEGER REFERENCES child(id) ON DELETE CASCADE);',
 			].join('\n'),
-			// Seeded in two files: a migration's DML runs in one transaction, which the limit applies to as well.
+			// Two files: a migration's DML runs in one transaction, and DSQL's row limit applies to it as well.
 			'002.sql':
 				"INSERT INTO parent VALUES ('p');\nINSERT INTO child SELECT g, 'p' FROM generate_series(1, 1500) g;",
 			'003.sql': 'INSERT INTO grandchild SELECT g, g FROM generate_series(1, 1500) g;',
 		});
-		// 1 parent + 1,500 children + 1,500 grandchildren = 3,001 rows in one transaction.
 		await assert.rejects(
 			db.execute(sql`DELETE FROM parent WHERE id = ${'p'}`),
 			(e: Error) => e.name === DatabaseErrors.TransactionRowLimitExceeded && /cascades included/.test(e.message),
@@ -329,7 +314,6 @@ describe('Database (owned DSQL cluster)', () => {
 			await db.queryOne(sql`SELECT 1 FROM pg_indexes WHERE indexname = 'items_user'`),
 			'the ASYNC index exists',
 		);
-		// The foreign key and the check are enforced (validated, not left NOT VALID).
 		const queryFailed = (e: Error) => e.name === DatabaseErrors.QueryFailed;
 		await assert.rejects(db.execute(sql`INSERT INTO items (user_id, qty) VALUES (${'nobody'}, ${1})`), queryFailed);
 		await assert.rejects(db.execute(sql`INSERT INTO items (user_id, qty) VALUES (${'u1'}, ${-1})`), queryFailed);
@@ -389,7 +373,7 @@ describe('Database (owned DSQL cluster)', () => {
 			'001_init.sql': [
 				'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL);',
 				'CREATE INDEX ASYNC t_n ON t (n);',
-				// What the DSQL user guide shows: wait for the job the statement returned. Locally there is no job.
+				// The waits the DSQL user guide shows; locally there is no job, so the sys stub returns at once.
 				"SELECT sys.wait_for_job('jh2gbtx4mzhgfkbimtgwn5j45y');",
 				"SELECT sys.wait_for_job(job_id) FROM sys.jobs WHERE status IN ('submitted', 'processing');",
 			].join('\n'),
@@ -412,14 +396,12 @@ describe('DatabaseCluster (shared DSQL)', () => {
 		assert.deepStrictEqual(users.cluster, { kind: 'dsql', id: shared.fullId });
 		assert.strictEqual(users.schemaName, 'users');
 		assert.strictEqual(orders.schemaName, 'orders');
-		// The same table name in each schema.
 		await withMigrations(users, { '001.sql': 'CREATE TABLE items (id TEXT PRIMARY KEY);' });
 		await withMigrations(orders, { '001.sql': 'CREATE TABLE items (id TEXT PRIMARY KEY);' });
 		await users.execute(sql`INSERT INTO items VALUES (${'u1'})`);
 		await orders.execute(sql`INSERT INTO items VALUES (${'o1'}), (${'o2'})`);
 		assert.strictEqual((await users.query(sql`SELECT * FROM items`)).length, 1);
 		assert.strictEqual((await orders.query(sql`SELECT * FROM items`)).length, 2);
-		// Concurrent transactions from both blocks stay isolated.
 		await Promise.all([
 			users.transaction(async (tx) => {
 				await tx.execute(sql`INSERT INTO items VALUES (${'u2'})`);
@@ -430,7 +412,6 @@ describe('DatabaseCluster (shared DSQL)', () => {
 				assert.strictEqual((await tx.query(sql`SELECT * FROM items`)).length, 3);
 			}),
 		]);
-		// Both schemas live in one PGlite: the cluster's data directory, not the blocks'.
 		assert.ok(existsSync(join(DATA_DIR, shared.fullId, 'pglite')));
 		assert.ok(!existsSync(join(DATA_DIR, users.fullId, 'pglite')));
 	});
@@ -518,7 +499,6 @@ describe('construction-time rules', () => {
 	});
 });
 
-/** Write migration files into a temp directory and run them on a block exactly as its constructor would. */
 async function withMigrations(db: Database, files: Record<string, string>): Promise<void> {
 	const dir = join(DATA_DIR, `${db.fullId}-migrations`);
 	mkdirSync(dir, { recursive: true });
@@ -531,7 +511,6 @@ async function withMigrations(db: Database, files: Record<string, string>): Prom
 	await engine.withDdl(() => runMigrationPlan(engine, plan, { schemaName: db.schemaName, log: () => {} }));
 }
 
-/** A minimal Standard Schema built from a type guard, so the tests need no schema library. */
 function schemaOf<T>(check: (v: unknown) => v is T, message = 'invalid row'): StandardSchemaV1<unknown, T> {
 	return {
 		'~standard': {

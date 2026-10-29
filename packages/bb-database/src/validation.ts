@@ -1,23 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Aurora DSQL compatibility checks for a `dsql` cluster, and the mirror
- * of DSQL's per-transaction limits the local mock enforces.
- *
- * Statement compatibility is decided by AWS's `dsql-lint` (see `dsql-lint.ts`),
- * which parses the SQL and whose rule set the DSQL team maintains. The checks
- * run on the SQL as written: a migration file (see `migrations/plan.ts`) and
- * every statement a handler issues locally. A `TRUNCATE`, a trigger, Row Level
- * Security, an array column, and the PostgreSQL spellings of DSQL forms (a
- * `SERIAL` column, a `CREATE INDEX` without `ASYNC`, an `ADD CONSTRAINT`
- * without `NOT VALID`) all fail here, on the laptop, with dsql-lint's message
- * and suggestion. One check is the block's own: `GRANT … ON SCHEMA public`,
- * which dsql-lint accepts and DSQL rejects at runtime.
- *
- * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
- */
-
 import { brandBlocksError } from '@aws-blocks/core';
 import { DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
 import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from './constants.js';
@@ -29,7 +12,6 @@ const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;
 const DDL_DOC = `${DOCS}/working-with-ddl.html`;
 const QUOTAS_DOC = `${DOCS}/CHAP_quotas.html`;
 
-/** Strip string literals and comments before classifying a statement. */
 export function stripLiteralsAndComments(sql: string): string {
 	let result = '';
 	let i = 0;
@@ -75,11 +57,8 @@ export function stripLiteralsAndComments(sql: string): string {
 	return result;
 }
 
-/** A compatibility finding, with the doc page to read. */
 interface ValidationIssue {
-	/** The dsql-lint rule id. */
 	rule: string;
-	/** dsql-lint's message and suggestion. */
 	message: string;
 	doc: string;
 }
@@ -88,10 +67,8 @@ function toIssue(d: LintDiagnostic): ValidationIssue {
 	return { rule: d.rule, message: formatDiagnostic(d), doc: COMPAT_DOC };
 }
 
-/** `GRANT ... ON SCHEMA ... TO`, for the `public` check below; `[^;]` keeps a match inside one statement. */
 const GRANT_ON_SCHEMA = /\bGRANT\b[^;]*\bON\s+SCHEMA\s+([^;]*?)\bTO\b/gi;
 
-/** Whether a schema list from `GRANT ... ON SCHEMA` names `public` (unquoted, any case, or quoted exactly). */
 function grantsOnPublic(schemas: string): boolean {
 	return schemas.split(',').some((s) => {
 		const name = s.trim();
@@ -99,7 +76,6 @@ function grantsOnPublic(schemas: string): boolean {
 	});
 }
 
-/** The dsql-lint findings for SQL a `dsql` cluster would be asked to run. */
 export function findStatementIssues(sql: string): ValidationIssue[] {
 	const issues = lintSql(sql).map(toIssue);
 	// dsql-lint and PGlite both accept this, but DSQL rejects it at runtime:
@@ -117,14 +93,12 @@ export function findStatementIssues(sql: string): ValidationIssue[] {
 	return issues;
 }
 
-/** Validate a SQL statement for `dsql` compatibility. Throws a branded `DsqlValidationError`. */
 export function validateStatement(sql: string): void {
 	const issues = findStatementIssues(sql);
 	if (issues.length === 0) return;
 	throw validationError(issues.map((i) => i.message).join(' '), issues[0].doc);
 }
 
-/** Classify a statement as DDL, DML, or other. */
 export function classifyStatement(sql: string): 'ddl' | 'dml' | 'other' {
 	const cleaned = stripLiteralsAndComments(sql).trim();
 	if (/^\s*(CREATE|ALTER|DROP)\b/i.test(cleaned)) return 'ddl';
@@ -132,18 +106,12 @@ export function classifyStatement(sql: string): 'ddl' | 'dml' | 'other' {
 	return 'other';
 }
 
-/** Build the branded `TransactionRowLimitExceeded` the mock raises for the row and size limits. */
 function transactionLimitError(detail: string): Error {
 	const err = new Error(`${detail} Split the work into smaller transactions. (${QUOTAS_DOC})`);
 	err.name = DatabaseErrors.TransactionRowLimitExceeded;
 	return brandBlocksError(err);
 }
 
-/**
- * Mirror of the DSQL per-transaction limits for the local `dsql` mock:
- * one DDL statement, no DDL and DML together, 3,000 changed rows (cascades
- * included), and 10 MiB of data.
- */
 export class TransactionTracker {
 	private ddlCount = 0;
 	private hasDml = false;
@@ -165,7 +133,8 @@ export class TransactionTracker {
 		}
 	}
 
-	/** Approximate the data a DML statement writes by its text and parameter sizes. */
+	// An approximation: DSQL counts the data actually modified; locally the statement text and parameters
+	// stand in for it.
 	private recordBytes(sql: string, params?: unknown[]): void {
 		this.bytes += Buffer.byteLength(sql);
 		for (const p of params ?? []) {

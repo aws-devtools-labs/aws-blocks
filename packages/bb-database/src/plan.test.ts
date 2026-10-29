@@ -1,13 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The plan runs what the migration file says. These tests pin that the SQL of
- * every step is the file's statement verbatim, that DDL and DML are grouped
- * into transactions the way DSQL requires, that the two asynchronous forms get
- * a job wait, and that a PostgreSQL spelling of a DSQL form stops the plan
- * with dsql-lint's rule instead of being changed.
- */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { buildMigrationPlan } from './migrations/plan.js';

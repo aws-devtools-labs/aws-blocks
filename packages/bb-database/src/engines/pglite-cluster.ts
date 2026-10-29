@@ -1,17 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * One PGlite per local cluster, shared by its blocks. PGlite has a single
- * session, so each block's statements switch `search_path` to its schema, and
- * a mutex held for each statement or whole transaction keeps blocks from
- * interleaving. A query from inside a block's own transaction joins it
- * (`tx-scope.ts`) instead of deadlocking.
- *
- * The cluster also carries a stub of DSQL's `sys` schema (see
- * {@link SYS_SCHEMA_STUB}), so a migration that waits for an asynchronous DDL
- * job the way the AWS documentation shows runs locally as a no-op.
- */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,21 +10,11 @@ import { quoteIdent } from '../constants.js';
 import { translatePgError } from '../errors.js';
 import { currentTransactionHandle } from './tx-scope.js';
 
-/**
- * A local stand-in for the `sys` schema Aurora DSQL exposes for asynchronous
- * DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE
- * CONSTRAINT` return a `job_id`; `sys.jobs` lists the job while it runs, and
- * `sys.wait_for_job(job_id)` blocks the session until it completes or fails and
- * returns a boolean. PGlite runs those statements synchronously (the mock strips
- * `ASYNC`), so there is never a job: here `sys.jobs` is empty and
- * `sys.wait_for_job()` returns `true` at once. Both forms a migration copied
- * from the AWS examples can take then run locally unchanged:
- * `SELECT sys.wait_for_job('…')` and `SELECT sys.wait_for_job(job_id) FROM sys.jobs …`.
- * `CREATE OR REPLACE` keeps this idempotent across dev-server restarts on the
- * same data directory.
- *
- * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html
- */
+// On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` return a job id that
+// `sys.jobs` lists until `sys.wait_for_job(job_id)` sees it finish. PGlite runs them synchronously (the mock
+// strips ASYNC), so `sys.jobs` is empty and `wait_for_job` returns true at once: a migration copied from
+// the AWS examples runs locally unchanged. `CREATE OR REPLACE` keeps this idempotent across restarts.
+// https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html
 const SYS_SCHEMA_STUB = `
 CREATE SCHEMA IF NOT EXISTS sys;
 CREATE OR REPLACE FUNCTION sys.wait_for_job(job_id text) RETURNS boolean LANGUAGE sql AS 'SELECT true';
@@ -58,7 +37,7 @@ const PGLITE_DATA_DIR_MARKERS = [
 	'postmaster.pid',
 ];
 
-/** Remove a stale postmaster.pid left by an unclean shutdown (PGlite is in-process; the pid is always stale). */
+// PGlite is in-process, so a postmaster.pid left by an unclean shutdown is always stale.
 function cleanStaleLock(dataDir: string): void {
 	const pidFile = join(dataDir, 'postmaster.pid');
 	if (existsSync(pidFile)) {
@@ -76,7 +55,6 @@ function isErrnoException(error: unknown): error is { code?: string } {
 	return typeof error === 'object' && error !== null && 'code' in error;
 }
 
-/** Quarantine a half-written data directory so a fresh initdb can proceed. */
 function recoverIncompletePgliteDataDir(dataDir: string): void {
 	let entries: string[];
 	try {
@@ -96,18 +74,15 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 	console.log(`[bb-database] Moved incomplete PGlite data directory to ${corruptDataDir}; created a fresh one.`);
 }
 
-/** A transaction handle the schema engine issues. */
 interface ClusterTxHandle {
 	readonly owner: SchemaEngine;
 	release: () => void;
 	done: boolean;
 }
 
-/** The pending work queue: a minimal async mutex. */
 class Mutex {
 	private tail: Promise<void> = Promise.resolve();
 
-	/** Wait for the lock; resolves with a release function. */
 	acquire(): Promise<() => void> {
 		let release!: () => void;
 		const next = new Promise<void>((resolve) => {
@@ -126,16 +101,13 @@ class Mutex {
 	}
 }
 
-/**
- * The shared PGlite behind one local cluster. Hand out per-block engines with
- * {@link PgliteCluster.forSchema}.
- */
+// PGlite has one session: each block's statements switch `search_path` to its schema under a mutex, and a
+// query inside a block's own open transaction joins it (tx-scope.ts) instead of taking the lock again.
 class PgliteCluster {
 	private db: PGlite;
 	private closed = false;
 	private ready?: Promise<PGlite>;
 	private readonly mutex = new Mutex();
-	/** The schema the single session's `search_path` currently points at; `undefined` when unknown. */
 	private currentSchema?: string;
 
 	constructor(readonly dataDir: string) {
@@ -149,7 +121,6 @@ class PgliteCluster {
 		return new PGlite(this.dataDir);
 	}
 
-	/** Force PGlite's lazy WASM init, retrying past intermittent initdb traps, then install the `sys` stub. */
 	private ensureReady(): Promise<PGlite> {
 		if (!this.ready) {
 			this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
@@ -172,21 +143,18 @@ class PgliteCluster {
 		return this.ready;
 	}
 
-	/** Run a raw statement on the session. Callers hold the lock (or own the open transaction). */
 	async raw<T>(sql: string, params?: unknown[]): Promise<{ rows: T[]; affectedRows: number }> {
 		const db = await this.ensureReady();
 		const result = await db.query<T>(sql, params);
 		return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 	}
 
-	/** Point the session's `search_path` at `schema` if it is not already there. */
 	async useSchema(schema: string): Promise<void> {
 		if (this.currentSchema === schema) return;
 		await this.raw(`SET search_path TO ${quoteIdent(schema)}`);
 		this.currentSchema = schema;
 	}
 
-	/** Forget the remembered search_path (after a ROLLBACK, which undoes an in-transaction SET). */
 	forgetSchema(): void {
 		this.currentSchema = undefined;
 	}
@@ -195,7 +163,6 @@ class PgliteCluster {
 		return this.mutex.acquire();
 	}
 
-	/** A `DatabaseEngine` whose statements run in `schema`. */
 	forSchema(schema: string): DatabaseEngine {
 		return new SchemaEngine(this, schema);
 	}
@@ -203,9 +170,8 @@ class PgliteCluster {
 	async destroy(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
-		// PGlite's close() never resolves when it runs before the lazy WASM init
-		// has finished (seen on 0.5.10), and a block that only failed validation
-		// never ran a statement. Wait for the init first; if it failed there is
+		// PGlite's close() never resolves before its lazy WASM init has finished (seen on 0.5.10), and a block
+		// that only failed validation never ran a statement. Wait for the init first; if it failed there is
 		// nothing to close.
 		const db = this.ready
 			? await this.ready.catch(() => undefined)
@@ -217,17 +183,12 @@ class PgliteCluster {
 	}
 }
 
-/**
- * Per-block view of a {@link PgliteCluster}: every statement runs with
- * `search_path` set to the block's schema, serialized on the cluster mutex.
- */
 class SchemaEngine implements DatabaseEngine {
 	constructor(
 		private readonly cluster: PgliteCluster,
 		private readonly schema: string,
 	) {}
 
-	/** The ambient handle when the caller is inside one of this engine's own open transactions. */
 	private joinable(): ClusterTxHandle | undefined {
 		const ambient = currentTransactionHandle() as ClusterTxHandle | undefined;
 		return ambient && ambient.owner === this && !ambient.done ? ambient : undefined;
@@ -320,14 +281,11 @@ class SchemaEngine implements DatabaseEngine {
 		}
 	}
 
-	/** The cluster owns the PGlite; a per-block view has nothing of its own to close. */
 	async destroy(): Promise<void> {}
 }
 
-/** Process-wide cache so every block on one local cluster shares the same PGlite. */
 const clusters = new Map<string, PgliteCluster>();
 
-/** Get (or create) the shared PGlite for a data directory. */
 export function sharedPgliteCluster(dataDir: string): PgliteCluster {
 	let c = clusters.get(dataDir);
 	if (!c) {
@@ -337,7 +295,7 @@ export function sharedPgliteCluster(dataDir: string): PgliteCluster {
 	return c;
 }
 
-/** @internal Close and forget every shared PGlite. **For test cleanup only.** */
+/** @internal For test cleanup only. */
 export async function _closeAllPgliteClusters(): Promise<void> {
 	const all = [...clusters.values()];
 	clusters.clear();

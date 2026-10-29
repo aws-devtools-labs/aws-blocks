@@ -1,11 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The pg type parsers the DSQL engine installs must return the same JavaScript
- * values the local PGlite engine returns, so a handler's result types hold in
- * both environments.
- */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { PGlite } from '@electric-sql/pglite';

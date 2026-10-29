@@ -1,9 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Public types for the Database Building Block. Types only, no runtime code.
- */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { SqlQuery } from '@aws-blocks/data-common';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -30,7 +27,7 @@ export type ClusterType = 'dsql';
 export interface DatabaseClusterLike {
 	/** The category this cluster was constructed with. */
 	readonly type: ClusterType;
-	/** The cluster's scoped id (drives resource naming and the binding record). */
+	/** The cluster's scoped id; drives resource naming. */
 	readonly fullId: string;
 }
 
@@ -42,10 +39,7 @@ export interface DatabaseClusterLike {
 export interface ClusterRef {
 	/** Which kind of cluster the block runs on. */
 	readonly kind: ClusterType;
-	/**
-	 * `'default'` when the block owns its cluster, otherwise the
-	 * `DatabaseCluster`'s full id. The same value is written to the binding record.
-	 */
+	/** `'default'` when the block owns its cluster, otherwise the `DatabaseCluster`'s full id. */
 	readonly id: string;
 }
 

@@ -1,9 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Aurora DSQL engine: a `pg.Pool` authenticated with IAM tokens.
- */
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import pg from 'pg';
 import { DEFAULT_POOL_SIZE, quoteIdent } from '../constants.js';
@@ -13,21 +10,15 @@ interface DsqlEngineConfig {
 	endpoint: string;
 	getAuthToken: () => Promise<string>;
 	poolSize?: number;
-	/** PostgreSQL role name to connect as (mapped from IAM via `AWS IAM GRANT`). */
 	role: string;
-	/** The schema every connection's `search_path` points at. Omit for `public`. */
 	searchPath?: string;
 }
 
-/** PostgreSQL `bigint` (`int8`). */
 const INT8_OID = 20;
 
 /**
- * Parse a `bigint` the way the local PGlite engine does: a `number` when the
- * value is a safe integer, otherwise a `BigInt`. pg's default is a string, which
- * would make every identity column, `count(*)` and `sum()` over integers a
- * number locally and a string on DSQL.
- * @internal
+ * @internal pg returns `bigint` as a string; PGlite returns a number (or a BigInt past the safe range). Without
+ * this, every identity column, `count(*)` and `sum()` would be a number locally and a string on DSQL.
  */
 export function parseInt8(text: string): number | bigint {
 	const big = BigInt(text);
@@ -35,13 +26,13 @@ export function parseInt8(text: string): number | bigint {
 	return Number.isSafeInteger(num) ? num : big;
 }
 
-/** @internal pg type parsers for DSQL: pg's defaults, with `bigint` matching the local engine. */
+/** @internal */
 export const dsqlTypeParsers: pg.CustomTypesConfig = {
 	getTypeParser: (oid: number, format?: 'text' | 'binary') =>
 		oid === INT8_OID && format !== 'binary' ? parseInt8 : pg.types.getTypeParser(oid, format),
 };
 
-/** Retries a statement once when DSQL reports a stale schema cache (`OC001`); the fix is a catalog refresh. */
+// DSQL reports a stale schema cache as SQLSTATE OC001; one retry refreshes the catalog.
 async function withStaleCacheRetry<T>(fn: () => Promise<T>): Promise<T> {
 	try {
 		return await fn();

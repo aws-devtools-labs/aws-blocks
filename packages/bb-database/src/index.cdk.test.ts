@@ -1,12 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Synth-level contract of the CDK entry: what an owned and a shared cluster
- * provision, how blocks attach and chain, and which functions wait for
- * migrations. Harness mirrors bb-distributed-table's cdk test: a stub stack
- * exposing `executionRole` + `defaults` as the ambient CURRENT_BLOCKS_STACK.
- */
 import assert from 'node:assert';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -144,7 +138,6 @@ describe('Database (CDK)', () => {
 		new Database(parent, 'a', { cluster: shared });
 		new Database(parent, 'b', { cluster: shared });
 		new Database(parent, 'own');
-		// A function with its own role is not an app function.
 		new cdk.aws_lambda.Function(stack, 'Unrelated', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'other.handler',
@@ -176,11 +169,9 @@ describe('Database (CDK)', () => {
 			const template = Template.fromStack(stack);
 			template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
 				migrationsHash: Match.stringLikeRegexp('^[0-9a-f]{16}$'),
-				// The files travel as an S3 asset: the Lambda is bundled before blocks attach.
 				migrationsBucket: Match.anyValue(),
 				migrationsKey: Match.stringLikeRegexp('\\.json$'),
 			});
-			// The staged asset is the block's files as one JSON document.
 			const assembly = cdk.Stage.of(stack)?.synth();
 			const out = assembly?.directory ?? '';
 			const files = readdirSync(out)

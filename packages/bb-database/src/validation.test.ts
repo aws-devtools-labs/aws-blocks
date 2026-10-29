@@ -1,18 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * The compatibility checker is AWS's dsql-lint, run on the SQL as written. This
- * table pins what the integration must reject and accept, so a dsql-lint
- * upgrade that changes a rule shows up here. Each row names the rule id the
- * linter reports, which is what a user sees in the error.
- */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { dsqlLintBinary, isDsqlLintAvailable, lintSql } from './dsql-lint.js';
 import { findStatementIssues, TransactionTracker, validateStatement } from './validation.js';
 
-/** SQL a `dsql` cluster cannot run, and the dsql-lint rule that says so. */
 const REJECTED: [sql: string, rule: string][] = [
 	['CREATE TRIGGER t_audit AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION audit()', 'unsupported_create_trigger'],
 	['CREATE FUNCTION f() RETURNS void AS $$ BEGIN END $$ LANGUAGE plpgsql', 'unsupported_create_function_non_sql'],
@@ -38,7 +31,6 @@ const REJECTED: [sql: string, rule: string][] = [
 	['CREATE TABLE t (name TEXT COLLATE "en_US")', 'collation'],
 	['CREATE INDEX ASYNC t_created ON t (created_at DESC)', 'index_sort_direction'],
 	['CREATE INDEX ASYNC t_tags ON t USING gin (tags)', 'index_using'],
-	// The PostgreSQL spellings of DSQL forms: the block does not rewrite them, so each stops a migration file and a handler alike.
 	['CREATE INDEX t_name ON t (name)', 'index_async'],
 	['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0)', 'check_not_valid'],
 	['ALTER TABLE t ADD CHECK (a > 0)', 'check_not_valid'],
@@ -53,7 +45,6 @@ const REJECTED: [sql: string, rule: string][] = [
 	['GRANT USAGE ON SCHEMA app, "public" TO blocks_app_x', 'grant_on_public_schema'],
 ];
 
-/** SQL DSQL runs today, including features its 2025 rule set used to reject. */
 const ACCEPTED = [
 	'CREATE TABLE posts (id UUID PRIMARY KEY, user_id UUID REFERENCES users(id) ON DELETE CASCADE)',
 	'ALTER TABLE posts ADD CONSTRAINT posts_user FOREIGN KEY (user_id) REFERENCES users(id) NOT VALID',

@@ -1,14 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Test helpers for `@aws-blocks/bb-database`. Import them from
- * `@aws-blocks/bb-database/testing`; they are not part of the block's runtime API.
- */
 import { internalAccess } from './core/internal.js';
 import type { ClusterRef } from './types.js';
 
-/** The shape every entry point's `Database` satisfies. */
 interface DatabaseLike {
 	readonly cluster: ClusterRef;
 	readonly schemaName: string;

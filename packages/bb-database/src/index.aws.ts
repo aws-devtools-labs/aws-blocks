@@ -1,10 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Lambda runtime entry point. DSQL over `pg` with IAM tokens. Connection config
- * is keyed by cluster (`BLOCKS_{clusterId}_*`), so blocks on one cluster share it.
- */
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
@@ -28,7 +24,7 @@ import type {
 } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-/** The config a cluster's runtime connection needs, read from `process.env` (loaded from the config bucket). */
+// Keyed by cluster, not by block, so every block on one cluster reads the same config.
 function readClusterConfig(clusterFullId: string): Record<string, string> {
 	const env = toEnvName(clusterFullId);
 	const read = (suffix: string) => process.env[`${ENV_VAR_PREFIX}_${env}_${suffix}`] ?? '';
@@ -41,7 +37,6 @@ export class DatabaseCluster extends Scope {
 	readonly type: ClusterType;
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
-		// Plain scope: the cluster is part of the Database block, not a block itself.
 		super(id, { parent: scope });
 		this.type = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);

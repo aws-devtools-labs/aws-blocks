@@ -1,14 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Local development entry point (`npm run dev`, tests).
- *
- * Every cluster is a PGlite (WASM PostgreSQL) on disk under `.bb-data/`, one
- * instance per cluster with one schema per block. A `dsql` cluster runs
- * every statement through dsql-lint first, so unsupported SQL fails here, not
- * in production.
- */
 import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
@@ -36,13 +28,11 @@ import type {
 } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-database');
 
 /**
- * A cluster several `Database` blocks share, each in its own schema. Pick a
- * engine: `dsql` is Aurora DSQL. Part of the
- * `Database` block, not a block on its own.
+ * A cluster several `Database` blocks share, each in its own schema. `type: 'dsql'`
+ * is Aurora DSQL. Part of the `Database` block, not a block on its own.
  *
  * Locally it is one PGlite under `.bb-data/{fullId}/`.
  *
@@ -56,14 +46,13 @@ export class DatabaseCluster extends Scope {
 	readonly type: ClusterType;
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
-		// Plain scope: the cluster is part of the Database block, not a block itself.
 		super(id, { parent: scope });
 		this.type = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
 		registerSdkIdentifiers(this.fullId, { clusterEndpoint: `mock-endpoint-${this.fullId}` });
 	}
 
-	/** @internal The per-block engine on this cluster's shared PGlite. */
+	/** @internal */
 	engineFor(schemaName: string): DatabaseEngine {
 		return sharedPgliteCluster(join(getMockDataDir(this), 'pglite')).forSchema(schemaName);
 	}
@@ -89,7 +78,6 @@ export class Database extends Scope {
 	readonly cluster: ClusterRef;
 	/** The schema this block's tables live in. */
 	readonly schemaName: string;
-	/** The resolved migrations directory, or `undefined` when the block has none. */
 	private readonly migrationsPath: string | undefined;
 
 	private readonly core: DatabaseCore;
@@ -150,7 +138,8 @@ export class Database extends Scope {
 			},
 			migrationsPath: this.migrationsPath,
 		});
-		// An owned cluster is named after its block; a shared one after the DatabaseCluster.
+		// Derived here as the cdk and aws entries derive it: an owned cluster is named after its block, a
+		// shared one after the DatabaseCluster.
 		registerSdkIdentifiers(this.fullId, {
 			clusterId: resolved.ref.id === DEFAULT_CLUSTER_ID ? this.fullId : resolved.ref.id,
 			schemaName: this.schemaName,
