@@ -68,9 +68,10 @@ export function resolveAppIdentity(scope: Construct): BlocksAppIdentity | undefi
 export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined {
 	const app = resolveAppIdentity(root);
 	if (!app) return undefined;
-	cdk.Tags.of(root).add(BLOCKS_APP_TAG_KEY, app.id, { priority: APP_TAG_PRIORITY });
+	tagAppResources([root], app.id);
 	forEachBlocksRole(root, (role) => tagRole(role, app.id));
 	nameLayersForApp(cdk.Stack.of(root), app.id);
+	nameCloudFrontForApp(cdk.Stack.of(root), app.id);
 	if (!resolvePermissionsBoundary(root)) {
 		cdk.Annotations.of(root).addWarningV2(
 			'blocks:app:noPermissionsBoundary',
@@ -80,6 +81,55 @@ export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined
 		);
 	}
 	return app;
+}
+
+/**
+ * Tag every resource under each of `scopes` `app=<id>` at the app tag's
+ * priority. A scope that is a stack also gets the tag as a stack tag, which
+ * CloudFormation propagates to the resources a tag aspect can't reach (a CDK
+ * custom-resource provider's function). Used for the backend root, and for
+ * `Hosting` and the separate stacks it adds (its us-east-1 support stack and
+ * Lambda@Edge stack), which sit outside the root.
+ */
+export function tagAppResources(scopes: readonly IConstruct[], id: string): void {
+	for (const scope of scopes) cdk.Tags.of(scope).add(BLOCKS_APP_TAG_KEY, id, { priority: APP_TAG_PRIORITY });
+}
+
+/** Max length of a CloudFront Function or KeyValueStore name; both allow `[a-zA-Z0-9-_]`. */
+const CLOUDFRONT_NAME_MAX = 64;
+
+/** The longest region name (`ap-southeast-4`): CloudFront names are global, so they carry the stack's region. */
+const REGION_NAME_MAX = 14;
+
+/**
+ * Name every CloudFront Function and KeyValueStore in the app's stack
+ * `<id>-<region>-<unique id>` when CDK generated its name. CDK otherwise names
+ * them `<region><stack>…` / `<stack>…` (no `-` after the app id), so a platform
+ * couldn't scope them to one app by name. A name the app chose (one that doesn't
+ * end in the construct's CDK hash) is kept.
+ */
+function nameCloudFrontForApp(stack: cdk.Stack, id: string): void {
+	cdk.Aspects.of(stack).add({
+		visit(node) {
+			if (!cdk.CfnResource.isCfnResource(node)) return;
+			const type = node.cfnResourceType;
+			if (type !== 'AWS::CloudFront::Function' && type !== 'AWS::CloudFront::KeyValueStore') return;
+			const owner = node.node.scope;
+			if (!owner) return;
+			const nodeStack = cdk.Stack.of(node);
+			const props = (node as unknown as { _cfnProperties?: { Name?: unknown; name?: unknown } })._cfnProperties;
+			const current = nodeStack.resolve((node as { name?: unknown }).name ?? props?.Name ?? props?.name);
+			if (typeof current === 'string' && current.startsWith(`${id}-`)) return;
+			// CDK's generated names end in the 8-character hash of the construct's path.
+			const hash = cdk.Names.uniqueId(owner).slice(-8);
+			if (typeof current === 'string' && !current.endsWith(hash)) return;
+			const rest = cdk.Names.uniqueResourceName(owner, {
+				maxLength: CLOUDFRONT_NAME_MAX - id.length - REGION_NAME_MAX - 2,
+				allowedSpecialCharacters: '-_',
+			});
+			node.addPropertyOverride('Name', `${id}-${nodeStack.region}-${rest}`);
+		},
+	});
 }
 
 /** Max length of a Lambda layer name. */
