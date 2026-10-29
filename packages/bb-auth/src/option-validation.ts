@@ -57,6 +57,7 @@ import type {
 	ProviderCommon,
 	RedirectOptions,
 	SamlProviderOptions,
+	SecretRef,
 	SessionOptions,
 	SocialProviders,
 	StubIdpSettings,
@@ -74,7 +75,7 @@ import type {
  * How the validator treats one option's value.
  *
  * - `'value'` — not inspected: primitives, functions, string arrays, and
- *   reference objects (`AppSettingRef`, `Auth.fromExisting()`'s
+ *   reference objects (`AppSettingRef`, `SecretRef`, `Auth.fromExisting()`'s
  *   `ExternalUserPoolRef`, a `Logger`) whose own members are not options.
  * - `'boolean'` — must be `true`, `false` or `undefined`.
  * - `{ object }` — when the value is a plain object, its keys must be in the
@@ -118,7 +119,7 @@ type KeysOf<T> = T extends unknown ? keyof T : never;
 type PropOf<T, K> = T extends unknown ? (K extends keyof T ? T[K] : never) : never;
 
 /** Values whose members are not options: references and callbacks. (Branded strings such as `RelayOrigin` are primitives.) */
-type Opaque = AppSettingRef | ExternalUserPoolRef | ChildLogger | ((...args: never[]) => unknown);
+type Opaque = AppSettingRef | SecretRef | ExternalUserPoolRef | ChildLogger | ((...args: never[]) => unknown);
 
 /**
  * `true` (possibly as part of `boolean`) when `V` is, or contains, an options

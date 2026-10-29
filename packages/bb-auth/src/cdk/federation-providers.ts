@@ -12,7 +12,9 @@
  * Secrets never appear in a registration's `details`. A secret-bearing value
  * (`client_secret`, Sign in with Apple's `private_key`) is recorded as the
  * **name** of the SSM SecureString that holds it, in `secretDetails`; the
- * deploy-time registration Lambda reads and decrypts it. CloudFormation does
+ * deploy-time registration Lambda reads and decrypts it. A secret given as a
+ * `Secret` is recorded the same way, by its Secrets Manager **ARN**, in
+ * `secretsManagerDetails`. CloudFormation does
  * not accept an `ssm-secure` dynamic reference on
  * `AWS::Cognito::UserPoolIdentityProvider.ProviderDetails` (see DESIGN.md).
  *
@@ -20,10 +22,10 @@
  */
 
 import type {
-	AppSettingRef,
 	AuthOptions,
 	CognitoOidcProviderOptions,
 	ProviderCommon,
+	ProviderSecretRef,
 	SamlProviderOptions,
 } from '../types.js';
 import { AUTH_ROUTE_PREFIX, type CognitoFederatedKind, cognitoFederatedProviders } from './contract.js';
@@ -43,6 +45,11 @@ export interface IdpRegistration {
 	details: Record<string, string>;
 	/** `ProviderDetails` key → SSM SecureString parameter **name** (never the value). Empty for SAML. */
 	secretDetails: Record<string, string>;
+	/**
+	 * `ProviderDetails` key → Secrets Manager secret **ARN** (never the value),
+	 * for a secret given as a `Secret`. Empty unless one is.
+	 */
+	secretsManagerDetails: Record<string, string>;
 	/** Cognito `AttributeMapping`: pool attribute → IdP claim. */
 	attributeMapping: Record<string, string>;
 }
@@ -116,9 +123,11 @@ const PROVIDER_NAME_PATTERN = /^[^_\p{Z}][\p{L}\p{M}\p{S}\p{N}\p{P}][^_\p{Z}]+$/
  * - a non-secret `AppSetting`: a provider secret in a plaintext SSM `String` is
  *   readable by anyone with `ssm:GetParameter`.
  */
-export function secretParameterName(ref: AppSettingRef, what: string): string {
+export function secretParameterName(ref: ProviderSecretRef, what: string): string {
 	if (!ref || typeof ref !== 'object' || typeof ref.fullId !== 'string' || ref.fullId.length === 0) {
-		throw new Error(`Auth: ${what} must be an AppSetting reference (an \`AppSetting\` with \`secret: true\`).`);
+		throw new Error(
+			`Auth: ${what} must be an AppSetting reference (an \`AppSetting\` with \`secret: true\`) or a \`Secret\`.`,
+		);
 	}
 	// `parameterName` / `secret` are on the AppSetting CDK class only (the
 	// public `AppSettingRef` type is the runtime surface), so read them untyped.
@@ -126,7 +135,7 @@ export function secretParameterName(ref: AppSettingRef, what: string): string {
 	const secret: unknown = Reflect.get(ref, 'secret');
 	if (typeof parameterName !== 'string' || parameterName.length === 0 || typeof secret !== 'boolean') {
 		throw new Error(
-			`Auth: ${what} ('${ref.fullId}') is not an AppSetting — it has no SSM parameter name. Pass an \`AppSetting\` created with \`secret: true\` (or \`AppSetting.fromExisting(scope, id, { name, secret: true })\`).`,
+			`Auth: ${what} ('${ref.fullId}') is not an AppSetting — it has no SSM parameter name. Pass an \`AppSetting\` created with \`secret: true\` (or \`AppSetting.fromExisting(scope, id, { name, secret: true })\`), or a \`Secret\`.`,
 		);
 	}
 	if (!secret) {
@@ -135,6 +144,41 @@ export function secretParameterName(ref: AppSettingRef, what: string): string {
 		);
 	}
 	return parameterName;
+}
+
+/** Where a provider secret lives: an SSM SecureString (by name) or a Secrets Manager secret (by ARN). */
+export type ProviderSecretSource =
+	| { kind: 'ssm'; parameterName: string }
+	| { kind: 'secrets-manager'; secretArn: string };
+
+/**
+ * Where a provider secret resolves to at deploy time.
+ *
+ * A `Secret`'s CDK layer carries the ARN of its Secrets Manager secret
+ * (`secretArn` — the secret it creates, or the `Secret.fromExisting()` ARN);
+ * anything else must be a `secret: true` `AppSetting` and goes through
+ * {@link secretParameterName}, with its synth-time checks.
+ */
+export function providerSecretSource(ref: ProviderSecretRef, what: string): ProviderSecretSource {
+	// `secretArn` is on the Secret CDK class only (the public `SecretRef` type
+	// is the runtime surface), so read it untyped. An AppSetting has none.
+	const secretArn: unknown = ref && typeof ref === 'object' ? Reflect.get(ref, 'secretArn') : undefined;
+	if (typeof secretArn === 'string' && secretArn.length > 0) return { kind: 'secrets-manager', secretArn };
+	return { kind: 'ssm', parameterName: secretParameterName(ref, what) };
+}
+
+/** Split `key → secret` into the registration's SSM and Secrets Manager maps. */
+function secretMaps(entries: Record<string, ProviderSecretSource>): {
+	secretDetails: Record<string, string>;
+	secretsManagerDetails: Record<string, string>;
+} {
+	const secretDetails: Record<string, string> = {};
+	const secretsManagerDetails: Record<string, string> = {};
+	for (const [key, source] of Object.entries(entries)) {
+		if (source.kind === 'ssm') secretDetails[key] = source.parameterName;
+		else secretsManagerDetails[key] = source.secretArn;
+	}
+	return { secretDetails, secretsManagerDetails };
 }
 
 function scopesFor(provider: keyof typeof SCOPES, id: string, scopes: readonly string[] | undefined): string {
@@ -236,9 +280,9 @@ function socialRegistration(
 					client_id: requireNonEmpty(p.clientId, `socialProviders.${id}.clientId`),
 					authorize_scopes: scopesFor(id, id, p.scopes),
 				},
-				secretDetails: {
-					client_secret: secretParameterName(p.clientSecret, `socialProviders.${id}.clientSecret`),
-				},
+				...secretMaps({
+					client_secret: providerSecretSource(p.clientSecret, `socialProviders.${id}.clientSecret`),
+				}),
 				attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 			};
 		}
@@ -259,7 +303,9 @@ function socialRegistration(
 					key_id: requireNonEmpty(p.keyId, 'socialProviders.apple.keyId'),
 					authorize_scopes: scopesFor('apple', id, p.scopes),
 				},
-				secretDetails: { private_key: secretParameterName(p.privateKey, 'socialProviders.apple.privateKey') },
+				...secretMaps({
+					private_key: providerSecretSource(p.privateKey, 'socialProviders.apple.privateKey'),
+				}),
 				attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 			};
 		}
@@ -289,6 +335,7 @@ function samlRegistration(id: string, p: SamlProviderOptions, customAttributes: 
 		providerType: 'SAML',
 		details,
 		secretDetails: {},
+		secretsManagerDetails: {},
 		attributeMapping: attributeMappingFor(id, DEFAULT_SAML_MAPPING, p.attributeMapping, customAttributes),
 	};
 }
@@ -329,7 +376,7 @@ function cognitoOidcRegistration(
 		providerName: id,
 		providerType: 'OIDC',
 		details,
-		secretDetails: { client_secret: secretParameterName(p.clientSecret, `oidcProviders.${id}.clientSecret`) },
+		...secretMaps({ client_secret: providerSecretSource(p.clientSecret, `oidcProviders.${id}.clientSecret`) }),
 		attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 	};
 }

@@ -10,6 +10,7 @@
 
 import assert from 'node:assert';
 import { after, before, beforeEach, describe, test } from 'node:test';
+import { Secret } from '@aws-blocks/bb-secret';
 import { ApiError, type BlocksContext, isBlocksError, isWireSafeError, Scope } from '@aws-blocks/core';
 import { resolveProviders } from './auth-base.js';
 import { DirectFederationEngine, pkceChallenge } from './engines/federation-direct.js';
@@ -145,6 +146,26 @@ describe('DirectFederationEngine', () => {
 		const identity = await signIn(idp, engine);
 		assert.strictEqual(identity.kind, 'direct');
 		assert.strictEqual(idp.requests.find((r) => r.path === '/token')?.form.get('client_secret'), 's3cret');
+	});
+
+	test('a Secret (Secrets Manager) as the client secret: the local value is sent; unset fails until set', async () => {
+		idp.clientSecret = 'sm-s3cret';
+		const secretScope = new Scope('secrets', { parent: { id: `fedsm${process.pid}x${++counter}` } });
+		const secret = new Secret(secretScope, 'okta-client-secret', { allowRuntimeWrite: true });
+		const { engine, entries } = makeEngine(okta({ clientSecret: secret }));
+
+		// No value yet: `Secret.get()` is `null` — a generic wire message, the fix in the log.
+		await assert.rejects(signIn(idp, engine), rejectsWith(AuthErrors.ProviderMisconfigured));
+		assert.ok(
+			entries.some((e) => /client secret has no value/.test(String(e.message))),
+			'the log names the unset secret',
+		);
+
+		// Set it (locally: the Secret's `.bb-data` store): the next sign-in reads it — `null` was not memoized.
+		await secret.put('sm-s3cret');
+		const identity = await signIn(idp, engine);
+		assert.strictEqual(identity.kind, 'direct');
+		assert.strictEqual(idp.requests.find((r) => r.path === '/token')?.form.get('client_secret'), 'sm-s3cret');
 	});
 
 	test('rejects an ID token with the wrong nonce', async () => {

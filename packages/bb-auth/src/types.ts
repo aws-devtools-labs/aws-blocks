@@ -518,6 +518,9 @@ export interface PasswordPolicy {
  * an explicit `name`, or via `AppSetting.fromExisting(scope, id, { name, secret: true })`.
  * At synth `Auth` reads the SSM name from the `AppSetting`'s `parameterName`,
  * and refuses a non-secret `AppSetting` or an object that is not an `AppSetting`.
+ *
+ * A `Secret` (AWS Secrets Manager) is accepted wherever a provider secret is:
+ * see {@link SecretRef} and {@link ProviderSecretRef}.
  */
 export interface AppSettingRef {
 	/** The `AppSetting`'s scoped id. */
@@ -525,6 +528,40 @@ export interface AppSettingRef {
 	/** Read the secret value at request time. */
 	get(): Promise<string>;
 }
+
+/**
+ * A reference to a `Secret` (AWS Secrets Manager) holding a provider secret.
+ *
+ * Pass a string-valued `Secret` — `new Secret(scope, id)`, with or without an
+ * explicit `name`, or one wrapping `Secret.fromExisting(arn)`. A `Secret` with
+ * a `schema` holds JSON, not a single string, and is refused by the type.
+ *
+ * For a provider federated through Cognito (a social provider,
+ * or an OIDC provider with `federateVia: 'cognito'`), the deploy reads the secret's current value from Secrets
+ * Manager and registers it with the user pool. The deploy-time registration's
+ * own grant covers exactly that secret; the app's execution role can read it
+ * too, as it can every `Secret` the app declares. Set the value with the AWS CLI or `npm run secret`, then
+ * deploy again to re-register the provider with it. For a directly federated
+ * provider the value is read at request time through the `Secret` itself.
+ * Locally, the value comes from the `Secret`'s local store
+ * (`.bb-data/settings.json`).
+ */
+export interface SecretRef {
+	/** The `Secret`'s scoped id. */
+	readonly fullId: string;
+	/** Read the secret value at request time; `null` while no value is set. */
+	get(): Promise<string | null>;
+}
+
+/**
+ * A provider secret: an `AppSetting` created with `secret: true` (an SSM
+ * SecureString), or a `Secret` (AWS Secrets Manager). Never a plain string —
+ * a literal would be committed to source and baked into the template.
+ *
+ * @see AppSettingRef
+ * @see SecretRef
+ */
+export type ProviderSecretRef = AppSettingRef | SecretRef;
 
 /** The social providers Cognito registers natively. */
 export type SocialProviderId = 'google' | 'apple' | 'facebook' | 'amazon';
@@ -545,8 +582,12 @@ export interface SocialProviders {
 export interface OAuthCredentials {
 	/** Public client identifier. Not a secret; a literal string is fine. */
 	clientId: string;
-	/** Client secret, as an `AppSetting` reference. @see AppSettingRef */
-	clientSecret: AppSettingRef;
+	/**
+	 * Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference.
+	 * @see AppSettingRef
+	 * @see SecretRef
+	 */
+	clientSecret: ProviderSecretRef;
 }
 
 /** Sign in with Apple credentials. */
@@ -557,8 +598,8 @@ export interface AppleCredentials {
 	teamId: string;
 	/** Key id for `privateKey`. */
 	keyId: string;
-	/** The `.p8` signing key, as an `AppSetting` reference. */
-	privateKey: AppSettingRef;
+	/** The `.p8` signing key, as an `AppSetting` (`secret: true`) or `Secret` reference. */
+	privateKey: ProviderSecretRef;
 }
 
 /** Settings shared by every federated provider. */
@@ -659,8 +700,8 @@ export interface OidcProviderBase extends ProviderCommon {
 export interface DirectOidcProviderOptions extends OidcProviderBase {
 	/** Federate this provider directly from your backend. @default 'direct' */
 	federateVia?: 'direct';
-	/** Client secret, as an `AppSetting` reference. Omit for a public (PKCE-only) client. */
-	clientSecret?: AppSettingRef;
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Omit for a public (PKCE-only) client. */
+	clientSecret?: ProviderSecretRef;
 	/**
 	 * ID-token claim to read group membership from, so `requireRole()` works for
 	 * this provider's users (they have no Cognito groups). Read at sign-in and
@@ -687,8 +728,8 @@ export interface DirectOidcProviderOptions extends OidcProviderBase {
 export interface CognitoOidcProviderOptions extends OidcProviderBase {
 	/** Federate this provider through the Cognito user pool. */
 	federateVia: 'cognito';
-	/** Client secret, as an `AppSetting` reference. Required: Cognito is a confidential client. */
-	clientSecret: AppSettingRef;
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Required: Cognito is a confidential client. */
+	clientSecret: ProviderSecretRef;
 	/** How Cognito fetches the userinfo endpoint. @default 'GET' */
 	attributesRequestMethod?: 'GET' | 'POST';
 }
@@ -841,8 +882,8 @@ export interface StubIdpOptions extends StubIdpSettings {
 export interface GitHubOptions {
 	/** The OAuth app's client id. Not a secret; a literal string is fine. */
 	clientId: string;
-	/** The OAuth app's client secret, as an `AppSetting` reference. */
-	clientSecret: AppSettingRef;
+	/** The OAuth app's client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. */
+	clientSecret: ProviderSecretRef;
 	/** @default ['read:user', 'user:email'] */
 	scopes?: readonly string[];
 	/** Label for the generated `signIn:<id>` UI action. @default 'Sign in with GitHub' */
@@ -859,8 +900,8 @@ export interface CustomOauth2Options {
 	name: string;
 	/** Public client id. Not a secret; a literal string is fine. */
 	clientId: string;
-	/** Client secret, as an `AppSetting` reference. Omit for a public (PKCE-only) client. */
-	clientSecret?: AppSettingRef;
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Omit for a public (PKCE-only) client. */
+	clientSecret?: ProviderSecretRef;
 	/** The provider's authorization, token and userinfo endpoints. */
 	endpoints: OAuth2ProviderOptions['oauth2']['endpoints'];
 	/** Scopes requested from the provider. */

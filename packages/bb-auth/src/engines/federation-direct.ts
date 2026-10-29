@@ -517,7 +517,18 @@ export class DirectFederationEngine implements FederationEngine {
 		const ref = this.config.clientSecret;
 		if (!ref) return Promise.resolve(undefined);
 		this.secretPromise ??= ref.get().then(
-			(v) => v,
+			(v) => {
+				// A `Secret` (Secrets Manager) reads `null` until a value is set.
+				if (v === null) {
+					this.secretPromise = undefined; // re-read once the value is set
+					this.host.log.error(
+						'[bb-auth] the provider client secret has no value: set the Secret (locally in .bb-data/settings.json, deployed with the AWS CLI or `npm run secret`)',
+						{ provider: this.provider.id, secret: ref.fullId },
+					);
+					throw misconfigured(`Sign-in provider '${this.provider.id}' is not configured correctly.`);
+				}
+				return v;
+			},
 			(e: unknown) => {
 				this.secretPromise = undefined; // never memoize a failure
 				this.host.log.error('[bb-auth] could not read the provider client secret', {
