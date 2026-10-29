@@ -218,12 +218,58 @@ function inBrowser(): boolean {
 	return typeof window !== 'undefined';
 }
 
+/**
+ * A store listener. `write` gets every change of what the store shows, with
+ * the clock tick the shown answer is as new as (`at`); `announced` marks the
+ * write of a `submitAuthAction` result that is broadcast right after it
+ * (`onAuthChange` takes that one from the broadcast). `heard` gets another
+ * tab's broadcast message for this api, with the tick it arrived at, just before the
+ * store refetches for it. `resync` is called, without a write, when that
+ * refetch told the store something new without changing what it shows.
+ */
+interface StoreListener {
+	write(state: AuthState, announced: boolean, at: number): void;
+	heard?(event: MessageEvent, at: number): void;
+	resync?(state: AuthState | null, at: number): void;
+}
+
+/**
+ * What the store knows for one api. The rule it follows under races (tabs,
+ * answers out of order, failures) is "Ordering answers" in DESIGN.md.
+ */
 interface AuthStateCache {
+	/** What the store shows (the snapshot), as {@link updateState} chose it. */
 	state: AuthState | null;
+	/** The tick `state` is as new as: its read's send, or its action's arrival. */
+	shownAt: number;
 	hydrating: Promise<AuthState> | null;
-	listeners: Set<(state: AuthState) => void>;
+	listeners: Set<StoreListener>;
 	/** The one cross-tab listener for this api, installed while it has listeners. */
 	crossTab: ((event: MessageEvent) => void) | null;
+	/** Ticks when a request for this api is sent and when its answer arrives. */
+	clock: number;
+	/**
+	 * The newest answer about the session. A read counts from when it was sent
+	 * (it carried the cookie of that moment); an action that set or cleared the
+	 * session counts from when its answer arrived (the cookie changes then).
+	 */
+	session: { state: AuthState; at: number } | null;
+	/**
+	 * This tab's flow: the answers, in arrival order, of its actions that left
+	 * the session as it was — a challenge step, a failed sign-in, a resend —
+	 * and are not moot. The last one is this tab's place in the flow, shown
+	 * over a signed-out session. `start` is when each was sent.
+	 */
+	flows: { state: AuthState; start: number; arrived: number }[];
+	/**
+	 * A flow answer sent before this is moot: the latest send time of a
+	 * signed-in read, or arrival of a session action.
+	 */
+	moot: number;
+	/** The send time of the latest request (a read or an action). */
+	lastSent: number;
+	/** Send times of the reads in flight. */
+	reading: Set<number>;
 }
 
 const caches = new WeakMap<AuthStateApi, AuthStateCache>();
@@ -231,27 +277,109 @@ const caches = new WeakMap<AuthStateApi, AuthStateCache>();
 function getCache(api: AuthStateApi): AuthStateCache {
 	let cache = caches.get(api);
 	if (!cache) {
-		cache = { state: null, hydrating: null, listeners: new Set(), crossTab: null };
+		cache = {
+			state: null,
+			shownAt: 0,
+			hydrating: null,
+			listeners: new Set(),
+			crossTab: null,
+			clock: 0,
+			session: null,
+			flows: [],
+			moot: 0,
+			lastSent: 0,
+			reading: new Set(),
+		};
 		caches.set(api, cache);
 	}
 	return cache;
 }
 
+function tick(cache: AuthStateCache): number {
+	cache.clock += 1;
+	return cache.clock;
+}
+
+/**
+ * Send `getAuthState()` and take its answer in: it is the session's newest
+ * answer if it was sent after the current one, and a signed-in answer makes any
+ * flow sent before it moot. Every read goes through here (hydration and the
+ * refetch); a failed one changes nothing. Resolves to the answer, and whether
+ * it told the store something new (it is the newest session answer, and not
+ * the very object the store already had).
+ */
+function sendRead(api: AuthStateApi): Promise<{ state: AuthState; learned: boolean }> {
+	const cache = getCache(api);
+	const at = tick(cache);
+	cache.lastSent = at;
+	cache.reading.add(at);
+	return api.getAuthState().then(
+		(s) => {
+			cache.reading.delete(at);
+			tick(cache);
+			if (s.state === 'signedIn') {
+				cache.moot = Math.max(cache.moot, at);
+				cache.flows = cache.flows.filter((f) => f.start > at);
+			}
+			const newest = !cache.session || at > cache.session.at;
+			const learned = newest && s !== cache.session?.state;
+			if (newest) cache.session = { state: s, at };
+			return { state: s, learned };
+		},
+		(e: unknown) => {
+			cache.reading.delete(at);
+			throw e;
+		},
+	);
+}
+
+/** Whether `next`, the answer to `input`, set or cleared the session cookie. */
+function changesSession(input: AuthActionInput, next: AuthState): boolean {
+	return next.state === 'signedIn' || input.action === 'signOut';
+}
+
+/**
+ * Take in `submitAuthAction`'s non-retriable answer `next` to `input`, sent at
+ * `start`. Returns when it arrived if the store must re-read the session: another
+ * request was sent while this session action was in flight, and the server may
+ * have handled it before this action took effect or after, so the store cannot
+ * tell which of them saw the session last. Else `null`.
+ */
+function takeAction(cache: AuthStateCache, input: AuthActionInput, start: number, next: AuthState): number | null {
+	const arrived = tick(cache);
+	if (!changesSession(input, next)) {
+		// The newest step is this tab's place in the flow, unless the session
+		// was seen signed in, or changed here, after it was sent. An earlier
+		// answer sent before it can no longer be shown: whatever makes this
+		// one moot makes that one moot too.
+		if (cache.moot < start) {
+			cache.flows = [...cache.flows.filter((f) => f.start > start), { state: next, start, arrived }];
+		}
+		return null;
+	}
+	// The cookie changed as this answer arrived: it is the newest session
+	// answer, and it ends any flow this tab was in.
+	cache.session = { state: next, at: arrived };
+	cache.flows = [];
+	cache.moot = arrived;
+	return cache.lastSent > start ? arrived : null;
+}
+
 /**
  * Hydrate the cache if needed, return the current state. A hydration that
  * lands writes the store (notifying listeners) unless a newer state was
- * written while it was in flight — then the newer state wins.
+ * written while it was in flight — then the newer state wins (it is a read
+ * like any other: see {@link sendRead}).
  */
 async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
-	cache.hydrating = api.getAuthState()
-		.then((s) => {
+	cache.hydrating = sendRead(api)
+		.then(({ state }) => {
 			cache.hydrating = null;
-			if (cache.state) return cache.state;
-			updateState(api, s);
-			return s;
+			updateState(api);
+			return cache.state ?? state;
 		})
 		.catch((e) => {
 			// Clear the in-flight marker on failure so the next ensureState()
@@ -264,25 +392,72 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 }
 
 /**
- * Update the cached state and notify all listeners. The store's only write
- * primitive. Callers: `submitAuthAction` (every client-side auth action),
- * `ensureState` (hydration) and `refetchFromOtherTab` (cross-tab).
+ * Write what the store shows and notify all listeners if it changed. The
+ * store's only write primitive. Callers: `submitAuthAction` (every client-side
+ * auth action), `ensureState` (hydration) and `refetchFromOtherTab`.
+ *
+ * It shows the session's newest answer if that is signed in, else this tab's
+ * flow if it is in one, else the session's answer. `announced` is the state
+ * `submitAuthAction` broadcasts next, if any.
+ *
+ * A flow under a signed-in answer sent before it means the store cannot tell
+ * whether the session ended (it may have timed out, and the user is signing in
+ * again): it re-reads the session and, until that answer lands, keeps showing
+ * what it showed — the flow if it was showing it, else the session.
  */
-function updateState(api: AuthStateApi, state: AuthState): void {
+function updateState(api: AuthStateApi, announced?: AuthState): void {
 	const cache = getCache(api);
-	cache.state = state;
-	for (const listener of [...cache.listeners]) {
-		listener(state);
+	const { session } = cache;
+	const flow = cache.flows.at(-1);
+	const signedIn = session?.state.state === 'signedIn';
+	// A flow under a signed-in answer is ambiguous until the re-read lands:
+	// keep showing the flow if it is what the store shows, else the session.
+	const holdFlow = signedIn && flow !== undefined && cache.state === flow.state;
+	const shown = holdFlow ? flow.state : signedIn ? session.state : (flow?.state ?? session?.state ?? null);
+	if (shown && shown !== cache.state) {
+		cache.state = shown;
+		// A flow shown over a signed-out answer is as new as the newer of the two.
+		cache.shownAt = Math.max(session?.at ?? 0, !signedIn && flow ? flow.arrived : 0);
+		for (const listener of [...cache.listeners]) {
+			listener.write(shown, shown === announced, cache.shownAt);
+		}
 	}
+	if (signedIn && flow) recheck(api, flow.start);
 }
 
 /**
- * Another tab signed in or out: refetch once for this api and write the
- * result. One refetch per api, however many components are subscribed.
+ * Re-read the session (through {@link refetchFromOtherTab}) unless a read sent
+ * after `since` is already in flight. The store does this when its answers
+ * cannot tell it which session is current.
+ */
+function recheck(api: AuthStateApi, since: number): void {
+	for (const at of getCache(api).reading) if (at > since) return;
+	refetchFromOtherTab(api);
+}
+
+/**
+ * Re-read the session and write the result: once per api when another tab
+ * broadcasts a sign-in or sign-out (however many components are subscribed),
+ * and when the store re-checks (see {@link updateState}).
+ *
+ * `onAuthChange` takes another tab's broadcast at its word, and this read is
+ * this tab's answer to it, so `onAuthChange` also returns to what the store
+ * shows when the read told the store something new without changing what it
+ * shows (a step over a signed-out session). When the read fails, the broadcast
+ * stands: it is newer than anything the store knows, so `onAuthChange` keeps it
+ * (a sign-out stays a sign-out on a network blip) and the store keeps what it
+ * showed, until the next broadcast or reload.
  */
 function refetchFromOtherTab(api: AuthStateApi): void {
-	api.getAuthState()
-		.then((s) => updateState(api, s))
+	const cache = getCache(api);
+	sendRead(api)
+		.then(({ learned }) => {
+			const before = cache.state;
+			updateState(api);
+			if (learned && cache.state === before) {
+				for (const listener of [...cache.listeners]) listener.resync?.(cache.state, cache.session?.at ?? 0);
+			}
+		})
 		.catch(() => {
 			// keep the last-known state; the next broadcast or reload retries
 		});
@@ -297,14 +472,18 @@ function refetchFromOtherTab(api: AuthStateApi): void {
  * written the store. (`BroadcastChannel` never delivers to the posting
  * instance, and every subscriber shares one module-level channel.)
  */
-function subscribe(api: AuthStateApi, listener: (state: AuthState) => void): () => void {
+function subscribe(api: AuthStateApi, listener: ((state: AuthState) => void) | StoreListener): () => void {
 	const cache = getCache(api);
 	// Wrap so the same function subscribed twice gets two independent slots.
-	const entry = (state: AuthState) => listener(state);
+	const entry: StoreListener =
+		typeof listener === 'function' ? { write: (state) => listener(state) } : { ...listener };
 	cache.listeners.add(entry);
 	if (!cache.crossTab) {
 		const handler = (event: MessageEvent) => {
-			if (event.data?.type === 'auth-change' && isForApi(event.data, api)) refetchFromOtherTab(api);
+			if (event.data?.type !== 'auth-change' || !isForApi(event.data, api)) return;
+			const at = tick(cache);
+			for (const listener of [...cache.listeners]) listener.heard?.(event, at);
+			refetchFromOtherTab(api);
 		};
 		cache.crossTab = handler;
 		getChannel().addEventListener('message', handler);
@@ -344,13 +523,28 @@ function subscribe(api: AuthStateApi, listener: (state: AuthState) => void): () 
  *    fields such as the challenge `session`) and show `error` inline;
  * 3. otherwise writes the state to the shared per-`api` store, so
  *    `subscribeAuthState` listeners and the `Authenticator` re-render. This
- *    includes mid-flow challenge states (e.g. sign-in form → confirm-code form);
- * 4. and, when the resulting state is `signedIn` or `signedOut`, broadcasts
- *    `user ?? null` to `onAuthChange` / `AuthenticatedContent` in this window
- *    and in other tabs. Mid-flow challenge states are not broadcast. The
- *    broadcast follows the resulting state, not a diff against the previous
- *    one, so a failed sign-in that returns `signedOut` re-broadcasts `null`;
- *    subscribers must be idempotent (the built-in ones are).
+ *    includes mid-flow challenge states (e.g. sign-in form → confirm-code form).
+ *    When requests overlap, a result the store's ordering drops is not written
+ *    (see below);
+ * 4. and, when the resulting state is `signedIn` or `signedOut` and the store
+ *    shows it, broadcasts `user ?? null` to `onAuthChange` /
+ *    `AuthenticatedContent` in this window and in other tabs. Mid-flow
+ *    challenge states are not broadcast. The broadcast follows the resulting
+ *    state, not a diff against the previous one, so a failed sign-in that
+ *    returns `signedOut` re-broadcasts `null` (unless the store does not show
+ *    it: see below); subscribers must be idempotent (the built-in ones are).
+ *
+ * When requests overlap (another tab's broadcast, a hydration, a second
+ * submit), the store orders the answers by when they changed or read the
+ * session cookie, so a late answer never overwrites a newer one; see "Ordering
+ * answers" in DESIGN.md. A sign-in or sign-out result is always written. A
+ * result that leaves the session as it was (a challenge step, a failed
+ * sign-in) is shown over a signed-out session, and dropped — not written, and
+ * not broadcast — once the session was seen signed in after it was sent
+ * (another tab finished signing in). When the answers conflict (a step under
+ * a signed-in state that may have timed out), the store re-reads the session
+ * with one `getAuthState()` before it changes what it shows; a failed sign-in
+ * that arrives under such a signed-in state is not broadcast either.
  *
  * If `setAuthState` rejects (network error, 5xx, parse failure), the same
  * error is re-thrown and nothing is cached or broadcast. Outside a browser
@@ -385,12 +579,25 @@ export async function submitAuthAction<A extends AuthStateApi<never>>(
 ): Promise<AuthState<AuthUserOf<A>>> {
 	// `A` is an `AuthStateApi<I, U>` for some `I` and `U`, and `input` is that `I`.
 	const wide: AuthStateApi = api;
+	if (!inBrowser()) return stateOf(api, await wide.setAuthState(input));
+	const action: AuthActionInput = input;
+	const cache = getCache(wide);
+	const start = tick(cache);
+	cache.lastSent = start;
 	const next = stateOf(api, await wide.setAuthState(input));
-	if (next.retriable === true || !inBrowser()) return next;
-	updateState(wide, next);
-	if (next.state === 'signedIn' || next.state === 'signedOut') {
+	if (next.retriable === true) return next;
+	const terminal = next.state === 'signedIn' || next.state === 'signedOut';
+	const overlapped = takeAction(cache, action, start, next);
+	updateState(wide, terminal ? next : undefined);
+	// Broadcast what the store shows. A result it does not show (a failed
+	// sign-in sent before the session was seen signed in, or under a signed-in
+	// state the store is re-reading) is not this tab's state.
+	if (terminal && cache.state === next) {
 		broadcastAuthChange(next.user ?? null, api);
 	}
+	// A read or another session action sent while this one was in flight may
+	// have seen the session before this action took effect, or after: re-read.
+	if (overlapped !== null) recheck(wide, overlapped);
 	return next;
 }
 
@@ -408,6 +615,11 @@ export async function submitAuthAction<A extends AuthStateApi<never>>(
  * current value with {@link getAuthStateSnapshot}. A failed hydration fires
  * nothing and is retried by the next subscriber. Designed for React's
  * `useSyncExternalStore`.
+ *
+ * Answers that arrive out of order are ordered by the session cookie they
+ * reflect, so a stale refetch or hydration never replaces a newer state, and
+ * a failed request never empties the store. When its answers conflict, the
+ * store re-reads the session once itself. See "Ordering answers" in DESIGN.md.
  *
  * This is the state-level view; {@link onAuthChange} is the user-level view
  * (it does not fire for mid-flow states). A single sign-in fires each once.
@@ -535,49 +747,90 @@ function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
  * or from a tab running an older `@aws-blocks/auth-common`) reaches every API's
  * listeners, as before.
  *
+ * It also follows the shared store, so it ends where {@link subscribeAuthState}
+ * does: a broadcast from another tab is delivered at once, and the store's
+ * refetch for it (one per `api`) then corrects it if the session changed again
+ * in between. An answer the store learned before that broadcast arrived never
+ * replaces it, so when the refetch fails the broadcast stands (a sign-out
+ * stays a sign-out on a network blip). Any other change of the store's user (a
+ * challenge step after a session timed out, the store's own re-read) reaches
+ * `callback` too. A user equal to the one last delivered is not delivered
+ * again, except by a broadcast. Each `api` with an `onAuthChange` subscriber
+ * (`AuthenticatedContent`, `AccountMenuBar`) therefore sends one
+ * `getAuthState()` per broadcast from another tab.
+ *
  * @returns An unsubscribe function.
  */
 export function onAuthChange<A extends AuthStateApi<never>>(
 	api: A,
 	callback: (user: AuthUserOf<A> | null) => void | Promise<void>,
 ): () => void {
+	let emitted: AuthUserOf<A> | null | undefined;
+	/** The last cross-tab broadcast: the store tick it arrived at, and the user it named. */
+	let heard: { at: number; user: AuthUserOf<A> | null } | undefined;
+	const deliver = (user: AuthUserOf<A> | null) => {
+		emitted = user;
+		callback(user);
+	};
+	/**
+	 * Emit the store's user for `state` (as new as `at`), unless it is the one
+	 * last emitted. An answer the store learned before the last broadcast arrived
+	 * is older than that broadcast: it is emitted only if it agrees with it.
+	 */
+	const follow = (state: AuthState, at: number) => {
+		const user = stateOf(api, state).user ?? null;
+		if (heard && at < heard.at && !sameAuthUser(user, heard.user)) return;
+		if (emitted !== undefined && sameAuthUser(user, emitted)) return;
+		deliver(user);
+	};
+
 	// Listen for broadcast events (cross-tab + same-window). A message tagged
 	// with another API's namespace is not for this listener (see `broadcastAuthChange`).
-	const channelHandler = (event: MessageEvent) => {
-		if (event.data?.type === 'auth-change' && isForApi(event.data, api)) callback(event.data.user);
-	};
-	getChannel().addEventListener('message', channelHandler);
-
+	// Another tab's message reaches it through the store's one channel listener
+	// for this api (see `subscribe`), just before the store refetches for it.
 	const localHandler = (event: Event) => {
 		const detail = (event as CustomEvent).detail;
-		if (detail?.type === 'auth-change' && isForApi(detail, api)) callback(detail.user);
+		if (detail?.type === 'auth-change' && isForApi(detail, api)) deliver(detail.user);
 	};
 	window.addEventListener(AUTH_LOCAL_EVENT, localHandler);
+
+	// Then follow the store, so this view ends where the state-level view does:
+	// a cross-tab message is the other tab's news, and the refetch it triggers
+	// (or the store's own re-read) is this tab's answer. A write that
+	// `submitAuthAction` broadcasts next arrives through the window event above.
+	// An answer older than the last broadcast never replaces it: when the
+	// refetch fails, the broadcast stands.
+	const unsubscribe = subscribe(api, {
+		write: (state, announced, at) => {
+			if (!announced) follow(state, at);
+		},
+		heard: (event, at) => {
+			heard = { at, user: event.data.user };
+			deliver(event.data.user);
+		},
+		resync: (state, at) => {
+			if (state) follow(state, at);
+		},
+	});
 
 	// Synchronous first frame from the shared cache, then an async refresh.
 	// Skip the sync emit only when the cache is cold AND a hydration is
 	// already in flight — the pending promise will deliver the real value,
 	// so emitting a throwaway `null` now would just flash signed-out.
 	const cache = getCache(api);
-	let emitted: AuthUserOf<A> | null | undefined;
 	if (cache.state || !cache.hydrating) {
-		emitted = cache.state ? (stateOf(api, cache.state).user ?? null) : null;
-		callback(emitted);
+		deliver(cache.state ? (stateOf(api, cache.state).user ?? null) : null);
 	}
 	ensureState(api)
-		.then((s) => {
-			const user = stateOf(api, s).user ?? null;
-			// Don't repaint if the hydrated value matches the sync emit.
-			if (emitted !== undefined && sameAuthUser(user, emitted)) return;
-			callback(user);
-		})
+		// Don't repaint if the hydrated value matches the sync emit.
+		.then((s) => follow(s, cache.shownAt))
 		.catch(() => {
 			// getAuthState() rejected — keep the last-known frame; never
 			// strand the UI on an unresolved subscribe.
 		});
 
 	return () => {
-		getChannel().removeEventListener('message', channelHandler);
+		unsubscribe();
 		window.removeEventListener(AUTH_LOCAL_EVENT, localHandler);
 	};
 }
