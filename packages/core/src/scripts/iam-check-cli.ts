@@ -61,6 +61,7 @@ try {
 		process.stdout.write(`blocks-iam-check: ${result.violations.length} violation(s):\n`);
 		for (const v of result.violations) process.stdout.write(`  • [${v.rule}] ${v.message}  (${v.source})\n`);
 	}
+	if (!json) for (const note of result.notes) process.stdout.write(`blocks-iam-check: note (not a violation): ${note}\n`);
 	process.exit(result.violations.length === 0 ? 0 : 1);
 } catch (error) {
 	if (error instanceof IamCheckUsageError) usage(error.message);

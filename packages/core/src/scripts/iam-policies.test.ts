@@ -4,10 +4,12 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import {
+	EXECUTION_POLICY_SPLIT_CHARS,
 	generateBoundaryPolicy,
 	generateDeployGuardPolicy,
 	generateExecutionPolicy,
 	MANAGED_POLICY_MAX_CHARS,
+	UNSCOPED_REASONS,
 	type PolicyDocument,
 	policySize,
 	splitPolicy,
@@ -38,12 +40,29 @@ type Request = {
 	tagKeys?: string[];
 	viaService?: string;
 	roleArn?: string;
+	/** Any other condition keys the request carries (`iam:AWSServiceName`, `lambda:FunctionArn`, …). */
+	context?: Record<string, string | string[]>;
 };
 
+/** The request's condition context, as IAM sees it. */
+function contextOf(r: Request): Record<string, string[]> {
+	const c: Record<string, string[]> = {};
+	if (r.resourceApp !== undefined) c['aws:ResourceTag/app'] = [r.resourceApp];
+	if (r.requestApp !== undefined) c['aws:RequestTag/app'] = [r.requestApp];
+	const keys = r.tagKeys ?? (r.requestApp !== undefined ? ['app'] : undefined);
+	if (keys !== undefined) c['aws:TagKeys'] = keys;
+	if (r.viaService !== undefined) c['kms:ViaService'] = [r.viaService];
+	if (r.roleArn !== undefined) c['cloudformation:RoleArn'] = [r.roleArn];
+	for (const [k, v] of Object.entries(r.context ?? {})) c[k] = list(v);
+	return c;
+}
+
 /**
- * Whether a statement applies to the request, for the shapes the generator emits:
- * Action, Resource / NotResource, StringEquals on `aws:ResourceTag/app`,
- * StringLike on `kms:ViaService`, StringNotLike on `cloudformation:RoleArn`.
+ * Whether a statement applies to the request: Action, Resource / NotResource, and
+ * the condition operators the generator emits (StringEquals / StringNotEquals /
+ * StringEqualsIfExists, StringLike / StringNotLike, ArnLike, Null, ForAnyValue:StringEquals), with
+ * IAM's semantics for a key the request doesn't carry. An operator it doesn't
+ * know fails the test, rather than being silently ignored.
  */
 function matches(s: Statement, r: Request): boolean {
 	// biome-ignore lint/suspicious/noTemplateCurlyInString: the IAM policy variable the boundary uses
@@ -51,27 +70,41 @@ function matches(s: Statement, r: Request): boolean {
 	if (!list(s.Action).some((a) => glob(a, r.action, 'i'))) return false;
 	if (s.Resource && !list(s.Resource).some((p) => glob(sub(p), r.arn))) return false;
 	if (s.NotResource && list(s.NotResource).some((p) => glob(sub(p), r.arn))) return false;
-	const c = s.Condition;
-	// Deny "resource tagged as another app": StringNotEquals + Null=false on aws:ResourceTag/app.
-	const notTag = c?.StringNotEquals?.['aws:ResourceTag/app'];
-	if (notTag !== undefined && c?.Null?.['aws:ResourceTag/app'] === 'false') {
-		if (r.resourceApp === undefined || r.resourceApp === notTag) return false;
+	const ctx = contextOf(r);
+	for (const [op, keys] of Object.entries(s.Condition ?? {})) {
+		for (const [key, raw] of Object.entries(keys)) {
+			const want = list(raw).map((v) => sub(String(v)));
+			const have = ctx[key];
+			const eq = (a: string, b: string) => a === b;
+			const any = (f: (p: string, v: string) => boolean) => (have ?? []).some((v) => want.some((p) => f(p, v)));
+			let ok: boolean;
+			switch (op) {
+				case 'StringEquals':
+				case 'ForAnyValue:StringEquals':
+					ok = any(eq);
+					break;
+				case 'StringNotEquals':
+					ok = have === undefined || !any(eq);
+					break;
+				case 'StringEqualsIfExists':
+					ok = have === undefined || any(eq);
+					break;
+				case 'StringLike':
+				case 'ArnLike':
+					ok = any((p, v) => glob(p, v));
+					break;
+				case 'StringNotLike':
+					ok = have === undefined || !any((p, v) => glob(p, v));
+					break;
+				case 'Null':
+					ok = (want[0] === 'true') === (have === undefined);
+					break;
+				default:
+					throw new Error(`the test evaluator doesn't know the condition operator ${op}`);
+			}
+			if (!ok) return false;
+		}
 	}
-	const tagKeysCondition = (c as Record<string, Record<string, unknown>> | undefined)?.['ForAnyValue:StringEquals']?.['aws:TagKeys'];
-	if (tagKeysCondition !== undefined) {
-		const keys = r.tagKeys ?? (r.requestApp !== undefined ? ['app'] : []);
-		if (!list(tagKeysCondition as string[]).some((k) => keys.includes(k))) return false;
-	}
-	const reqTag = c?.StringEquals?.['aws:RequestTag/app'];
-	if (reqTag !== undefined && r.requestApp !== reqTag) return false;
-	const notReqTag = c?.StringNotEquals?.['aws:RequestTag/app'];
-	if (notReqTag !== undefined && (r.requestApp === undefined || r.requestApp === notReqTag)) return false;
-	const tag = c?.StringEquals?.['aws:ResourceTag/app'];
-	if (tag !== undefined && sub(tag as string) !== r.resourceApp) return false;
-	const via = c?.StringLike?.['kms:ViaService'];
-	if (via !== undefined && !(r.viaService && list(via).some((p) => glob(p, r.viaService as string)))) return false;
-	const role = c?.StringNotLike?.['cloudformation:RoleArn'];
-	if (role !== undefined && r.roleArn !== undefined && glob(role as string, r.roleArn)) return false;
 	return true;
 }
 const allowed = (doc: PolicyDocument, r: Request) =>
@@ -104,6 +137,28 @@ describe('blocks-iam-policies — the shared boundary (allow-list)', () => {
 		{ action: 'states:StartExecution', arn: `${A}:states:us-east-1:${acct}:stateMachine:Flow-x`, resourceApp: 'appa' },
 		{ action: 'kms:Decrypt', arn: `${A}:kms:us-east-1:${acct}:key/managed`, viaService: 'ssm.us-east-1.amazonaws.com' },
 		{ action: 'xray:PutTraceSegments', arn: '*' },
+		// A Database's cluster log group (its log-retention provider creates it).
+		{ action: 'logs:CreateLogGroup', arn: `${A}:logs:us-east-1:${acct}:log-group:/aws/rds/cluster/appa-db-x1/postgresql` },
+		{ action: 'logs:PutRetentionPolicy', arn: `${A}:logs:us-east-1:${acct}:log-group:/aws/rds/cluster/appa-db-x1/postgresql:*` },
+		// Hosting config() / secret() under `blocks/<id>/` (stackId = app id), untagged.
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/blocks/appa/config/FEATURE_FLAGS` },
+		{ action: 'secretsmanager:GetSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/appa/secrets/DEMO-AbCdEf` },
+		// AWS-owned models and system-defined inference profiles: metadata reads.
+		{ action: 'bedrock:GetFoundationModel', arn: `${A}:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0` },
+		{ action: 'bedrock:GetInferenceProfile', arn: `${A}:bedrock:us-east-1:${acct}:inference-profile/us.amazon.nova-pro-v1:0` },
+		{ action: 'bedrock:ListInferenceProfiles', arn: '*' },
+		// A workload access token: the shared default directory, and the app's own (tagged) identity.
+		{
+			action: 'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+			arn: `${A}:bedrock-agentcore:us-east-1:${acct}:workload-identity-directory/default`,
+		},
+		{
+			action: 'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+			arn: `${A}:bedrock-agentcore:us-east-1:${acct}:workload-identity-directory/default/workload-identity/rt1`,
+			resourceApp: 'appa',
+		},
+		// CDK's Lambda@Edge ARN parameter for the app's own stack.
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/cdk/EdgeFunctionArn/eu-west-1/appa/Hosting/Fn` },
 	];
 	for (const r of own) {
 		test(`allows the app its own: ${r.action} ${r.arn.split(':').slice(5).join(':') || r.arn}`, () => {
@@ -134,6 +189,26 @@ describe('blocks-iam-policies — the shared boundary (allow-list)', () => {
 		{ action: 'iam:AttachRolePolicy', arn: `${A}:iam::${acct}:role/appa-Role` },
 		{ action: 'sts:AssumeRole', arn: `${A}:iam::${acct}:role/appb-Role` },
 		{ action: 'rekognition:DetectLabels', arn: '*' },
+		{ action: 'logs:CreateLogGroup', arn: `${A}:logs:us-east-1:${acct}:log-group:/aws/rds/cluster/appb-db-x1/postgresql` },
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/blocks/appb/config/FEATURE_FLAGS` },
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/blocks/config/FEATURE_FLAGS` },
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/blocks/appab/config/X` },
+		{ action: 'secretsmanager:GetSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/appb/secrets/DEMO-AbCdEf` },
+		{ action: 'secretsmanager:GetSecretValue', arn: `${A}:secretsmanager:us-east-1:${acct}:secret:blocks/secrets/DEMO-AbCdEf` },
+		// Another app's application inference profile (a separate, taggable resource type).
+		{
+			action: 'bedrock:GetInferenceProfile',
+			arn: `${A}:bedrock:us-east-1:${acct}:application-inference-profile/abc123`,
+			resourceApp: 'appb',
+		},
+		{ action: 'bedrock:DeleteInferenceProfile', arn: `${A}:bedrock:us-east-1:${acct}:inference-profile/us.amazon.nova-pro-v1:0` },
+		{ action: 'ssm:GetParameter', arn: `${A}:ssm:us-east-1:${acct}:parameter/cdk/EdgeFunctionArn/eu-west-1/appb/Hosting/Fn` },
+		{
+			action: 'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+			arn: `${A}:bedrock-agentcore:us-east-1:${acct}:workload-identity-directory/default/workload-identity/rt2`,
+			resourceApp: 'appb',
+		},
+		{ action: 'bedrock-agentcore:DeleteWorkloadIdentity', arn: `${A}:bedrock-agentcore:us-east-1:${acct}:workload-identity-directory/default` },
 	];
 	for (const r of other) {
 		test(`denies: ${r.action} ${r.arn.split(':').slice(5).join(':') || r.arn}`, () => {
@@ -258,7 +333,7 @@ describe('blocks-iam-policies — the per-app execution policy', () => {
 	});
 
 	test('lists the resource types it has no scoped rule for', () => {
-		assert.deepStrictEqual(unscoped, ['AWS::Bedrock::KnowledgeBase', 'AWS::Custom::Thing']);
+		assert.deepStrictEqual(unscoped, ['AWS::Custom::Thing']);
 	});
 
 	test('needs the app id and a 12-digit account', () => {
@@ -288,10 +363,18 @@ describe('blocks-iam-policies — the deploy guard', () => {
 		assert.strictEqual(denied('cloudformation:CreateChangeSet', stack('appa'), otherExec), true);
 	});
 
-	test('denies creating, changing or deleting a stack without naming a role (CloudFormation would reuse the old one)', () => {
-		for (const action of ['cloudformation:DeleteStack', 'cloudformation:CreateChangeSet', 'cloudformation:UpdateStack']) {
+	test('denies creating or changing a stack without naming a role (CloudFormation would reuse the old one)', () => {
+		for (const action of ['cloudformation:CreateChangeSet', 'cloudformation:CreateStack', 'cloudformation:UpdateStack']) {
 			assert.strictEqual(denied(action, stack('appa'), undefined), true, action);
 		}
+	});
+
+	test("deleting its own stack may omit the role (CDK's cleanup of a failed first deploy); a named role must be its own", () => {
+		assert.strictEqual(denied('cloudformation:DeleteStack', stack('appa'), undefined), false, 'own stack, no RoleARN');
+		assert.strictEqual(denied('cloudformation:DeleteStack', stack('appa-edge'), undefined), false, 'own helper stack, no RoleARN');
+		assert.strictEqual(denied('cloudformation:DeleteStack', stack('appa'), ownExec), false, 'own stack, own role');
+		assert.strictEqual(denied('cloudformation:DeleteStack', stack('appa'), otherExec), true, "own stack, another app's role");
+		assert.strictEqual(denied('cloudformation:DeleteStack', stack('appb'), undefined), true, "another app's stack, no RoleARN");
 	});
 
 	test('allows its own stacks with its own execution role', () => {
@@ -309,7 +392,188 @@ describe('blocks-iam-policies — the deploy guard', () => {
 	});
 });
 
+describe('blocks-iam-policies — rules for the types Hosting, Database, DistributedDatabase, KnowledgeBase use', () => {
+	const types = [
+		'AWS::CloudFront::Distribution',
+		'AWS::CloudFront::KeyValueStore',
+		'AWS::CloudFront::Function',
+		'AWS::CloudFront::OriginAccessControl',
+		'AWS::CloudFront::CachePolicy',
+		'AWS::CloudFront::OriginRequestPolicy',
+		'AWS::CloudFront::ResponseHeadersPolicy',
+		'AWS::SNS::Topic',
+		'AWS::CloudWatch::Alarm',
+		'AWS::Lambda::Function',
+		'AWS::Lambda::EventSourceMapping',
+		'AWS::IAM::ManagedPolicy',
+		'AWS::SecretsManager::Secret',
+		'AWS::S3Vectors::VectorBucket',
+		'AWS::S3Vectors::Index',
+		'AWS::DSQL::Cluster',
+		'AWS::EC2::VPC',
+		'AWS::EC2::Subnet',
+		'AWS::EC2::SecurityGroup',
+		'AWS::EC2::RouteTable',
+		'AWS::EC2::SubnetRouteTableAssociation',
+		'AWS::RDS::DBCluster',
+		'AWS::RDS::DBInstance',
+		'AWS::RDS::DBSubnetGroup',
+		'AWS::Bedrock::KnowledgeBase',
+		'AWS::Bedrock::DataSource',
+		'AWS::ApiGateway::RestApi',
+		'AWS::BedrockAgentCore::Runtime',
+		'Custom::CrossRegionExportReader',
+	];
+	const result = generateExecutionPolicy(types, { appId: 'appa', account: acct });
+	const exec = result.document;
+	const r = (action: string, arn: string, extra: Partial<Request> = {}) => allowed(exec, { action, arn, principalApp: 'appa', ...extra });
+	const cf = (path: string) => `${A}:cloudfront::${acct}:${path}`;
+
+	test('only AgentCore is left unscoped (with a reason); CloudFront config is an accepted exception', () => {
+		assert.deepStrictEqual(result.unscoped, ['AWS::BedrockAgentCore::Runtime']);
+		assert.ok(UNSCOPED_REASONS['AWS::BedrockAgentCore::Runtime']);
+		assert.deepStrictEqual(result.accepted, [
+			'AWS::CloudFront::CachePolicy',
+			'AWS::CloudFront::OriginAccessControl',
+			'AWS::CloudFront::OriginRequestPolicy',
+			'AWS::CloudFront::ResponseHeadersPolicy',
+		]);
+		const statements = exec.Statement as { Sid: string; Action: string | string[] }[];
+		assert.ok(statements.some((st) => st.Sid === 'CloudFrontUnscopableConfig'));
+		assert.ok(!statements.some((st) => list(st.Action).some((a) => a.startsWith('bedrock-agentcore:'))), 'no AgentCore grant');
+	});
+
+	test('a type in a namespace another rule handles is still reported when no rule names it', () => {
+		const { unscoped, document } = generateExecutionPolicy(
+			['AWS::CloudWatch::Alarm', 'AWS::CloudWatch::Dashboard', 'AWS::CloudWatch::CompositeAlarm', 'AWS::Lambda::CodeSigningConfig', 'AWS::ApiGateway::Account'],
+			{ appId: 'appa', account: acct },
+		);
+		assert.deepStrictEqual(unscoped, ['AWS::ApiGateway::Account', 'AWS::CloudWatch::CompositeAlarm', 'AWS::Lambda::CodeSigningConfig']);
+		const sids = (document.Statement as { Sid: string }[]).map((st) => st.Sid);
+		assert.ok(sids.includes('Alarms') && sids.includes('Dashboards'), sids.join(','));
+	});
+
+	test('CloudFront: distributions and KeyValueStores by tag, functions by name, never another app\'s', () => {
+		assert.strictEqual(r('cloudfront:CreateDistribution', cf('distribution/*'), { requestApp: 'appa' }), true);
+		assert.strictEqual(r('cloudfront:CreateDistribution', cf('distribution/*')), false, 'untagged');
+		assert.strictEqual(r('cloudfront:UpdateDistribution', cf('distribution/E1'), { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('cloudfront:UpdateDistribution', cf('distribution/E2'), { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('cloudfront:CreateInvalidation', cf('distribution/E2'), { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('cloudfront:CreateKeyValueStore', cf('key-value-store/*'), { requestApp: 'appa' }), true);
+		assert.strictEqual(r('cloudfront:DeleteKeyValueStore', cf('key-value-store/k1'), { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('cloudfront:DeleteKeyValueStore', cf('key-value-store/k2'), { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('cloudfront:TagResource', cf('key-value-store/k1'), { resourceApp: 'appa', requestApp: 'appb' }), false, 'hand it to another app');
+		assert.strictEqual(r('cloudfront:CreateFunction', cf('function/appa-us-east-1-appaHostingRouter1A2B3C4D')), true);
+		assert.strictEqual(r('cloudfront:UpdateFunction', cf('function/appb-us-east-1-x')), false);
+		assert.strictEqual(r('cloudfront:UpdateFunction', cf('function/us-east-1appaHostingRouter1A2B3C4D')), false, 'CDK-style name');
+		assert.strictEqual(r('cloudfront:CreateCachePolicy', cf('cache-policy/*')), true, 'accepted exception');
+	});
+
+	test("SNS topics and CloudWatch alarms by name", () => {
+		assert.strictEqual(r('sns:GetTopicAttributes', `${A}:sns:us-east-1:${acct}:appa-AlarmTopic-x`), true);
+		assert.strictEqual(r('sns:SetTopicAttributes', `${A}:sns:us-east-1:${acct}:appb-AlarmTopic-x`), false);
+		assert.strictEqual(r('sns:Subscribe', `${A}:sns:us-east-1:${acct}:appab-AlarmTopic-x`), false);
+		assert.strictEqual(r('cloudwatch:PutMetricAlarm', `${A}:cloudwatch:us-east-1:${acct}:alarm:appa-Cf5xx-x`), true);
+		assert.strictEqual(r('cloudwatch:DeleteAlarms', `${A}:cloudwatch:us-east-1:${acct}:alarm:appb-Cf5xx-x`), false);
+	});
+
+	test('event source mappings: tagged as the app on create, re-tagged or untagged only as the app', () => {
+		const esm = `${A}:lambda:us-east-1:${acct}:event-source-mapping:1111-2222`;
+		assert.strictEqual(r('lambda:TagResource', esm, { requestApp: 'appa' }), true, 'tag on create');
+		assert.strictEqual(r('lambda:TagResource', esm, { requestApp: 'appb' }), false);
+		assert.strictEqual(r('lambda:ListTags', esm, { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('lambda:UntagResource', esm, { resourceApp: 'appb', tagKeys: ['x'] }), false);
+		assert.strictEqual(r('lambda:TagResource', esm, { resourceApp: 'appa', requestApp: 'appb' }), false, 'hand it to another app');
+	});
+
+	test("managed policies named <id>-…, never the boundary; generated secrets' random password", () => {
+		assert.strictEqual(r('iam:CreatePolicy', `${A}:iam::${acct}:policy/appa-BlocksRoleOverflowPolicy1-X`), true);
+		assert.strictEqual(r('iam:CreatePolicyVersion', `${A}:iam::${acct}:policy/appb-BlocksRoleOverflowPolicy1-X`), false);
+		assert.strictEqual(r('iam:CreatePolicyVersion', `${A}:iam::${acct}:policy/apps-boundary`), false);
+		assert.strictEqual(r('secretsmanager:GetRandomPassword', '*'), true);
+	});
+
+	test('S3 Vectors by name; DSQL and knowledge bases by tag', () => {
+		assert.strictEqual(r('s3vectors:CreateIndex', `${A}:s3vectors:us-east-1:${acct}:bucket/appa-vec-x/index/i`), true);
+		assert.strictEqual(r('s3vectors:DeleteIndex', `${A}:s3vectors:us-east-1:${acct}:bucket/appb-vec-x/index/i`), false);
+		assert.strictEqual(r('dsql:CreateCluster', `${A}:dsql:us-east-1:${acct}:cluster/*`, { requestApp: 'appa' }), true);
+		assert.strictEqual(r('dsql:CreateCluster', `${A}:dsql:us-east-1:${acct}:cluster/*`), false, 'untagged');
+		assert.strictEqual(r('dsql:DeleteCluster', `${A}:dsql:us-east-1:${acct}:cluster/c2`, { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('dsql:GetCluster', `${A}:dsql:us-east-1:${acct}:cluster/c1`, { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('bedrock:CreateKnowledgeBase', '*', { requestApp: 'appa' }), true);
+		assert.strictEqual(r('bedrock:CreateDataSource', `${A}:bedrock:us-east-1:${acct}:knowledge-base/KB1`, { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('bedrock:DeleteDataSource', `${A}:bedrock:us-east-1:${acct}:knowledge-base/KB2`, { resourceApp: 'appb' }), false);
+	});
+
+	test("EC2: VPC resources tagged as the app; children only in the app's own VPC", () => {
+		const ec2 = (path: string) => `${A}:ec2:us-east-1:${acct}:${path}`;
+		assert.strictEqual(r('ec2:CreateVpc', ec2('vpc/*'), { requestApp: 'appa' }), true);
+		assert.strictEqual(r('ec2:CreateVpc', ec2('vpc/*')), false, 'untagged');
+		assert.strictEqual(r('ec2:CreateSubnet', ec2('subnet/*'), { requestApp: 'appa' }), true);
+		assert.strictEqual(r('ec2:CreateSubnet', ec2('vpc/vpc-own'), { resourceApp: 'appa' }), true, 'in its own VPC');
+		assert.strictEqual(r('ec2:CreateSubnet', ec2('vpc/vpc-other'), { resourceApp: 'appb' }), false, "in another app's VPC");
+		assert.strictEqual(r('ec2:CreateSecurityGroup', ec2('vpc/vpc-untagged')), false, 'in an untagged VPC');
+		assert.strictEqual(r('ec2:DeleteSecurityGroup', ec2('security-group/sg-2'), { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('ec2:AssociateRouteTable', ec2('route-table/rtb-1'), { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('ec2:CreateTags', ec2('vpc/vpc-own'), { resourceApp: 'appa', requestApp: 'appb' }), false, 'hand it to another app');
+		assert.strictEqual(r('ec2:DescribeVpcs', '*'), true);
+	});
+
+	test("RDS by name, plus using RDS's default parameter and option groups", () => {
+		const rds = (path: string) => `${A}:rds:us-east-1:${acct}:${path}`;
+		assert.strictEqual(r('rds:CreateDBCluster', rds('cluster:appa-dbcluster-x')), true);
+		assert.strictEqual(r('rds:CreateDBCluster', rds('cluster-pg:default.aurora-postgresql16')), true);
+		assert.strictEqual(r('rds:CreateDBSubnetGroup', rds('subgrp:appa-subnets-x')), true);
+		assert.strictEqual(r('rds:DeleteDBCluster', rds('cluster:appb-dbcluster-x')), false);
+		assert.strictEqual(r('rds:ModifyDBClusterParameterGroup', rds('cluster-pg:default.aurora-postgresql16')), false, 'edit a default group');
+		assert.strictEqual(r('rds:DeleteDBSubnetGroup', rds('subgrp:appb-subnets-x')), false);
+	});
+
+	test('API Gateway: a REST API resource policy on create (the collection), and on its own API only', () => {
+		const api = (path: string) => `${A}:apigateway:us-east-1::${path}`;
+		assert.strictEqual(r('apigateway:UpdateRestApiPolicy', api('/restapis')), true);
+		assert.strictEqual(r('apigateway:UpdateRestApiPolicy', api('/restapis/own123'), { resourceApp: 'appa' }), true);
+		assert.strictEqual(r('apigateway:UpdateRestApiPolicy', api('/restapis/other99'), { resourceApp: 'appb' }), false);
+		assert.strictEqual(r('apigateway:UpdateRestApiPolicy', api('/restapis/untagged')), false);
+	});
+
+	test("cross-region references: the app's own stacks' exports only", () => {
+		assert.strictEqual(r('ssm:GetParameters', `${A}:ssm:us-east-1:${acct}:parameter/cdk/exports/appa-CfMonitoring-c8df000e/x`), true);
+		assert.strictEqual(r('ssm:GetParameters', `${A}:ssm:us-east-1:${acct}:parameter/cdk/exports/appb-CfMonitoring-c8df000e/x`), false);
+		assert.strictEqual(r('ssm:PutParameter', `${A}:ssm:us-east-1:${acct}:parameter/cdk/exports/appa-CfMonitoring-c8df000e/x`), false);
+	});
+
+	test('service-linked roles: only for the services these templates use', () => {
+		const slr = (service: string) =>
+			r('iam:CreateServiceLinkedRole', `${A}:iam::${acct}:role/aws-service-role/${service}/AWSServiceRoleFor`, {
+				context: { 'iam:AWSServiceName': service },
+			});
+		for (const service of ['rds.amazonaws.com', 'dsql.amazonaws.com', 'runtime-identity.bedrock-agentcore.amazonaws.com']) {
+			assert.strictEqual(slr(service), true, service);
+		}
+		assert.strictEqual(slr('ecs.amazonaws.com'), false);
+		assert.strictEqual(
+			generateExecutionPolicy(['AWS::DynamoDB::Table'], { appId: 'appa', account: acct }).document.Statement.some(
+				(st) => st.Sid === 'ServiceLinkedRoles',
+			),
+			false,
+			'none for an app that needs none',
+		);
+	});
+});
+
 describe('blocks-iam-policies — splitting a large execution policy', () => {
+	test('the CLI splits below IAM\'s limit, so every part has room for hand additions', () => {
+		assert.ok(EXECUTION_POLICY_SPLIT_CHARS <= MANAGED_POLICY_MAX_CHARS - 1000);
+		const { document } = generateExecutionPolicy(['AWS::Lambda::Function', 'AWS::EC2::VPC', 'AWS::RDS::DBCluster', 'AWS::CloudFront::Distribution'], {
+			appId: 'appa',
+			account: acct,
+		});
+		for (const part of splitPolicy(document, EXECUTION_POLICY_SPLIT_CHARS)) {
+			assert.ok(policySize(part) <= EXECUTION_POLICY_SPLIT_CHARS, `${policySize(part)} characters`);
+		}
+	});
+
 	test('every part fits IAM\'s limit, and no statement is lost or reordered', () => {
 		const types = ['AWS::Lambda::Function', 'AWS::Logs::LogGroup', 'AWS::DynamoDB::Table', 'AWS::SQS::Queue', 'AWS::S3::Bucket',
 			'AWS::SSM::Parameter', 'AWS::SecretsManager::Secret', 'AWS::ApiGateway::RestApi', 'AWS::Scheduler::Schedule', 'AWS::Events::Rule',
