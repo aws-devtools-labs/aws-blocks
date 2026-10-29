@@ -12,6 +12,7 @@ import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster
 import { configError } from './errors.js';
 import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
+import { enforceLocalBinding } from './runtime/bindings.js';
 import { registerDatabase, registerUniqueId } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
@@ -101,6 +102,7 @@ export class Database extends Scope {
 		this.schemaName = resolved.schemaName;
 
 		const dataDir = getMockDataDir(this);
+		enforceLocalBinding(dataDir, this.fullId, id, { cluster: resolved.ref.id, type: resolved.ref.kind });
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 		// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
 		// (a cache hit) in case a file changed after startup.
