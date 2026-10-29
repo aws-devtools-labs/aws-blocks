@@ -183,3 +183,30 @@ export interface SecretReadOptions {
 	 */
 	version?: 'current' | 'previous' | SecretVersion;
 }
+
+/**
+ * Package-internal construction options, used only by the framework key helper
+ * in `@aws-blocks/bb-secret/internal`. Not exported from the package entry
+ * points, so customer code cannot set them and the public `Secret` defaults
+ * never change.
+ *
+ * @internal
+ */
+export interface InternalSecretOptions extends SecretOptions<string> {
+	/**
+	 * Leave `Name` unset so CloudFormation generates a unique secret name. The
+	 * runtime finds the secret by the ARN registered in config, so nothing
+	 * depends on the name. Takes precedence over {@link SecretOptions.name}.
+	 */
+	generatedName?: boolean;
+	/**
+	 * Seed the secret from CloudFormation `GenerateSecretString` with these
+	 * settings. Implies {@link SecretOptions.generate}.
+	 */
+	generatedValue?: {
+		/** Length of the generated value, in characters. */
+		passwordLength: number;
+		/** Exclude punctuation, so the value uses letters and digits only. */
+		excludePunctuation: boolean;
+	};
+}

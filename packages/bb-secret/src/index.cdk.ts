@@ -8,7 +8,7 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import type { ExternalSecretRef, SecretOptions } from './types.js';
+import type { ExternalSecretRef, InternalSecretOptions, SecretOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -68,12 +68,27 @@ export class Secret extends BuildingBlockScope {
 						? RemovalPolicy.RETAIN
 						: this.defaults.removalPolicy;
 
+			// `generatedName` / `generatedValue` are package-internal (set only by
+			// the framework key helper in `./internal`), not on the public
+			// SecretOptions, so read them via the internal options type.
+			const internalOptions = options as InternalSecretOptions | undefined;
+
 			const l2 = new secretsmanager.Secret(this, 'secret', {
 				// Use the caller's explicit, well-known name when provided (so a
 				// team/CI pipeline can target it with `aws secretsmanager …`); else
-				// derive a unique name from the scope tree.
-				secretName: (options?.name ?? this.fullId).substring(0, 255),
+				// derive a unique name from the scope tree. The framework key
+				// helper leaves the name unset instead, so CloudFormation generates
+				// a unique one and a recreate never collides with a retained name.
+				secretName: internalOptions?.generatedName === true
+					? undefined
+					: (options?.name ?? this.fullId).substring(0, 255),
 				removalPolicy,
+				generateSecretString: internalOptions?.generatedValue
+					? {
+						passwordLength: internalOptions.generatedValue.passwordLength,
+						excludePunctuation: internalOptions.generatedValue.excludePunctuation,
+					}
+					: undefined,
 			});
 
 			// Default: an EMPTY secret, so an unset secret reads back as `null`
@@ -84,7 +99,7 @@ export class Secret extends BuildingBlockScope {
 			// that generator only when `generate: true` (signing/HMAC keys that just
 			// need to exist). CloudFormation treats a secret with neither
 			// `GenerateSecretString` nor `SecretString` as empty.
-			if (options?.generate !== true) {
+			if (options?.generate !== true && internalOptions?.generatedValue === undefined) {
 				const cfn = l2.node.defaultChild as secretsmanager.CfnSecret;
 				cfn.addPropertyDeletionOverride('GenerateSecretString');
 			}
