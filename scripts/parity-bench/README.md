@@ -72,7 +72,7 @@ src/kinds/     reusable probe shapes and exact-size payload generators: countLim
 src/server/    the default-deny `probe` namespace (createProbeMethods), runCase/observe helpers, CDK wiring (./cdk)
 src/client/    the e2e client recorder and the node:test driver for fixed and slider cases
 src/packs/     one pack per block area: <pack>.cases.ts (pure data) + <pack>.probe.ts (runner); catalog.ts
-src/cli/       parity-report, parity-validate-catalog
+src/cli/       report.ts, validate-catalog.ts (run through npm scripts / tsx)
 test/          unit tests for the pure core
 ```
 
@@ -109,19 +109,24 @@ stack gets none of the packs' resources.
   `src/kinds/` where one fits, otherwise from `runCase({ setup, act, cleanup })`. `act` returns a
   small summary and never asserts. Register the pack in `catalog.ts` (`PARITY_CASES`, `PACK_IDS`)
   and `packs/index.ts`.
-- `npm test` here runs the unit tests and `parity-validate-catalog`. Then run `parity:local` in a
+- `npm test` here runs the unit tests and the catalog validation (`npm run validate-catalog`). Then run `parity:local` in a
   stack, then `parity:sandbox`.
 
 Each attempt must finish well under 20 s deployed, because of the API Gateway 29 s limit.
 
 ## Security
 
-`probe` is a network-reachable RPC namespace, so it is **default-deny**. Every method answers 404
-unless the serving process has `E2E_PARITY_PROBES=true`. The e2e harness passes the flag to the
-local dev server, which binds to loopback. `enableParityProbes` registers it on a deployed stack
-only when the deploy itself ran with the flag set. Callers can only pick a case id from the fixed
-catalog, plus, for a slider, one integer inside that case's declared range. They can't supply SQL,
-sizes beyond the range, or targets.
+`probe` is a network-reachable RPC namespace, so it is **default-deny**. The namespace is mounted on
+every deploy of the stack, but every method answers 404 unless the serving process has
+`E2E_PARITY_PROBES=true` **and** is not a production deployment. The e2e harness passes the flag to
+the local dev server, which binds to loopback. `enableParityProbes` registers it on a deployed stack
+only when the deploy itself ran with the flag set, and throws if that deploy is a production one.
+Callers can only pick a case id from the fixed catalog, plus, for a slider, one integer inside that
+case's declared range. They can't supply SQL, sizes beyond the range, or targets.
+
+The probe methods have no auth of their own. While the flag is on for a deployed sandbox stack,
+anyone who can reach that stack's API can run catalog cases against its resources. Enable it only
+on a throwaway sandbox stack in a test account, and let the run destroy the stack afterwards.
 
 Recordings redact values under credential-like keys (`token`, `password`, `cookie`, `session`, …)
 and are written only under `.parity/`, which is git-ignored.

@@ -55,6 +55,9 @@ export async function findBreakpoint(
 	if (aborted) return { breakpoint: null, monotonic: true, aborted, attempts };
 	if (!fails(top)) return { breakpoint: null, monotonic: true, attempts };
 	// Invariant: everything below `lo` is assumed to succeed; `hi` is the lowest known failure.
+	// `min` itself is never probed on its own: a case must declare a `min` that is expected to
+	// succeed. If it fails anyway, the search reports `breakpoint === min` (the first failure
+	// observed), with no evidence about the values below it.
 	let lo = min;
 	let hi = max;
 	while (lo < hi) {

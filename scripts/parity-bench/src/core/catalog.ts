@@ -3,7 +3,7 @@
 
 /**
  * Catalog validation — the structural rules every case must meet before it can
- * run or be scored. Runs in CI (`parity validate-catalog`) and is the gate an
+ * run or be scored. Runs in CI (`npm run validate-catalog`) and is the gate an
  * LLM-proposed case must pass before review.
  */
 

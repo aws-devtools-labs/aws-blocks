@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { snapshot } from '../src/client/recorder.js';
-import { diff, suiteMapper } from '../src/core/report.js';
+import { cell, diff, suiteMapper } from '../src/core/report.js';
 import type { CallRecord, ProbeOutcome, ProbeRecord, RecordedOutcome, SweepRecord } from '../src/core/types.js';
 import { COMPREHENSIVE_SUITE_BLOCKS } from '../src/suites.js';
 
@@ -107,4 +107,12 @@ test('a slider that never breaks locally but breaks deployed is silent; equal br
 	assert.strictEqual(shape.verdict, 'differs-error');
 	const [same] = diff([sweep('local', 3001, 'X')], [sweep('sandbox', 3001, 'X')]);
 	assert.strictEqual(same.verdict, 'same');
+});
+
+test('table cells escape backslashes before pipes and fold newlines', () => {
+	assert.strictEqual(cell('a|b'), 'a\\|b');
+	// A recorded value ending in a backslash must not un-escape the following pipe.
+	assert.strictEqual(cell('a\\|b'), 'a\\\\\\|b');
+	assert.strictEqual(cell('line1\nline2\r\nline3'), 'line1 line2 line3');
+	assert.strictEqual(cell(undefined), '—');
 });

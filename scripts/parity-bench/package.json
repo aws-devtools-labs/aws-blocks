@@ -13,10 +13,6 @@
 		"./cdk": "./src/server/cdk.ts",
 		"./client": "./src/client/index.ts"
 	},
-	"bin": {
-		"parity-report": "./src/cli/report.ts",
-		"parity-validate-catalog": "./src/cli/validate-catalog.ts"
-	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
 		"test": "tsx --test 'test/**/*.test.ts' && tsx src/cli/validate-catalog.ts",

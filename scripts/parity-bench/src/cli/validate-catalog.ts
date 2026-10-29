@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// parity validate-catalog — fail (exit 1) if the bundled catalog breaks a structural rule (see ../core/catalog.ts).
+// validate-catalog — fail (exit 1) if the bundled catalog breaks a structural rule (see ../core/catalog.ts).
 
 import { validateCatalog } from '../core/catalog.js';
 import { PACK_IDS, PARITY_CASES } from '../packs/catalog.js';

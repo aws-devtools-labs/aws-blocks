@@ -7,20 +7,27 @@
  *   export const probe = new ApiNamespace(scope, 'probe', () => createProbeMethods(PARITY_CASES, runners));
  *
  * TEST-ONLY, DEFAULT-DENY. Every method answers 404 unless `E2E_PARITY_PROBES` is
- * exactly `'true'` in the serving process (see `parityProbesEnabled`). Callers pick
+ * exactly `'true'` in the serving process and that process is not a production
+ * deployment (see `parityProbesEnabled`). The methods carry no auth of their own:
+ * while the flag is on, anyone who can reach the stack can run catalog cases, so
+ * enable it only on a throwaway sandbox stack in a test account. Callers pick
  * a case id from the fixed catalog; a slider case additionally takes one integer,
  * which must lie inside the range the catalog declares for that case. Nothing else
  * — SQL, sizes, targets — comes from the caller.
  */
 
-import { ApiError } from '@aws-blocks/core';
+import { ApiError, getDeploymentType } from '@aws-blocks/core';
 import type { ParityCase, ProbeResult, ProbeRunner } from '../core/types.js';
 
 export type ProbeRunners = Readonly<Record<string, ProbeRunner>>;
 
-/** The opt-in flag. Read it at call time or module load; every layer sees it (see `enableParityProbes`). */
+/**
+ * The opt-in flag. Read it at call time or module load; every layer sees it (see `enableParityProbes`).
+ * Always false on a production deployment, including deployed compute whose config has not loaded
+ * (which `getDeploymentType()` reports as production), so the probes fail closed.
+ */
 export function parityProbesEnabled(): boolean {
-	return process.env.E2E_PARITY_PROBES === 'true';
+	return process.env.E2E_PARITY_PROBES === 'true' && getDeploymentType() !== 'production';
 }
 
 function notFound(): ApiError {

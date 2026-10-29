@@ -209,7 +209,9 @@ const VERDICT_LABEL: Record<Verdict, string> = {
 	same: 'same',
 };
 
-const cell = (s?: string) => (s ?? '—').replace(/\|/g, '\\|');
+/** One markdown table cell: escape backslashes first so `\|` can't be forged, then pipes; fold newlines. */
+export const cell = (s?: string) =>
+	(s ?? '—').replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 export function renderMarkdown(
 	findings: readonly Finding[],

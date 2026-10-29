@@ -9,5 +9,5 @@ export { findBreakpoint } from './breakpoint.js';
 export type { BreakpointResult } from './breakpoint.js';
 export { validateCatalog } from './catalog.js';
 export type { CatalogProblem } from './catalog.js';
-export { diff, normalize, renderMarkdown, suiteMapper } from './report.js';
+export { cell, diff, normalize, renderMarkdown, suiteMapper } from './report.js';
 export type { Finding, SuiteMapper, Verdict } from './report.js';
