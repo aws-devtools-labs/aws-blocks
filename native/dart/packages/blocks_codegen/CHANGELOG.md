@@ -54,6 +54,8 @@
 - Reject a binding whose `export` is not a delimited run of alphanumeric
   segments starting with a letter, since the generator upper-camel-cases it into
   a type name in the generated client.
+- Name the accepted separators `-`, `_` and `.` in that rejection, which used to
+  report only that the export does not name a public Dart type.
 - Escape line terminators in `info.title` and `info.version` so a spec cannot
   place a declaration in the generated file's header comment.
 - Generate `UnknownTransferable` (with an `AWSBLOCKS-NATIVE-001` diagnostic) for

@@ -280,6 +280,40 @@ void main() {
       expect(output, contains('Future<DeviceLink> connectDevice()'));
     });
 
+    test('an all-caps export keeps its case, so the import names what the '
+        'package exports', () {
+      final output = _generate(_build(_specWith(_binding(export: 'URL'))));
+
+      expect(
+        output,
+        contains(
+          "import 'package:example_iot_native/example_iot_native.dart' "
+          'show URL;',
+        ),
+      );
+    });
+
+    test("only each segment's first character is raised", () {
+      const cases = {
+        'iot_API': 'IotAPI',
+        'iot-API': 'IotAPI',
+        'iot.API': 'IotAPI',
+        'DEVICE_LINK': 'DEVICELINK',
+      };
+
+      for (final entry in cases.entries) {
+        final output = _generate(
+          _build(_specWith(_binding(export: entry.key))),
+        );
+
+        expect(
+          output,
+          contains('Future<${entry.value}> connectDevice()'),
+          reason: entry.key,
+        );
+      }
+    });
+
     test('a declared package is not imported when no result uses its tag', () {
       final output = _generate(
         _build(
@@ -1240,7 +1274,11 @@ void main() {
       for (final export in const ['_private', '2device', 'device link']) {
         expect(
           () => _build(_specWith(_binding(export: export))),
-          _throwsFormat("export '$export' does not name a public Dart type"),
+          _throwsFormat(
+            "export '$export' is not a -, _ or . joined run of "
+            'alphanumeric segments starting with a letter, so it cannot name '
+            'a public Dart type',
+          ),
           reason: export,
         );
       }

@@ -32,6 +32,8 @@ let maxGenericArity = 1
 /// syntax whatever their arity, and `Any` cannot name a declaration at all.
 let typeNamesIllegalWhenQualified: Set<String> = ["Type", "Protocol", "Any"]
 
+let exportGrammar = #"^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$"#
+
 struct DeclaredTransferableBinding {
     let module: String
     /// Module-qualified, as `BlocksRuntime.UnknownTransferable` already is.
@@ -63,8 +65,9 @@ struct ResolvedDeclaredBindings {
 /// A built-in tag is dropped rather than rejected: it keeps the hard-coded path in
 /// `SwiftCodeGenerator`'s `switch blocksType`.
 ///
-/// Six of the rules below coincide with producer checks because Swift needs them
-/// for its own emission, not to re-validate; D-020 records which, and why.
+/// Seven of the rules below coincide with producer checks because Swift needs them
+/// for its own emission, not to re-validate; D-020 records six, D-021 the export
+/// grammar it added.
 func resolveDeclaredTransferableBindings(
     packages: NativePackagesCatalog?,
     bindings: NativeBindingsCatalog?,
@@ -124,9 +127,14 @@ func resolveDeclaredTransferableBindings(
             // comparing, so an empty expected tag can never be satisfied.
             throw CodegenError.invalidNativeCatalog("binding '\(binding.id)' declares an empty tag")
         }
+        guard binding.export.range(of: exportGrammar, options: .regularExpression) != nil else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(binding.id)' declares export '\(binding.export)', "
+                    + "which is not a -, _ or . joined run of alphanumeric segments starting with a letter"
+            )
+        }
         let typeName = upperCamelCase(binding.export)
-        guard isValidSwiftIdentifier(typeName),
-              !swiftKeywords.contains(typeName),
+        guard !swiftKeywords.contains(typeName),
               !typeNamesIllegalWhenQualified.contains(typeName)
         else {
             throw CodegenError.invalidNativeCatalog(
@@ -261,14 +269,15 @@ func declaredResultTypeName(
     return optional ? "\(name)?" : name
 }
 
+/// The separator set is the producer's `EXPORT_GRAMMAR` alphabet exactly.
+/// `resolveDeclaredTransferableBindings` rejects every other character against that grammar
+/// before this is reached, and `validate-native-catalogs.ts` is the only path to a
+/// `blocks.spec.json`, so no value a test can build arrives here with another separator.
+/// `Helpers.swift`'s `pascalCase` keeps `:` for Cognito's `custom:email`: it names types the
+/// generator invents, not ones a declaring package exports.
 func upperCamelCase(_ export: String) -> String {
-    export.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == "." || $0 == ":" })
-        .map { segment in
-            if segment.allSatisfy({ $0.isUppercase || $0.isNumber }), segment.count > 1 {
-                return segment.prefix(1).uppercased() + segment.dropFirst().lowercased()
-            }
-            return segment.prefix(1).uppercased() + segment.dropFirst()
-        }
+    export.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == "." })
+        .map { $0.prefix(1).uppercased() + $0.dropFirst() }
         .joined()
 }
 
@@ -341,9 +350,9 @@ enum FormatKind {
 }
 
 /// JSON Schema constraint annotations carried alongside a primitive / list type.
-/// Code generation may emit `precondition` checks at construct time when these
-/// are set; today they are decoded but only the `format` field is consumed
-/// (mapped into `ResolvedType.formattedType` upstream).
+/// `format` is consumed upstream by the model builder, which folds it into
+/// `ResolvedType.formattedType`; every other field is consumed by the
+/// generator, which emits a throwing `guard` in the type's memberwise init.
 struct Constraints: Equatable {
     let format: String?
     let minLength: Int?
