@@ -137,7 +137,10 @@ function closePendingOnBeforeExit(): void {
 	for (const close of closers) {
 		// Best effort: the process is exiting anyway. Closing schedules work, so
 		// Node runs it and emits `beforeExit` again; with nothing left, it exits.
-		close().catch(() => {});
+		// A close that throws synchronously is ignored too, so the rest still run.
+		try {
+			close().catch(() => {});
+		} catch {}
 	}
 }
 
