@@ -121,7 +121,7 @@ export class ClusterInfra {
 		});
 		const migrationFunction = (id: string, handler: 'handler' | 'isComplete') =>
 			new lambda.NodejsFunction(props.owner, id, {
-				entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: '../migration-lambda' }),
+				entry: deployTimeLambdaEntry({ moduleUrl: import.meta.url, source: './migration-lambda' }),
 				handler,
 				runtime: DEFAULT_NODE_RUNTIME,
 				timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),

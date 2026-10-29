@@ -5,11 +5,11 @@ import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
-import { DEFAULT_SCHEMA, quoteIdent, searchPathFor } from './constants.js';
-import { DsqlEngine } from './engines/dsql-engine.js';
-import { DatabaseErrors, pgErrorCode } from './errors.js';
-import { buildMigrationPlan } from './migrations/plan.js';
-import { ensureMigrationTables, runMigrationPlan } from './migrations/runner.js';
+import { DEFAULT_SCHEMA, quoteIdent, searchPathFor } from '../constants.js';
+import { DsqlEngine } from '../engines/dsql-engine.js';
+import { DatabaseErrors, pgErrorCode } from '../errors.js';
+import { buildMigrationPlan } from '../migrations/plan.js';
+import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
 
 const MAX_RETRIES = 8;
 const INITIAL_DELAY_MS = 1000;

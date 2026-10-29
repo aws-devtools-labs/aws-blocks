@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { configError } from './errors.js';
+import { configError } from '../errors.js';
 
 const require = createRequire(import.meta.url);
 

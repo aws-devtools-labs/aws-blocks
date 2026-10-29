@@ -59,7 +59,7 @@ The DSQL engine is a `pg` pool authenticated with IAM tokens. It sets `search_pa
 
 ### 5.1 The compatibility checker
 
-Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`dsql-lint.ts`), the linter the Aurora DSQL team maintains. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on each migration file as written, at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text (about 8 ms per uncached statement). It is never run on AWS: the migration Lambda builds its plan with `validate: false`, because the files were validated at synth and the binary is not deployed; the app runtime does no validation.
+Statement compatibility is decided by AWS's [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) (`src/dsql/lint.ts`), the linter the Aurora DSQL team maintains. It parses the SQL, so a keyword inside a literal is never a false positive, and its rules follow DSQL releases, which a hand-written table did not: the 2025 table in `bb-distributed-data` rejected six features DSQL had since added. `@aws/dsql-lint` installs a native binary per platform as optional dependencies, the pattern esbuild uses. The block runs it on each migration file as written, at synth and in the dev server, and on every distinct statement a handler issues locally, with results cached per text (about 8 ms per uncached statement). It is never run on AWS: the migration Lambda builds its plan with `validate: false`, because the files were validated at synth and the binary is not deployed; the app runtime does no validation.
 
 dsql-lint marks some findings as fixable (`fix_result.status` of `fixed` or `fixed_with_warning`: `serial_type`, `index_async`, `foreign_key_not_valid`, `check_not_valid`, `sequence_cache_missing`, `alter_add_unique_collapse`). The block treats them exactly like the unfixable ones: the file stops with the linter's message and suggestion, and the author makes the change (§5.2).
 
@@ -145,6 +145,7 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 | Test helpers and the internal access channel | `src/testing.ts`, `src/core/internal.ts` |
 | DSQL connection and result type parsers | `src/engines/dsql-engine.ts` |
 | Local engine, schema switching and the `sys` stub | `src/engines/pglite-cluster.ts`, `src/engines/mock-engine.ts` |
-| DSQL compatibility checks and plan sequencing | `src/dsql-lint.ts`, `src/validation.ts`, `src/migrations/plan.ts` |
+| DSQL rules: the linter wrapper, the block's own checks, statement classification, the transaction limits | `src/dsql/lint.ts`, `src/dsql/validation.ts` |
+| Plan sequencing | `src/migrations/plan.ts` |
 | Resumable runner and job waits | `src/migrations/runner.ts` |
-| Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/migration-lambda.ts` |
+| Provisioning and the migration Lambdas | `src/infra/cluster-infra.ts`, `src/infra/migration-lambda.ts` |

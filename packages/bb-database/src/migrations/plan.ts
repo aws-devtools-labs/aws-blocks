@@ -3,7 +3,7 @@
 
 import { blocksError } from '@aws-blocks/core';
 import { splitStatements } from '@aws-blocks/data-common';
-import { ASYNC_DDL, findStatementIssues, inspectStatement } from '../validation.js';
+import { ASYNC_DDL, findStatementIssues, inspectStatement } from '../dsql/validation.js';
 
 export interface PlanStep {
 	kind: 'statement' | 'wait-job';

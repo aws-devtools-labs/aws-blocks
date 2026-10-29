@@ -8,8 +8,8 @@ import { type DatabaseEngine, initializePgliteWithRetry, type TransactionHandle 
 import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { PGlite } from '@electric-sql/pglite';
 import { quoteIdent } from '../constants.js';
+import { ASYNC_DDL } from '../dsql/validation.js';
 import { translatePgError } from '../errors.js';
-import { ASYNC_DDL } from '../validation.js';
 import { currentTransactionHandle } from './tx-scope.js';
 
 // How PGlite stands in for DSQL's asynchronous DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC …

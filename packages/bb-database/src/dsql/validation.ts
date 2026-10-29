@@ -3,9 +3,9 @@
 
 import { blocksError } from '@aws-blocks/core';
 import { DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
-import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from './constants.js';
-import { formatDiagnostic, type LintDiagnostic, lintSql } from './dsql-lint.js';
-import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from './errors.js';
+import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from '../constants.js';
+import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from '../errors.js';
+import { formatDiagnostic, type LintDiagnostic, lintSql } from './lint.js';
 
 const DOCS = 'https://docs.aws.amazon.com/aurora-dsql/latest/userguide';
 const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;

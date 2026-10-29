@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { dsqlLintBinary, isDsqlLintAvailable, lintSql } from './dsql-lint.js';
+import { dsqlLintBinary, isDsqlLintAvailable, lintSql } from './lint.js';
 import { findStatementIssues, TransactionTracker, validateStatement } from './validation.js';
 
 const REJECTED: [sql: string, rule: string][] = [

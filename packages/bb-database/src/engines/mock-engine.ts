@@ -3,8 +3,8 @@
 
 import { blocksError } from '@aws-blocks/core';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import { inspectStatement, type StatementInfo, TransactionTracker, validateStatement } from '../dsql/validation.js';
 import { DSQL_PERMISSION_ERROR_NAME, serializationConflict } from '../errors.js';
-import { inspectStatement, type StatementInfo, TransactionTracker, validateStatement } from '../validation.js';
 import { currentTransactionHandle } from './tx-scope.js';
 
 const DDL_NOT_ALLOWED_MESSAGE =
