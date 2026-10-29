@@ -20,6 +20,8 @@ import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import { z } from 'zod';
+import { createProbeRunners, PARITY_CASES } from '@aws-blocks/parity-bench/packs';
+import { createProbeMethods } from '@aws-blocks/parity-bench/server';
 
 
 const scope = new Scope('test-app');
@@ -2738,6 +2740,15 @@ export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
     return lambdaIdentity();
   },
 }), { compute: isolatedCompute });
+
+// ============================================================================
+// Parity probes — TEST-ONLY, default-deny (404 unless E2E_PARITY_PROBES=true).
+// Executes fixed catalog cases so the parity bench can diff local vs deployed
+// behavior per Building Block. See scripts/parity-bench/README.md.
+// ============================================================================
+
+const probeRunners = createProbeRunners(scope, { dsql, realtime });
+export const probe = new ApiNamespace(scope, 'probe', () => createProbeMethods(PARITY_CASES, probeRunners));
 
 // Export auth state machine API
 export const authApi = auth.createApi();

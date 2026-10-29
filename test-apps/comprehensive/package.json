@@ -20,10 +20,14 @@
     "test:e2e:local": "npm run test:local",
     "test:e2e:sandbox": "npm run test:sandbox",
     "test:e2e:production": "npm run test:production",
+    "parity:local": "E2E_PARITY_DIR=.parity/local E2E_PARITY_PROBES=true npm run test:local",
+    "parity:sandbox": "E2E_PARITY_DIR=.parity/sandbox E2E_PARITY_PROBES=true npm run test:sandbox",
+    "parity:report": "tsx ../../scripts/parity-bench/src/cli/report.ts --local .parity/local --deployed .parity/sandbox",
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
   "dependencies": {
     "@aws-blocks/auth-common": "*",
+    "@aws-blocks/parity-bench": "*",
     "@aws-blocks/bb-agent": "*",
     "@aws-blocks/bb-app-setting": "*",
     "@aws-blocks/bb-async-job": "*",

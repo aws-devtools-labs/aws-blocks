@@ -6,6 +6,7 @@ import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/c
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
+import { enableParityProbes } from '@aws-blocks/parity-bench/cdk';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -56,6 +57,10 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 if (process.env.E2E_FROM_EMAIL) {
   registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
+
+// Enable the test-only parity probes only on a stack deployed for a parity run;
+// every other deploy leaves them answering 404 (scripts/parity-bench/README.md).
+enableParityProbes(blocksStack);
 
 // Tag every taggable resource in the stack for easy identification and cleanup
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-test');

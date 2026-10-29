@@ -7,7 +7,7 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
+import type { api as apiType, isolatedApi as isolatedApiType, probe as probeType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { codePoller } from './poll-for-code.js';
@@ -39,6 +39,8 @@ import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
+import { installParityRecorder, parityProbeTests, recordClient } from '@aws-blocks/parity-bench/client';
+import { PARITY_CASES } from '@aws-blocks/parity-bench/catalog';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +49,10 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
+let probe: typeof probeType;
+
+// No-op unless E2E_PARITY_DIR is set (see scripts/parity-bench/README.md).
+installParityRecorder('main');
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -134,8 +140,9 @@ test.before(async () => {
 
   // Import API after config is written
   const module = await import('aws-blocks');
-  api = module.api;
-  isolatedApi = module.isolatedApi;
+  api = recordClient(module.api, 'api');
+  isolatedApi = recordClient(module.isolatedApi, 'isolated');
+  probe = module.probe;
   
   await waitForServer();
   console.log('✅ Server ready\n');
@@ -362,6 +369,10 @@ test('Data types - serialization', { timeout: 10_000 }, async () => {
   assert.deepStrictEqual(await api.echoData([1, 2, 3]), [1, 2, 3]);
   assert.strictEqual(await api.echoData(null), null);
 });
+
+// Parity probes (no-op unless E2E_PARITY_PROBES=true). Last among the serial
+// suites so the rows they seed never overlap the DSQL tests' table reads.
+parityProbeTests(() => probe, PARITY_CASES);
 
 // Background suites started at the top of this file: one test per suite, each
 // failing with that suite's own exit status (its results are the prefixed

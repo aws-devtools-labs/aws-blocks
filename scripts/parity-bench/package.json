@@ -1,0 +1,44 @@
+{
+	"name": "@aws-blocks/parity-bench",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Local-vs-deployed behavioral parity bench for Building Blocks. Private workspace package — not published; consumed as TypeScript source by test apps.",
+	"exports": {
+		".": "./src/core/index.ts",
+		"./catalog": "./src/packs/catalog.ts",
+		"./packs": "./src/packs/index.ts",
+		"./kinds": "./src/kinds/index.ts",
+		"./server": "./src/server/index.ts",
+		"./cdk": "./src/server/cdk.ts",
+		"./client": "./src/client/index.ts"
+	},
+	"bin": {
+		"parity-report": "./src/cli/report.ts",
+		"parity-validate-catalog": "./src/cli/validate-catalog.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "tsx --test 'test/**/*.test.ts' && tsx src/cli/validate-catalog.ts",
+		"validate-catalog": "tsx src/cli/validate-catalog.ts",
+		"report": "tsx src/cli/report.ts"
+	},
+	"dependencies": {
+		"@aws-blocks/bb-app-setting": "*",
+		"@aws-blocks/bb-async-job": "*",
+		"@aws-blocks/bb-distributed-data": "*",
+		"@aws-blocks/bb-realtime": "*",
+		"@aws-blocks/bb-secret": "*",
+		"@aws-blocks/blocks": "*",
+		"@aws-blocks/core": "*",
+		"zod": "^4.6.7"
+	},
+	"peerDependencies": {
+		"constructs": "^10.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^20.19.43",
+		"tsx": "^4.23.15",
+		"typescript": "^5.9.3"
+	}
+}

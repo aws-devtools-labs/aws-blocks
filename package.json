@@ -64,6 +64,7 @@
     "test-apps/pipeline",
     "test-apps/db-pull-typecheck",
     "scripts/agent-bench",
+    "scripts/parity-bench",
     "test-apps/telemetry",
     "test-infra"
   ],

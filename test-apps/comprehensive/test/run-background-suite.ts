@@ -19,6 +19,7 @@ import { agentTests } from './agent.test.js';
 import { asyncJobTests } from './async-job.test.js';
 import { asyncJobStatusTests } from './async-job-status.test.js';
 import type { BackgroundSuiteName } from './background-suites.js';
+import { installParityRecorder, recordClient } from '@aws-blocks/parity-bench/client';
 
 const SUITES: Record<BackgroundSuiteName, (getApi: () => typeof apiType) => void> = {
   agent: agentTests,
@@ -33,11 +34,14 @@ if (!name || !Object.hasOwn(SUITES, name)) {
 
 let api: typeof apiType;
 
+// No-op unless E2E_PARITY_DIR is set (see scripts/parity-bench/README.md).
+installParityRecorder(`bg-${name}`);
+
 test.before(async () => {
   // Own cookie jar: this process starts signed out, whatever the parent's
   // suites do to theirs.
   installCookieJar();
-  api = (await import('aws-blocks')).api;
+  api = recordClient((await import('aws-blocks')).api, 'api');
 });
 
 test.after(async () => {
