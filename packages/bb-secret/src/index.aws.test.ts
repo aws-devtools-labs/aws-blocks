@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { describe, mock, test } from 'node:test';
 import { Scope } from '@aws-blocks/core';
 import { ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { z } from 'zod';
 import { Secret } from './index.aws.js';
 
 const TEST_ARN = 'arn:aws:secretsmanager:us-east-1:111122223333:secret:test-AbCdEf';
@@ -27,6 +28,33 @@ function stubSend(responder: (cmd: any) => unknown) {
 function getCalls(commands: any[]): any[] {
 	return commands.filter((c) => c.constructor.name === 'GetSecretValueCommand');
 }
+
+describe('AWS runtime string schemas', () => {
+	for (const value of ['hello', '123', 'null', '"quoted"']) {
+		test(`round-trips ${JSON.stringify(value)} as a JSON string`, async () => {
+			let stored: string | undefined;
+			const { restore } = stubSend((command) => {
+				if (command.constructor.name === 'PutSecretValueCommand') {
+					stored = command.input.SecretString;
+					assert.strictEqual(stored, JSON.stringify(value));
+					return {};
+				}
+				return { SecretString: stored };
+			});
+			try {
+				const secret = new Secret(new Scope('app'), 'validated-key', {
+					secret: Secret.fromExisting(TEST_ARN),
+					schema: z.string().min(1),
+					allowRuntimeWrite: true,
+				});
+				await secret.put(value);
+				assert.strictEqual(await secret.get(), value);
+			} finally {
+				restore();
+			}
+		});
+	}
+});
 
 describe('AWS runtime read cache', () => {
 	test('a repeated current read hits the cache — one GetSecretValue call', async () => {

@@ -241,4 +241,6 @@ For anything deeper than the current/previous pair (full history, custom staging
 
 The mock stores the current value as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/aws-blocks/settings` route surfaces secrets alongside settings. The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in a small `.bb-data/secret-versions.json` sidecar — current + previous only; deeper history is an AWS-only capability. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
 
+Schema-backed values are stored structurally in the mock, so a string schema preserves the literal string, including quotes or JSON-looking content. Legacy JSON strings are still decoded when the schema rejects the string itself (for example, when it expects an object). This applies to current and previous values and explicit version reads; no storage-format migration is needed.
+
 `Secret` runs server-side only. Importing and instantiating it in browser/client code throws `SecretErrors.NotSupported` — a secret read in the browser would expose it to the client.
