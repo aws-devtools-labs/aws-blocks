@@ -4193,6 +4193,30 @@ describe('createChat', () => {
 
 		stream.unsubscribe();
 	});
+
+	test('realtimeTransport calls the subscription unsubscribe on its own receiver after attach', async () => {
+		class Subscription {
+			detached = false;
+			established = Promise.resolve();
+			unsubscribe() {
+				this.detached = true;
+			}
+		}
+		const sub = new Subscription();
+		const transport = realtimeTransport({
+			subscribe: async () => sub,
+			sendMessage: async () => {},
+			resume: async () => {},
+		});
+
+		const stream = transport.subscribe('conv-1');
+		await stream.established;
+
+		assert.doesNotThrow(() => stream.unsubscribe(), 'unsubscribe must not lose the subscription receiver');
+		assert.strictEqual(sub.detached, true, 'the subscription instance must be detached');
+		const next = await stream[Symbol.asyncIterator]().next();
+		assert.strictEqual(next.done, true, 'the iterator must complete after unsubscribe');
+	});
 });
 
 describe('createChat loadConversation + metadata narrowing', () => {
