@@ -561,9 +561,39 @@ describe('the trim settings on their own', () => {
             return manifest;
           },
         }),
-      (err: Error) => err.name === 'EdgeRouteNeedsCloudFrontDoorError' && /only the CloudFront door invokes/.test(err.message),
+      (err: Error & { resolution?: string }) =>
+        err.name === 'EdgeRouteNeedsCloudFrontDoorError' &&
+        /only the CloudFront door invokes/.test(err.message) &&
+        /edgeRoutes: 'regional'/.test(err.resolution ?? ''),
     );
   });
+
+  for (const [label, frontDoor] of [
+    ['the ALB', { kind: 'alb' }],
+    ['the API Gateway REST API', { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: 'app.example.com', hostedZone: 'example.com' } } }],
+    ['the stacked door', { kind: 'stacked', edge: 'cloudfront', router: 'alb' }],
+  ] as const) {
+    it(`a Lambda@Edge route behind ${label} points at a door that serves it, not at edgeRoutes`, () => {
+      const fixture = ssrFixture(tmpDir, {});
+      assert.throws(
+        () =>
+          new Hosting(newStack(`EdgeHint${label.replace(/\W/g, '')}`), 'Hosting', {
+            root: tmpDir, buildOutputDir: 'dist', api: MOCK_API,
+            frontDoor: frontDoor as HostingProps['frontDoor'],
+            customAdapter: (dir) => {
+              const manifest = fixture(dir);
+              manifest.compute.edge1 = { ...manifest.compute.edge1, type: 'edge', placement: 'global' };
+              return manifest;
+            },
+          }),
+        (err: Error & { resolution?: string }) =>
+          err.name === 'EdgeRouteNeedsCloudFrontDoorError' &&
+          /CloudFront door/.test(err.resolution ?? '') &&
+          /API Gateway HTTP API door/.test(err.resolution ?? '') &&
+          !/edgeRoutes/.test(err.resolution ?? ''),
+      );
+    });
+  }
 
   it('a region with no Lambda Web Adapter layer tells the adapters so', () => {
     const seen: { profile?: BuildProfile } = {};

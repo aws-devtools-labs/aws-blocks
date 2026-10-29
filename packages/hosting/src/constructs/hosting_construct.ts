@@ -806,7 +806,12 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
-    assertEdgeRoutesReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertEdgeRoutesReachableByDoor(
+      manifest,
+      resolved.kind,
+      stackedRouter ? 'stacked' : resolved.kind,
+      typeof props.frontDoor === 'object' && props.frontDoor?.kind === 'apiGateway' && (props.frontDoor.api ?? 'http') === 'http',
+    );
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -2982,9 +2987,19 @@ const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string,
  * CloudFront distribution invokes Lambda@Edge, so the route would never reach
  * its function.
  *
+ * The resolution depends on the door: only the API Gateway HTTP API door can
+ * run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`),
+ * so behind any other door the fix is to change the door.
+ *
+ * @param httpApi whether the door is the API Gateway HTTP API door.
  * @throws HostingError('EdgeRouteNeedsCloudFrontDoorError') naming the computes and the door.
  */
-const assertEdgeRoutesReachableByDoor = (manifest: DeployManifest, kind: string, label: string = kind): void => {
+const assertEdgeRoutesReachableByDoor = (
+  manifest: DeployManifest,
+  kind: string,
+  label: string = kind,
+  httpApi = false,
+): void => {
   if (kind === 'cloudfront') return;
   const edge = Object.entries(manifest.compute)
     .filter(([, resource]) => resource.type === 'edge')
@@ -2994,9 +3009,11 @@ const assertEdgeRoutesReachableByDoor = (manifest: DeployManifest, kind: string,
     message:
       `The app has Lambda@Edge computes (${edge.join(', ')}), which only the CloudFront door invokes; the '${label}' ` +
       'front door would deploy them with no route reaching them.',
-    resolution:
-      "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind the API Gateway " +
-      'HTTP API door), or use the CloudFront door.',
+    resolution: httpApi
+      ? "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind this door), " +
+        'or use the CloudFront door.'
+      : "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or the API Gateway HTTP API door " +
+        "(`frontDoor: { kind: 'apiGateway' }`), which runs them as regional functions.",
   });
 };
 
