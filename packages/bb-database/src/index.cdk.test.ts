@@ -193,6 +193,27 @@ describe('Database (CDK)', () => {
 		}
 	});
 
+	test('a migration DSQL cannot run fails synth, naming the file and the dsql-lint rule', () => {
+		const dir = join(tmpdir(), `bb-database-cdk-lint-${process.pid}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, '001_init.sql'),
+			'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);',
+		);
+		try {
+			const { parent } = setup();
+			assert.throws(
+				() => new Database(parent, 'db', { migrationsPath: dir }),
+				(e: Error) =>
+					e.name === 'DsqlMigrationValidationError' &&
+					/001_init\.sql: serial_type: /.test(e.message) &&
+					/001_init\.sql: index_async: /.test(e.message),
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test('runtime methods are synth-guarded', () => {
 		const { parent } = setup();
 		const db = new Database(parent, 'db');

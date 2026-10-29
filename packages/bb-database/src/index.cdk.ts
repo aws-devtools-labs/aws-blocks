@@ -16,7 +16,8 @@ import { resolveCluster } from './cluster-ref.js';
 import { DEFAULT_CLUSTER_ID } from './constants.js';
 import { configError } from './errors.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
-import { resolveMigrationsPath } from './migrations/runner.js';
+import { buildMigrationPlan } from './migrations/plan.js';
+import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
 import { registerSchema, registerUniqueId } from './registry.js';
 import type {
 	ClusterRef,
@@ -89,6 +90,9 @@ export class Database extends BuildingBlockScope {
 		registerSchema(clusterFullId, this.schemaName, this.fullId);
 		const projectRoot = projectRootOf(this);
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId, projectRoot);
+		// Check the files with dsql-lint here, before any deploy: the migration
+		// Lambda runs them without the linter, which is not deployed with it.
+		if (this.migrationsPath) buildMigrationPlan(loadMigrationFiles(this.migrationsPath));
 
 		if (resolved.owned) {
 			const owned = options as OwnedDatabaseOptions;
