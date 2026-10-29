@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { stubComputeFactory } from './__fixtures__/stub-lambda-compute.js';
@@ -102,6 +103,31 @@ describe('defaults.app — tags', () => {
 		for (const [logicalId, layer] of layers) {
 			assert.strictEqual(layer.Properties?.LayerName, `appa-${logicalId}`);
 		}
+	});
+
+	test("set: CloudFront Functions and KeyValueStores CDK named are renamed <id>-<region>-…; a name the app chose is kept", async () => {
+		const app = new cdk.App({ context: QUALIFIER });
+		const stack = await makeStack(app, 'appa', { ...appDefaults(), app: { id: 'appa' } });
+		const code = cloudfront.FunctionCode.fromInline('function handler(event) { return event.request; }');
+		new cloudfront.Function(stack, 'Router', { code, runtime: cloudfront.FunctionRuntime.JS_2_0 });
+		new cloudfront.Function(stack, 'VeryLongRouterFunctionNameThatOverflowsTheShortFormOfCdkGeneratedNames', {
+			code,
+			runtime: cloudfront.FunctionRuntime.JS_2_0,
+		});
+		new cloudfront.Function(stack, 'Chosen', { code, functionName: 'my-own-function' });
+		new cloudfront.KeyValueStore(stack, 'Store');
+		const names = Object.values(Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string; Properties: { Name: unknown } }>)
+			.filter((r) => /^AWS::CloudFront::(Function|KeyValueStore)$/.test(r.Type))
+			.map((r) => stack.resolve(r.Properties.Name));
+		const generated = names.filter((n) => n !== 'my-own-function');
+		assert.strictEqual(generated.length, 3, JSON.stringify(names));
+		for (const name of generated) {
+			// The stack is env-agnostic: the region is CloudFormation's pseudo parameter.
+			const text = JSON.stringify(name);
+			assert.match(text, /"appa-"/, text);
+			assert.match(text, /AWS::Region/, text);
+		}
+		assert.ok(names.includes('my-own-function'), 'an explicit name is kept');
 	});
 
 	test('unset: layers keep their CloudFormation-generated names', async () => {
