@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { contextFetch } from './fetch-store.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
 
 const IS_SSR = typeof window === 'undefined';
@@ -336,9 +337,12 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
 ): AsyncAPI<T> {
   const urlOverride = options?.url;
   // Look `fetch` up at call time (not when the client is built), as the retrying path does,
-  // so a `fetch` installed later (a polyfill, a test spy) is the one used.
+  // so a `fetch` installed later (a polyfill, a test spy) is the one used. A test client's
+  // call brings its own (see ./fetch-store.ts).
   const send: (url: string, init: RequestInit) => Promise<Response> =
-    options?.retryStaleConnection === false ? (url, init) => fetch(url, init) : fetchWithStaleConnectionRetry;
+    options?.retryStaleConnection === false
+      ? (url, init) => (contextFetch() ?? fetch)(url, init)
+      : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
   // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
   // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
   const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;

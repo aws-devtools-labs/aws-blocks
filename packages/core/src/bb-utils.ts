@@ -16,3 +16,6 @@ export { isLoopbackHost, isWildcardHost, isIpLiteral } from './common/loopback.j
 // Defined in the config module (it owns the config-key contract), re-exported
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';
+// Internal: the per-call fetch store the generated client reads and
+// `@aws-blocks/blocks/utils`'s createTestClient sets (see client/fetch-store.ts).
+export { CLIENT_FETCH_STORE } from './client/fetch-store.js';

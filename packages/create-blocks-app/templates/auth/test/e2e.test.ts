@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -12,23 +12,24 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let hello: typeof helloType;
 let authApi: typeof authApiType;
 const serverPort = 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-// The sign-in tests below read each emailed code through `getLastCode()`, which
-// only works against the local mock runtime: against a running sandbox the
-// server on :3000 proxies to the deployed Lambda, where `getLastCode()` returns
-// null (Cognito emails the code) and each run would create a real user. The
-// readiness config.json says which one we hit.
+// The sign-in tests below read each emailed code with `getLastAuthCode()`, which
+// reads the local mock pool's files (.bb-data/): against a running sandbox the
+// server on :3000 proxies to the deployed Lambda, where Cognito emails the code
+// and each run would create a real user. The readiness config.json says which
+// one we hit.
 let isLocalMock = false;
 
 /** Skips [t] unless the server is the local mock; true when skipped. */
 function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
   if (isLocalMock) return false;
-  t.skip('needs the local mock: getLastCode() is null against a deployed backend');
+  t.skip('needs the local mock: Cognito emails the code on a deployed backend');
   return true;
 }
 
@@ -45,10 +46,10 @@ test.before(async () => {
     await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  hello = mod.hello;
-  authApi = mod.authApi;
+  app = await import('aws-blocks');
+  api = app.api;
+  hello = app.hello;
+  authApi = app.authApi;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 60; i++) {
@@ -104,12 +105,17 @@ test('KV Store - rejects signed-out callers', async () => {
 const email = `e2e-${Date.now().toString(36)}@example.com`;
 const password = 'TestPass123!';
 
-/** The last code `codeDelivery` received (local dev only — see `getLastCode`). */
-async function lastCodeFor(name: string): Promise<string> {
-  const last = await api.getLastCode();
-  assert.ok(last, 'expected a verification code (local dev)');
-  assert.strictEqual(last.username, name);
-  return last.code;
+/**
+ * A new user with a session of their own: `createTestClient` gives them the
+ * app's clients with their own cookie jar, so a test can hold several users at
+ * once. `getLastAuthCode` reads the code the local pool "emailed" them.
+ */
+async function newUser(name: string) {
+  const user = createTestClient(app);
+  await user.authApi.setAuthState({ action: 'signUp', username: name, password });
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username: name, code: await getLastAuthCode(name) });
+  assert.strictEqual((await user.authApi.setAuthState({ action: 'autoSignIn', username: name })).state, 'signedIn');
+  return user;
 }
 
 test('auth: protected and role-gated methods reject a signed-out caller', async () => {
@@ -122,7 +128,7 @@ test('auth: sign up with the emailed code signs the user in', async (t) => {
   const signUp = await authApi.setAuthState({ action: 'signUp', username: email, password });
   assert.strictEqual(signUp.state, 'confirmingSignUp');
 
-  const confirmed = await authApi.setAuthState({ action: 'confirmSignUp', username: email, code: await lastCodeFor(email) });
+  const confirmed = await authApi.setAuthState({ action: 'confirmSignUp', username: email, code: await getLastAuthCode(email) });
   // The <Authenticator> submits this step on its own; no second password entry.
   assert.ok(confirmed.actions.some((a) => a.name === 'autoSignIn'));
   const state = await authApi.setAuthState({ action: 'autoSignIn', username: email });
@@ -170,31 +176,25 @@ test('todos: another user can neither see nor change them', async (t) => {
   if (skipUnlessLocal(t)) return;
   const mine = await api.createTodo('Private to the first user', 1);
 
-  // Sign in as a second, brand-new user.
-  await authApi.setAuthState({ action: 'signOut' });
-  const other = `b-${email}`;
-  await authApi.setAuthState({ action: 'signUp', username: other, password });
-  await authApi.setAuthState({ action: 'confirmSignUp', username: other, code: await lastCodeFor(other) });
-  assert.strictEqual((await authApi.setAuthState({ action: 'autoSignIn', username: other })).state, 'signedIn');
+  // A second, brand-new user, signed in at the same time as the first.
+  const other = await newUser(`b-${email}`);
 
-  const bobsTodo = await api.createTodo('Second user', 2);
+  const bobsTodo = await other.api.createTodo('Second user', 2);
   for (const sortBy of [undefined, 'priority', 'title', 'createdAt'] as const) {
-    const theirs = await api.listTodos(sortBy);
+    const theirs = await other.api.listTodos(sortBy);
     assert.ok(!theirs.some((t) => t.todoId === mine.todoId), `listTodos(${sortBy ?? ''}) leaked the first user's todo`);
   }
-  await assert.rejects(() => api.updateTodo(mine.todoId, { title: 'not yours' }), /not found/i);
-  await api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
+  await assert.rejects(() => other.api.updateTodo(mine.todoId, { title: 'not yours' }), /not found/i);
+  await other.api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
 
   // Extra properties reach the server untouched, so updateTodo must not copy
   // key fields from `updates` onto the stored todo.
   const withKeyFields = { title: 'still mine', userSub: mine.userSub, todoId: mine.todoId };
-  await api.updateTodo(bobsTodo.todoId, withKeyFields);
-  const theirs = await api.listTodos();
+  await other.api.updateTodo(bobsTodo.todoId, withKeyFields);
+  const theirs = await other.api.listTodos();
   assert.deepStrictEqual(theirs.map((t) => [t.todoId, t.title]), [[bobsTodo.todoId, 'still mine']]);
 
-  // Back as the first user: the todo is still there, unchanged.
-  await authApi.setAuthState({ action: 'signOut' });
-  assert.strictEqual((await authApi.setAuthState({ action: 'signIn', username: email, password })).state, 'signedIn');
+  // The first user, still signed in: the todo is still there, unchanged.
   const after = await api.listTodos();
   assert.deepStrictEqual(after.map((t) => [t.todoId, t.title]), [[mine.todoId, 'Private to the first user']]);
   await api.deleteTodo(mine.todoId);
@@ -202,18 +202,11 @@ test('todos: another user can neither see nor change them', async (t) => {
 
 test('KV Store - set and get (signed in, keys isolated per user)', async (t) => {
   if (skipUnlessLocal(t)) return;
-  const signUpAndIn = async (username: string) => {
-    await authApi.setAuthState({ action: 'signOut' });
-    await authApi.setAuthState({ action: 'signUp', username, password });
-    await authApi.setAuthState({ action: 'confirmSignUp', username, code: await lastCodeFor(username) });
-    assert.strictEqual((await authApi.setAuthState({ action: 'autoSignIn', username })).state, 'signedIn');
-  };
-  await signUpAndIn(`kv-a-${Date.now().toString(36)}@example.com`);
-  assert.strictEqual((await api.setValue('test-key', 'test-value')).success, true);
-  assert.strictEqual(await api.getValue('test-key'), 'test-value');
+  const a = await newUser(`kv-a-${Date.now().toString(36)}@example.com`);
+  const b = await newUser(`kv-b-${Date.now().toString(36)}@example.com`);
+  assert.strictEqual((await a.api.setValue('test-key', 'test-value')).success, true);
+  assert.strictEqual(await a.api.getValue('test-key'), 'test-value');
 
   // A different user sees their own namespace, not the first user's value.
-  await signUpAndIn(`kv-b-${Date.now().toString(36)}@example.com`);
-  assert.strictEqual(await api.getValue('test-key'), null);
-  await authApi.setAuthState({ action: 'signOut' });
+  assert.strictEqual(await b.api.getValue('test-key'), null);
 });

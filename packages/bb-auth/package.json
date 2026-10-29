@@ -51,6 +51,10 @@
     "./browser-client": {
       "types": "./dist/browser-client.d.ts",
       "default": "./dist/browser-client.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {

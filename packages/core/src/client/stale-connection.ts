@@ -44,7 +44,8 @@ export function isStaleConnectionError(err: unknown): boolean {
 }
 
 /**
- * `fetch(url, init)`, resent **once** if it fails with {@link isStaleConnectionError}.
+ * `fetch(url, init)`, resent **once** if it fails with {@link isStaleConnectionError}. `send`
+ * replaces the global `fetch` (a test client's, see `ApiNamespaceClient`).
  *
  * Only the `fetch()` call itself is retried, and `fetch()` resolves as soon as the response
  * headers arrive, so a failure after the headers arrived (while reading the body) is never
@@ -63,11 +64,16 @@ export function isStaleConnectionError(err: unknown): boolean {
  * at-least-once; behind API Gateway a failed backend gets a `5xx` response instead, which
  * is never retried.
  */
-export async function fetchWithStaleConnectionRetry(url: string, init: RequestInit): Promise<Response> {
+export async function fetchWithStaleConnectionRetry(
+	url: string,
+	init: RequestInit,
+	// Default: the global `fetch`, looked up at call time.
+	send: typeof fetch = fetch,
+): Promise<Response> {
 	try {
-		return await fetch(url, init);
+		return await send(url, init);
 	} catch (err) {
 		if (!isStaleConnectionError(err)) throw err;
-		return fetch(url, init);
+		return send(url, init);
 	}
 }

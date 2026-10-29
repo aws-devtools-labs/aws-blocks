@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/blocks/client';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -13,24 +12,16 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 let hello: typeof helloType;
 const serverPort = 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-/**
- * The verification code the local auth block just issued for `name`. Locally no
- * email is sent: every code is written to `.bb-data/<scope id>-<auth id>/last-code.json`
- * (here `my-app` + `auth`). On AWS, Cognito emails it instead.
- */
-async function lastCode(name: string): Promise<string> {
-  const last: { username: string; code: string } = JSON.parse(
-    await readFile('.bb-data/my-app-auth/last-code.json', 'utf-8'),
-  );
-  assert.strictEqual(last.username, name, 'expected a code for this user');
-  return last.code;
-}
+// Locally no email is sent: `getLastAuthCode(name)` reads the verification code
+// the local auth block just issued for `name` (it finds the block's .bb-data/
+// files itself). On AWS, Cognito emails it instead.
 
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
@@ -45,10 +36,10 @@ test.before(async () => {
     await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
-  hello = mod.hello;
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
+  hello = app.hello;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 60; i++) {
@@ -165,7 +156,7 @@ test('auth: sign up with the emailed code, then call a protected method', async 
 
   const signUp = await authApi.setAuthState({ action: 'signUp', username, password });
   assert.strictEqual(signUp.state, 'confirmingSignUp');
-  await authApi.setAuthState({ action: 'confirmSignUp', username, code: await lastCode(username) });
+  await authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
   const state = await authApi.setAuthState({ action: 'autoSignIn', username });
   assert.strictEqual(state.state, 'signedIn');
 
@@ -174,43 +165,48 @@ test('auth: sign up with the emailed code, then call a protected method', async 
   await api.deleteTodo(todo.todoId);
 });
 
-/** Sign out whoever is signed in, then sign up `username` and sign them in. */
-async function signUpAs(username: string, password: string) {
-  await authApi.setAuthState({ action: 'signOut' });
-  await authApi.setAuthState({ action: 'signUp', username, password });
-  await authApi.setAuthState({ action: 'confirmSignUp', username, code: await lastCode(username) });
-  const state = await authApi.setAuthState({ action: 'autoSignIn', username });
+/**
+ * Sign out whoever is signed in, then sign up `username` and sign them in.
+ * `user` defaults to this file's clients (the cookie jar `installCookieJar`
+ * installs); pass `createTestClient(app)` for another user with a session of
+ * their own, signed in at the same time.
+ */
+async function signUpAs(username: string, password: string, user = { authApi }) {
+  await user.authApi.setAuthState({ action: 'signOut' });
+  await user.authApi.setAuthState({ action: 'signUp', username, password });
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  const state = await user.authApi.setAuthState({ action: 'autoSignIn', username });
   assert.strictEqual(state.state, 'signedIn');
 }
 
 // Todos are private: each method reads and writes only the caller's own.
 test('todos: another user can neither see nor change them', async () => {
   const password = 'TestPass123!';
-  const alice = `demo-a-${Date.now().toString(36)}@example.com`;
-  await signUpAs(alice, password);
-  const mine = await api.createTodo('Private to alice', 1);
+  // Alice and Bob signed in at once, each with a cookie jar of their own.
+  const alice = createTestClient(app);
+  const bob = createTestClient(app);
+  await signUpAs(`demo-a-${Date.now().toString(36)}@example.com`, password, alice);
+  await signUpAs(`demo-b-${Date.now().toString(36)}@example.com`, password, bob);
+  const mine = await alice.api.createTodo('Private to alice', 1);
 
-  await signUpAs(`demo-b-${Date.now().toString(36)}@example.com`, password);
-  const bobsTodo = await api.createTodo('Bob', 2);
+  const bobsTodo = await bob.api.createTodo('Bob', 2);
   for (const sortBy of [undefined, 'priority', 'title', 'createdAt'] as const) {
-    const theirs = await api.listTodos(sortBy);
+    const theirs = await bob.api.listTodos(sortBy);
     assert.ok(!theirs.some((t) => t.todoId === mine.todoId), `listTodos(${sortBy ?? ''}) leaked alice's todo`);
   }
-  await assert.rejects(() => api.updateTodo(mine.todoId, { title: 'not yours' }), /not found/i);
-  await api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
+  await assert.rejects(() => bob.api.updateTodo(mine.todoId, { title: 'not yours' }), /not found/i);
+  await bob.api.deleteTodo(mine.todoId); // a no-op outside the caller's own todos
 
   // Extra properties reach the server untouched, so updateTodo must not copy
   // key fields from `updates` onto the stored todo.
   const withKeyFields = { title: 'still bob', userSub: mine.userSub, todoId: mine.todoId };
-  await api.updateTodo(bobsTodo.todoId, withKeyFields);
-  const bobs = await api.listTodos();
+  await bob.api.updateTodo(bobsTodo.todoId, withKeyFields);
+  const bobs = await bob.api.listTodos();
   assert.deepStrictEqual(bobs.map((t) => [t.todoId, t.title]), [[bobsTodo.todoId, 'still bob']]);
 
-  await authApi.setAuthState({ action: 'signOut' });
-  assert.strictEqual((await authApi.setAuthState({ action: 'signIn', username: alice, password })).state, 'signedIn');
-  const after = await api.listTodos();
+  const after = await alice.api.listTodos();
   assert.deepStrictEqual(after.map((t) => [t.todoId, t.title]), [[mine.todoId, 'Private to alice']]);
-  await api.deleteTodo(mine.todoId);
+  await alice.api.deleteTodo(mine.todoId);
 });
 
 // ─── FileBucket ─────────────────────────────────────────────────────────────
