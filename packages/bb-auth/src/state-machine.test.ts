@@ -19,8 +19,10 @@ import {
 	confirmingPasswordReset,
 	confirmingSignIn,
 	confirmingSignUp,
+	managingMfa,
 	managingPasskeys,
 	registeringPasskey,
+	settingUpTotp,
 	signedIn,
 	signedOut,
 } from './state-machine.js';
@@ -351,10 +353,12 @@ describe('public names: data-testid contract and log redaction', () => {
 		signedIn(user, { passkeys: true }),
 		registeringPasskey(user, '{"challenge":"c"}'),
 		managingPasskeys(user, [{ credentialId: 'cred-123456789', friendlyName: 'Laptop' }]),
+		settingUpTotp(user, 'TOTPSECRETTOTP', 'otpauth://totp/App:u?secret=TOTPSECRETTOTP&issuer=App'),
+		managingMfa(user, { types: ['SMS', 'TOTP', 'EMAIL'], enabled: ['SMS', 'TOTP', 'EMAIL'], preferred: 'TOTP' }),
 		confirmingPasswordReset('u'),
 	];
 
-	test('action and field names are exactly AuthCognito’s (no rename)', () => {
+	test('action and field names are exactly AuthCognito’s (no rename), plus the MFA enrolment ones', () => {
 		const actions = new Set(allStates.flatMap((s) => s.actions.map((a) => a.name)));
 		const fields = new Set(allStates.flatMap((s) => s.actions.flatMap((a) => a.fields.map((f) => f.name))));
 		assert.deepStrictEqual([...actions].sort(), [
@@ -364,14 +368,18 @@ describe('public names: data-testid contract and log redaction', () => {
 			'confirmSignIn',
 			'confirmSignUp',
 			'deletePasskey',
+			'getMfaPreference',
 			'listPasskeys',
 			'resendSignUpCode',
 			'resetPassword',
+			'setUpTotp',
 			'signIn',
 			'signInWithPasskey',
 			'signOut',
 			'signUp',
 			'startPasskeyRegistration',
+			'updateMfaPreference',
+			'verifyTotpSetup',
 		]);
 		assert.deepStrictEqual([...fields].sort(), [
 			'challenge',
@@ -384,22 +392,48 @@ describe('public names: data-testid contract and log redaction', () => {
 			'firstFactor',
 			'mfaType',
 			'newPassword',
+			'otpauthUri',
 			'password',
 			'phone_number',
 			'session',
 			'sharedSecret',
+			'sms',
+			'totp',
 			'username',
+		]);
+	});
+
+	test('MFA settings: one form per change the user can make', () => {
+		const names = (s: AuthState) =>
+			s.actions.map((a) => [a.name, a.label, ...a.fields.map((f) => `${f.name}=${f.defaultValue}`)].join(' '));
+		assert.deepStrictEqual(names(managingMfa(user, { types: ['TOTP'], enabled: [] })), [
+			'setUpTotp Set up authenticator app',
+			'signOut Sign Out',
+		]);
+		assert.deepStrictEqual(names(managingMfa(user, { types: ['TOTP', 'SMS'], enabled: ['TOTP', 'SMS'], preferred: 'SMS' })), [
+			'setUpTotp Replace authenticator app',
+			'updateMfaPreference Use authenticator app by default totp=PREFERRED',
+			'updateMfaPreference Turn off authenticator app totp=DISABLED',
+			'updateMfaPreference Turn off SMS codes sms=DISABLED',
+			'signOut Sign Out',
+		]);
+		// No TOTP in mfa.types: no authenticator setup.
+		assert.deepStrictEqual(names(managingMfa(user, { types: ['EMAIL'], enabled: ['EMAIL'] })), [
+			'updateMfaPreference Use email codes by default email=PREFERRED',
+			'updateMfaPreference Turn off email codes email=DISABLED',
+			'signOut Sign Out',
 		]);
 	});
 
 	test('core/src/redact.ts masks every secret-bearing field this state machine emits', async () => {
 		const redactUrl = new URL('./redact.js', import.meta.resolve('@aws-blocks/core'));
 		const { redactForLogging }: { redactForLogging: (v: unknown) => unknown } = await import(redactUrl.href);
-		const secretFields = ['password', 'newPassword', 'session', 'sharedSecret', 'credential', 'code'];
+		const secretFields = ['password', 'newPassword', 'session', 'sharedSecret', 'otpauthUri', 'credential', 'code'];
 		const states = allStates.map((s) => JSON.stringify(redactForLogging(s)));
 		const joined = states.join('\n');
 		assert.ok(!joined.includes('"defaultValue":"S"'), 'challenge session redacted');
 		assert.ok(!joined.includes('SECRETSECRET'), 'TOTP shared secret redacted');
+		assert.ok(!joined.includes('TOTPSECRETTOTP'), 'TOTP enrolment secret and otpauth URI redacted');
 		for (const field of secretFields) {
 			const payload = JSON.stringify(redactForLogging({ action: 'x', [field]: 'TOPSECRET' }));
 			assert.ok(!payload.includes('TOPSECRET'), `setAuthState payload field '${field}' redacted`);

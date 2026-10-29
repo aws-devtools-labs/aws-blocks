@@ -45,7 +45,31 @@ export type * from './types.js';
  */
 function isMockOptions(options: AuthOptions): options is AuthMockOptions {
 	const codeDelivery: unknown = Reflect.get(options, 'codeDelivery');
-	return codeDelivery === undefined || typeof codeDelivery === 'function';
+	const totpVerification: unknown = Reflect.get(options, 'totpVerification');
+	return (
+		(codeDelivery === undefined || typeof codeDelivery === 'function') &&
+		(totpVerification === undefined || TOTP_VERIFICATION.some((v) => v === totpVerification))
+	);
+}
+
+/** The values of {@link AuthMockOptions.totpVerification}. */
+const TOTP_VERIFICATION = ['any', 'rfc6238'] as const;
+
+/**
+ * `totpVerification`, checked at construction (the backend module is plain
+ * JavaScript once compiled): a typo must not silently keep accepting any code.
+ */
+function totpVerificationOf(options: AuthOptions): AuthMockOptions['totpVerification'] {
+	const value: unknown = Reflect.get(options, 'totpVerification');
+	if (value === undefined) return undefined;
+	const known = TOTP_VERIFICATION.find((v) => v === value);
+	if (!known) {
+		throw new Error(
+			`Auth: totpVerification must be 'any' or 'rfc6238', got ${JSON.stringify(value)}. ` +
+				`'rfc6238' makes the local user pool check TOTP codes the way Cognito does.`,
+		);
+	}
+	return known;
 }
 
 /**
@@ -63,8 +87,12 @@ const MOCK_LAYER: AuthLayer = {
 		};
 	},
 	native: (host) => {
+		const totpVerification = totpVerificationOf(host.options);
 		const codeDelivery = isMockOptions(host.options) ? host.options.codeDelivery : undefined;
-		return new MockNativeEngine(host, codeDelivery ? { codeDelivery } : {});
+		return new MockNativeEngine(host, {
+			...(codeDelivery ? { codeDelivery } : {}),
+			...(totpVerification ? { totpVerification } : {}),
+		});
 	},
 	// `allowBearerAuth`: the local pool's own (unsigned) access tokens, only
 	// while the pool still recognises them. Mock-only by construction — the AWS
@@ -127,6 +155,8 @@ const MOCK_LAYER: AuthLayer = {
  * Locally, `Auth` runs a complete user pool with no AWS account. Every
  * verification code is written to `.bb-data/<fullId>/last-code.json` and
  * passed to the mock-only `codeDelivery` hook ({@link AuthMockOptions}).
+ * Authenticator-app (TOTP) codes are checked as Cognito checks them only with
+ * the mock-only `totpVerification: 'rfc6238'`; by default any six digits pass.
  *
  * @typeParam O - The options literal, captured with `const` so inline options
  * narrow the method surface without `as const`.

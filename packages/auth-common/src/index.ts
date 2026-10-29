@@ -8,7 +8,7 @@ import type { BlocksContext } from '@aws-blocks/core';
 // (which pulls in DOM-dependent UI helpers). The discriminated payload
 // map is re-exported alongside so customers calling `setAuthState`
 // directly get the typed overload.
-export type { AuthActionPayloadMap, AuthActionInput, AuthStateApi, AuthUserOf } from './ui.js';
+export type { AuthActionPayloadMap, AuthActionInput, AuthMfaSetting, AuthStateApi, AuthUserOf } from './ui.js';
 
 // Canonical auth error vocabulary + guards. See `errors.ts`.
 export { AuthErrors, isAuthError, isAuthErrorName } from './errors.js';

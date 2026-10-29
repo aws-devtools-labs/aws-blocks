@@ -81,6 +81,7 @@ export interface AuthActionPayloadMap {
     deletePasskey: {
         credentialId: string;
     };
+    getMfaPreference: {};
     listPasskeys: {};
     // (undocumented)
     resendSignUpCode: {
@@ -90,6 +91,7 @@ export interface AuthActionPayloadMap {
     resetPassword: {
         username: string;
     };
+    setUpTotp: {};
     // (undocumented)
     signIn: {
         username: string;
@@ -106,6 +108,14 @@ export interface AuthActionPayloadMap {
         password: string;
     } & Record<string, string>;
     startPasskeyRegistration: {};
+    updateMfaPreference: {
+        sms?: AuthMfaSetting;
+        totp?: AuthMfaSetting;
+        email?: AuthMfaSetting;
+    };
+    verifyTotpSetup: {
+        code: string;
+    };
 }
 
 // @public
@@ -165,6 +175,9 @@ export interface AuthField {
     required: boolean;
     type: 'text' | 'password' | 'email' | 'tel' | 'number' | 'hidden';
 }
+
+// @public
+export type AuthMfaSetting = 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
 
 // @public
 export interface AuthState<U extends AuthUser = AuthUser> {

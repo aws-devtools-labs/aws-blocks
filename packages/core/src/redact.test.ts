@@ -118,6 +118,28 @@ describe('redactForLogging', () => {
     assert.ok(json.includes('Set Up Authenticator'));
   });
 
+  it('redacts the otpauth:// setup URI (it embeds the TOTP secret), as a key and as a form field', () => {
+    const uri = 'otpauth://totp/Acme:alice?secret=JBSWY3DPEHPK3PXP&issuer=Acme';
+    const authState = {
+      state: 'signedIn',
+      actions: [{
+        name: 'verifyTotpSetup',
+        label: 'Verify',
+        fields: [
+          { name: 'sharedSecret', label: 'Setup Key', type: 'hidden', required: true, defaultValue: 'JBSWY3DPEHPK3PXP' },
+          { name: 'otpauthUri', label: 'Setup URI', type: 'hidden', required: true, defaultValue: uri },
+          { name: 'code', label: 'Code', type: 'text', required: true },
+        ],
+      }],
+    };
+    const json = JSON.stringify(redactForLogging(authState));
+    assert.ok(!json.includes('JBSWY3DPEHPK3PXP'), 'the secret must not leak through the URI field');
+    assert.ok(json.includes('verifyTotpSetup'));
+    const payload = redactForLogging({ action: 'verifyTotpSetup', otpauthUri: uri, code: '123456' }) as Record<string, unknown>;
+    assert.equal(payload.otpauthUri, REDACTED);
+    assert.equal(payload.code, REDACTED);
+  });
+
   it('leaves defaultValue untouched for a non-sensitive field (e.g. echoed username)', () => {
     const out = redactForLogging({
       name: 'username',

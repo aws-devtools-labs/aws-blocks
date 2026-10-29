@@ -45,6 +45,9 @@ const SENSITIVE_KEY_PARTS: readonly string[] = [
   'credential',
   'apikey',
   'authorization',
+  // An `otpauth://` URI (`otpauthUri`, the TOTP setup QR code's content) embeds
+  // the shared secret.
+  'otpauth',
 ];
 
 /**

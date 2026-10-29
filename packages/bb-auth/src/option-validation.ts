@@ -285,6 +285,7 @@ const EMAIL_PASSWORD = {
 const MFA = {
 	mode: 'value',
 	types: 'value',
+	totpIssuer: 'value',
 } as const satisfies ShapeOf<MfaOptions>;
 
 const PASSKEYS = {
@@ -358,8 +359,8 @@ const EMAIL_SENDER = {
 } as const satisfies ShapeOf<EmailSenderOptions>;
 
 /**
- * Every option `Auth` accepts, at every nesting level. `codeDelivery` is
- * mock-only ({@link AuthMockOptions}) but known to every entry: the backend
+ * Every option `Auth` accepts, at every nesting level. `codeDelivery` and
+ * `totpVerification` are mock-only ({@link AuthMockOptions}) but known to every entry: the backend
  * module type-checks against the mock's types and runs unchanged under the AWS
  * and CDK entries, which ignore it.
  *
@@ -392,6 +393,7 @@ export const AUTH_OPTIONS_SHAPE = {
 	email: { object: EMAIL_SENDER },
 	logger: 'value',
 	codeDelivery: 'value',
+	totpVerification: 'value',
 } as const satisfies ShapeOf<AuthMockOptions>;
 
 // ─────────────────────────────────────────────────────────────────────────────

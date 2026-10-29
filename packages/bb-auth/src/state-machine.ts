@@ -27,7 +27,7 @@
  */
 
 import type { AuthAction, AuthField, AuthState, AuthUser } from '@aws-blocks/auth-common';
-import type { PasskeyDescription, SignInNextStep } from './types.js';
+import type { MfaFactor, PasskeyDescription, SignInNextStep } from './types.js';
 
 /** A federated provider as the signed-out state shows it. */
 export interface ProviderAction {
@@ -538,6 +538,86 @@ export function managingPasskeys<U extends AuthUser>(
 	actions.push({ name: 'startPasskeyRegistration', label: 'Add a passkey to this device', fields: [] });
 	actions.push({ name: 'signOut', label: 'Sign Out', fields: [] });
 	return { state: 'signedIn', user, actions, ...(error ? { error } : {}) };
+}
+
+/**
+ * Mid authenticator-app (TOTP) enrolment, after `setUpTotp`: one
+ * `verifyTotpSetup` form carrying the shared secret and the `otpauth://` URI
+ * (the QR code's content) as hidden fields, plus the `code` input; and
+ * `getMfaPreference` to cancel back to the settings. Both hidden fields hold
+ * the secret: `core/src/redact.ts` masks them by name in logs.
+ */
+export function settingUpTotp<U extends AuthUser>(
+	user: U,
+	sharedSecret: string,
+	otpauthUri: string,
+	error?: string,
+): AuthState<U> {
+	return {
+		state: 'signedIn',
+		user,
+		actions: [
+			{
+				name: 'verifyTotpSetup',
+				label: 'Verify',
+				fields: [
+					{ name: 'sharedSecret', label: 'Setup Key', type: 'hidden', required: true, defaultValue: sharedSecret },
+					{ name: 'otpauthUri', label: 'Setup URI', type: 'hidden', required: true, defaultValue: otpauthUri },
+					{ name: 'code', label: 'Code from Authenticator', type: 'text', required: true },
+				],
+			},
+			{ name: 'getMfaPreference', label: 'Cancel', fields: [] },
+		],
+		...(error ? { error } : {}),
+	};
+}
+
+/** Inputs for {@link managingMfa}. */
+export interface ManagingMfaInput {
+	/** The factors `mfa.types` configures, in declaration order. */
+	types: readonly MfaFactor[];
+	/** The user's enabled factors (configured ones only). */
+	enabled: readonly MfaFactor[];
+	/** The user's preferred factor, if any (`'NOMFA'` when they turned MFA off). */
+	preferred?: MfaFactor | 'NOMFA';
+}
+
+/** How the settings name a factor in a button label. */
+const FACTOR_LABEL: Record<MfaFactor, string> = { TOTP: 'authenticator app', SMS: 'SMS codes', EMAIL: 'email codes' };
+
+/**
+ * The signed-in user's MFA settings, after `getMfaPreference`,
+ * `verifyTotpSetup` or `updateMfaPreference`: `setUpTotp` ("Set up" /
+ * "Replace authenticator app") when TOTP is configured; for each enabled
+ * factor, an `updateMfaPreference` form that makes it the default (unless it
+ * is) and one that turns it off, each carrying its setting as a hidden field
+ * named after the factor (`totp`, `sms`, `email`); then `signOut`.
+ */
+export function managingMfa<U extends AuthUser>(user: U, input: ManagingMfaInput): AuthState<U> {
+	const actions: AuthAction[] = [];
+	if (input.types.includes('TOTP')) {
+		actions.push({
+			name: 'setUpTotp',
+			label: input.enabled.includes('TOTP') ? 'Replace authenticator app' : 'Set up authenticator app',
+			fields: [],
+		});
+	}
+	const preference = (factor: MfaFactor, setting: 'PREFERRED' | 'DISABLED', label: string): AuthAction => ({
+		name: 'updateMfaPreference',
+		label,
+		fields: [
+			{ name: factor.toLowerCase(), label: 'Setting', type: 'hidden', required: true, defaultValue: setting },
+		],
+	});
+	for (const factor of input.types) {
+		if (!input.enabled.includes(factor)) continue;
+		if (input.preferred !== factor) {
+			actions.push(preference(factor, 'PREFERRED', `Use ${FACTOR_LABEL[factor]} by default`));
+		}
+		actions.push(preference(factor, 'DISABLED', `Turn off ${FACTOR_LABEL[factor]}`));
+	}
+	actions.push({ name: 'signOut', label: 'Sign Out', fields: [] });
+	return { state: 'signedIn', user, actions };
 }
 
 /** After `resetPassword`: the code + new-password form (username hidden). */

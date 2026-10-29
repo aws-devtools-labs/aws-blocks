@@ -246,6 +246,64 @@ public class AuthApi(
       public data class DeletePasskey(
         public val credentialId: String,
       ) : Input()
+
+      @Serializable
+      @SerialName("setUpTotp")
+      public data object SetUpTotp : Input()
+
+      @Serializable
+      @SerialName("verifyTotpSetup")
+      public data class VerifyTotpSetup(
+        public val code: String,
+      ) : Input()
+
+      @Serializable
+      @SerialName("getMfaPreference")
+      public data object GetMfaPreference : Input()
+
+      @Serializable
+      @SerialName("updateMfaPreference")
+      public data class UpdateMfaPreference(
+        public val sms: UpdateMfaPreference.Sms? = null,
+        public val totp: UpdateMfaPreference.Totp? = null,
+        public val email: UpdateMfaPreference.Email? = null,
+      ) : Input() {
+        @Serializable
+        public enum class Sms {
+          @SerialName("ENABLED")
+          Enabled,
+          @SerialName("DISABLED")
+          Disabled,
+          @SerialName("PREFERRED")
+          Preferred,
+          @SerialName("NOT_PREFERRED")
+          NotPreferred,
+        }
+
+        @Serializable
+        public enum class Totp {
+          @SerialName("ENABLED")
+          Enabled,
+          @SerialName("DISABLED")
+          Disabled,
+          @SerialName("PREFERRED")
+          Preferred,
+          @SerialName("NOT_PREFERRED")
+          NotPreferred,
+        }
+
+        @Serializable
+        public enum class Email {
+          @SerialName("ENABLED")
+          Enabled,
+          @SerialName("DISABLED")
+          Disabled,
+          @SerialName("PREFERRED")
+          Preferred,
+          @SerialName("NOT_PREFERRED")
+          NotPreferred,
+        }
+      }
     }
   }
 }

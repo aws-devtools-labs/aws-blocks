@@ -6,7 +6,9 @@
  *
  * Re-exports the shared, provider-agnostic renderer from
  * `@aws-blocks/auth-common/ui` (the same functions, so they share one
- * per-`api` auth-state store with any other import path), plus
+ * per-`api` auth-state store with any other import path) — the
+ * `Authenticator`, the `MfaSettings` authenticator-app enrolment panel and the
+ * auth-state helpers — plus
  * {@link authOverrides}: a typed pass-through for `Authenticator` options keyed
  * against `Auth`'s action, next-step and field vocabulary.
  *
@@ -49,8 +51,10 @@ export type {
 	AuthActionPayloadMap,
 	AuthenticatorOptions,
 	AuthFieldOverride,
+	AuthMfaSetting,
 	AuthStateApi,
 	AuthUserOf,
+	MfaSettingsOptions,
 	StatusKind,
 	StatusMessageHandle,
 	StatusMessageOptions,
@@ -62,6 +66,7 @@ export {
 	broadcastAuthChange,
 	getAuthStateSnapshot,
 	injectTheme,
+	MfaSettings,
 	onAuthChange,
 	StatusMessage,
 	submitAuthAction,
@@ -100,6 +105,10 @@ export type AuthActionName =
 	| 'completePasskeyRegistration'
 	| 'listPasskeys'
 	| 'deletePasskey'
+	| 'setUpTotp'
+	| 'verifyTotpSetup'
+	| 'getMfaPreference'
+	| 'updateMfaPreference'
 	| 'resetPassword'
 	| 'confirmResetPassword'
 	| 'signOut'
@@ -136,6 +145,10 @@ export interface AuthActionFields {
 	completePasskeyRegistration: 'credentialCreationOptions' | 'credential';
 	listPasskeys: never;
 	deletePasskey: 'credentialId';
+	setUpTotp: never;
+	verifyTotpSetup: 'sharedSecret' | 'otpauthUri' | 'code';
+	getMfaPreference: never;
+	updateMfaPreference: 'sms' | 'totp' | 'email';
 	CONFIRM_SIGN_IN_WITH_SMS_CODE: 'session' | 'code';
 	CONFIRM_SIGN_IN_WITH_TOTP_CODE: 'session' | 'code';
 	CONFIRM_SIGN_IN_WITH_EMAIL_CODE: 'session' | 'code';

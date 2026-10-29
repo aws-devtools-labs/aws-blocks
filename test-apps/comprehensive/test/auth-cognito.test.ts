@@ -4,6 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { AuthErrors } from '@aws-blocks/bb-auth';
+import { totpCodeFor } from '@aws-blocks/blocks/utils';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
@@ -515,7 +516,12 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 			// authCMfa pool is `mfa: 'optional'` + `mfaTypes: ['TOTP']`.
 			// With no enrolled factor, signIn succeeds without a challenge.
 			// After setUpTOTP + verifyTOTPSetup, subsequent signIn issues
-			// a CONFIRM_SIGN_IN_WITH_TOTP_CODE challenge.
+			// a CONFIRM_SIGN_IN_WITH_TOTP_CODE challenge. The pool checks codes
+			// by RFC 6238 (`totpVerification: 'rfc6238'`), so each enrolled
+			// user's secret is kept to compute them.
+			const totpSecrets = new Map<string, string>();
+			/** The TOTP code for `username`'s enrolled secret, one step ahead (Cognito refuses a reused code). */
+			const nextTotpCode = (username: string) => totpCodeFor(totpSecrets.get(username) ?? '', Date.now() + 30_000);
 			async function signedInMfaUser(api: typeof apiType, opts?: { enrollTotp?: boolean }) {
 				const username = uniqueUser();
 				await api.authCMfaSignUp(username, 'Password1!', `${username}@example.com`);
@@ -529,8 +535,9 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				// Enroll TOTP so updateMFAPreference tests that touch TOTP
 				// don't trip the "not associated" guard.
 				if (opts?.enrollTotp !== false) {
-					await api.authCMfaSetUpTOTP();
-					await api.authCMfaVerifyTOTPSetup('123456');
+					const { sharedSecret } = await api.authCMfaSetUpTOTP();
+					totpSecrets.set(username, sharedSecret);
+					await api.authCMfaVerifyTOTPSetup(totpCodeFor(sharedSecret));
 				}
 				return username;
 			}
@@ -575,7 +582,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				}
 				assert.strictEqual(handled, 'totp:true');
 				if (step.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
-				const final = await api.authCMfaConfirmSignIn(step.session, '123456');
+				const final = await api.authCMfaConfirmSignIn(step.session, nextTotpCode(username));
 				assert.strictEqual(final.status, 'signedIn');
 				await api.authCMfaSignOut();
 			});
@@ -662,8 +669,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				assert.ok(sharedSecret, 'sharedSecret must be returned');
 				assert.ok(sharedSecret.length > 0);
 
-				// Mock accepts any 6-digit code; real Cognito validates RFC-6238.
-				await api.authCMfaVerifyTOTPSetup('123456');
+				// The pool checks the code by RFC 6238, locally as on Cognito.
+				await api.authCMfaVerifyTOTPSetup(totpCodeFor(sharedSecret));
 
 				const pref = await api.authCMfaFetchMFAPreference();
 				assert.ok(pref.enabled.includes('TOTP'));
@@ -708,8 +715,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				if (r.status === 'signedIn') throw new Error('expected TOTP challenge');
 				const step = r.nextStep;
 				if (step.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') throw new Error(`expected a TOTP challenge, got ${step.name}`);
-				// Mock accepts any 6-digit code; real Cognito validates RFC-6238.
-				const final = await api.authCMfaConfirmSignIn(step.session, '123456');
+				// The pool checks the code by RFC 6238, locally as on Cognito.
+				const final = await api.authCMfaConfirmSignIn(step.session, nextTotpCode(username));
 				assert.strictEqual(final.status, 'signedIn');
 				await api.authCMfaSignOut();
 			});
