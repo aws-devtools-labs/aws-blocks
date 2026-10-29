@@ -182,7 +182,11 @@ import { AuthOIDC, google } from '@aws-blocks/bb-auth-oidc';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { supabaseCrud } from './supabase.js';
 
-const googleId = new AppSetting(scope, 'google-client-id', { name: 'google-client-id' });
+const googleId = new AppSetting(scope, 'google-client-id', {
+  name: 'google-client-id',
+  // OAuth client IDs identify an application; they are not credentials.
+  value: 'replace-with-your-google-client-id',
+});
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true, name: 'google-client-secret' });
 const auth = new AuthOIDC(scope, 'auth', {
   providers: [google({ clientId: () => googleId.get(), clientSecret: () => googleSecret.get() })],
@@ -195,6 +199,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 AuthOIDC supports Google, Auth0, Clerk, Cognito, and any custom OIDC provider.
 See the @aws-blocks/bb-auth-oidc package README for provider setup.
+
+Replace \`replace-with-your-google-client-id\` before you deploy. An OAuth client ID
+is a public application identifier, so it can be stored as a regular AppSetting;
+the client **secret** remains a SecureString and must be set separately.
 
 **Migration-specific note:** ensure the \`userId\` your OIDC provider returns matches
 the format already stored in your Supabase database (e.g. the \`sub\` claim in your
