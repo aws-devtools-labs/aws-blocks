@@ -45,7 +45,9 @@ one AWS account through one pipeline. All of it is opt-in: without
   per exact resource type; it prints the types it has no rule for and the
   accepted CloudFront exceptions, and splits into parts with room for hand
   additions), and a deploy guard that keeps the app's deploy role on its own
-  stacks. It warns when the app calls its APIs through `execute-api` (Realtime,
+  stacks. It lists the types the execution policy manages only once tagged
+  `app=<id>` (an existing app adopting `defaults.app` tags those resources
+  first; see the core README). It warns when the app calls its APIs through `execute-api` (Realtime,
   Agent streaming), which needs a per-app boundary.
 - **`create-blocks-app --template platform`** (new template): the api-only
   service with `defaults.app`, the permissions boundary, a `check:iam` script and

@@ -700,3 +700,21 @@ npx blocks-iam-check cdk.out --app "$APP_ID"   # exit 0: clean · 1: violations 
 - **Account quotas are shared.** Each app adds roles and a bootstrap stack; at thousands of apps, spread them across several accounts.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.
 
+#### Adopting `defaults.app` in an existing app
+
+An app deployed before it set `defaults.app` has resources with no `app` tag. The execution policy manages resources of the tag-scoped types — Secrets Manager secrets, KMS keys, Cognito user pools, Step Functions state machines, API Gateway APIs, CloudFront distributions and KeyValueStores, DSQL clusters, Bedrock knowledge bases and EC2 VPC resources — only once they're tagged `app=<id>`, including the update that would add the tag, so the first deploy under it fails on them (`AccessDenied`, e.g. on `kms:DescribeKey`). That's on purpose: a policy that let a deploy tag an untagged resource would let any app claim one. `blocks-iam-policies` lists the app's tag-scoped types when it writes the execution policy. Adopt in this order:
+
+1. **The stack names must already start with the id** (`<id>` or `<id>-…`): a stack can't be renamed, so another name means new stacks (and moving the data), not adoption.
+2. **An admin, not the app's pipeline, tags the app's existing resources `app=<id>` once**, before the first deploy under the execution policy. Do it for each of the app's stacks, in its region and in `us-east-1` (Hosting's `<id>-CfMonitoring-…` stack, and CloudFront's global resources, which the Tagging API lists in `us-east-1`). CloudFormation tags what it creates `aws:cloudformation:stack-name`, so the Resource Groups Tagging API can find and tag them (`tag-resources` takes up to 20 ARNs at a time):
+
+   ```bash
+   STACK=<stack name>; REGION=<region>; APP=<id>
+   aws resourcegroupstaggingapi get-resources --region "$REGION" \
+     --tag-filters "Key=aws:cloudformation:stack-name,Values=$STACK" \
+     --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' |
+     xargs -n 20 aws resourcegroupstaggingapi tag-resources --region "$REGION" --tags "app=$APP" --resource-arn-list
+   ```
+
+   Compare with `aws cloudformation list-stack-resources --stack-name "$STACK" --region "$REGION"`, which lists every resource in the stack, and tag any tag-scoped one the first command missed with its service's own tag command. Tag IAM roles with `aws iam tag-role --role-name <role> --tags Key=app,Value=<id>` (the execution policy manages the app's roles by their `<id>-…` name, and the deploy adds the tag, so this is optional).
+3. **Set `stackId` in `.blocks/config.json` to the id**, if it isn't already. Hosting's `secret()` and `config()` values move to `blocks/<id>/secrets/…` and `/blocks/<id>/config/…`, so set each value again (`npm run secret -- set …`, `npm run config -- set …`) before deploying; the old ones stay where they were until you delete them. If `index.cdk.ts` builds the stack name from `stackId` (`getStackName()`, `<stackId>-prod`), changing it renames the stack: see step 1.
+4. **Expect replacements on the first deploy.** AWS Blocks renames the CloudFront Functions and KeyValueStores it creates to `<id>-<region>-…`, and a new name replaces the resource. CloudFormation then tries to delete the old ones, and the old Functions fail to delete (`DELETE_FAILED`, skipped; the stack still reaches `UPDATE_COMPLETE`), because their names (`<region>…`) are outside the app's prefix — and so can the old KeyValueStores still associated with them. An admin deletes them once: `aws cloudfront delete-function --name <name> --if-match <ETag from describe-function>`, then `aws cloudfront delete-key-value-store --name <name> --if-match <ETag from describe-key-value-store>`. Hosting's Lambda@Edge stack (Hosting outside `us-east-1`) becomes a new stack, `<id>-edge` (CDK named it `edge-lambda-stack-<hash>`); the app's deploy guard can't touch the old one, so an admin deletes it once the distribution no longer uses its functions (Lambda@Edge replicas can take hours to release).

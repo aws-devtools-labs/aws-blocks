@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, test } from 'node:test';
 import { APP_ID_PATTERN, isValidAppId, RESERVED_APP_ID_PREFIXES, RESERVED_APP_IDS } from '../cdk/app-isolation-rules.js';
 import {
@@ -731,4 +736,42 @@ describe('blocks-iam-policies — reserved app ids: no usable id reaches a share
 			assert.strictEqual(allowed(generateBoundaryPolicy(), { ...r, principalApp: 'regx' }), false);
 		});
 	}
+});
+
+describe('blocks-iam-policies — adopting defaults.app: tag-scoped types', () => {
+	test('lists the types managed only once tagged as the app', () => {
+		const { tagScoped } = generateExecutionPolicy(
+			['AWS::Lambda::Function', 'AWS::KMS::Key', 'AWS::SecretsManager::Secret', 'AWS::CloudFront::KeyValueStore', 'AWS::CloudFront::Function'],
+			{ appId: 'appa', account: acct },
+		);
+		assert.deepStrictEqual(tagScoped, ['AWS::CloudFront::KeyValueStore', 'AWS::KMS::Key', 'AWS::SecretsManager::Secret']);
+	});
+
+	const cli = join(dirname(fileURLToPath(import.meta.url)), 'iam-policies-cli.js');
+	const runCli = (args: string[]) => {
+		try {
+			return { status: 0, out: execFileSync(process.execPath, [cli, ...args], { stdio: 'pipe', encoding: 'utf8' }) };
+		} catch (error) {
+			const e = error as { status?: number; stdout?: string; stderr?: string };
+			return { status: e.status, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
+		}
+	};
+
+	test('the CLI says existing resources of those types must already carry app=<id>, and rejects a reserved --app', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-iam-policies-'));
+		try {
+			const template = { Resources: { Key: { Type: 'AWS::KMS::Key' }, Fn: { Type: 'AWS::Lambda::Function' } } };
+			writeFileSync(join(dir, 'appa.template.json'), JSON.stringify(template));
+			const ok = runCli([dir, '--out', join(dir, 'iam'), '--app', 'appa', '--account', acct]);
+			assert.strictEqual(ok.status, 0, ok.out);
+			assert.match(ok.out, /Managed only once tagged app=appa/);
+			assert.match(ok.out, /• AWS::KMS::Key/);
+			assert.doesNotMatch(ok.out, /• AWS::Lambda::Function/);
+			const reserved = runCli([dir, '--out', join(dir, 'iam2'), '--app', 'cdk', '--account', acct]);
+			assert.strictEqual(reserved.status, 2);
+			assert.match(reserved.out, /--app: "cdk" is reserved/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
