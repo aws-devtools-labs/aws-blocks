@@ -1,0 +1,54 @@
+name: Auth Store Races
+
+# The full race enumeration for the client auth-state store in
+# packages/auth-common. The default unit run (pr-checks) skips the two-API,
+# three-operation sets (about 8.6 million interleavings); this job runs every
+# set with AUTH_STORE_RACES_FULL=1. Path-filtered at the trigger so it only
+# runs for PRs that change the store or its race model.
+#
+# No AWS / secrets needed — this runs the same on fork PRs.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/auth-common/src/ui.ts'
+      - 'packages/auth-common/src/test-support/auth-store-races.ts'
+      - 'packages/auth-common/src/ui.races.*.test.ts'
+      - '.github/workflows/auth-store-races.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: auth-store-races-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full:
+    name: Auth store races (full enumeration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build auth-common and core
+        run: npm run build --workspace=@aws-blocks/core --workspace=@aws-blocks/auth-common
+
+      - name: Run every interleaving
+        working-directory: packages/auth-common
+        env:
+          AUTH_STORE_RACES_FULL: '1'
+        run: node --test dist/ui.races.*.test.js
