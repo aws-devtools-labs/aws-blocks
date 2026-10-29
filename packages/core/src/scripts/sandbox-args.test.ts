@@ -15,6 +15,7 @@ import {
   buildSandboxWatchArgs,
   sandboxIsDeployOnly,
   findHostingUrl,
+  previewRemovalWarning,
   PREVIEW_MODE_CONTEXT,
   findExpressUnsafeStacks,
   sandboxFailureRecoveryHint,
@@ -292,5 +293,42 @@ describe('findHostingUrl — the URL a preview sandbox prints', () => {
 
   it('is undefined for a backend-only sandbox', () => {
     assert.strictEqual(findHostingUrl({ ApiUrl: 'https://api.example/prod/aws-blocks/api' }), undefined);
+  });
+});
+
+describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview', () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+  const outputsWith = (outputs: unknown): string => {
+    dir = mkdtempSync(join(tmpdir(), 'sandbox-preview-warning-'));
+    const file = join(dir, 'outputs.json');
+    writeFileSync(file, typeof outputs === 'string' ? outputs : JSON.stringify(outputs));
+    return file;
+  };
+  const withPreview = {
+    'MyApp-sandbox-me': {
+      ApiUrl: 'https://api.example/prod/aws-blocks/api',
+      HostingHostingUrlAB12CD34: 'https://abc.execute-api.us-west-2.amazonaws.com',
+    },
+  };
+
+  it('warns, naming the preview URL, when the previous deploy had hosting', () => {
+    const warning = previewRemovalWarning(outputsWith(withPreview), false);
+    assert.match(warning ?? '', /hosted preview at https:\/\/abc\.execute-api\.us-west-2\.amazonaws\.com/);
+    assert.match(warning ?? '', /removes it/);
+    assert.match(warning ?? '', /npm run sandbox:preview/);
+  });
+
+  it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {
+    assert.strictEqual(previewRemovalWarning(outputsWith(withPreview), true), undefined);
+    assert.strictEqual(
+      previewRemovalWarning(outputsWith({ 'MyApp-sandbox-me': { ApiUrl: 'https://api.example/prod/aws-blocks/api' } }), false),
+      undefined,
+    );
+    assert.strictEqual(previewRemovalWarning(join(tmpdir(), 'no-such-dir', 'outputs.json'), false), undefined);
+    assert.strictEqual(previewRemovalWarning(outputsWith('{not json'), false), undefined);
   });
 });

@@ -94,6 +94,33 @@ export function findHostingUrl(stackOutputs: Record<string, string>): string | u
   return /^https?:\/\//.test(url) ? url : `https://${url}`;
 }
 
+/**
+ * The warning a plain (backend-only) sandbox deploy prints when the stack has
+ * a hosted preview. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy
+ * one stack, and only a preview synth includes `Hosting`, so a plain deploy
+ * removes the preview; the next `sandbox:preview` recreates it at a new URL.
+ *
+ * @param outputsFile the previous deploy's `outputs.json`.
+ * @param preview whether this deploy is a preview.
+ * @returns the warning, or `undefined` for a preview deploy, a stack with no
+ *   hosting, or no (or an unreadable) outputs file.
+ */
+export function previewRemovalWarning(outputsFile: string, preview: boolean): string | undefined {
+  if (preview || !existsSync(outputsFile)) return undefined;
+  let groups: Record<string, string>[];
+  try {
+    groups = Object.values(JSON.parse(readFileSync(outputsFile, "utf-8")) ?? {}) as Record<string, string>[];
+  } catch {
+    return undefined;
+  }
+  const hostingUrl = groups.map((group) => findHostingUrl(group ?? {})).find(Boolean);
+  if (!hostingUrl) return undefined;
+  return (
+    `⚠️  This stack has a hosted preview at ${hostingUrl}. A plain sandbox deploy is backend-only and removes it.\n` +
+    "   Run npm run sandbox:preview to keep it (re-adding it later gives a new URL)."
+  );
+}
+
 export interface SandboxDeployArgsOptions {
   /** Directory CDK writes stack outputs to (relative to the project root). */
   outDir: string;
@@ -354,12 +381,16 @@ export async function startSandbox(options: SandboxOptions) {
   // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
   // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
   // destroyed since, `--hotswap-fallback` falls back to a full deploy.
-  const hotswap = preview && existsSync(join(process.cwd(), outDir, "outputs.json"));
+  const previousOutputs = join(process.cwd(), outDir, "outputs.json");
+  const hotswap = preview && existsSync(previousOutputs);
+
+  const removalWarning = previewRemovalWarning(previousOutputs, preview);
+  if (removalWarning) console.warn(removalWarning);
 
   console.log("🚀 Deploying to AWS...");
   console.log(
     hotswap
-      ? "   (preview re-deploy: hotswapping code changes; other changes fall back to a full deploy)"
+      ? "   (preview re-deploy: a backend-only change is hotswapped; a changed frontend build or infra change does a full deploy)"
       : "   (This may take a few minutes on first deploy)",
   );
 
@@ -439,12 +470,13 @@ export async function startSandbox(options: SandboxOptions) {
 
   // Same machine-readable completion line as `npm run deploy`, so a caller can
   // grep one stable line after a sandbox deploy instead of parsing streamed
-  // output. Sandbox serves the frontend locally (no CloudFront), so there is no
-  // hosting URL — the signal is backend-only (`BLOCKS_DEPLOYED api=…`). Emitted
+  // output. A plain sandbox serves the frontend locally, so its signal is
+  // backend-only (`BLOCKS_DEPLOYED api=…`); a preview adds the hosted site's
+  // `url=…`. Emitted
   // AFTER config.json is written (matching `deploy()`), so the signal always
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
-  console.log(`\n${formatDeploySignal(apiUrl)}`);
+  console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
 
   if (deployOnly) {
     return apiUrl;
