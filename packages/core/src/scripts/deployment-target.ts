@@ -92,6 +92,26 @@ export function environmentAccessKeys(env: NodeJS.ProcessEnv = process.env): Aws
 }
 
 /**
+ * The environment that names the credentials CDK deploys with, for the credential
+ * guidance: with environment keys, no profile, and the keys under the `AWS_` names
+ * that the guidance reads. Without keys, `env` unchanged.
+ */
+export function deploymentCredentialsEnv(
+	env: NodeJS.ProcessEnv,
+	keys: AwsCredentialIdentity | undefined,
+): NodeJS.ProcessEnv {
+	if (!keys) return env;
+	return {
+		...env,
+		AWS_PROFILE: undefined,
+		AWS_DEFAULT_PROFILE: undefined,
+		AWS_ACCESS_KEY_ID: keys.accessKeyId,
+		AWS_SECRET_ACCESS_KEY: keys.secretAccessKey,
+		AWS_SESSION_TOKEN: keys.sessionToken,
+	};
+}
+
+/**
  * Find the Region and the profile that CDK uses for a deployment.
  *
  * The lookup order is:

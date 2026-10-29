@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
-import { resolveDeploymentTarget } from './deployment-target.js';
+import { deploymentCredentialsEnv, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 
 describe('resolveDeploymentTarget', () => {
@@ -173,5 +173,25 @@ describe('resolveDeploymentTarget', () => {
 				return true;
 			},
 		);
+	});
+});
+
+describe('deploymentCredentialsEnv', () => {
+	it('names the environment keys under the AWS_ names, without a profile', () => {
+		const env = {
+			AWS_PROFILE: 'dev',
+			AWS_DEFAULT_PROFILE: 'other',
+			AMAZON_ACCESS_KEY_ID: 'id',
+			AWS_REGION: 'eu-west-1',
+		};
+		assert.equal(deploymentCredentialsEnv(env, undefined), env);
+		assert.deepEqual(deploymentCredentialsEnv(env, { accessKeyId: 'id', secretAccessKey: 'key' }), {
+			...env,
+			AWS_PROFILE: undefined,
+			AWS_DEFAULT_PROFILE: undefined,
+			AWS_ACCESS_KEY_ID: 'id',
+			AWS_SECRET_ACCESS_KEY: 'key',
+			AWS_SESSION_TOKEN: undefined,
+		});
 	});
 });
