@@ -10,7 +10,16 @@ import { createServer, type Server } from 'node:http';
 import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
-import { handleDiscovery, handleJwks, handleAuthorize, handleAuthorizeSubmit, stubIssuerUrl } from './engines/stub-idp.js';
+import {
+	handleDiscovery,
+	handleJwks,
+	handleAuthorize,
+	handleAuthorizeSubmit,
+	stubIssuerUrl,
+	deriveStubCodeKey,
+	stubCodeEncode,
+	stubCodeDecode,
+} from './engines/stub-idp.js';
 import { buildExchangeUrl } from './engines/oidc-client-engine.js';
 import { SignJWT, generateKeyPair, exportJWK } from 'jose';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
@@ -377,6 +386,7 @@ describe('AuthOIDC construction validation', () => {
 
 describe('stub IdP /authorize', () => {
 	const HTTPS_REDIRECT = 'https://app.example.com/aws-blocks/auth/callback';
+	const stubOpts = { codeKey: () => deriveStubCodeKey('test-cookie-secret', 'google') };
 
 	function authorizeContext(provider: string, params: Record<string, string>, body?: string) {
 		const url = new URL(`http://localhost:3000/aws-blocks/auth/idp/${provider}/authorize`);
@@ -408,7 +418,7 @@ describe('stub IdP /authorize', () => {
 	test('interactive default renders a login screen (200 HTML)', async () => {
 		const provider = stubIdp({ name: 'google' });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 200);
 		assert.strictEqual(cap.headers.get('Content-Type'), 'text/html');
 		assert.match(String(cap.sent), /Blocks stub IdP: sign in/);
@@ -431,7 +441,7 @@ describe('stub IdP /authorize', () => {
 			},
 		} as any;
 		const provider = stubIdp({ name: 'google' });
-		await handleAuthorize(provider, ctx);
+		await handleAuthorize(provider, ctx, stubOpts);
 		assert.match(
 			String(sent),
 			/action="https:\/\/abc123\.execute-api\.us-east-1\.amazonaws\.com\/prod\/aws-blocks\/auth\/idp\/google\/authorize"/,
@@ -441,7 +451,7 @@ describe('stub IdP /authorize', () => {
 	test('onAuthorize returning a user auto-approves (302 to callback)', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		const location = cap.headers.get('Location')!;
 		assert.match(location, /^https:\/\/app\.example\.com\/aws-blocks\/auth\/callback\?code=/);
@@ -451,7 +461,7 @@ describe('stub IdP /authorize', () => {
 	test('onAuthorize throwing denies (302 with error)', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: () => { throw new Error('nope'); } });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /error=access_denied/);
 	});
@@ -462,7 +472,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
 		});
 		const cap = authorizeContext('google', { ...baseParams, login_hint: 'google-user@stub.invalid' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'matching loginHint signs in');
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
@@ -476,7 +486,7 @@ describe('stub IdP /authorize', () => {
 			],
 		});
 		const cap = authorizeContext('corporate', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 200);
 		const html = String(cap.sent);
 		assert.match(html, /alice@example\.com/);
@@ -495,7 +505,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
 		});
 		const cap = authorizeContext('corporate', { ...baseParams, login_hint: 'bob@example.com' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'inline user matched by loginHint signs in');
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
@@ -503,7 +513,7 @@ describe('stub IdP /authorize', () => {
 	test('rejects custom-scheme redirect_uri', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', { ...baseParams, redirect_uri: 'myapp://callback' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 	});
 
@@ -513,7 +523,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/spa-callback?scope=openid',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -527,7 +537,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback?state=abc',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -541,7 +551,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback?error_description=x',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -555,7 +565,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?State=abc',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'capital-S `State` is a distinct, non-reserved query key');
 		assert.match(cap.headers.get('Location')!, /State=abc/);
 		assert.match(cap.headers.get('Location')!, /code=/);
@@ -567,7 +577,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback#state=1',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -581,7 +591,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?tenant=acme',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /tenant=acme/);
 		assert.match(cap.headers.get('Location')!, /code=/);
@@ -591,7 +601,7 @@ describe('stub IdP /authorize', () => {
 		const provider = stubIdp({ name: 'google' });
 		const form = new URLSearchParams({ ...baseParams, scope: 'openid email', sub: 'stub-google-user' });
 		const cap = authorizeContext('google', {}, form.toString());
-		await handleAuthorizeSubmit(provider, cap.ctx);
+		await handleAuthorizeSubmit(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /^https:\/\/app\.example\.com\/aws-blocks\/auth\/callback\?code=/);
 	});
@@ -608,7 +618,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => { seen = req.users.map((u) => u.sub); return req.users.find((u) => u.email === req.loginHint); },
 		});
 		const cap = authorizeContext('google', { ...baseParams, login_hint: 'bob@example.com' });
-		await handleAuthorize(provider, cap.ctx, dir);
+		await handleAuthorize(provider, cap.ctx, { ...stubOpts, dataDir: dir });
 		rmSync(dir, { recursive: true, force: true });
 		assert.deepStrictEqual(seen, ['alice', 'bob']);
 		assert.strictEqual(cap.status, 302, 'picked Bob by loginHint');
@@ -619,10 +629,97 @@ describe('stub IdP /authorize', () => {
 		let seen: string[] = [];
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => { seen = req.users.map((u) => u.sub); return req.users[0]; } });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx, dir);
+		await handleAuthorize(provider, cap.ctx, { ...stubOpts, dataDir: dir });
 		rmSync(dir, { recursive: true, force: true });
 		assert.deepStrictEqual(seen, ['stub-google-user']);
 		assert.strictEqual(cap.status, 302);
+	});
+});
+
+describe('stub IdP authorization-code signing', () => {
+	const payload = () => ({
+		clientId: 'stub-client-id',
+		codeChallenge: 'abc',
+		codeChallengeMethod: 'S256',
+		state: 'xyz',
+		nonce: 'n',
+		redirectUri: 'https://app.example.com/aws-blocks/auth/callback',
+		scopes: ['openid'],
+		user: { sub: 'stub-google-user', email: 'google-user@stub.invalid' },
+		exp: Math.floor(Date.now() / 1000) + 300,
+	});
+	const keyA = deriveStubCodeKey('test-cookie-secret', 'A');
+
+	test('round-trips a code signed with a derived key', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const decoded = stubCodeDecode(code, keyA);
+		assert.ok(decoded);
+		assert.strictEqual(decoded.clientId, 'stub-client-id');
+		assert.strictEqual(decoded.user.sub, 'stub-google-user');
+	});
+
+	test('key derivation is deterministic per secret and provider', () => {
+		assert.ok(deriveStubCodeKey('test-cookie-secret', 'A').equals(keyA));
+		assert.ok(!deriveStubCodeKey('other-cookie-secret', 'A').equals(keyA));
+	});
+
+	test('rejects a code signed with a different key (the former fixed key)', () => {
+		const code = stubCodeEncode(payload(), 'blocks-stub-idp-code-signing-secret-not-for-production');
+		assert.strictEqual(stubCodeDecode(code, keyA), null);
+	});
+
+	test('rejects a code whose payload was modified', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const dot = code.lastIndexOf('.');
+		const body = code.slice(0, dot);
+		const i = Math.floor(body.length / 2);
+		const flipped = body.slice(0, i) + (body[i] === 'A' ? 'B' : 'A') + body.slice(i + 1);
+		assert.strictEqual(stubCodeDecode(`${flipped}${code.slice(dot)}`, keyA), null);
+	});
+
+	test('returns null without throwing for a truncated or wrong-length MAC', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		assert.doesNotThrow(() => stubCodeDecode(code.slice(0, -4), keyA));
+		assert.strictEqual(stubCodeDecode(code.slice(0, -4), keyA), null);
+		assert.strictEqual(stubCodeDecode(`${code}AAAA`, keyA), null);
+		assert.strictEqual(stubCodeDecode(code.slice(0, code.lastIndexOf('.') + 1), keyA), null);
+		assert.strictEqual(stubCodeDecode('no-dot-here', keyA), null);
+	});
+
+	test('rejects a MAC with trailing base64 padding appended', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		assert.strictEqual(stubCodeDecode(`${code}=`, keyA), null);
+		assert.strictEqual(stubCodeDecode(`${code}==`, keyA), null);
+	});
+
+	test('rejects a MAC whose last character is flipped to a byte-equivalent spelling', () => {
+		// A 32-byte MAC is 43 base64url chars; the last char's low 2 bits are
+		// unused, so toggling its lowest alphabet bit decodes to the same bytes.
+		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+		const code = stubCodeEncode(payload(), keyA);
+		const last = code[code.length - 1];
+		const sibling = alphabet[alphabet.indexOf(last) ^ 1];
+		const tampered = code.slice(0, -1) + sibling;
+		assert.notStrictEqual(tampered, code);
+		assert.strictEqual(stubCodeDecode(tampered, keyA), null);
+	});
+
+	test('rejects a MAC with an inserted non-base64url character', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const dot = code.lastIndexOf('.');
+		const i = dot + 1 + Math.floor((code.length - dot - 1) / 2);
+		assert.strictEqual(stubCodeDecode(`${code.slice(0, i)}!${code.slice(i)}`, keyA), null);
+	});
+
+	test('rejects a code minted for provider A under provider B\'s key', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const keyB = deriveStubCodeKey('test-cookie-secret', 'B');
+		assert.strictEqual(stubCodeDecode(code, keyB), null);
+	});
+
+	test('rejects an expired code signed with the right key', () => {
+		const code = stubCodeEncode({ ...payload(), exp: Math.floor(Date.now() / 1000) - 1 }, keyA);
+		assert.strictEqual(stubCodeDecode(code, keyA), null);
 	});
 });
 

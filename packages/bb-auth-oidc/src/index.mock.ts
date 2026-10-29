@@ -6,11 +6,21 @@
  * Wires to an in-process stub IdP via `OidcClientEngine`.
  */
 
-import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+	buildingBlockParent,
+	getSdkIdentifiers,
+	registerSdkIdentifiers,
+	type Scope,
+	type ScopeParent,
+} from '@aws-blocks/core';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
+import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -18,6 +28,9 @@ import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
 import { resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-auth-oidc');
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -38,8 +51,59 @@ export type {
 	StubUser,
 } from './types.js';
 
-/** Fixed cookie-signing secret for the mock runtime (deterministic for tests). */
-const MOCK_COOKIE_SECRET = 'blocks-mock-cookie-secret-do-not-use-in-prod';
+/** File (under the instance's mock data dir) holding the mock cookie-signing secret. */
+const MOCK_COOKIE_SECRET_FILE = 'cookie-secret';
+
+/**
+ * In-memory fallback secret, used only when the persisted secret can't be read
+ * or written. Random per process; held on `globalThis` (like `bb-realtime`'s
+ * local token secret) so duplicate copies of this module in one process agree.
+ */
+const MOCK_COOKIE_SECRET_KEY = Symbol.for('@aws-blocks/bb-auth-oidc.mockCookieSecret');
+const mockCookieSecretHolder = globalThis as unknown as Record<symbol, string | undefined>;
+
+function inMemoryMockCookieSecret(): string {
+	mockCookieSecretHolder[MOCK_COOKIE_SECRET_KEY] ??= randomBytes(32).toString('hex');
+	return mockCookieSecretHolder[MOCK_COOKIE_SECRET_KEY];
+}
+
+/**
+ * Cookie-signing secret for the mock runtime. Random per project: generated
+ * once and persisted (mode 0600) as `cookie-secret` under this instance's mock
+ * data dir (`.bb-data/<fullId>/`), so sessions survive backend reloads and
+ * dev-server restarts. It is never a shipped constant, and the mock is
+ * local-dev only. Sign and verify both happen in the same local process, so
+ * the cookie round-trip is unaffected.
+ *
+ * Any file IO failure falls back to an in-memory per-process secret rather
+ * than failing local dev; sessions then just don't outlive the process.
+ */
+function resolveMockCookieSecret(dataDir: string): string {
+	const file = join(dataDir, MOCK_COOKIE_SECRET_FILE);
+	try {
+		try {
+			const existing = readFileSync(file, 'utf8').trim();
+			if (existing) return existing;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+		}
+		const secret = randomBytes(32).toString('hex');
+		try {
+			// 'wx': never clobber a secret another process created concurrently.
+			writeFileSync(file, secret, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+			return secret;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+			const existing = readFileSync(file, 'utf8').trim();
+			if (existing) return existing;
+			throw err;
+		}
+	} catch {
+		// Fallback: unreadable/unwritable data dir. Keep local dev running with a
+		// per-process random secret (sessions drop when the process restarts).
+		return inMemoryMockCookieSecret();
+	}
+}
 
 /**
  * Credential resolver for the mock runtime's Cognito engine. `cognitoFederated`
@@ -64,9 +128,15 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		const sessions = new KVStore<SessionRow>(self, 'sessions');
+		// `self` carries the same `fullId` this instance gets from super(), and
+		// getMockDataDir only reads `fullId`, so this resolves the same directory
+		// `getMockDataDir(this)` does below.
+		const mockCookieSecret = resolveMockCookieSecret(getMockDataDir(self as unknown as Scope));
 
-		const cookieNamePrefix = `oidc_${mockPrefix(scope, id)}`;
+		// The same expression as the AWS runtime; `user-agent.test.ts` pins the pair.
+		const cookieNamePrefix = `oidc_${self.fullId}`;
 		const cookieAttributes = {
 			...resolveCookieSecurity({
 				crossDomain: options.crossDomain ?? false,
@@ -82,7 +152,7 @@ export class AuthOIDC<
 		// and ran OIDC discovery against an empty issuer, crashing `npm run dev`.
 		const hasCognitoFederated = options.providers.some((p) => p.kind === 'cognito-federated');
 
-		let engine;
+		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			// Cognito federation needs a deployed Cognito User Pool + app-client
 			// credentials, which only exist after `npm run sandbox`/`deploy`. In the
@@ -92,7 +162,7 @@ export class AuthOIDC<
 			// not block `npm run dev` for the rest of the app).
 			const sessionManager = new SessionManager({
 				sessionStore: sessions,
-				cookieSecret: MOCK_COOKIE_SECRET,
+				cookieSecret: mockCookieSecret,
 				cookieNamePrefix,
 				cookieAttributes,
 			});
@@ -108,7 +178,7 @@ export class AuthOIDC<
 			engine = new OidcClientEngine({
 				providers: options.providers,
 				sessionStore: sessions,
-				cookieSecret: MOCK_COOKIE_SECRET,
+				cookieSecret: mockCookieSecret,
 				cookieNamePrefix,
 				cookieAttributes,
 				callbackPath: options.callbackPath ?? DEFAULT_CALLBACK_PATH,
@@ -126,7 +196,7 @@ export class AuthOIDC<
 		const dataDir = getMockDataDir(this);
 		for (const provider of options.providers) {
 			if (provider.kind === 'stub') {
-				mountStubIdpRoutes(this, provider, dataDir);
+				mountStubIdpRoutes(this, provider, { codeSecret: mockCookieSecret, dataDir });
 			}
 		}
 
@@ -154,16 +224,4 @@ export class AuthOIDC<
 			}
 		}
 	}
-}
-
-/** Mock-runtime scope prefix for cookie naming (avoids collisions between instances). */
-function mockPrefix(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('_');
 }

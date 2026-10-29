@@ -4,15 +4,16 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, getDeploymentType, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Secret } from '@aws-blocks/bb-secret';
 import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -108,10 +109,20 @@ async function readDeliveredCode<T extends DeliveredCode>(channel: string, usern
   return parseStoredRecord<T>(key, await store.get(key));
 }
 
-async function purgeDeliveredCodes(): Promise<number> {
+/** Every channel that records delivered codes (the `recordDeliveredCode` callers below). */
+const CODE_CHANNELS = ['auth', 'authC', 'authCMfa'] as const;
+
+async function purgeDeliveredCodes(username?: string): Promise<number> {
   const keys: string[] = [];
-  for await (const entry of store.scan()) {
-    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+  if (username === undefined) {
+    for await (const entry of store.scan()) {
+      if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+    }
+  } else {
+    for (const channel of CODE_CHANNELS) {
+      const key = codeKey(channel, username);
+      if ((await store.get(key)) !== null) keys.push(key);
+    }
   }
   for (const key of keys) await store.delete(key);
   return keys.length;
@@ -136,6 +147,15 @@ const authSameOrigin = new AuthBasic(scope, 'auth-same-origin', {
 const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
   passwordPolicy: { minLength: 6 },
   crossDomain: true,
+});
+
+// AuthBasic sign-in throttling (#766). A dedicated pool with a tight lockout
+// policy so the e2e trips the lock in a couple of attempts and self-expires
+// fast — kept separate from the shared `auth` pool so the lock never bleeds
+// into the other sign-in tests. No codeDelivery → signUp confirms immediately.
+const authThrottle = new AuthBasic(scope, 'auth-throttle', {
+  passwordPolicy: { minLength: 6 },
+  lockout: { maxAttempts: 2, windowSeconds: 60, lockoutSeconds: 60 },
 });
 
 // AuthCognito - username/password + MFA + groups (mock in local dev).
@@ -178,7 +198,7 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 });
 
 // AuthOIDC - OIDC sign-in gate
-// Uses the stub IdP in mock runtime — no real IdP needed for local tests.
+// Uses the stub IdP in local and sandbox — no real IdP needed for tests.
 //
 // ── Sign-in records (e2e read-back) ─────────────────────────────────────────
 //
@@ -211,10 +231,24 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
   return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
-const oidcProviders = [
-  stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
-] as const;
+// The stub IdP is sandbox-only: AuthOIDC rejects stub providers at synth for
+// production deployments and never mounts their routes there. Choose providers
+// by deployment type so the production e2e still deploys every AuthOIDC
+// instance. `getDeploymentType()` is set from the CDK context at synth and
+// delivered to compute via the BB config, so synth and runtime agree. The
+// production branch uses a placeholder real provider (AuthOIDC needs at least
+// one); the e2e only asserts its route surface, never a real Google sign-in.
+const stubsAllowed = getDeploymentType() !== 'production';
+
+/** Placeholder real provider for production deployments (never signed in to). */
+const placeholderGoogle = () => google({ clientId: 'e2e-placeholder', clientSecret: 'e2e-placeholder' });
+
+const oidcProviders = stubsAllowed
+  ? [
+      stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
+      stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
+    ] as const
+  : [placeholderGoogle()] as const;
 
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
@@ -227,9 +261,9 @@ const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
-  providers: [
-    stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/extras/callback',
   signOutPath: '/aws-blocks/auth/extras/signout',
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
@@ -253,9 +287,9 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
-  providers: [
-    stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/relay/callback',
   signOutPath: '/aws-blocks/auth/relay/signout',
   allowBearerAuth: true,
@@ -581,6 +615,99 @@ const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
   secret: true,
 });
+
+// The Agent suite's API-key resolver test writes and reads its own secret: it
+// runs in a background process at the same time as the AppSetting suite, which
+// writes and restores `secretSetting` (test/background-suites.ts).
+const agentApiKeySetting = new AppSetting(scope, 'agent-api-key-setting', {
+  name: `${ssmPrefix}/agent-api-key`,
+  secret: true,
+});
+
+// Secret - Single high-value credential backed by AWS Secrets Manager
+// Opaque string secret (e.g. a third-party API key). `allowRuntimeWrite: true`
+// because the e2e sets the value via put(); `cacheTtlSeconds: 0` disables the
+// read cache for this instance so the read-after-write e2e tests below
+// (round-trip, overwrite, grace window, listVersions) are deterministic: with
+// the default 5-min cache and warm-Lambda reuse, a get() could be served a value
+// cached by an earlier test on the same warm instance. The default TTL is
+// covered by the unit tests; here 0 both fixes isolation and exercises the
+// cache-disabled path end to end.
+const apiKeySecret = new Secret(scope, 'secret-api-key', {
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Typed JSON secret with schema validation (e.g. a set of related credentials).
+const dbSecretSchema = z.object({ host: z.string(), port: z.number() });
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const dbCredentialsSecret = new Secret(scope, 'secret-db-credentials', {
+  schema: dbSecretSchema,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Secret with an explicit well-known name (for CI/CD-driven management via the
+// aws CLI). Scoped by stack identity so parallel deploys don't collide.
+// cacheTtlSeconds: 0 — deterministic read-after-write for the e2e (see secret-api-key).
+const namedSecret = new Secret(scope, 'secret-named', {
+  name: `${scope.fullId}/webhook-signing-key`,
+  removalPolicy: 'destroy',
+  cacheTtlSeconds: 0,
+  allowRuntimeWrite: true,
+});
+
+// Unset secret: created empty (no `generate`), so get() returns null until a
+// value is set. Exercises the "unset reads null on AWS, not a random string"
+// contract — this instance is deliberately never written in the e2e suite.
+const unsetSecret = new Secret(scope, 'secret-unset', { removalPolicy: 'destroy' });
+
+// Auto-generated secret: `generate: true` seeds a random value on first create,
+// so get() returns a non-null string before any put() — a signing/HMAC key that
+// just needs to exist.
+const generatedSecret = new Secret(scope, 'secret-generated', {
+  generate: true,
+  removalPolicy: 'destroy',
+});
+
+// allowRuntimeWrite matrix — three secrets covering the write-gating contract so
+// the e2e can assert build + runtime behavior for each case:
+//   - omitted  → read-only (no put() on the object or type; read-only IAM)
+//   - false    → read-only (explicit)
+//   - true     → writable  (put() present, callable, correctly typed; write IAM)
+// The build-level assertions live inline here (this backend module is compiled
+// by the e2e build/synth, so a wrong type fails the suite); the runtime
+// assertions are exposed via the secretWrite* RPC methods below.
+const writeOmittedSecret = new Secret(scope, 'secret-write-omitted', { removalPolicy: 'destroy' });
+const writeFalseSecret = new Secret(scope, 'secret-write-false', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: false,
+});
+const writeTrueSecret = new Secret(scope, 'secret-write-true', {
+  removalPolicy: 'destroy',
+  allowRuntimeWrite: true,
+  // Disable the read cache so the write probe's put→get reflects the write
+  // deterministically (matches the other written e2e secrets).
+  cacheTtlSeconds: 0,
+});
+
+// Build-level proof that `put` is ABSENT from the type when writes aren't
+// allowed. If the read-only type ever regained `put`, `@ts-expect-error` would
+// itself become an unused-directive error and fail the e2e build — a meaningful,
+// non-silent failure. (These are never executed; see secretWrite* for runtime.)
+function _secretWriteTypeAssertions(): void {
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite omitted
+  void writeOmittedSecret.put;
+  // @ts-expect-error — put must be absent on a secret with allowRuntimeWrite: false
+  void writeFalseSecret.put;
+  // Writable: put IS present and typed (string value). No ts-expect-error here.
+  void writeTrueSecret.put('ok');
+  // @ts-expect-error — a writable string secret rejects a non-string value
+  void writeTrueSecret.put(123);
+}
+void _secretWriteTypeAssertions;
 
 // CronJob - Scheduled task execution
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1024,6 +1151,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { user: { username: user.username } };
   },
 
+  // Throttle pool (#766): sign-up + sign-in against the lockout-enabled
+  // `authThrottle` instance, so the e2e can trip and observe the lock.
+  async authThrottleSignUp(username: string, password: string) {
+    await authThrottle.signUp(username, password);
+    return { success: true };
+  },
+
+  async authThrottleSignIn(username: string, password: string) {
+    const user = await authThrottle.signIn(username, password, context);
+    return { userId: user.userId, username: user.username };
+  },
+
   async authResetPassword(username: string) {
     await auth.resetPassword(username);
     return { success: true };
@@ -1059,9 +1198,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * Codes are one small record per test user and CI destroys the table at
    * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
    * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+   *
+   * Pass `username` to delete only that user's records (every channel). The
+   * e2e sweeps everything once, before its suites start running at the same
+   * time (test/background-suites.ts), and passes `username` after that: a full
+   * purge then could delete a code another suite is still waiting to read.
    */
-  async authPurgeDeliveredCodes() {
-    return { deleted: await purgeDeliveredCodes() };
+  async authPurgeDeliveredCodes(username?: string) {
+    return { deleted: await purgeDeliveredCodes(username) };
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -1148,6 +1292,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const u = await authC.admin.createUser(username, {
       temporaryPassword,
       attributes: { department, email: `${username}@example.com` },
+      // Without SUPPRESS, Cognito emails an invite via its default sender, whose
+      // account-wide daily cap turns repeat CI runs into LimitExceededException.
+      suppressInvite: true,
     });
     return { username: u.username, enabled: u.enabled };
   },
@@ -1425,6 +1572,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     context.response.headers.set('set-cookie', `${name}=${value}; HttpOnly; Secure; SameSite=None`);
     return { success: true };
   },
+
+  // Sets two cookies in one response — `set` then `append`, the same pattern
+  // Auth uses for its session + auto-sign-in cookies. Every value must
+  // reach the browser on AWS too (API Gateway REST needs multiValueHeaders).
+  async setTwoCookies(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-a=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-b=2; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    return { success: true };
+  },
+
+  // Clears a cookie and then throws 401 — the `requireAuth`-on-a-dead-session
+  // shape. The client must receive both the error and the clearing cookie.
+  async clearCookieThenThrow(name: string) {
+    context.response.headers.set('set-cookie', `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+  },
+
+  // Sets a live cookie AND clears another, then throws — a method that changes
+  // cookies and then fails. Only the deletion may reach the client, with the
+  // error envelope (code, message, name) unchanged.
+  async setLiveAndClearCookieThenThrow(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-live=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-gone=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('rejected after changing cookies', 409, { name: 'CookieTestRejected' });
+  },
   
   async getCookie(name: string) {
     const cookies = context.request.headers.get('cookie') || '';
@@ -1634,6 +1806,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
+  // Request errors: each statement is rejected by Postgres for something the
+  // caller did (a constraint, a foreign key, a row-level-security policy or a
+  // missing grant), and must reach the client as a named 4xx, not a 500.
+  async dbCheckViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
+  },
+
+  async dbNotNullViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
+  },
+
+  async dbForeignKeyViolation(id: string) {
+    await db.execute(
+      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
+    );
+  },
+
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
+  async dbRlsViolation(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
+  },
+
+  async dbMissingGrant(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
+  },
+
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
   // Runs a balance transfer entirely through Kysely's `.transaction()`. If the
   // adapter does not drive a real engine transaction, the debit and credit do not
@@ -1754,15 +1961,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async dsqlDuplicateInsert(id: string) {
     try {
       await dsql.execute(sql`INSERT INTO dsql_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
-  async dsqlRejectForeignKey() {
-    try {
-      await dsql.execute(sql`CREATE TABLE bad_fk (id TEXT, ref TEXT REFERENCES dsql_items(id))`);
       return { error: null };
     } catch (e: any) {
       return { error: e.name };
@@ -2005,10 +2203,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
-    // Puts a test value into the secret setting, then resolves it via the same
+    // Puts a test value into its own secret setting, then resolves it via the same
     // () => Promise<string> pattern the agent uses for apiKey.
-    await secretSetting.put('sk-test-12345');
-    const resolver: () => Promise<string> = () => secretSetting.get();
+    await agentApiKeySetting.put('sk-test-12345');
+    const resolver: () => Promise<string> = () => agentApiKeySetting.get();
     const resolved = await resolver();
     return { resolved: resolved === 'sk-test-12345' };
   },
@@ -2156,6 +2354,100 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async settingPutSecret(value: string) {
     await secretSetting.put(value);
     return { success: true };
+  },
+
+  // ------------------------------------------------------------------------
+  // Secret Tests (AWS Secrets Manager)
+  // ------------------------------------------------------------------------
+
+  async secretGetApiKey() {
+    return { value: await apiKeySecret.get() };
+  },
+
+  async secretPutApiKey(value: string) {
+    await apiKeySecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetDbCredentials() {
+    return { value: await dbCredentialsSecret.get() };
+  },
+
+  async secretPutDbCredentials(value: { host: string; port: number }) {
+    await dbCredentialsSecret.put(value);
+    return { success: true };
+  },
+
+  async secretPutDbCredentialsInvalid(value: unknown) {
+    // Exercises schema validation on put. `value` is deliberately untyped here
+    // because the test passes an intentionally-wrong shape; the BB rejects it.
+    await dbCredentialsSecret.put(value as { host: string; port: number });
+    return { success: true };
+  },
+
+  async secretGetNamed() {
+    return { value: await namedSecret.get() };
+  },
+
+  async secretPutNamed(value: string) {
+    await namedSecret.put(value);
+    return { success: true };
+  },
+
+  async secretGetApiKeyPrevious() {
+    return { value: await apiKeySecret.get({ version: 'previous' }) };
+  },
+
+  async secretListApiKeyVersions() {
+    const versions = await apiKeySecret.listVersions();
+    // Return client-safe metadata (versionId + stages count), never values.
+    return versions.map((v) => ({ versionId: v.versionId, stages: v.stages }));
+  },
+
+  // Unset secret: never written, so get() must return null (not a random
+  // generated string) on AWS — the "unset reads null" contract.
+  async secretGetUnset() {
+    return { value: await unsetSecret.get() };
+  },
+
+  // Generated secret: get() before any put() returns the seeded random value.
+  async secretGetGenerated() {
+    return { value: await generatedSecret.get() };
+  },
+
+  // allowRuntimeWrite matrix — runtime behavior probes. Each reports whether
+  // `put` exists on the object, and what happens when it's invoked. For the
+  // read-only secrets we force the call through a minimal callable view (the
+  // only cast — representing a customer who bypasses the types with `as`/ignore)
+  // and expect a meaningful "not a function" TypeError. The writable one is
+  // called normally and must round-trip.
+  async secretWriteProbeOmitted() {
+    const hasPut = typeof (writeOmittedSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeOmittedSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeFalse() {
+    const hasPut = typeof (writeFalseSecret as { put?: unknown }).put === 'function';
+    let callError: string | null = null;
+    try {
+      await (writeFalseSecret as unknown as { put: (v: string) => Promise<void> }).put('x');
+    } catch (e) {
+      callError = e instanceof Error ? e.constructor.name : String(e);
+    }
+    return { hasPut, callError };
+  },
+
+  async secretWriteProbeTrue(value: string) {
+    const hasPut = typeof writeTrueSecret.put === 'function';
+    await writeTrueSecret.put(value);
+    const readBack = await writeTrueSecret.get();
+    return { hasPut, readBack };
   },
   // CronJob Tests
   // ------------------------------------------------------------------------
@@ -2411,7 +2703,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { stdout: captured.stdout, stderr: captured.stderr };
   },
+
+  // ------------------------------------------------------------------------
+  // Multi-compute — which function served this call (see isolatedApi below)
+  // ------------------------------------------------------------------------
+
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
+
+// ============================================================================
+// Multi-compute — a namespace on its own compute
+//
+// `isolatedApi` runs on a separate serverless compute with less memory than the
+// default, so a deployed call proves the gateway routed it there: it reports a
+// different function and the compute's own memory size. The export name differs
+// from the constructor name ('isolated'), as with `auth.createApi()`, because
+// the gateway routes on the export name the client calls.
+// ============================================================================
+
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    pid: process.pid,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
 
 // Export auth state machine API
 export const authApi = auth.createApi();

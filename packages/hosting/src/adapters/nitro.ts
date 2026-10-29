@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync, isPackageExists } from 'local-pkg';
+import { getProjectPackageInfo, projectHasPackage } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
@@ -39,6 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
+import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
   /** Project root directory (the directory containing the framework config) */
@@ -53,6 +54,10 @@ export type NitroAdapterOptions = {
    * in the user's `nuxt.config.ts` (the adapter reads this from
    * `.output/nitro.json`). `'node-server'` produces a plain Node HTTP
    * server (run via the Lambda Web Adapter).
+   *
+   * When the run targets Lambda Web Functions (`compute.type:
+   * 'web-function'`, see `withComputeTarget`) the default is
+   * `'node-server'` instead — Web Functions run the HTTP server directly.
    */
   preset?: string;
   /**
@@ -161,7 +166,7 @@ export const VERIFIED_NITRO_RANGE = '>=2.10.0 <2.14.0';
  * @internal
  */
 export const warnIfNitroOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('nitropack', { paths: [projectDir] });
+  const info = getProjectPackageInfo('nitropack', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_NITRO_RANGE)) return;
@@ -249,7 +254,9 @@ type NitroRouteRule = {
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   const { projectDir, skipBuild, preset, buildCommand } = options;
-  const effectivePreset = preset ?? 'aws-lambda';
+  // Web Functions run a plain Node.js HTTP server → `node-server`; Lambda
+  // compute (API Gateway) → `aws-lambda`.
+  const effectivePreset = preset ?? (targetCompute() === 'web-function' ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');
@@ -327,8 +334,10 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   if (!skipBuild) {
     // Nitro's aws-lambda preset reads event.rawPath / requestContext.http
     // (HTTP API v2 / Function URL shape). The L3 fronts SSR with REST API
-    // (payload v1: event.path / requestContext.httpMethod). Without the
-    // patch every URL renders as `/`. See patchNitroHandlerForApiGateway.
+    // (payload v1: event.path / requestContext.httpMethod), and the ALB door
+    // invokes it as a Lambda target (method at the top level:
+    // event.httpMethod). Without the patch every URL renders as `/` and every
+    // ALB request is a GET. See patchNitroHandlerForApiGateway.
     if (effectivePreset === 'aws-lambda') {
       // Flag an unverified nitropack BEFORE patching so a signature drift
       // (or a v3 build that legitimately needs no patch) is contextualized.
@@ -734,14 +743,14 @@ export const extractJsonObjectAfter = (
   if (open === -1) return undefined;
   let depth = 0;
   let inString = false;
-  let escape = false;
+  let escaped = false;
   for (let i = open; i < source.length; i++) {
     const ch = source[i];
     if (inString) {
-      if (escape) {
-        escape = false;
+      if (escaped) {
+        escaped = false;
       } else if (ch === '\\') {
-        escape = true;
+        escaped = true;
       } else if (ch === '"') {
         inString = false;
       }
@@ -1078,7 +1087,7 @@ const pruneImageOptBundle = (bundleDir: string): void => {
  * count.
  */
 const projectUsesNuxtImage = (projectDir: string): boolean => {
-  if (!isPackageExists('@nuxt/image', { paths: [projectDir] })) {
+  if (!projectHasPackage('@nuxt/image', projectDir)) {
     return false;
   }
   // The package is installed, but the user may have disabled the
@@ -1329,8 +1338,16 @@ const buildManifest = (input: {
       // Forward the user-configured base URL into the Lambda so its
       // prefix-stripping regex matches whatever path CloudFront
       // routes here. Default `/_ipx` works without an explicit env.
-      ...(effectiveIpxBaseURL !== '/_ipx'
-        ? { environment: { IPX_BASE_URL: effectiveIpxBaseURL } }
+      // The app's base path too: behind the ALB and API Gateway doors the
+      // image Lambda receives `/<basePath>/_ipx/...` (the CloudFront router
+      // strips it first), so it strips an optional base path before IPX's.
+      ...(effectiveIpxBaseURL !== '/_ipx' || basePath
+        ? {
+            environment: {
+              ...(effectiveIpxBaseURL !== '/_ipx' ? { IPX_BASE_URL: effectiveIpxBaseURL } : {}),
+              ...(basePath ? { IPX_APP_BASE_URL: basePath } : {}),
+            },
+          }
         : {}),
     };
   }
@@ -1351,16 +1368,45 @@ const buildManifest = (input: {
 const usesIsrFeatures = (
   routeRules: Record<string, NitroRouteRule>,
 ): boolean => {
-  return Object.values(routeRules).some((rule) => {
-    const raw = rule as Record<string, unknown>;
-    // `swr` and `isr` aren't typed on our local NitroRouteRule yet —
-    // Nitro emits any of these three for ISR semantics. Truthy values
-    // mean "use cache" (e.g. `swr: 60`, `cache: { swr: true }`); falsy
-    // values (`cache: false`, `swr: 0`) mean the rule explicitly opts
-    // out and shouldn't trigger cache provisioning.
-    return Boolean(rule.cache) || Boolean(raw.swr) || Boolean(raw.isr);
-  });
+  return Object.values(routeRules).some(ruleUsesCache);
 };
+
+/** Whether one route rule asks for ISR/SWR caching (see {@link usesIsrFeatures}). */
+const ruleUsesCache = (rule: NitroRouteRule): boolean => {
+  const raw = rule as Record<string, unknown>;
+  // `swr` and `isr` aren't typed on our local NitroRouteRule yet —
+  // Nitro emits any of these three for ISR semantics. Truthy values
+  // mean "use cache" (e.g. `swr: 60`, `cache: { swr: true }`); falsy
+  // values (`cache: false`, `swr: 0`) mean the rule explicitly opts
+  // out and shouldn't trigger cache provisioning.
+  return Boolean(rule.cache) || Boolean(raw.swr) || Boolean(raw.isr);
+};
+
+/**
+ * The literal path prefix of a route-rule pattern, up to its first wildcard
+ * segment: `/blog/**` → `/blog`, `/about` → `/about`, `/**` → `''`. A
+ * pattern with a wildcard in the middle stops at that segment.
+ */
+const ruleLiteralPrefix = (pattern: string): string => {
+  const literal: string[] = [];
+  for (const segment of pattern.split('/').filter(Boolean)) {
+    if (segment.includes('*')) break;
+    literal.push(segment);
+  }
+  return literal.length > 0 ? `/${literal.join('/')}` : '';
+};
+
+/** `true` when `urlPath` is `prefix` or lies under it. */
+const isUnderPrefix = (urlPath: string, prefix: string): boolean =>
+  urlPath === prefix || urlPath.startsWith(`${prefix}/`);
+
+/**
+ * Upper bound on the `exact` asset rows one ISR/SWR folder may add before the
+ * adapter warns. Every exact row is a row the CloudFront router scans per
+ * request, and a large table trips its instruction limit (a 503 on every
+ * route) — the reason sibling routes are coalesced at all.
+ */
+const ISR_DIR_EXACT_ROW_WARN_THRESHOLD = 50;
 
 /**
  * Map a Nitro preset (+ relevant config flags) to the right
@@ -1434,6 +1480,29 @@ const buildRoutes = (
     });
   }
 
+  // Literal prefixes of the ISR/SWR rules that name a path (`/blog/**` →
+  // `/blog`). A site-wide rule (`/**`) has no prefix and is left out: it
+  // doesn't name a folder, and treating every public folder (including the
+  // hashed `_nuxt/`) as an ISR subtree would explode the route table.
+  const isrPrefixes = Object.entries(routeRules)
+    .filter(([, rule]) => ruleUsesCache(rule))
+    .map(([pattern]) => ruleLiteralPrefix(pattern))
+    .filter((prefix) => prefix.length > 0);
+  const isUnderIsr = (urlPath: string): boolean =>
+    isrPrefixes.some((prefix) => isUnderPrefix(urlPath, prefix));
+
+  // Pages an explicit `prerender: true` rule freezes (`/blog/featured`, or a
+  // `/blog/archive/**` subtree).
+  const prerenderRules = Object.entries(routeRules)
+    .filter(([, rule]) => rule.prerender)
+    .map(([pattern]) => normalizeRulePattern(pattern));
+  const isExplicitPrerender = (urlPath: string): boolean =>
+    prerenderRules.some((rule) =>
+      rule.endsWith('/*')
+        ? isUnderPrefix(urlPath, rule.slice(0, -2))
+        : rule === urlPath,
+    );
+
   if (fs.existsSync(publicDir)) {
     // Everything in `.output/public/` is, by definition, a static
     // asset. Walk the top level and route each entry to S3:
@@ -1442,9 +1511,21 @@ const buildRoutes = (
     // This catches both framework-emitted dirs (`_nuxt/`, `_build/`,
     // `assets/`) and user-supplied ones (anything dropped into
     // `public/`, e.g. `public/img/`, `public/fonts/`).
+    //
+    // Exception: a folder that an ISR/SWR rule names (`public/blog/` under
+    // `/blog/**`) does NOT get a blanket `/<name>/*` static row. Every front
+    // door takes the first match, so that row would send every page under the
+    // folder that renders on demand (`/blog/any-other-post`) to S3 and 404.
+    // Its real files get their own `exact` rows instead (see
+    // `addIsrFolderAssets`), and requests for anything else fall through to
+    // the server.
     for (const entry of fs.readdirSync(publicDir, { withFileTypes: true })) {
       // Skip prerendered HTML routes — handled below as `<route>/*`.
       if (entry.isFile() && entry.name.endsWith('.html')) continue;
+      if (entry.isDirectory() && isUnderIsrFolder(`/${entry.name}`, isrPrefixes)) {
+        addIsrFolderAssets(path.join(publicDir, entry.name), `/${entry.name}`, addRoute);
+        continue;
+      }
       const pattern = entry.isDirectory()
         ? `/${entry.name}/*`
         : `/${entry.name}`;
@@ -1469,8 +1550,15 @@ const buildRoutes = (
       const rel = path.relative(publicDir, htmlFile).replace(/\\/g, '/');
       const urlPath = htmlFileToUrlPath(rel);
       if (urlPath === '/') continue;
-      addRoute({ pattern: urlPath, target: 'static' });
-      addRoute({ pattern: `${urlPath}/*`, target: 'static' });
+      // Inside an ISR/SWR subtree, a page an explicit `prerender: true` rule
+      // freezes keeps its own rows (`exact`), so it's still served frozen from
+      // S3 and isn't merged into a server wildcard. Pages prerendered only
+      // because the crawler found them stay mergeable: under ISR they coalesce
+      // into one server wildcard and render through the ISR cache, which keeps
+      // the table small for a large site.
+      const exact = isUnderIsr(urlPath) && isExplicitPrerender(urlPath);
+      addRoute({ pattern: urlPath, target: 'static', ...(exact ? { exact } : {}) });
+      addRoute({ pattern: `${urlPath}/*`, target: 'static', ...(exact ? { exact } : {}) });
     }
   }
 
@@ -1483,11 +1571,13 @@ const buildRoutes = (
   for (const [routePattern, rule] of Object.entries(routeRules)) {
     if (rule.prerender) {
       const normalized = normalizeRulePattern(routePattern);
+      const exact = isUnderIsr(ruleLiteralPrefix(routePattern) || '/');
+      const flag = exact ? { exact } : {};
       if (normalized.endsWith('/*')) {
-        addRoute({ pattern: normalized, target: 'static' });
+        addRoute({ pattern: normalized, target: 'static', ...flag });
       } else {
-        addRoute({ pattern: normalized, target: 'static' });
-        addRoute({ pattern: `${normalized}/*`, target: 'static' });
+        addRoute({ pattern: normalized, target: 'static', ...flag });
+        addRoute({ pattern: `${normalized}/*`, target: 'static', ...flag });
       }
     }
   }
@@ -1496,6 +1586,58 @@ const buildRoutes = (
   addRoute({ pattern: '/*', target: 'default' });
 
   return routes;
+};
+
+/**
+ * Whether a top-level public folder (`/blog`) is an ISR/SWR subtree, or holds
+ * one: an ISR/SWR rule's literal prefix is the folder or lies under it.
+ */
+const isUnderIsrFolder = (folderPath: string, isrPrefixes: string[]): boolean =>
+  isrPrefixes.some((prefix) => isUnderPrefix(prefix, folderPath));
+
+/**
+ * Emit `exact` static rows for the real files in a public folder that an
+ * ISR/SWR rule names, in place of the folder's blanket `/<dir>/*` row:
+ *   - a non-HTML file              → `/<dir>/<file>`
+ *   - a sub-folder with no HTML    → `/<dir>/<sub>/*` (one row for the assets)
+ *   - a prerendered page's folder  → skipped; the page's own rows cover it
+ *   - any other sub-folder         → walked the same way
+ * `exact` keeps these rows out of route coalescing, so they're never merged
+ * into a wildcard that the ISR switch would send to the server (which has no
+ * copy of `public/`).
+ */
+const addIsrFolderAssets = (
+  absDir: string,
+  urlDir: string,
+  addRoute: (route: RouteBehavior) => void,
+): void => {
+  let rows = 0;
+  const walk = (dir: string, url: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      const childUrl = `${url}/${entry.name}`;
+      if (entry.isFile()) {
+        if (entry.name.endsWith('.html')) continue;
+        addRoute({ pattern: childUrl, target: 'static', exact: true });
+        rows++;
+      } else if (entry.isDirectory()) {
+        if (walkHtmlFiles(abs).length === 0) {
+          addRoute({ pattern: `${childUrl}/*`, target: 'static', exact: true });
+          rows++;
+        } else if (!fs.existsSync(path.join(abs, 'index.html'))) {
+          walk(abs, childUrl);
+        }
+      }
+    }
+  };
+  walk(absDir, urlDir);
+  if (rows > ISR_DIR_EXACT_ROW_WARN_THRESHOLD) {
+    process.stderr.write(
+      `⚠️  public${urlDir}/ is under an ISR/SWR route rule, so its ${rows} files get their own route rows. ` +
+        'A large route table can exceed the CloudFront router function\'s instruction limit. ' +
+        'Move the files into a sub-folder (one row per sub-folder) to keep the table small.\n',
+    );
+  }
 };
 
 const walkHtmlFiles = (dir: string): string[] => {
@@ -1671,6 +1813,7 @@ const buildHeaders = (
  * (payload v1) fields when the v2 fields are undefined:
  *   - withQuery(event.rawPath, …) → event.rawPath || event.path
  *   - event.requestContext?.http?.method → || event.requestContext?.httpMethod
+ *     || event.httpMethod (the last for an ALB Lambda-target event)
  *
  * The handler can land in different chunks depending on Nitro's chunking
  * (typically `chunks/nitro/nitro.mjs` on POSIX, `chunks/_/nitro.mjs` or
@@ -1691,13 +1834,17 @@ export const patchNitroHandlerForApiGateway = (serverDir: string): void => {
 
   const rawPathRe = /withQuery\(\s*event\.rawPath\s*,\s*query\s*\)/g;
   const rawPathReplacement = 'withQuery(event.rawPath || event.path, query)';
+  // The method falls through payload 2.0 (`requestContext.http.method`), the
+  // REST API (payload 1.0, `requestContext.httpMethod`) and an ALB Lambda
+  // target (`event.httpMethod` at the top level — the ALB event has neither
+  // `requestContext` field, so without it every ALB request would be a GET).
   // Negative lookahead so we don't re-wrap a method ref that already has the
   // `|| event.requestContext?.httpMethod` fallthrough — keeps the patch
   // idempotent across repeat invocations.
   const methodRe =
     /event\.requestContext\?\.http\?\.method(?!\s*\|\|\s*event\.requestContext\?\.httpMethod)/g;
   const methodReplacement =
-    '(event.requestContext?.http?.method || event.requestContext?.httpMethod)';
+    '(event.requestContext?.http?.method || event.requestContext?.httpMethod || event.httpMethod)';
   // Nitro's aws-lambda preset decodes the API Gateway base64 wrapper and
   // immediately re-encodes the bytes as a UTF-8 string before handing them
   // to h3, mangling any non-text payload (file uploads, binary blobs). A

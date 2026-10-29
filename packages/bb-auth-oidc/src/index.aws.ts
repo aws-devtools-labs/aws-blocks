@@ -9,17 +9,32 @@
 
 import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 
-import { type ScopeParent, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
+import {
+	buildingBlockParent,
+	getCachedConfigValue,
+	getDeploymentType,
+	getSdkIdentifiers,
+	installClientUserAgent,
+	registerSdkIdentifiers,
+	type ScopeParent,
+} from '@aws-blocks/core';
 import { resolveCookieSecurity } from '@aws-blocks/auth-common/cookies';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { AuthOIDC as AuthOIDCBase, DEFAULT_CALLBACK_PATH } from './auth-oidc.js';
+import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
-import { cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
+import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
+
+// Provider names already warned about, so the not-mounted warnings below log
+// once per provider per container rather than once per construction.
+// Bounded by the app's distinct stub provider names (a small fixed set); entries
+// are never removed because the dedupe must persist for the life of the container.
+const warnedStubProviders = new Set<string>();
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -34,6 +49,7 @@ export { relayOrigin, type RelayOrigin } from './relay.js';
 export type {
 	OIDCUser,
 	MappedClaims,
+	OIDCClient,
 	OnStubAuthorize,
 	StubAuthorizeRequest,
 	StubUser,
@@ -57,15 +73,16 @@ export class AuthOIDC<
 > extends AuthOIDCBase<P> {
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
-		const fullIdForEnv = scopeFullId(scope, id);
-		const envVarName = cookieSecretEnvVar(fullIdForEnv);
+		const self = buildingBlockParent({ id, parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		const envVarName = cookieSecretEnvVar(self.fullId);
 		// Lazy env resolution — this module is imported during client-code
 		// generation (outside Lambda) where env vars are absent. We defer the
 		// hard check to the cookie-secret resolver so construction succeeds
 		// during codegen but runtime calls still fail fast if misconfigured.
 		const parameterName = process.env[envVarName] ?? '';
 
-		const sessions = new KVStore<SessionRow>(scope, `${id}-sessions`);
+		// The store feeds `engine`, which `super()` consumes, so `this` is unavailable.
+		const sessions = new KVStore<SessionRow>(self, 'sessions');
 
 		const cookieOpts = {
 			...resolveCookieSecurity({
@@ -100,30 +117,30 @@ export class AuthOIDC<
 
 		const hasCognitoFederated = options.providers.some(p => p.kind === 'cognito-federated');
 
-		let engine;
+		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			const sessionManager = new SessionManager({
 				sessionStore: sessions,
 				cookieSecret,
-				cookieNamePrefix: `oidc_${fullIdForEnv}`,
+				cookieNamePrefix: `oidc_${self.fullId}`,
 				cookieAttributes: cookieOpts,
 			});
 
-			const cognitoEnvPrefix = `BLOCKS_AUTH_OIDC_COGNITO_${fullIdForEnv.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+			const envPrefix = cognitoEnvPrefix(self.fullId);
 			engine = new CognitoFederationEngine({
 				providers: options.providers,
 				sessionManager,
 				cognitoClientId: () => {
-					const val = process.env[`${cognitoEnvPrefix}_CLIENT_ID`];
-					if (!val) throw new Error(`AuthOIDC: env var ${cognitoEnvPrefix}_CLIENT_ID is not set.`);
+					const val = process.env[`${envPrefix}_CLIENT_ID`];
+					if (!val) throw new Error(`AuthOIDC: env var ${envPrefix}_CLIENT_ID is not set.`);
 					return val;
 				},
 				cognitoClientSecret: () => {
-					return process.env[`${cognitoEnvPrefix}_CLIENT_SECRET`] ?? '';
+					return process.env[`${envPrefix}_CLIENT_SECRET`] ?? '';
 				},
 				cognitoUserPoolId: () => {
-					const val = process.env[`${cognitoEnvPrefix}_POOL_ID`];
-					if (!val) throw new Error(`AuthOIDC: env var ${cognitoEnvPrefix}_POOL_ID is not set.`);
+					const val = process.env[`${envPrefix}_POOL_ID`];
+					if (!val) throw new Error(`AuthOIDC: env var ${envPrefix}_POOL_ID is not set.`);
 					return val;
 				},
 				allowedRelayOrigins: options.allowedRelayOrigins,
@@ -133,7 +150,7 @@ export class AuthOIDC<
 				providers: options.providers,
 				sessionStore: sessions,
 				cookieSecret,
-				cookieNamePrefix: `oidc_${fullIdForEnv}`,
+				cookieNamePrefix: `oidc_${self.fullId}`,
 				cookieAttributes: cookieOpts,
 				callbackPath: options.callbackPath ?? DEFAULT_CALLBACK_PATH,
 				postSignInPath: options.postSignInPath ?? '/',
@@ -149,22 +166,42 @@ export class AuthOIDC<
 		});
 		mountAuthRoutes(this);
 
+		// Stub IdP routes are mounted only on sandbox deployments. The CDK entry
+		// rejects stub providers at synth for other deployments; this check
+		// covers runtime code paired with an older config (e.g. a `cdk watch`
+		// hotswap). It never throws: this entry is also imported during client
+		// code generation outside compute, where the type is 'local'.
+		//
+		// When a stub provider is not mounted, the warning depends on why:
+		// - 'production' with a BLOCKS_DEPLOYMENT_TYPE value in the config: the
+		//   app was deployed outside the sandbox dev loop.
+		// - 'production' with NO BLOCKS_DEPLOYMENT_TYPE value: the config was
+		//   written before the key existed (e.g. code hotswapped by `cdk watch`
+		//   onto an older config), so `getDeploymentType()` falls back to
+		//   'production'. A full sandbox deploy rewrites the config.
+		// - 'local': no Blocks deployed configuration (local dev, tests, client
+		//   code generation). Not mounted and silent, since this is the normal
+		//   codegen path and there is no compute-agnostic way to tell it apart
+		//   from compute that Blocks does not configure.
+		// The loaded config value (the source `getDeploymentType()` reads on
+		// deployed compute) only selects the message; the mount decision uses
+		// `getDeploymentType()` alone.
+		const deploymentType = getDeploymentType();
 		for (const provider of options.providers) {
-			if (provider.kind === 'stub') {
-				mountStubIdpRoutes(this, provider);
+			if (provider.kind !== 'stub') continue;
+			if (deploymentType === 'sandbox') {
+				mountStubIdpRoutes(this, provider, { codeSecret: cookieSecret });
+			} else if (deploymentType === 'production' && !warnedStubProviders.has(provider.name)) {
+				warnedStubProviders.add(provider.name); // dedupe: warn once per provider per container
+				if (getCachedConfigValue('BLOCKS_DEPLOYMENT_TYPE') === undefined) {
+					console.warn(
+						`AuthOIDC: stubIdp provider '${provider.name}' is not mounted: this deployment's config predates BLOCKS_DEPLOYMENT_TYPE. Restart \`npm run sandbox\` (its initial full deploy refreshes the config).`,
+					);
+				} else {
+					console.warn(`AuthOIDC: stubIdp provider '${provider.name}' is not mounted outside a sandbox deployment.`);
+				}
 			}
 		}
 	}
-}
-
-function scopeFullId(scope: ScopeParent, id: string): string {
-	const segments: string[] = [id];
-	let current: ScopeParent | undefined = scope;
-	while (current && 'parent' in current && current.parent) {
-		segments.unshift(current.id);
-		current = (current as { parent: ScopeParent }).parent;
-	}
-	if (current && 'id' in current) segments.unshift(current.id);
-	return segments.join('-');
 }
 

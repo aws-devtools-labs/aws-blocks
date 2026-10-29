@@ -120,7 +120,7 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## AWS Runtime
 
-- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`.
+- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
 - When the Lambda receives an event with `source === 'blocks.cronjob'`, it routes to the handler matching `jobName`.
 - The handler receives `{ scheduledTime, jobName, input }` — the same `CronJobEvent<T>` shape used in mock.
 - `scheduledTime` is resolved by EventBridge at invocation time via the `<aws.scheduler.scheduled-time>` template variable.
@@ -144,6 +144,9 @@ The mock computes the next cron fire time by:
 2. Iterating minute-by-minute (up to 525,600 iterations = 1 year).
 3. Checking if the candidate time matches all cron fields (minute, hour, day-of-month, month, day-of-week).
 4. For timezone-aware schedules, components are extracted via `Intl.DateTimeFormat`.
+5. If no minute in that year matches (e.g. a leap-day schedule two years out), returning `null`; the mock then searches again later instead of firing.
+
+A fire time further away than `setTimeout`'s maximum delay (about 24.8 days) is reached in steps: the mock re-plans at the maximum delay and fires only once the remaining delay fits.
 
 This is a brute-force approach that trades performance for correctness. Acceptable for local dev where precision is not critical.
 

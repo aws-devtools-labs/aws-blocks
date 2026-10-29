@@ -24,7 +24,7 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
 import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -33,7 +33,7 @@ import { CronJob, CronJobErrors } from './index.cdk.js';
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 
 /** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
-class FakeCompute extends Compute {
+class FakeCompute extends ComputeBase {
 	setEnv(_key: string, _value: string): void {}
 	// Observability hooks are irrelevant here — stub them to satisfy Compute.
 	protected applyTracing(): void {}
@@ -182,5 +182,33 @@ describe('CronJob scheduler role trust', () => {
 		assert.ok(sourceArn.includes('AWS::Region'), `SourceArn is region-scoped: ${sourceArn}`);
 		assert.ok(sourceArn.includes('AWS::AccountId'), `SourceArn is account-scoped: ${sourceArn}`);
 		assert.ok(sourceArn.includes('AWS::Partition'), `SourceArn uses the stack partition: ${sourceArn}`);
+	});
+});
+
+describe('CronJob one handler per event key, at synth', () => {
+	// Two jobs end up with one `fullId` (`<stack>-x-y-z`) because `fullId` joins
+	// ids with '-': `x-y`/`z` and `x`/`y-z`. CDK accepts both construct paths, and
+	// the Lambda runtime would register both under `blocks.cronjob:<fullId>` —
+	// the second throws on cold start, failing every request. Synth must refuse it.
+	test('two CronJobs that share a fullId fail synth, naming the key', async () => {
+		const stack = await makeStack('CronCollide');
+		new CronJob(new Scope('x-y', { parent: stack }), 'z', { schedule: 'rate(1 day)', handler: async () => {} });
+		const other = new Scope('x', { parent: stack });
+		assert.throws(
+			() => new CronJob(other, 'y-z', { schedule: 'rate(1 day)', handler: async () => {} }),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /"blocks\.cronjob:CronCollide-x-y-z"/);
+				assert.match(e.message, /already registered by Building Block 'CronCollide-x-y-z'/);
+				return true;
+			},
+		);
+	});
+
+	test('distinct CronJobs in one stack synthesize', async () => {
+		const stack = await makeStack('CronDistinct');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(stack, 'hourly', { schedule: 'rate(1 hour)', handler: async () => {} });
+		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 2);
 	});
 });

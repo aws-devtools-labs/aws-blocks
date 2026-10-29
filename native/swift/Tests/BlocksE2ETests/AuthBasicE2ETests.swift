@@ -62,9 +62,10 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
     }
 
     func testRequireAuthWhenSignedOutThrows() async throws {
-        let freshApi = Api(server: Self.server)
+        let fresh = Blocks(server: Self.server)
+        defer { fresh.close() }
         do {
-            _ = try await freshApi.basicRequireAuth()
+            _ = try await fresh.api.basicRequireAuth()
             XCTFail("Expected error for unauthenticated request")
         } catch {
             // Expected
@@ -79,6 +80,25 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
             XCTFail("Expected error for wrong password")
         } catch {
             // Expected
+        }
+    }
+
+    func testZeroArgumentBlocksFollowsTheSpecsServer() async throws {
+        let zeroArgument = Blocks()
+        defer { zeroArgument.close() }
+        // The local job serves on a random port, so only a BLOCKS_URL equal to the spec's server can be called.
+        try XCTSkipUnless(zeroArgument.server.url == Self.blocksUrl, "spec server \(zeroArgument.server.url) is not BLOCKS_URL")
+        let authed = try await zeroArgument.api.basicCheckAuth()
+        XCTAssertFalse(authed)
+    }
+
+    func testClosedBlocksThrowsClientClosedError() async throws {
+        blocks.close()
+        do {
+            _ = try await api.basicCheckAuth()
+            XCTFail("Expected ClientClosedError")
+        } catch {
+            XCTAssertTrue(error is ClientClosedError, "\(error)")
         }
     }
 }

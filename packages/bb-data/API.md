@@ -84,6 +84,10 @@ export const DatabaseErrors: {
     readonly TransactionFailed: "TransactionFailedException";
     readonly UniqueConstraintViolation: "UniqueConstraintViolationException";
     readonly SerializationFailure: "SerializationFailureException";
+    readonly PermissionDenied: "PermissionDeniedException";
+    readonly CheckViolation: "CheckViolationException";
+    readonly NotNullViolation: "NotNullViolationException";
+    readonly ForeignKeyViolation: "ForeignKeyViolationException";
 };
 
 // @public (undocumented)
@@ -156,6 +160,7 @@ export class PgClientEngine implements DatabaseEngine {
 
 // @public
 export interface PgClientEngineConfig {
+    applicationName?: string;
     connectionString: string;
     connectionTimeoutMillis?: number;
     poolSize?: number;

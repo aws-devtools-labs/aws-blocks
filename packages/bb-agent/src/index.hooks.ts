@@ -17,6 +17,7 @@
 import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, JSONValue } from './types.js';
 import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
+import { agentErrorFromChunk } from './errors.js';
 
 export type { AgentStreamChunk } from './types.js';
 /** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
@@ -148,8 +149,13 @@ export interface UseChatOptions {
 	onLoadingChange?: (isLoading: boolean) => void;
 	/** Called on each streaming chunk. */
 	onChunk?: (chunk: AgentStreamChunk) => void;
-	/** Called when the agent encounters an error. */
-	onError?: (error: string) => void;
+	/**
+	 * Called when the agent encounters an error. `error` is the message. `cause` is set when
+	 * the server classified an `error` chunk (e.g. a Bedrock model the account cannot invoke):
+	 * it is the branded error the chunk maps to, such as `AgentErrors.ModelUnavailable`, so a
+	 * call site can `isBlocksError(cause, ...)` to branch on error type. Otherwise undefined.
+	 */
+	onError?: (error: string, cause?: unknown) => void;
 	/** Called when the agent needs human approval before continuing. The same interrupt may be surfaced more than once — on the initial `loadConversation` and again on a reconnect re-sync — so handlers should key/dedupe by interrupt `id`. */
 	onInterrupt?: (interrupts: Array<{ id: string; name: string; reason?: any }>) => void;
 }
@@ -338,10 +344,10 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	 * send-rejection and a later `error` chunk can both describe the same failed turn; we
 	 * must not fire onError twice for it.
 	 */
-	function reportError(message: string) {
+	function reportError(message: string, cause?: unknown) {
 		if (errorReported) return;
 		errorReported = true;
-		options.onError?.(message);
+		options.onError?.(message, cause);
 	}
 
 	/**
@@ -536,8 +542,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			loading = false;
 			options.onLoadingChange?.(loading);
 			// Report at most once per turn: a prior send-rejection may have already surfaced
-			// onError for this same (server-started) turn.
-			reportError(chunk.error ?? 'Unknown error');
+			// onError for this same (server-started) turn. A server-classified failure (errorName)
+			// also passes the branded error as `cause`, so call sites can isBlocksError() on it.
+			reportError(chunk.error ?? 'Unknown error', chunk.errorName ? agentErrorFromChunk(chunk) : undefined);
 		}
 
 		if (chunk.type === 'interrupt' && chunk.interrupts) {

@@ -14,6 +14,7 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'AuthBasic',
   'AuthCognito',
   'AuthOidc',
+  'Compute',
   'CronJob',
   'Dashboard',
   'Database',
@@ -27,5 +28,6 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'Logger',
   'Metrics',
   'Realtime',
+  'Secret',
   'Tracer',
 ]);

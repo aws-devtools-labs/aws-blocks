@@ -18,14 +18,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  cleanup:
-    name: Delete Stale Stacks
+  # One cleanup leg per E2E account (count from .github/actions/e2e-slot), plus
+  # publish. publish still holds stacks from runs before the move, and the agent
+  # bench deploys there until #878 merges. Drop publish only after #878 has
+  # merged and the publish leg has reported zero candidates (stacks, REST APIs,
+  # IAM roles) for several scheduled runs in a row.
+  legs:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: publish
+    outputs:
+      accounts: ${{ steps.e2e-slot.outputs.accounts }}
+      matrix: ${{ steps.legs.outputs.matrix }}
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions/e2e-slot
+          persist-credentials: false
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
+      - id: legs
+        env:
+          ACCOUNTS: ${{ steps.e2e-slot.outputs.accounts }}
+        run: |
+          matrix=$(jq -cn --argjson n "$ACCOUNTS" \
+            '[range($n) | {name: "e2e account \(. + 1)", environment: "e2e", index: .}] + [{name: "publish", environment: "publish"}]')
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  cleanup:
+    name: Delete Stale Stacks (${{ matrix.name }})
+    needs: legs
+    runs-on: ubuntu-latest
+    # The steps' own time budgets (stack sweep 40 min, Amplify sandbox sweep
+    # 40, REST API and CloudWatch role sweeps 15 each, log group sweep 5) add
+    # up to more than this. They only bind on a backlog run: then the timeout
+    # can land during the Amplify sandbox sweep or earlier, and the steps
+    # after it, the log group sweep included, may not run until the next
+    # scheduled run. Don't add a budgeted step without checking the total.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    environment: ${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.environment == 'e2e'
+        with:
+          sparse-checkout: .github/actions/e2e-aws-credentials
+          persist-credentials: false
+
+      - name: Configure AWS credentials (E2E account)
+        if: matrix.environment == 'e2e'
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ matrix.index }}
+          # Fails the leg if AWS_ROLE_ARNS and the pool size have drifted apart.
+          accounts: ${{ needs.legs.outputs.accounts }}
+
+      - name: Configure AWS credentials (publish)
+        if: matrix.environment == 'publish'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -314,6 +367,12 @@ jobs:
           echo "- Skipped (not e2e): $SKIPPED_NOT_E2E" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (< 2h old): $SKIPPED_TOO_NEW" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TRIGGER_FAILED" -gt 0 ]; then
+            # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
+            # prefix the CI role can't delete) never self-heals, and every such
+            # stack keeps holding its REST API against the account quota.
+            echo "::warning::$TRIGGER_FAILED delete-stack call(s) failed — see the log for the stacks and errors"
+          fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
@@ -464,6 +523,12 @@ jobs:
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TRIGGER_FAILED" -gt 0 ]; then
+            # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
+            # prefix the CI role can't delete) never self-heals, and every such
+            # stack keeps holding its REST API against the account quota.
+            echo "::warning::$TRIGGER_FAILED delete-stack call(s) failed — see the log for the stacks and errors"
+          fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
@@ -530,8 +595,14 @@ jobs:
           OWNED_IDS=$(echo "$OWNED_IDS" | sed '/^$/d' | sort -u)
 
           # All custom REST APIs with id, name and creation epoch.
-          APIS=$(aws apigateway get-rest-apis \
-            --query "items[].[id,name,createdDate]" --output text 2>/dev/null || echo "")
+          # Surface a failed listing instead of reading it as "no APIs": a silent
+          # failure here hid both the orphan sweep and the EDGE-quota warning
+          # below while the account filled up.
+          if ! APIS=$(aws apigateway get-rest-apis \
+            --query "items[].[id,name,createdDate]" --output text 2>/tmp/get-rest-apis.err); then
+            echo "::warning::apigateway get-rest-apis failed, orphaned REST APIs were not swept: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
+            APIS=""
+          fi
 
           # Only sweep APIs that (a) match a test-artifact name shape, (b) are old
           # enough to be clearly abandoned (>6h), and (c) are owned by NO live stack
@@ -585,14 +656,16 @@ jobs:
             fi
 
             # (a) test-artifact name shape only. These are the prefixes CI apps use.
-            # NOTE: DefaultCompute* / *DefaultComputeAPI* are ALSO the default API
-            # name on live blocks-compute stacks, so a name match is NOT a safety
-            # signal for them — a live DefaultCompute API is protected solely by the
-            # OWNED_IDS id-ownership check above (gate (c), which runs first). Do not
-            # weaken or reorder that id gate on the assumption this name list only
-            # ever matches abandoned artifacts; it does not.
+            # NOTE: DefaultCompute* / *DefaultComputeAPI* / 'Blocks API' are ALSO
+            # default API names on LIVE blocks stacks — 'Blocks API' is the hardcoded
+            # restApiName of the bb-lambda-compute construct, so EVERY blocks-compute
+            # deploy (live or orphaned) creates a REST API with that exact name. So a
+            # name match is NOT a safety signal for these — a live one is protected
+            # SOLELY by the OWNED_IDS id-ownership check above (gate (c), which runs
+            # first). Do not weaken or reorder that id gate on the assumption this
+            # name list only ever matches abandoned artifacts; it does not.
             case "$NAME" in
-              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI*) ;;
+              blocks-test-* | blocks-hosting-* | bb-test-* | bb-telemetry-* | bb-vpc-smoke-* | my-app-* | *-e2e-* | DefaultCompute* | *DefaultComputeAPI* | 'Blocks API') ;;
               *)
                 SKIPPED_UNMATCHED=$((SKIPPED_UNMATCHED + 1))
                 continue
@@ -640,9 +713,12 @@ jobs:
           done <<< "$APIS"
 
           # Report current headroom against the 120-EDGE cap so quota pressure is visible.
-          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/dev/null || echo "?")
+          TOTAL=$(aws apigateway get-rest-apis --query "length(items)" --output text 2>/tmp/get-rest-apis.err || echo "?")
           EDGE=$(aws apigateway get-rest-apis \
-            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>/dev/null || echo "?")
+            --query "length(items[?contains(endpointConfiguration.types, 'EDGE')])" --output text 2>>/tmp/get-rest-apis.err || echo "?")
+          if [ "$EDGE" = "?" ]; then
+            echo "::warning::could not count REST APIs, so the EDGE-quota check is blind: $(head -n 1 /tmp/get-rest-apis.err | head -c 500)"
+          fi
 
           echo ""
           echo "## API Gateway REST API Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -657,6 +733,186 @@ jobs:
           fi
           if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
             echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"
+          fi
+
+      - name: Cleanup orphaned API Gateway CloudWatch IAM roles
+        if: always()
+        run: |
+          # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
+          set -eo pipefail
+          # CDK's RestApi defaults `cloudWatchRole: true` with
+          # `cloudWatchRoleRemovalPolicy: RETAIN`, so every destroyed stack that
+          # carried one left its `*CloudWatchRole*` IAM role behind, owned by no
+          # stack. bb-lambda-compute and hosting now set `cloudWatchRole: false`,
+          # but the backlog (and any app still on an older release) accumulates
+          # until the account hits the 3000 RolesPerAccount quota — at which point
+          # EVERY deploy-dependent E2E lane fails at CREATE with ServiceLimitExceeded.
+          # Nothing else reclaims these, so sweep them here.
+          #
+          # A role is deleted only if ALL of these hold — the scope is deliberately
+          # narrow, since IAM roles are shared, account-level infrastructure:
+          #   (a) name has a CI test-app prefix;
+          #   (b) trust policy is EXACTLY apigateway.amazonaws.com, the only attached
+          #       policy is AmazonAPIGatewayPushToCloudWatchLogs, and there are no
+          #       inline policies (i.e. it is the CDK RestApi CloudWatch role shape);
+          #   (c) created > 6h ago;
+          #   (d) owned by NO live CloudFormation stack in any region (by role
+          #       name — ground truth);
+          #   (e) NOT the role any region's API Gateway account setting currently
+          #       points at (deleting it would break logging for live stages).
+          echo "🔍 Checking for orphaned API Gateway CloudWatch IAM roles..."
+
+          # Every gate below FAILS CLOSED: any error while building the ownership
+          # set or reading the account setting sets OWNERSHIP_INCOMPLETE, and then
+          # nothing is deleted this run (the next scheduled run retries).
+          OWNERSHIP_INCOMPLETE=0
+
+          # (d) Ownership set: PhysicalResourceId of every AWS::IAM::Role owned by a
+          # live stack in ANY region — IAM is account-global, so a stack in another
+          # region can own a prefixed role too.
+          # Paginated list-stack-resources, not describe-stack-resources (which
+          # caps at 100 resources and would miss roles in a large stack).
+          # By stack ID (ARN), not name: a stack that finishes deleting between
+          # list-stacks and the listing still resolves by ID (its roles just read
+          # as owned this run and are swept on the next), whereas a lookup by name
+          # errors and would block the whole sweep on a busy account.
+          if ! REGIONS=$(aws ec2 describe-regions --query 'Regions[].RegionName' --output text 2>/dev/null); then
+            echo "  ⚠️ describe-regions failed — ownership set is incomplete this run"
+            OWNERSHIP_INCOMPLETE=1
+            REGIONS=""
+          fi
+          OWNED_ROLES=""
+          for R in $REGIONS; do
+            if ! LIVE_STACKS=$(aws cloudformation list-stacks --region "$R" \
+              --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS DELETE_FAILED UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE CREATE_FAILED ROLLBACK_FAILED UPDATE_ROLLBACK_FAILED \
+              --query "StackSummaries[].StackId" --output text 2>/dev/null); then
+              echo "  ⚠️ list-stacks failed in $R — ownership set is incomplete this run"
+              OWNERSHIP_INCOMPLETE=1
+              continue
+            fi
+            for S in $(echo "$LIVE_STACKS" | tr '\t' '\n' | sort -u); do
+              [ -z "$S" ] || [ "$S" = "None" ] && continue
+              # Retry a few times before giving up: on a throttled account a single
+              # transient failure would otherwise defer the whole sweep.
+              LISTED=0
+              for ATTEMPT in 1 2 3; do
+                if NAMES=$(aws cloudformation list-stack-resources --region "$R" --stack-name "$S" \
+                  --query "StackResourceSummaries[?ResourceType=='AWS::IAM::Role'].PhysicalResourceId" \
+                  --output text 2>/dev/null); then
+                  LISTED=1
+                  break
+                fi
+                sleep $((ATTEMPT * 5))
+              done
+              if [ "$LISTED" -eq 1 ]; then
+                NAMES=$(echo "$NAMES" | tr '\t' '\n')
+                [ -n "$NAMES" ] && OWNED_ROLES="$OWNED_ROLES"$'\n'"$NAMES"
+              else
+                echo "  ⚠️ list-stack-resources failed for $S — ownership set is incomplete this run"
+                OWNERSHIP_INCOMPLETE=1
+              fi
+            done
+          done
+          OWNED_ROLES=$(echo "$OWNED_ROLES" | sed '/^$/d;/^None$/d' | sort -u)
+
+          # (e) The role the account-level API Gateway setting points at, in every
+          # region (the setting is per region). An empty setting ("None") is fine;
+          # a FAILED read is not — we can't prove the role is unreferenced.
+          ACCOUNT_ROLES=""
+          for R in $REGIONS; do
+            if ARN=$(aws apigateway get-account --region "$R" --query cloudwatchRoleArn --output text 2>/dev/null); then
+              [ -n "$ARN" ] && [ "$ARN" != "None" ] && ACCOUNT_ROLES="$ACCOUNT_ROLES"$'\n'"${ARN##*/}"
+            else
+              echo "  ⚠️ apigateway get-account failed in $R — cannot verify the active CloudWatch role"
+              OWNERSHIP_INCOMPLETE=1
+            fi
+          done
+
+          # (a)+(b)+(c) candidates straight from list-roles: name prefix, trust
+          # principal exactly apigateway.amazonaws.com, and created before the cutoff.
+          # The listing is kept so the summary can count roles without a second scan.
+          CUTOFF_ISO=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%S)
+          if ! ROLES_JSON=$(aws iam list-roles --output json 2>/dev/null); then
+            echo "  ⚠️ iam list-roles failed — nothing to sweep this run"
+            ROLES_JSON='{"Roles":[]}'
+            OWNERSHIP_INCOMPLETE=1
+          fi
+          CANDIDATES=$(echo "$ROLES_JSON" | jq -r --arg cutoff "$CUTOFF_ISO" '
+            .Roles[]
+            | select(.RoleName | test("^(blocks-test-|blocks-hosting-|bb-test-|bb-telemetry-|bb-vpc-smoke-|my-app-)"))
+            | select(.CreateDate[0:19] < $cutoff)
+            | select([.AssumeRolePolicyDocument.Statement[].Principal.Service?] | flatten | map(select(. != null)) | unique == ["apigateway.amazonaws.com"])
+            | .RoleName' || echo "")
+
+          DELETED=0
+          SKIPPED_OWNED=0
+          SKIPPED_SHAPE=0
+          DEFERRED=0
+          FAILED=0
+          # Wall-clock budget so this always-run step can't push the job past its
+          # 60-min timeout on a large backlog; the remainder defers to the next run.
+          SWEEP_DEADLINE=$((SECONDS + 900))
+          CW_POLICY_ARN='arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+
+          while read -r ROLE; do
+            [ -z "$ROLE" ] && continue
+
+            # (d) HARD SAFETY: owned by a live stack.
+            if echo "$OWNED_ROLES" | grep -qxF "$ROLE" 2>/dev/null; then
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            # (e) HARD SAFETY: a region's active API Gateway CloudWatch role.
+            if echo "$ACCOUNT_ROLES" | grep -qxF "$ROLE" 2>/dev/null; then
+              echo "  ⏭️ Skipping $ROLE — it is the API Gateway account's active CloudWatch role"
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            # Throttle fail-safe: incomplete ownership set → delete nothing this run.
+            if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ] || [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+
+            # (b) policy shape: the one managed policy (or none — a previous run may
+            # have detached it and then been throttled on delete-role), and no
+            # inline policies.
+            ATTACHED=$(aws iam list-attached-role-policies --role-name "$ROLE" \
+              --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null || echo "ERR")
+            INLINE=$(aws iam list-role-policies --role-name "$ROLE" \
+              --query 'PolicyNames[]' --output text 2>/dev/null || echo "ERR")
+            if { [ "$ATTACHED" != "$CW_POLICY_ARN" ] && [ -n "$ATTACHED" ]; } || [ -n "$INLINE" ]; then
+              SKIPPED_SHAPE=$((SKIPPED_SHAPE + 1))
+              continue
+            fi
+
+            if { [ -z "$ATTACHED" ] || aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$CW_POLICY_ARN" 2>/dev/null; } \
+              && aws iam delete-role --role-name "$ROLE" 2>/dev/null; then
+              DELETED=$((DELETED + 1))
+            else
+              echo "  ⚠️ failed to delete $ROLE (throttled?; will retry next run)"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "$CANDIDATES"
+
+          # Count from the listing above (jq on the merged pages — a JMESPath
+          # length() would be applied per page by the CLI paginator).
+          if [ "$(echo "$ROLES_JSON" | jq '.Roles | length')" -gt 0 ]; then
+            TOTAL=$(( $(echo "$ROLES_JSON" | jq '.Roles | length') - DELETED ))
+          else
+            TOTAL="?"
+          fi
+
+          echo ""
+          echo "## API Gateway CloudWatch IAM Role Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Orphaned roles deleted: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (owned by live stack / active account role): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (unexpected policy shape): $SKIPPED_SHAPE" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Failed (will retry next run): $FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to next run (incomplete ownership set or 15-min budget): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- IAM roles in account: $TOTAL (quota 3000)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TOTAL" != "?" ] && [ "$TOTAL" -ge 2700 ] 2>/dev/null; then
+            echo "::warning::$TOTAL/3000 IAM roles in use — approaching the RolesPerAccount quota"
           fi
 
       - name: Cleanup orphaned CloudFront Response Headers Policies
@@ -691,3 +947,143 @@ jobs:
             fi
           done <<< "$POLICIES"
           echo "✅ Cleanup complete. Deleted $DELETED orphaned policies, skipped $SKIPPED in-use policies."
+
+      - name: Cleanup orphaned Lambda and RDS log groups
+        if: always() && matrix.environment == 'e2e'
+        run: |
+          # Lambda creates a function's log group itself, on first invoke and
+          # outside CloudFormation, so the group outlives the stack. Every test
+          # stack runs CDK helper functions that get no CloudFormation log group
+          # (BucketDeployment, S3 auto-delete, AwsCustomResource, LogRetention,
+          # custom-resource provider frameworks), which left up to about 1,700
+          # such groups per account per day (measured over about one day of
+          # data), none of them expiring. RDS engine log groups outlive their
+          # cluster the same way. Tests: scripts/ci/sweep-log-groups.test.mjs.
+          #
+          # A group is deleted only if ALL of these hold:
+          #   (a) its name has a test prefix (checked here and by the CI role's
+          #       delete grant). `my-app-` is left out: it may be a developer's
+          #       ad-hoc deploy, which the stack sweep also only deletes by tag;
+          #   (b) it is older than 24 hours, so the custom-resource logs of a
+          #       failed deploy stay readable for a day (the groups hold almost
+          #       no data and the account quota is 1,000,000 groups);
+          #   (c) its Lambda function / DB cluster no longer exists.
+          # FAILS CLOSED: if any listing fails, nothing is deleted and the step
+          # fails, so a missing grant or a throttle never reads as "owner gone".
+          set -euo pipefail
+          # CloudFormation cuts the stack-name part of a generated function name
+          # (here to 25 characters), so the interop prefix is cut too.
+          LAMBDA_PREFIXES=(amplify-amplifygen2- amplify-amplifyinteroptes bb-compute-smoke- bb-telemetry- bb-test- bb-vpc-smoke- blocks-hosting- blocks-test-)
+          RDS_PREFIXES=(bb-test-)
+          CUTOFF_MS=$((($(date +%s) - 24 * 3600) * 1000))
+          SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/null}
+          # More attempts than the CLI default, so one throttled page doesn't fail the listing.
+          export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8
+          ERR=$(mktemp)
+          trap 'rm -f "$ERR"' EXIT
+
+          # First line of the CLI's error (it starts with a blank line). Account
+          # ids are masked because the log of a public repository is public.
+          cli_error() {
+            local reason
+            reason=$(grep -m 1 -v '^[[:space:]]*$' "$ERR" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
+            reason=${reason:-no error output}
+            echo "${reason//%/%25}"
+          }
+          fail_closed() {
+            echo "::error::$1, so no log group was deleted: $(cli_error)"
+            echo "- Log group sweep skipped: $1" >> "$SUMMARY"
+            exit 1
+          }
+          has_test_prefix() {
+            local p
+            for p in "${@:2}"; do [[ $1 == "$p"* ]] && return 0; done
+            return 1
+          }
+
+          # Groups first, owners second. Test functions and clusters get
+          # CloudFormation-generated names (random suffix) that are never reused,
+          # so an owner created after its listing can't own a group older than
+          # the gate: a live owner always shows up in the owner listing.
+          LOG_GROUPS=""
+          for P in "${LAMBDA_PREFIXES[@]/#//aws/lambda/}" "${RDS_PREFIXES[@]/#//aws/rds/cluster/}"; do
+            OUT=$(aws logs describe-log-groups --log-group-name-prefix "$P" \
+              --query 'logGroups[].[logGroupName,creationTime]' --output text 2>"$ERR") ||
+              fail_closed "describe-log-groups failed for $P"
+            LOG_GROUPS+="$OUT"$'\n'
+          done
+          FUNCTIONS=$(aws lambda list-functions --query 'Functions[].[FunctionName]' --output text 2>"$ERR") ||
+            fail_closed "lambda list-functions failed"
+          CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[].[DBClusterIdentifier]' --output text 2>"$ERR" |
+            tr '[:upper:]' '[:lower:]') || fail_closed "rds describe-db-clusters failed"
+          # Delete budget, counted from here so slow or retried listings don't
+          # eat into it. 5 minutes at about 1 s per delete is a few hundred
+          # deletes a run, every 2 hours: more than the daily inflow.
+          DEADLINE=$((SECONDS + ${LOG_GROUP_SWEEP_BUDGET_SECONDS:-300}))
+
+          DELETED=0
+          SKIPPED_YOUNG=0
+          SKIPPED_OWNED=0
+          FAILED=0
+          DEFERRED=0
+          DENIED=""
+          LAST_ERROR=""
+          while IFS=$'\t' read -r NAME CREATED; do
+            { [ -z "$NAME" ] || [ "$NAME" = None ]; } && continue
+            case "$NAME" in
+              /aws/lambda/*)
+                OWNER=${NAME#/aws/lambda/}
+                has_test_prefix "$OWNER" "${LAMBDA_PREFIXES[@]}" || continue
+                OWNERS=$FUNCTIONS
+                ;;
+              /aws/rds/cluster/*)
+                OWNER=${NAME#/aws/rds/cluster/}
+                OWNER=$(tr '[:upper:]' '[:lower:]' <<<"${OWNER%%/*}")
+                has_test_prefix "$OWNER" "${RDS_PREFIXES[@]}" || continue
+                OWNERS=$CLUSTERS
+                ;;
+              *) continue ;;
+            esac
+            # (b) A creation time that doesn't parse counts as young: kept.
+            if ! [ "$CREATED" -lt "$CUTOFF_MS" ] 2>/dev/null; then
+              SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
+              continue
+            fi
+            # (c) HARD SAFETY: the owning function / cluster still exists.
+            if grep -qxF -- "$OWNER" <<<"$OWNERS"; then
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+            if aws logs delete-log-group --log-group-name "$NAME" 2>"$ERR"; then
+              DELETED=$((DELETED + 1))
+            elif grep -q AccessDenied "$ERR"; then
+              # A wrong or missing delete grant never clears on its own: say so.
+              DENIED=$(cli_error)
+              FAILED=$((FAILED + 1))
+            elif ! grep -q ResourceNotFoundException "$ERR"; then
+              LAST_ERROR=$(cli_error)
+              FAILED=$((FAILED + 1))
+            fi
+          done < <(sort -u <<<"$LOG_GROUPS")
+
+          echo ""
+          echo "## Log Group Cleanup Summary" | tee -a "$SUMMARY"
+          echo "- Orphaned log groups deleted: $DELETED" | tee -a "$SUMMARY"
+          echo "- Skipped (< 24h old): $SKIPPED_YOUNG" | tee -a "$SUMMARY"
+          echo "- Skipped (owner still exists): $SKIPPED_OWNED" | tee -a "$SUMMARY"
+          echo "- Failed (retried next run): $FAILED" | tee -a "$SUMMARY"
+          echo "- Deferred to next run (time budget): $DEFERRED" | tee -a "$SUMMARY"
+          if [ -n "$DENIED" ]; then
+            echo "::error::the CI role may not delete these log groups (redeploy test-infra BlocksGithubE2eOidc?): $DENIED"
+            exit 1
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::$FAILED log group delete(s) failed; retried on the next scheduled run: $LAST_ERROR"
+          fi
+          if [ "$DEFERRED" -gt 0 ]; then
+            echo "::warning::log group sweep hit its time budget with $DEFERRED candidate(s) left; the next scheduled run takes the rest"
+          fi

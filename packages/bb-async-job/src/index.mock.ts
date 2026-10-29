@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, brandBlocksError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { randomUUID } from 'node:crypto';
@@ -19,9 +19,14 @@ import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-async-job');
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
+	AsyncJobBaseOptions,
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
@@ -47,7 +52,7 @@ const MAX_PAYLOAD_BYTES = 256 * 1024;
 const MAX_BATCH_PAYLOADS = 10_000;
 
 /**
- * Background job processing backed by SQS and Lambda.
+ * Background job processing backed by SQS, run on Lambda or a container.
  *
  * Submit a payload, get a job ID back, and a handler processes it
  * asynchronously with automatic retries and dead-letter handling.
@@ -63,7 +68,11 @@ const MAX_BATCH_PAYLOADS = 10_000;
  * - Set `visibilityTimeout` to at least 2x the expected handler duration
  *
  * **Scaling (AWS):** SQS standard queues support nearly unlimited throughput.
- * A dedicated Lambda function processes jobs with automatic concurrency scaling.
+ * By default a dedicated Lambda function processes jobs with automatic
+ * concurrency scaling. Assign a container `Compute` (via the `compute` option)
+ * to run the handler on Fargate instead — for long-running or high-memory jobs —
+ * where a self-started poller drains the queue and the service autoscales on
+ * backlog depth.
  *
  * @example
  * ```typescript
@@ -241,19 +250,11 @@ export class AsyncJob<T = unknown> extends Scope {
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		if (payloads.length === 0) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
-			);
-			err.name = AsyncJobErrors.BatchEmpty;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.BatchEmpty, 'Batch is empty, must contain at least 1 payload');
 		}
 
 		if (payloads.length > MAX_BATCH_PAYLOADS) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.BatchTooLarge, `Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`);
 		}
 
 		// Validate every payload before enqueuing any, so one bad payload fails the
@@ -277,9 +278,7 @@ export class AsyncJob<T = unknown> extends Scope {
 			const result = rawResult instanceof Promise ? await rawResult : rawResult;
 			if (result && typeof result === 'object' && 'issues' in result && result.issues) {
 				const msg = result.issues[0]?.message ?? 'Validation failed';
-				const err = new Error(`${AsyncJobErrors.ValidationFailed}: ${msg}`);
-				err.name = AsyncJobErrors.ValidationFailed;
-				throw brandBlocksError(err);
+				throw blocksError(AsyncJobErrors.ValidationFailed, msg);
 			}
 		}
 
@@ -288,11 +287,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		const bytes = Buffer.byteLength(serialized, 'utf8');
 		if (bytes > MAX_PAYLOAD_BYTES) {
 			const kb = Math.ceil(bytes / 1024);
-			const err = new Error(
-				`${AsyncJobErrors.PayloadTooLarge}: Serialized payload is ${kb} KB, exceeds 256 KB limit`
-			);
-			err.name = AsyncJobErrors.PayloadTooLarge;
-			throw brandBlocksError(err);
+			throw blocksError(AsyncJobErrors.PayloadTooLarge, `Serialized payload is ${kb} KB, exceeds 256 KB limit`);
 		}
 	}
 

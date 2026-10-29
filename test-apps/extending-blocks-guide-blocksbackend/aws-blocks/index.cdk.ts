@@ -10,7 +10,7 @@
  */
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -57,10 +57,10 @@ class MyExistingStack extends cdk.Stack {
     });
 
     // Wire IAM + env on the BlocksBackend's handler — same surface as BlocksStack.
-    stack.externalQueue.grantSendMessages(stack.blocks.handler);
-    stack.blocks.handler.addEnvironment('EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
+    stack.externalQueue.grantSendMessages(stack.blocks.executionRole);
+    registerConfig(stack.blocks, 'EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
 
-    new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.blocks.apiUrl });
+    new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.blocks.publicApiUrl });
     new cdk.CfnOutput(stack, 'ExternalQueueUrl', { value: stack.externalQueue.queueUrl });
     new cdk.CfnOutput(stack, 'StackNameOut', { value: id });
 

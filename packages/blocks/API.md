@@ -25,6 +25,7 @@ import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { AppSettingErrors } from '@aws-blocks/bb-app-setting';
 import { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { AsyncJobBaseOptions } from '@aws-blocks/bb-async-job';
 import { AsyncJobContext } from '@aws-blocks/bb-async-job';
 import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
@@ -57,9 +58,16 @@ import { CodeDeliveryDetails } from '@aws-blocks/bb-auth-cognito';
 import { CodeDeliveryFn } from '@aws-blocks/bb-auth-cognito';
 import { cognitoFederated } from '@aws-blocks/bb-auth-oidc';
 import { CognitoUser } from '@aws-blocks/bb-auth-cognito';
+import { Compute } from '@aws-blocks/bb-compute';
+import { ComputeOptions } from '@aws-blocks/core';
+import { ComputeProps } from '@aws-blocks/bb-compute';
+import { ComputeType } from '@aws-blocks/core';
 import { ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
 import { ConfirmSignInOptions } from '@aws-blocks/bb-auth-cognito';
+import { ContainerComputeOptions } from '@aws-blocks/core';
+import { ContainerScaling } from '@aws-blocks/core';
+import { ContainerSize } from '@aws-blocks/core';
 import { CorsRule } from '@aws-blocks/bb-file-bucket';
 import { CronJob } from '@aws-blocks/bb-cron-job';
 import { CronJobErrors } from '@aws-blocks/bb-cron-job';
@@ -98,6 +106,7 @@ import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
 import { ExternalTableRef } from '@aws-blocks/bb-kv-store';
 import { ExternalUserPoolRef } from '@aws-blocks/bb-auth-cognito';
 import { ExternalBucketRef as FBExternalBucketRef } from '@aws-blocks/bb-file-bucket';
+import { ExternalKmsKeyRef as FBExternalKmsKeyRef } from '@aws-blocks/bb-file-bucket';
 import { PutOptions as FBPutOptions } from '@aws-blocks/bb-file-bucket';
 import { ScanOptions as FBScanOptions } from '@aws-blocks/bb-file-bucket';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -138,6 +147,7 @@ import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
+import { ObjectLockOptions } from '@aws-blocks/bb-file-bucket';
 import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
@@ -151,9 +161,17 @@ import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { ScalingSignal } from '@aws-blocks/core';
+import { Secret } from '@aws-blocks/bb-secret';
+import { SecretErrors } from '@aws-blocks/bb-secret';
+import { SecretOptions } from '@aws-blocks/bb-secret';
+import { SecretReadOptions } from '@aws-blocks/bb-secret';
+import { SecretVersion } from '@aws-blocks/bb-secret';
+import { SecretVersionInfo } from '@aws-blocks/bb-secret';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
+import { ServerlessComputeOptions } from '@aws-blocks/core';
 import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
 import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
@@ -226,6 +244,8 @@ export { AppSettingOptions }
 
 export { AsyncJob }
 
+export { AsyncJobBaseOptions }
+
 export { AsyncJobContext }
 
 export { AsyncJobErrors }
@@ -290,11 +310,25 @@ export { cognitoFederated }
 
 export { CognitoUser }
 
+export { Compute }
+
+export { ComputeOptions }
+
+export { ComputeProps }
+
+export { ComputeType }
+
 export { ConditionalDeleteOptions }
 
 export { ConditionalWriteOptions }
 
 export { ConfirmSignInOptions }
+
+export { ContainerComputeOptions }
+
+export { ContainerScaling }
+
+export { ContainerSize }
 
 export { CorsRule }
 
@@ -371,6 +405,8 @@ export { ExternalTableRef }
 export { ExternalUserPoolRef }
 
 export { FBExternalBucketRef }
+
+export { FBExternalKmsKeyRef }
 
 export { FBPutOptions }
 
@@ -540,6 +576,8 @@ export { MFAPreference }
 
 export { ModelConfig }
 
+export { ObjectLockOptions }
+
 export { OIDCUser }
 
 export { OllamaModels }
@@ -566,11 +604,27 @@ export { RetrieveOptions }
 
 export { RetrieveResult }
 
+export { ScalingSignal }
+
+export { Secret }
+
+export { SecretErrors }
+
+export { SecretOptions }
+
+export { SecretReadOptions }
+
+export { SecretVersion }
+
+export { SecretVersionInfo }
+
 export { Segment }
 
 export { SendBatchResult }
 
 export { SendResult }
+
+export { ServerlessComputeOptions }
 
 export { SetPasswordOptions }
 

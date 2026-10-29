@@ -147,25 +147,24 @@ export interface StubIdpOpts<N extends string = string> {
  *
  * Composable: you can mix real and stub providers in the same instance.
  *
+ * Available in local development and sandbox deployments only: synth fails
+ * when any other deployment configures a `stubIdp()` provider. Select
+ * providers with `getDeploymentType()` so the stub is used only where allowed.
+ *
  * @example
  * ```typescript
- * import { AuthOIDC, stubIdp } from '@aws-blocks/blocks';
+ * import { AuthOIDC, customOidc, google, stubIdp, getDeploymentType } from '@aws-blocks/blocks';
  *
- * // E2E test app — stub providers, no real IdP needed
- * const auth = new AuthOIDC(app, 'auth', {
- *   providers: [
- *     stubIdp({ name: 'google' }),
- *     stubIdp({ name: 'corporate' }),
- *   ],
- * });
+ * // Production — real providers. Local dev, sandbox, and E2E — stub
+ * // providers with the same names, no real IdP needed.
+ * const providers = getDeploymentType() === 'production'
+ *   ? [
+ *       google({ clientId, clientSecret }),
+ *       customOidc({ name: 'corporate', issuerUrl: 'https://login.corp.com', ... }),
+ *     ]
+ *   : [stubIdp({ name: 'google' }), stubIdp({ name: 'corporate' })];
  *
- * // Production — real providers
- * const auth = new AuthOIDC(app, 'auth', {
- *   providers: [
- *     google({ clientId, clientSecret }),
- *     customOidc({ name: 'corporate', issuerUrl: 'https://login.corp.com', ... }),
- *   ],
- * });
+ * const auth = new AuthOIDC(app, 'auth', { providers });
  * ```
  */
 export function stubIdp<N extends string>(opts: StubIdpOpts<N>): StubProvider<N> {
@@ -297,6 +296,48 @@ export interface CognitoFederatedOpts<N extends string = string> {
 	idpIssuerUrl?: string;
 	/** Override default scopes. Defaults to `['openid', 'email', 'profile']`. */
 	scopes?: string[];
+	/**
+	 * Extra callback (redirect) URLs to register on the Cognito app client, in
+	 * addition to the ones `AuthOIDC` derives at synth. Derived automatically:
+	 * the app's public origin (`BLOCKS_PUBLIC_ORIGIN` — the CloudFront / primary
+	 * custom-domain / door URL, when a front door publishes one) plus the
+	 * callback path, the shared API Gateway URL plus the callback path, and — in
+	 * sandbox mode — `http://localhost:3000` plus the callback path.
+	 *
+	 * Add entries here for redirect targets that can't be derived at synth:
+	 *
+	 * - Browser PKCE SPA pages: the browser client (`index.browser.ts`) sets
+	 *   `redirect_uri` to the SPA page URL, which is app-specific.
+	 * - Native custom schemes (e.g. `myapp://auth/callback`) used as the
+	 *   `redirect_uri` of a direct, client-initiated PKCE sign-in
+	 *   (`signIn(provider, { redirectPath })`). Not needed for the relay flow:
+	 *   there the `redirect_uri` is the backend's https callback (already derived
+	 *   above) and the custom scheme is only the `relayTo` target, which Cognito
+	 *   never sees.
+	 * - Additional custom-domain names: only the PRIMARY custom domain flows into
+	 *   `BLOCKS_PUBLIC_ORIGIN`; register `https://<other-name><callbackPath>` here
+	 *   for every other name the app is served from.
+	 * - A sandbox dev server on a port other than `3000`.
+	 *
+	 * All `cognitoFederated()` providers share one app client, so the entries of
+	 * every provider are merged (and de-duplicated).
+	 */
+	additionalCallbackUrls?: string[];
+	/**
+	 * Extra sign-out (logout) URLs to register on the Cognito app client, in
+	 * addition to the derived ones (the public origin root, the shared API
+	 * Gateway base URL and, in sandbox mode, `http://localhost:3000/`). Use it for
+	 * the same cases as `additionalCallbackUrls` — SPA pages, native custom
+	 * schemes used as a direct redirect, and custom-domain names other than the
+	 * primary one. Merged across every `cognitoFederated()` provider and
+	 * de-duplicated.
+	 *
+	 * Note: sign-out currently clears the session and revokes the refresh token
+	 * (`/oauth2/revoke`); it does not redirect to Cognito's hosted `/logout`
+	 * endpoint. Logout URLs are registered for completeness and forward
+	 * compatibility, but the current sign-out path doesn't use them.
+	 */
+	additionalLogoutUrls?: string[];
 }
 
 /**
@@ -366,6 +407,8 @@ export function cognitoFederated<N extends string>(opts: CognitoFederatedOpts<N>
 		idpIssuerUrl: opts.idpIssuerUrl,
 		idpClientId: opts.clientId,
 		idpClientSecret: opts.clientSecret,
+		additionalCallbackUrls: opts.additionalCallbackUrls,
+		additionalLogoutUrls: opts.additionalLogoutUrls,
 	};
 }
 

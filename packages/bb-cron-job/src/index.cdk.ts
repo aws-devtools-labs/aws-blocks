@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { validateSchedule, validateTimezone } from './schedule.js';
 import { CronJobErrors } from './errors.js';
+import { BB_NAME } from './version.js';
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
@@ -22,7 +23,7 @@ export class CronJob<T = void> extends Scope {
 	public readonly schedule: scheduler.CfnSchedule;
 
 	constructor(scope: ScopeParent, id: string, options: CronJobOptions<T>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope, bbName: BB_NAME });
 
 		// Fail fast at synth: an invalid schedule/timezone otherwise passes synth
 		// and is only rejected by EventBridge minutes into the deploy. Mirrors the
@@ -42,6 +43,9 @@ export class CronJob<T = void> extends Scope {
 				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
 			);
 		}
+		// Claim the key the Lambda runtime registers this job's handler under, so
+		// two jobs with the same `fullId` fail synth instead of on cold start.
+		this.registerLambdaEventHandler('blocks.cronjob', this.fullId);
 		const lambdaArn = compute.fn.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(this, lambdaArn);
 

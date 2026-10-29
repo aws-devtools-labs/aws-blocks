@@ -6,33 +6,55 @@ import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
+	type ApiFrontDoorTier,
 	type BlocksStack as BaseBlocksStack,
 	type BlocksStackProps,
 	computeScopeFullId,
 	type ScopeOptions,
 	type ScopeParent,
 } from '../common/index.js';
-import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
+import {
+	assertCdkConditionActive,
+	BlocksBackend,
+	buildSharedGateway,
+	ensureVpcAccessPolicyWhenVpcActive,
+	requireSharedGateway,
+	setupBlocksInfra,
+} from './blocks-backend.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
-import type { Compute } from './compute/compute.js';
+import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import { finalizeConfigRegistry } from './config-registry.js';
+import {
+	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
+	claimApiFrontDoor,
+	publishPublicOrigin,
+	publicApiUrl,
+	resolveApiFrontDoor,
+} from './api-front-door.js';
+import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
-import { BLOCKS_BACKEND_ROOT, findBackendRoot } from './root-registry.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
+import type { SharedGateway } from './shared-gateway.js';
+import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
-import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import { registerVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
+export type { ApiWafOptions } from '../common/index.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
 	type CoreBlocksBackendProps,
+	getSharedGatewayUrl,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
@@ -41,7 +63,14 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+export {
+	finalizeConfigRegistry,
+	getConfigDeployment,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerConfig,
+} from './config-registry.js';
+export { isSandboxContext } from './stack-metadata.js';
 export { finalizeDashboards, registerDashboardFinalizer } from './dashboard-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -67,7 +96,7 @@ export interface CoreBlocksStackProps extends BlocksStackProps {
 	defaultComputeFactory: DefaultComputeFactory;
 }
 
-export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
+export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontDoorOwner {
 	public readonly id: string;
 	public readonly backendHandlerPath: string;
 	/**
@@ -80,20 +109,75 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	public readonly executionRole: cdk.aws_iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
-	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
-	_defaultCompute?: Compute;
+	/** The default compute (owns the Lambda function); set in `create()`. @internal */
+	_defaultCompute?: ComputeBase;
+	/** The single shared REST API gateway fronting the default compute; built in `create()`. @internal */
+	_sharedGateway?: SharedGateway;
+	/** Set when a `Hosting` distribution has claimed the API front-door role (see {@link claimApiFrontDoor}). @internal */
+	_apiFrontDoorClaimedByHosting?: boolean;
+	/** Public origin of whichever front door ended up fronting the API. @internal */
+	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (see {@link publishPublicOrigin}). @internal */
+	_publicOriginPublishedByHosting?: boolean;
+	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
+	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
 
-	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
-	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
-		return this.requireDefaultCompute().fn;
+	/**
+	 * Claim the API front-door role for a `Hosting` distribution fronting this
+	 * stack's API, so the managed `cloudfront` distribution stands down. Recorded
+	 * on this instance (not ambient per-stack state) — see {@link ApiFrontDoorOwner}.
+	 * @internal Framework-only.
+	 */
+	claimApiFrontDoor(distributionUrl: string): void {
+		claimApiFrontDoor(this, distributionUrl);
 	}
-	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
+	}
+
+	/**
+	 * Record that a `Hosting` door publishes this backend's browser-facing origin
+	 * (`BLOCKS_PUBLIC_ORIGIN`), so the managed `cloudfront` distribution doesn't
+	 * overwrite it. See {@link publishPublicOrigin}.
+	 * @internal Framework-only.
+	 */
+	publishPublicOrigin(): void {
+		publishPublicOrigin(this);
+	}
+
+	/** The stack's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
 	get gateway(): cdk.aws_apigateway.RestApi {
-		return this.requireDefaultCompute().apiGateway;
+		return this.requireSharedGateway().restApi;
 	}
-	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The shared gateway's own RPC endpoint URL (its `execute-api` address),
+	 * whatever the `apiFrontDoor` tier. `Hosting` forwards API traffic to it, so it
+	 * stays the gateway's URL even under `'cloudfront'`. For the URL clients should
+	 * call, use {@link publicApiUrl}. To be removed once consumers move to the
+	 * multi-compute model.
+	 */
 	get apiUrl(): string {
-		return this.requireDefaultCompute().apiUrl;
+		return this.requireSharedGateway().apiUrl;
+	}
+	/**
+	 * The URL clients should send RPC calls to: the CloudFront distribution's URL +
+	 * `/aws-blocks/api` under `apiFrontDoor: 'cloudfront'` (the managed
+	 * distribution, or `Hosting`'s when Hosting fronts the API), otherwise
+	 * {@link apiUrl}. A CloudFormation token, resolved at synth — use it wherever a
+	 * deploy-time value works. The stack's `ApiUrl` output is this value.
+	 */
+	get publicApiUrl(): string {
+		return publicApiUrl(this, () => this.apiUrl);
 	}
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
@@ -105,10 +189,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks stack not fully initialized — access .handler/.gateway/.apiUrl after BlocksStack.create() resolves.',
+				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
+	}
+
+	private requireSharedGateway(): SharedGateway {
+		return requireSharedGateway(this, 'BlocksStack');
 	}
 
 	private _vpcOptions?: BlocksVpcOptions;
@@ -120,6 +208,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
 		this._vpcOptions = props.defaults.vpc;
+		// Validate and record the tier before the backend module is imported, so an
+		// invalid value fails before any app code runs.
+		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() can find this by walking the
 		// construct tree (see root-registry.ts). Set before any child Scope/BB is
@@ -139,6 +231,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left.
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.id);
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
@@ -149,10 +246,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		const actualScope = pipelineScope || scope;
 
 		const stack = new BlocksStack(actualScope, id, props);
-		// Create the default compute before importing the backend: it OWNS the
-		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
-		// a block reading `this.compute` in its constructor (during that import)
-		// must resolve to it. The factory is supplied by the umbrella
+		// Create the default compute before importing the backend: it owns the
+		// Lambda function (the shared gateway's target), and a block reading
+		// `this.compute` in its constructor (during that import) must resolve to
+		// it. The factory is supplied by the umbrella
 		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
 		// imports the concrete compute class.
 		stack._defaultCompute = props.defaultComputeFactory(stack);
@@ -160,6 +257,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(stack) ? 'sandbox' : 'production';
+		registerConfig(stack, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -171,6 +277,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 				);
 			}
 		}
+		// Build the single shared REST API gateway now that the backend module has
+		// imported and every compute exists, and schedule the API front door
+		// (see buildSharedGateway).
+		buildSharedGateway(stack, mod);
+
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
@@ -183,12 +294,24 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// state is settled — so the dashboard is order-independent.
 		finalizeDashboards(stack);
 
+		// Per-compute finalize hook: wiring that needs the fully-imported backend
+		// (e.g. a container's queue-depth autoscaling, which must know every
+		// AsyncJob queue assigned to it).
+		for (const compute of getComputes(stack)) compute.finalize();
+
 		// Finalize VPC. A VPC is a derived resource: use the customer's if they
 		// brought one, else lazily create one only if a Building Block genuinely
 		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
 		// services from the managed network without a VPC.
+		//
+		// A container compute needs the shared VPC *at construction* (during the
+		// backend import above), so it may have already derived and initialized it
+		// via getOrCreateVpc + initializeVpc. In that case we skip re-initializing
+		// (isVpcInitialized) but still run finalizeVpc to provision endpoints.
 		if (stack._vpcOptions) {
 			finalizeVpc(stack, stack._vpcOptions);
+		} else if (isVpcInitialized(stack)) {
+			finalizeVpc(stack, { network: getOrCreateVpc(stack) });
 		} else if (anyRequirementNeedsVpc(stack)) {
 			const derived = getOrCreateVpc(stack);
 			const options = { network: derived };
@@ -202,13 +325,24 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			);
 		}
 
-		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		// Grant the shared role ENI permissions when a VPC is active (provided or
+		// derived by a container compute during import) so a serverless compute
+		// placed in it can create ENIs. See helper for the full rationale.
+		ensureVpcAccessPolicyWhenVpcActive(stack);
+
+		// Where a client should send RPC calls (see publicApiUrl): the CloudFront URL
+		// under `cloudfront`, else the gateway's own URL. `deploy.ts` / `sandbox.ts`
+		// read this output and hand it to a client as `BLOCKS_API_URL`.
+		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.publicApiUrl });
 
 		addBlocksStackMetadata(stack);
 
 		return stack;
 	}
 }
+
+/** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
+const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
 
 export class Scope extends Construct {
 	public readonly id: string;
@@ -233,7 +367,7 @@ export class Scope extends Construct {
 	 * the customer-facing surface exists.
 	 * @internal
 	 */
-	_compute?: Compute;
+	_compute?: ComputeBase;
 
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -241,6 +375,11 @@ export class Scope extends Construct {
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		if (options?.bbName) {
+			this.bbName = options.bbName;
+			this.bbVersion = options.bbVersion;
+			recordBuildingBlock(this, options.bbName);
+		}
 	}
 
 	/**
@@ -255,10 +394,6 @@ export class Scope extends Construct {
 		// BlocksStack/BlocksBackend; the cast also admits the test doubles that set
 		// globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
 		return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
-	}
-
-	get handler() {
-		return this.root.handler;
 	}
 
 	/**
@@ -279,7 +414,7 @@ export class Scope extends Construct {
 	 * (test/framework) until the customer-facing surface exists; there is no
 	 * public option to set it yet.
 	 */
-	get compute(): Compute {
+	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
 			const assigned = (current as Scope)._compute;
 			if (assigned) return assigned;
@@ -303,7 +438,7 @@ export class Scope extends Construct {
 	 *
 	 * @internal Not a customer surface; for framework/BB singleton infra only.
 	 */
-	get defaultCompute(): Compute {
+	get defaultCompute(): ComputeBase {
 		const defaultCompute = this.root._defaultCompute;
 		if (!defaultCompute) {
 			throw new Error(
@@ -339,7 +474,7 @@ export class Scope extends Construct {
 
 	/**
 	 * The shared handler Lambda's CloudWatch log group (the default compute's).
-	 * Resolves the same way as {@link handler} — via the owning
+	 * Resolves via the owning
 	 * BlocksStack/BlocksBackend. Its retention comes from the compute's
 	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
 	 * CDK construct is a no-op and no longer reconfigures it.
@@ -363,7 +498,7 @@ export class Scope extends Construct {
 	 * ```
 	 */
 	get defaults(): BlocksDefaults {
-		// Resolve the same way as handler/executionRole: walk up to the owning
+		// Resolve the same way as executionRole: walk up to the owning
 		// BlocksStack/BlocksBackend and read its defaults, so several backends in
 		// one stack each keep their own posture. Falls back to the ambient stack,
 		// then to the production preset when none was registered.
@@ -387,14 +522,44 @@ export class Scope extends Construct {
 		return [];
 	}
 
+	protected formatUserAgentString(): string {
+		return '';
+	}
+
 	// Plugin registration — no-ops in CDK context (plugins are only used at dev/build time)
 	registerClientMiddleware(_packageSpecifier: string): void {}
 	registerDevAttachment(_packageSpecifier: string): void {}
+
+	/**
+	 * Claim a Lambda event key at synth, under the same one-handler-per-key rule
+	 * the Lambda runtime enforces (`Scope.registerLambdaEventHandler` in the
+	 * runtime layer): the key is `{eventSource}:{identifier}`, and a second claim
+	 * on the same backend root throws, naming both blocks.
+	 *
+	 * The runtime registers handlers when the handler module loads, so without
+	 * this a conflicting pair would pass `cdk synth` and deploy, and then every
+	 * request would fail on cold start. A Building Block whose runtime layer calls
+	 * `registerLambdaEventHandler(eventSource, identifier, …)` calls this from its
+	 * CDK constructor with the **same** `eventSource` and `identifier` (a CDK
+	 * token is fine — the same resource yields the same token). The handler is
+	 * not used at synth and may be omitted.
+	 *
+	 * @param eventSource - Event source prefix (e.g. `EventSourceMapping.SQS`, `'blocks.cronjob'`).
+	 * @param identifier - What the runtime registers under: the queue name, the block's `fullId`, the user pool id.
+	 * @param _handler - Ignored at synth; accepted so the call matches the runtime signature.
+	 * @throws {Error} When another block on the same backend root already claimed `{eventSource}:{identifier}`.
+	 */
 	registerLambdaEventHandler(
-		_eventSource: string,
-		_identifier: string,
-		_handler: (record: any) => Promise<void>,
-	): void {}
+		eventSource: string,
+		identifier: string,
+		_handler?: (record: any) => Promise<void>,
+	): void {
+		const claims = getOrCreateOnRoot(this, LAMBDA_EVENT_HANDLER_CLAIMS, () => new Map<string, string>());
+		const key = lambdaEventHandlerKey(eventSource, identifier);
+		const owner = claims.get(key);
+		if (owner !== undefined) throw duplicateLambdaEventHandlerError(key, this.fullId, owner);
+		claims.set(key, this.fullId);
+	}
 	get clientMiddleware(): readonly string[] {
 		return [];
 	}

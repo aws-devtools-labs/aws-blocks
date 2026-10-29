@@ -1,6 +1,25 @@
 import 'dart:convert';
 
+import 'package:blocks_codegen/src/diagnostics.dart';
 import 'model.dart';
+
+const _packagesExtension = 'x-blocks-native-packages';
+const _bindingsExtension = 'x-blocks-native-bindings';
+const _catalogSchemaVersion = 1;
+const _transferableKind = 'transferable';
+const _transferableAbiV1 = 'blocks-transferable-v1';
+const _maxGenericArity = 1;
+
+final _pubPackageName = RegExp(r'^[a-z_][a-z0-9_]*$');
+
+const _runtimePackage = 'blocks_runtime';
+
+/// Every segment must start with `[a-z_]`, so no segment can be `..` and the
+/// value can neither traverse out of the package nor close the string literal
+/// of the emitted import.
+final _entryLibraryPath = RegExp(
+  r'^(?!lib/)[a-z_][a-z0-9_.]*(/[a-z_][a-z0-9_.]*)*\.dart$',
+);
 
 /// Parses an OpenRPC JSON spec into an [RpcModel].
 class OpenRpcParser {
@@ -8,8 +27,9 @@ class OpenRpcParser {
 
   /// Parses [jsonString] as an OpenRPC document.
   ///
-  /// Throws a [FormatException] if the JSON is malformed or the `info` or
-  /// `methods` sections are missing or the wrong shape.
+  /// Throws a [FormatException] if the JSON is malformed, the `info` or
+  /// `methods` sections are missing or the wrong shape, or a present
+  /// `x-blocks-native-*` catalog is malformed.
   RpcModel parse(String jsonString) {
     final dynamic decoded;
     try {
@@ -18,8 +38,8 @@ class OpenRpcParser {
       throw FormatException('Invalid JSON in spec: ${e.message}');
     }
     final spec = decoded as Map<String, dynamic>;
-    final info = spec['info'] as Map<String, dynamic>?;
-    if (info == null) {
+    final info = spec['info'];
+    if (info is! Map<String, dynamic>) {
       throw const FormatException("Expected 'info' object in spec root");
     }
     final methodsList = spec['methods'];
@@ -54,7 +74,166 @@ class OpenRpcParser {
       methods: methods,
       schemas: schemas,
       servers: servers,
+      nativePackages: _parseNativePackages(spec),
+      nativeBindings: _parseNativeBindings(spec),
     );
+  }
+
+  Map<String, DartNativePackage?> _parseNativePackages(
+    Map<String, dynamic> spec,
+  ) {
+    final catalog = _catalog(spec, _packagesExtension);
+    if (catalog == null) return const {};
+    final packages = catalog['packages'];
+    if (packages is! Map<String, dynamic>) {
+      throw const FormatException(
+        "Expected '$_packagesExtension.packages' to be an object",
+      );
+    }
+    return packages.map((identity, entry) {
+      final path =
+          '$_packagesExtension.packages.${escapeForDiagnostic(identity)}';
+      if (entry is! Map<String, dynamic>) {
+        throw FormatException("Expected '$path' to be an object");
+      }
+      final platforms = entry['platforms'];
+      if (platforms is! Map<String, dynamic>) {
+        throw FormatException("Expected '$path.platforms' to be an object");
+      }
+      final dart = platforms['dart'];
+      if (dart == null) return MapEntry(identity, null);
+      if (dart is! Map<String, dynamic>) {
+        throw FormatException(
+          "Expected '$path.platforms.dart' to be an object",
+        );
+      }
+      final package = dart['package'];
+      if (package is! Map<String, dynamic>) {
+        throw FormatException(
+          "Expected '$path.platforms.dart.package' to be an object",
+        );
+      }
+      final name = _requiredMatch(
+        package,
+        'name',
+        '$path.platforms.dart.package',
+        _pubPackageName,
+        'a pub package name',
+      );
+      if (name == _runtimePackage) {
+        throw FormatException(
+          "Expected '$path.platforms.dart.package.name' to name a package "
+          "other than '$_runtimePackage', which every generated client "
+          'already imports',
+        );
+      }
+      return MapEntry(
+        identity,
+        DartNativePackage(
+          name: name,
+          library: _requiredMatch(
+            package,
+            'library',
+            '$path.platforms.dart.package',
+            _entryLibraryPath,
+            'a .dart path inside lib/, without the leading "lib/"',
+          ),
+        ),
+      );
+    });
+  }
+
+  List<NativeBinding> _parseNativeBindings(Map<String, dynamic> spec) {
+    final catalog = _catalog(spec, _bindingsExtension);
+    if (catalog == null) return const [];
+    final bindings = catalog['bindings'];
+    if (bindings is! List) {
+      throw const FormatException(
+        "Expected '$_bindingsExtension.bindings' to be an array",
+      );
+    }
+    final byTag = <String, int>{};
+    return bindings.asMap().entries.map((entry) {
+      final path = '$_bindingsExtension.bindings[${entry.key}]';
+      final binding = entry.value;
+      if (binding is! Map<String, dynamic>) {
+        throw FormatException("Expected '$path' to be an object");
+      }
+      final tag = _requiredField(binding, 'tag', path);
+      final duplicate = byTag[tag];
+      if (duplicate != null) {
+        throw FormatException(
+          "Duplicate binding for tag '${escapeForDiagnostic(tag)}' at "
+          "'$path' and "
+          "'$_bindingsExtension.bindings[$duplicate]'",
+        );
+      }
+      byTag[tag] = entry.key;
+      final arity = binding['genericArity'];
+      if (arity is! int || arity < 0 || arity > _maxGenericArity) {
+        throw FormatException(
+          "Expected '$path.genericArity' to be 0 or $_maxGenericArity",
+        );
+      }
+      final abi = _requiredField(binding, 'abi', path);
+      final kind = _requiredField(binding, 'kind', path);
+      if (kind == _transferableKind && abi != _transferableAbiV1) {
+        throw FormatException(
+          "Unsupported '$path.abi': '${escapeForDiagnostic(abi)}' "
+          "(expected '$_transferableAbiV1')",
+        );
+      }
+      return NativeBinding(
+        kind: kind,
+        tag: tag,
+        package: _requiredField(binding, 'package', path),
+        export: _requiredField(binding, 'export', path),
+        abi: abi,
+        genericArity: arity,
+      );
+    }).toList();
+  }
+
+  Map<String, dynamic>? _catalog(Map<String, dynamic> spec, String key) {
+    final catalog = spec[key];
+    if (catalog == null) return null;
+    if (catalog is! Map<String, dynamic>) {
+      throw FormatException("Expected '$key' to be an object");
+    }
+    final schemaVersion = catalog['schemaVersion'];
+    if (schemaVersion != _catalogSchemaVersion) {
+      throw FormatException(
+        "Unsupported '$key.schemaVersion': "
+        '${escapeForDiagnostic('$schemaVersion')} '
+        '(expected $_catalogSchemaVersion)',
+      );
+    }
+    return catalog;
+  }
+
+  String _requiredMatch(
+    Map<String, dynamic> owner,
+    String field,
+    String path,
+    RegExp pattern,
+    String shape,
+  ) {
+    final value = _requiredField(owner, field, path);
+    if (!pattern.hasMatch(value)) {
+      throw FormatException(
+        "Expected '$path.$field' to be $shape, got "
+        "'${escapeForDiagnostic(value)}'",
+      );
+    }
+    return value;
+  }
+
+  String _requiredField(Map<String, dynamic> owner, String field, String path) {
+    final value = owner[field];
+    if (value is! String || value.isEmpty) {
+      throw FormatException("Expected '$path.$field' to be a non-empty string");
+    }
+    return value;
   }
 
   Map<String, TypeRef> _parseSchemas(Map<String, dynamic> spec) {
@@ -337,11 +516,27 @@ class OpenRpcParser {
     return null;
   }
 
+  /// The generator emits [pattern] into a `RegExp`, so an invalid one analyzes
+  /// without error and throws on the customer's first call, where the spec is
+  /// gone.
+  String? _validRegExp(String? pattern) {
+    if (pattern == null) return null;
+    try {
+      RegExp(pattern);
+    } on FormatException catch (e) {
+      throw FormatException(
+        "Expected 'pattern' to be a regular expression Dart can compile, got "
+        "'${escapeForDiagnostic(pattern)}': ${e.message}",
+      );
+    }
+    return pattern;
+  }
+
   Constraints? _parseConstraints(Map<String, dynamic> schema) {
     final c = Constraints(
       minLength: schema['minLength'] as int?,
       maxLength: schema['maxLength'] as int?,
-      pattern: schema['pattern'] as String?,
+      pattern: _validRegExp(schema['pattern'] as String?),
       minimum: schema['minimum'] as num?,
       maximum: schema['maximum'] as num?,
       exclusiveMinimum: schema['exclusiveMinimum'] as num?,

@@ -4,21 +4,21 @@ import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib'
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
-  BehaviorOptions,
+  type BehaviorOptions,
   CacheCookieBehavior,
   CacheHeaderBehavior,
   CachePolicy,
   CacheQueryStringBehavior,
   Function as CloudFrontFunction,
   Distribution,
-  ErrorResponse,
+  type ErrorResponse,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
   GeoRestriction,
   HttpVersion,
-  IOrigin,
-  IResponseHeadersPolicy,
+  type IOrigin,
+  type IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
   OriginRequestCookieBehavior,
@@ -34,16 +34,16 @@ import {
   HttpOrigin,
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { IBucket } from 'aws-cdk-lib/aws-s3';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
-  IFunction,
-  IFunctionUrl,
-  IVersion,
+  type IFunction,
+  type IFunctionUrl,
+  type IVersion,
 } from 'aws-cdk-lib/aws-lambda';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import {
   EndpointType,
   LambdaIntegration,
@@ -52,20 +52,29 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
-import { SkewProtectionConfig } from './skew_protection.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
+import { customErrorResponses } from './error_responses.js';
+import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
-  buildKvsEntries,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
+import type { WebFunctionConstruct } from './web_function_construct.js';
+import {
+  type AccessLogFormat,
+  type AccessLogPartitioning,
+  wireStandardLoggingV2,
+} from './access_logging.js';
 import {
   AwsCustomResource,
   AwsCustomResourcePolicy,
@@ -93,16 +102,6 @@ const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 .c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
 <body><div class="c"><h1>Service Temporarily Unavailable</h1><p>We're working on it. Please try again in a few moments.</p></div></body></html>`;
 
-// Built-in default 404 page for multi-page static sites that ship no
-// 404.html of their own. Returned at HTTP 404 (not the SPA 200 fallback)
-// so crawlers and clients see a correct not-found status.
-const DEFAULT_NOT_FOUND_PAGE_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>404 — Page Not Found</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
-.c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
-<body><div class="c"><h1>404 — Page Not Found</h1><p>The page you're looking for doesn't exist.</p></div></body></html>`;
 
 // ---- Public types ----
 
@@ -134,6 +133,12 @@ export type CdnConstructProps = {
    * provisioned instances actually serve request traffic.
    */
   computeAliases?: Map<string, IFunction>;
+  /**
+   * Map of compute name → Lambda Web Function (`compute.type:
+   * 'web-function'`). A Web Function SSR compute is reached directly through
+   * its endpoint with CloudFront OAC — no API Gateway.
+   */
+  computeWebFunctions?: Map<string, WebFunctionConstruct>;
   /** WAFv2 WebACL to associate with the distribution. */
   webAcl?: CfnWebACL;
   /** ACM certificate for custom domain TLS. */
@@ -147,11 +152,28 @@ export type CdnConstructProps = {
   wwwRedirect?: 'toApex' | 'toWww' | 'none';
   /** S3 bucket for CloudFront access logging. */
   accessLogBucket?: IBucket;
+  /**
+   * CloudFront logging pipeline. `'v1'` (default) enables legacy standard
+   * logging inline on the distribution (`enableLogging`/`logBucket`); `'v2'`
+   * provisions the standard-logging-v2 delivery pipeline instead (see
+   * {@link wireStandardLoggingV2}). Only takes effect when
+   * {@link accessLogBucket} is set.
+   * @default 'v1'
+   */
+  accessLogVersion?: 'v1' | 'v2';
+  /** (v2 only) S3 key layout for delivered logs. @default 'date' */
+  accessLogPartitioning?: AccessLogPartitioning;
+  /** (v2 only) Delivered log record format. @default 'w3c' */
+  accessLogFormat?: AccessLogFormat;
+  /**
+   * (v2 only) Skip the us-east-1 delivery-source Region check. @default false
+   */
+  skipLoggingRegionValidation?: boolean;
   /** CloudFront price class. Default: PRICE_CLASS_100 (US, Canada, Europe). */
   priceClass?: PriceClass;
-  /** Geo-restriction configuration. */
+  /** Geo-restriction configuration (`'allowlist'` / `'denylist'`, or the legacy `'whitelist'` / `'blacklist'`). */
   geoRestriction?: {
-    type: 'whitelist' | 'blacklist';
+    type: 'allowlist' | 'denylist' | 'whitelist' | 'blacklist';
     countries: string[];
   };
   /** Custom error page HTML. */
@@ -218,6 +240,25 @@ export class CdnConstruct extends Construct {
   readonly defaultNotFoundPageHtml?: string;
 
   /**
+   * Physical id of the `/*` invalidation issued on a compute deploy, as a CDK
+   * token (`getResponseField('Invalidation.Id')`). A post-deploy liveness poll
+   * waits on `GetInvalidation` reaching `Completed` so it does not report the
+   * build live while the fire-and-forget invalidation is still propagating.
+   * `undefined` for a pure-static deploy, which issues no invalidation.
+   */
+  readonly invalidationId?: string;
+
+  /**
+   * The security-headers / CSP {@link IResponseHeadersPolicy} applied to the
+   * static, SSR and image cache behaviors. Exposed so a construct that adds
+   * more behaviors to this same distribution later — notably the API/auth
+   * proxy behaviors `core.Hosting` attaches when it fronts the backend — can
+   * attach the identical policy instead of leaving those responses without
+   * security headers.
+   */
+  readonly securityHeadersPolicy: IResponseHeadersPolicy;
+
+  /**
    * Resources whose update is the atomic-deploy cutover and therefore MUST
    * happen only after the new build's assets are uploaded to S3. Under KVS
    * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
@@ -245,6 +286,10 @@ export class CdnConstruct extends Construct {
 
     const { manifest, bucket } = props;
 
+    // Expose the policy so additional behaviors added to this distribution by
+    // other constructs (e.g. the API/auth proxy behaviors) can reuse it.
+    this.securityHeadersPolicy = props.securityHeadersPolicy;
+
     if (!manifest.buildId) {
       throw new HostingError('MissingBuildIdError', {
         message: 'Deploy manifest must include a buildId.',
@@ -268,6 +313,7 @@ export class CdnConstruct extends Construct {
     );
     const hasCompute =
       (props.computeFunctionUrls && props.computeFunctionUrls.size > 0) ||
+      (props.computeWebFunctions && props.computeWebFunctions.size > 0) ||
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
@@ -349,13 +395,10 @@ export class CdnConstruct extends Construct {
     // are excluded (their miss correctly serves index.html at 200); SSR
     // sites already have SSR_ERROR_PAGE_HTML. Precedence:
     // user errorPages.notFound > framework errorPages[404] > this default.
-    const hasFrameworkNotFound = !!manifest.errorPages?.[404];
-    const hasUserNotFound = !!props.customErrorPages?.notFound;
-    const needsDefaultNotFound =
-      !hasCompute &&
-      !isSpaFallback &&
-      !hasFrameworkNotFound &&
-      !hasUserNotFound;
+    // The same decision every other door makes (see `default_not_found.ts`).
+    const needsDefaultNotFound = needsDefaultNotFoundPage(manifest, {
+      userNotFound: !!props.customErrorPages?.notFound,
+    });
     this.defaultNotFoundPageHtml = needsDefaultNotFound
       ? DEFAULT_NOT_FOUND_PAGE_HTML
       : undefined;
@@ -389,12 +432,14 @@ export class CdnConstruct extends Construct {
     // wrapper (REST API sends v1; most adapters default to v2). Image-opt
     // and other GET-only compute stay on OAC + FURL.
     const computeOrigins = new Map<string, IOrigin>();
-    const ssrComputeName: 'default' | 'server' | undefined =
-      props.computeFunctions?.has('default')
-        ? 'default'
-        : props.computeFunctions?.has('server')
-          ? 'server'
-          : undefined;
+    const hasSsr = (name: 'default' | 'server'): boolean =>
+      Boolean(props.computeFunctions?.has(name) || props.computeWebFunctions?.has(name));
+    const ssrComputeName: 'default' | 'server' | undefined = hasSsr('default')
+      ? 'default'
+      : hasSsr('server')
+        ? 'server'
+        : undefined;
+    const ssrWebFunction = ssrComputeName ? props.computeWebFunctions?.get(ssrComputeName) : undefined;
 
     // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
     // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
@@ -413,20 +458,22 @@ export class CdnConstruct extends Construct {
       .update('origin-verify-v1')
       .digest('hex');
 
-    if (ssrComputeName && props.computeFunctions) {
-      // Target the warm `live` alias when provisioned concurrency is set;
-      // otherwise the unqualified function ($LATEST). Without this, the
-      // REST integration always hit $LATEST and provisioned instances on
-      // the alias sat idle.
-      const ssrFn =
-        props.computeAliases?.get(ssrComputeName) ??
-        props.computeFunctions.get(ssrComputeName)!;
-
-      // REGIONAL: CloudFront is already in front; edge-optimized would
-      // double-proxy and cap streaming idle timeout at 30s.
-      restApi = new RestApi(this, 'SsrRestApi', {
+    // REGIONAL: CloudFront is already in front; edge-optimized would
+    // double-proxy and cap streaming idle timeout at 30s.
+    const createOriginRestApi = (): RestApi =>
+      new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
+        // No per-stack CloudWatch role / AWS::ApiGateway::Account. The stage
+        // doesn't enable execution or access logging, so the role is unused,
+        // and CDK RETAINs it by default — every `cdk destroy` would orphan
+        // one IAM role and eventually exhaust the account's role quota.
+        // (Matches bb-lambda-compute's RestApi.) If stage logging is ever added
+        // here, provision the account role through core's
+        // `ensureApiGatewayAccount` (so the stack keeps ONE shared
+        // ApiGateway::Account) and depend the stage on it — don't re-enable
+        // `cloudWatchRole`.
+        cloudWatchRole: false,
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
         // request bodies (Lambda then sees 2× size) and re-encodes responses,
         // breaking binary uploads, downloads, and streaming.
@@ -458,6 +505,22 @@ export class CdnConstruct extends Construct {
           ],
         }),
       });
+
+    if (ssrWebFunction && ssrComputeName) {
+      // Web Function SSR: CloudFront signs every origin request with the
+      // function's OAC (IamAuth endpoint); the resource policy granting this
+      // distribution is attached once the distribution exists (below).
+      computeOrigins.set(ssrComputeName, ssrWebFunction.createOrigin());
+    } else if (ssrComputeName && props.computeFunctions?.has(ssrComputeName)) {
+      // Target the warm `live` alias when provisioned concurrency is set;
+      // otherwise the unqualified function ($LATEST). Without this, the
+      // REST integration always hit $LATEST and provisioned instances on
+      // the alias sat idle.
+      const ssrFn =
+        props.computeAliases?.get(ssrComputeName) ??
+        props.computeFunctions.get(ssrComputeName)!;
+
+      restApi = createOriginRestApi();
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
         responseTransferMode: ResponseTransferMode.STREAM,
@@ -513,6 +576,12 @@ export class CdnConstruct extends Construct {
     // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
     const ipxBaseUrl = manifest.imageOptimization?.baseURL;
     const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && ssrWebFunction && !restApi) {
+      // Web Function SSR needs no API Gateway, but the IPX Lambda still does
+      // (see above) — give it a REST API of its own.
+      restApi = createOriginRestApi();
+      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+    }
     if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
       // IPX is configured but there's no SSR compute (hence no shared RestApi)
       // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
@@ -883,7 +952,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    const kvsEntries = buildKvsEntries({
+    // Build the service-agnostic HostingPlan (origins + route table +
+    // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
+    // single source of routing truth every front-door adapter shares; CloudFront
+    // is one renderer of it.
+    const plan = buildHostingPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -891,6 +964,8 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+    });
+    const kvsEntries = renderKvsEntries(plan, {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
@@ -1192,13 +1267,19 @@ export class CdnConstruct extends Construct {
         ? [
             // S3 with OAC returns 403 for missing keys — map to the
             // custom 404 page so deep links render the framework's
-            // not-found page instead of a raw CloudFront error.
-            {
-              httpStatus: 403,
-              responseHttpStatus: 404,
-              responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
-              ttl: Duration.seconds(0),
-            },
+            // not-found page instead of a raw CloudFront error. Skipped
+            // when the default page already maps 403 (a site that ships a
+            // 500 page but no 404 page): one response per error code.
+            ...(needsDefaultNotFound
+              ? []
+              : [
+                  {
+                    httpStatus: 403,
+                    responseHttpStatus: 404,
+                    responsePagePath: `/builds/${buildId}${manifest.errorPages?.[404] ?? '/index.html'}`,
+                    ttl: Duration.seconds(0),
+                  },
+                ]),
             ...(manifest.errorPages?.[404]
               ? [
                   {
@@ -1255,28 +1336,10 @@ export class CdnConstruct extends Construct {
     ];
 
     // ---- Custom error pages (user-provided) ----
-    if (props.customErrorPages?.notFound) {
-      errorResponses.push({
-        httpStatus: 404,
-        responseHttpStatus: 404,
-        responsePagePath: `/builds/${buildId}/404.html`,
-        ttl: Duration.seconds(0),
-      });
-    }
-    if (props.customErrorPages?.serverError) {
-      // For compute (SSR) stacks, the default 502/503/504 error pages are
-      // already wired above; only add 500 with the custom page.
-      // For static/SPA stacks, add all server error statuses.
-      const serverErrorStatuses = hasCompute ? [500] : [500, 502, 503, 504];
-      for (const status of serverErrorStatuses) {
-        errorResponses.push({
-          httpStatus: status,
-          responseHttpStatus: status,
-          responsePagePath: `/builds/${buildId}/500.html`,
-          ttl: Duration.seconds(10),
-        });
-      }
-    }
+    // Shared with `cf.errorPages` (a bring-your-own door): see error_responses.ts.
+    // For compute (SSR) stacks, the default 502/503/504 error pages are
+    // already wired above; only 500 gets the custom page.
+    errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
 
 
     // ---- Distribution ----
@@ -1302,19 +1365,46 @@ export class CdnConstruct extends Construct {
         : props.webAcl
           ? { webAclId: props.webAcl.attrArn }
           : {}),
-      ...(props.accessLogBucket
+      // v1 (legacy) logging is enabled inline on the distribution. v2 logging
+      // is provisioned separately via the delivery pipeline after the
+      // distribution exists (see below), so it must NOT set enableLogging here.
+      ...(props.accessLogBucket && props.accessLogVersion !== 'v2'
         ? { enableLogging: true, logBucket: props.accessLogBucket }
         : {}),
       ...(props.geoRestriction
         ? {
             geoRestriction:
-              props.geoRestriction.type === 'whitelist'
+              props.geoRestriction.type === 'whitelist' || props.geoRestriction.type === 'allowlist'
                 ? GeoRestriction.allowlist(...props.geoRestriction.countries)
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }
         : {}),
       errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
     });
+
+    // ---- Standard logging v2 (opt-in) ----
+    // v1 logging was enabled inline above. For v2, provision the CloudWatch
+    // Logs vended-logs delivery pipeline (DeliverySource → DeliveryDestination
+    // → Delivery + bucket policy) against the now-created distribution. The
+    // log bucket is provisioned with BUCKET_OWNER_ENFORCED by the storage
+    // construct when v2 is selected, so no ACLs are involved.
+    if (props.accessLogBucket && props.accessLogVersion === 'v2') {
+      const distributionArn = Stack.of(this).formatArn({
+        service: 'cloudfront',
+        region: '',
+        account,
+        resource: 'distribution',
+        resourceName: this.distribution.distributionId,
+      });
+      wireStandardLoggingV2(this, {
+        distributionArn,
+        distributionId: this.distribution.distributionId,
+        logBucket: props.accessLogBucket,
+        partitioning: props.accessLogPartitioning,
+        format: props.accessLogFormat,
+        skipRegionValidation: props.skipLoggingRegionValidation,
+      });
+    }
 
     // ---- OAC: S3 bucket policy ----
     // GetObject for serving assets, plus ListBucket so S3 returns a real
@@ -1398,6 +1488,14 @@ export class CdnConstruct extends Construct {
           sourceArn: `arn:aws:cloudfront::${account}:distribution/${this.distribution.distributionId}`,
         });
       }
+    }
+
+    // ---- Web Function invoke grant ----
+    // The endpoint is IamAuth: only principals its resource policy allows can
+    // invoke it. Grant exactly this distribution (aws:SourceArn), which signs
+    // origin requests with the function's OAC.
+    if (ssrWebFunction) {
+      ssrWebFunction.allowCloudFrontInvoke(this.distribution.distributionId);
     }
 
     // ---- Distribution URL ----
@@ -1489,6 +1587,10 @@ export class CdnConstruct extends Construct {
       // Gate AFTER the atomic KVS cutover so we only flush the previous build's
       // pages (see ordering note above).
       invalidation.node.addDependency(kvKeys.resource);
+      // Surface the invalidation id (a CDK token) so the L3 can output it and a
+      // post-deploy poll can wait for it to reach `Completed` — the config
+      // probe alone proves the KVS cutover, not this invalidation's propagation.
+      this.invalidationId = invalidation.getResponseField('Invalidation.Id');
     }
 
     // ---- Self-enforcing atomic-deploy guard ----

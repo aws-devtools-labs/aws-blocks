@@ -16,11 +16,61 @@ export interface ModelConfig {
 	 */
 	provider: 'bedrock' | 'openai-api' | 'canned';
 	modelId?: string;
+	/**
+	 * Base URL of the OpenAI-compatible API for the `openai-api` provider (e.g. `http://localhost:11434/v1`).
+	 * For Amazon Bedrock Mantle, use `https://bedrock-mantle.<region>.api.aws/v1` (some model lines use `/openai/v1`);
+	 * only models that support the Chat Completions API work with this provider.
+	 */
 	endpoint?: string;
-	/** API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var. */
+	/**
+	 * API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var.
+	 *
+	 * For a Bedrock Mantle `endpoint`, omit it to authenticate with short-term Bedrock API keys minted from the
+	 * AWS credentials the agent runs with, refreshed automatically; `OPENAI_API_KEY` is not used for Mantle. The
+	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An empty string is treated as
+	 * omitted. An explicit key takes precedence.
+	 */
 	apiKey?: string | (() => Promise<string>);
+	/**
+	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.
+	 * Inline dictionaries are validated and copied when the provider is created; Agent creates a provider for each turn.
+	 * A path resolves from the current working directory when the model is created and is read once per text selection; tool calls and summaries do not read it.
+	 * Correct a failed file request and retry the next request. Replace files atomically to avoid exposing partial JSON to a selection.
+	 * Each file-backed text selection reads, parses, and validates the full dictionary; large fixtures increase per-request latency and memory use.
+	 */
+	cannedResponses?: Record<string, string> | string;
 	inferenceConfig?: InferenceConfig;
+	/**
+	 * @deprecated Not applied: no model provider reads this field, so setting it has no effect.
+	 * Use {@link ModelConfig.guardrail} to attach an existing Bedrock guardrail. The agent logs a
+	 * warning when this field is set.
+	 */
 	guardrails?: GuardrailsConfig;
+	/**
+	 * Attach an existing Amazon Bedrock guardrail to every model call (`provider: 'bedrock'` only).
+	 * Bedrock evaluates the conversation, including tool results, against the guardrail's content
+	 * filters, denied topics and prompt-attack filter. The deployed agent is granted
+	 * `bedrock:ApplyGuardrail` on this guardrail.
+	 *
+	 * Create the guardrail outside AWS Blocks (console, CLI or a CDK `CfnGuardrail`) and pass
+	 * its id or ARN and a version.
+	 *
+	 * @example
+	 * ```ts
+	 * model: { deployed: { ...BedrockModels.BALANCED, guardrail: { identifier: 'abc123xyz', version: '1' } } }
+	 * ```
+	 */
+	guardrail?: BedrockGuardrail;
+}
+
+/** An existing Amazon Bedrock guardrail to apply to model calls. See {@link ModelConfig.guardrail}. */
+export interface BedrockGuardrail {
+	/** Guardrail id (e.g. `abc123xyz`) or full guardrail ARN. */
+	identifier: string;
+	/** Guardrail version, e.g. `'1'`, or `'DRAFT'` for the working draft. */
+	version: string;
+	/** Guardrail trace in model responses. Default: Bedrock's (`'enabled'`). */
+	trace?: 'enabled' | 'disabled' | 'enabled_full';
 }
 
 export interface InferenceConfig {
@@ -204,6 +254,31 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	needsApproval?: boolean;
 	/** When true (and `needsApproval` is true), user can respond "trust" to auto-approve this tool for the rest of the conversation. */
 	trustable?: boolean;
+	/**
+	 * Set to `true` when this tool returns content you don't control: knowledge-base chunks,
+	 * fetched web pages, user-uploaded files, third-party API text. Defaults to `false`.
+	 *
+	 * The result is wrapped in an `<untrusted-data>` block whose delimiter carries a random
+	 * per-session id, and the agent's system prompt tells the model that content inside it is
+	 * data, never instructions. This is a mitigation for indirect prompt injection (text that
+	 * tries to make the agent call other tools), not a guarantee: also set `needsApproval` on
+	 * tools with side effects, and consider a Bedrock guardrail (`ModelConfig.guardrail`).
+	 *
+	 * The result is serialized to text inside the block: a string is kept as-is, and a
+	 * structured (object or array) result is presented to the model as JSON text rather than
+	 * as a structured tool result.
+	 *
+	 * @example
+	 * ```ts
+	 * searchDocs: tool({
+	 *   description: 'Search the product docs',
+	 *   parameters: z.object({ query: z.string() }),
+	 *   untrustedOutput: true,
+	 *   handler: async ({ input }) => (await kb.retrieve(input.query)).map((r) => ({ text: r.text, source: r.source })),
+	 * }),
+	 * ```
+	 */
+	untrustedOutput?: boolean;
 	/** General interrupt logic — called before tool execution with `{ input, context, interrupt }`. Call `interrupt()` to pause the agent. Mutually exclusive with `needsApproval`. */
 	interrupt?: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => void;
 	/**
@@ -360,17 +435,28 @@ export interface AgentStreamChunk {
 	input?: JSONValue;
 	usage?: TokenUsage;
 	error?: string;
+	/**
+	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
+	 * `ModelUnavailableException` for a Bedrock model the account cannot invoke). Absent for an
+	 * unclassified failure, which clients surface as `StreamFailed`.
+	 */
+	errorName?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
 
 
 export interface MessageMetadata {
 	toolName?: string;
-	toolInput?: string;
-	toolOutput?: string;
+	toolInput?: JSONValue;
+	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
 	error?: string;
+	/**
+	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for
+	 * example `ModelUnavailableException`). Absent for an unclassified failure.
+	 */
+	errorName?: string;
 }
 
 export interface Message {

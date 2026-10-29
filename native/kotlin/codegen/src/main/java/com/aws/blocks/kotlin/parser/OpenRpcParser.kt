@@ -6,6 +6,7 @@ import com.aws.blocks.kotlin.model.ContentDescriptor
 import com.aws.blocks.kotlin.model.Error
 import com.aws.blocks.kotlin.model.ExamplePairing
 import com.aws.blocks.kotlin.model.ExternalDocumentation
+import com.aws.blocks.kotlin.CodegenException
 import com.aws.blocks.kotlin.model.Field
 import com.aws.blocks.kotlin.model.Info
 import com.aws.blocks.kotlin.model.License
@@ -21,7 +22,7 @@ import kotlinx.serialization.json.*
 /**
  * Exception thrown when the OpenRPC parser encounters invalid or unsupported input.
  */
-class OpenRpcParseException(message: String) : RuntimeException(message)
+class OpenRpcParseException(message: String) : CodegenException(message)
 
 /**
  * Parses an OpenRPC JSON specification into a [com.aws.blocks.kotlin.model.RpcModel].
@@ -53,9 +54,17 @@ object OpenRpcParser {
         val info = parseInfo(root)
         val servers = parseServers(root)
         val endpoint = root["x-blocks-endpoint"]?.jsonPrimitive?.contentOrNull
+        val nativeCatalogs = NativeCatalogParser.parse(root)
 
         val methodsArray = root["methods"]?.jsonArray
-            ?: return RpcModel(info = info, methods = emptyList(), servers = servers, components = componentsObj, endpoint = endpoint)
+            ?: return RpcModel(
+                info = info,
+                methods = emptyList(),
+                servers = servers,
+                components = componentsObj,
+                endpoint = endpoint,
+                nativeCatalogs = nativeCatalogs,
+            )
 
         val methods = mutableListOf<Method>()
 
@@ -120,7 +129,14 @@ object OpenRpcParser {
             )
         }
 
-        return RpcModel(info = info, methods = methods, servers = servers, components = componentsObj, endpoint = endpoint)
+        return RpcModel(
+            info = info,
+            methods = methods,
+            servers = servers,
+            components = componentsObj,
+            endpoint = endpoint,
+            nativeCatalogs = nativeCatalogs,
+        )
     }
 
     private fun parseInfo(root: JsonObject): Info {
@@ -292,10 +308,15 @@ object OpenRpcParser {
         // Handle x-blocks-transferable
         schema["x-blocks-transferable"]?.let { transferableEl ->
             val transferableName = transferableEl.jsonPrimitive.content
-            val typeArgs = schema["x-blocks-type-args"]?.jsonArray?.map { argEl ->
-                val argObj = argEl.jsonObject
-                resolveSchema(argObj, components)
-            } ?: emptyList()
+            // An oidc/client's type argument names its providers, which the generated client doesn't use yet.
+            val typeArgs = if (transferableName == "oidc/client") {
+                emptyList()
+            } else {
+                schema["x-blocks-type-args"]?.jsonArray?.map { argEl ->
+                    val argObj = argEl.jsonObject
+                    resolveSchema(argObj, components)
+                } ?: emptyList()
+            }
             return TypeRef.Transferable(transferableName, typeArgs)
         }
 

@@ -247,6 +247,86 @@ test('CDK: customer-managed encryption provisions a KMS key', () => {
 	});
 });
 
+test('CDK: an auto-created CMK is DESTROYED with the table under the sandbox preset', () => {
+	// #670: the dedicated CMK defaults to RemovalPolicy.RETAIN, so without the
+	// guard it would survive a DESTROY table teardown as an orphaned, billed,
+	// rotating key. Under sandbox the key must follow the table to DELETE.
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+});
+
+test('CDK: an auto-created CMK is RETAINED with the table under the production preset', () => {
+	// The key is never less durable than the table it encrypts: production
+	// RETAINs the table, so the key is retained too.
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+});
+
+test('CDK: protection override wins for the CMK — a retained table under sandbox keeps its key', () => {
+	// The guard applies the RESOLVED removal policy, which `protection` overrides
+	// — not the preset default. A `retained` table under the sandbox preset must
+	// keep its key: a retained table whose only CMK is scheduled for deletion is
+	// unreadable and unrecoverable after the 30-day KMS window. This case fails
+	// if the guard uses the preset (`this.defaults`) instead of the resolved
+	// policy, which the preset-only tests above cannot detect.
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+		protection: 'retained',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+});
+
+test('CDK: protection override wins for the CMK — a disposable table under production destroys its key', () => {
+	// The reverse override: a `disposable` table under the production preset must
+	// DESTROY its key, reached only through the resolved policy, not the preset.
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+		protection: 'disposable',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::KMS::Key', { DeletionPolicy: 'Delete', UpdateReplacePolicy: 'Delete' });
+});
+
+test('CDK: an imported fromKmsKey survives the removal-policy guard under sandbox', () => {
+	// The `!encryptionKey` guard matters because `applyRemovalPolicy` on an
+	// imported `Key.fromKeyArn` THROWS — an imported key has no `CfnResource`
+	// child to stamp a policy on. So the real thing this pins is that
+	// construction does not throw under the sandbox preset (where an auto-created
+	// key WOULD be destroyed) and that the table still encrypts with the imported
+	// ARN. (The sibling `fromKmsKey ... provisions no new KMS key` test below
+	// covers the resource count.)
+	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	assert.doesNotThrow(() => new DistributedTable(parent, 'orders', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: DistributedTable.fromKmsKey(keyArn),
+	}));
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		SSESpecification: { SSEEnabled: true, SSEType: 'KMS', KMSMasterKeyId: keyArn },
+	});
+});
+
 test('CDK: fromKmsKey encrypts with an existing key and provisions no new KMS key', () => {
 	const { stack, parent } = setup();
 	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
@@ -445,7 +525,10 @@ test('CDK: an unrecognized encryption value warns at synth', () => {
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		encryption: 'kms', // intentional typo — exercise the synth guard
 	});
-	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+	Annotations.fromStack(stack).hasWarning(
+		'*',
+		Match.stringLikeRegexp('Unrecognized encryption.*ack: @aws-blocks/bb-distributed-table:UnknownEncryption'),
+	);
 });
 
 test('CDK: an out-of-range retentionDays warns at synth', () => {
@@ -455,7 +538,10 @@ test('CDK: an out-of-range retentionDays warns at synth', () => {
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		pointInTimeRecovery: { retentionDays: 60 },
 	});
-	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
+	Annotations.fromStack(stack).hasWarning(
+		'*',
+		Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-blocks/bb-distributed-table:InvalidPitrDays'),
+	);
 });
 
 test('CDK: durability options passed alongside fromExisting warn at synth', () => {
@@ -468,4 +554,98 @@ test('CDK: durability options passed alongside fromExisting warn at synth', () =
 		pointInTimeRecovery: { retentionDays: 14 },
 	});
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('wrapped via fromExisting'));
+});
+
+// --- GSI manager Delete: stack-status lookup ---
+// On Delete the GSI manager reads its own stack's status and template so a
+// table leaving the stack keeps its indexes (see gsi-manager-lambda.test.ts). The
+// upgrade must not touch the table or re-invoke the custom resource: the
+// template change is one IAM statement plus the Lambda code asset.
+
+type CfnResource = { Type: string; Properties?: any; DependsOn?: string[] };
+
+function gsiTemplate(): Record<string, CfnResource> {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' }, byCreated: { partitionKey: 'email', sortKey: 'createdAt' } },
+	});
+	return Template.fromStack(stack).toJSON().Resources;
+}
+
+function policyStatementsOf(resources: Record<string, CfnResource>, functionPrefix: string) {
+	const [fnId, fn] = Object.entries(resources).find(
+		([id, r]) => r.Type === 'AWS::Lambda::Function' && id.startsWith(functionPrefix),
+	) ?? [];
+	assert.ok(fn, `function ${functionPrefix} not found`);
+	const roleId = fn.Properties.Role['Fn::GetAtt'][0];
+	const policies = Object.entries(resources).filter(
+		([, r]) => r.Type === 'AWS::IAM::Policy' && r.Properties.Roles.some((ref: any) => ref.Ref === roleId),
+	);
+	return { fnId, fn, policies };
+}
+
+test('CDK: GSI manager may read its own stack only, from a policy its function depends on', () => {
+	const resources = gsiTemplate();
+	const { fn, policies } = policyStatementsOf(resources, 'BlocksGsiManager');
+	// One policy per role: a separate policy would have no DependsOn edge and a
+	// stack delete could remove it before the custom resource's Delete runs.
+	assert.strictEqual(policies.length, 1);
+	const [policyId, policy] = policies[0];
+	assert.ok(fn.DependsOn?.includes(policyId), 'the GSI manager function DependsOn its policy');
+	const stackRead = policy.Properties.PolicyDocument.Statement.filter((s: any) =>
+		[s.Action].flat().some((a: string) => a.startsWith('cloudformation:')),
+	);
+	assert.deepStrictEqual(stackRead, [
+		{
+			Action: ['cloudformation:DescribeStacks', 'cloudformation:GetTemplate'],
+			Effect: 'Allow',
+			Resource: { Ref: 'AWS::StackId' },
+		},
+	]);
+});
+
+test('CDK: only the GSI onEvent function gets the stack-status lookup', () => {
+	const resources = gsiTemplate();
+	const { policies } = policyStatementsOf(resources, 'BlocksGsiIsComplete');
+	const actions = policies.flatMap(([, p]) =>
+		p.Properties.PolicyDocument.Statement.flatMap((s: any) => [s.Action].flat()),
+	);
+	assert.ok(!actions.some((a: string) => a.startsWith('cloudformation:')));
+	const anyCfn = Object.values(resources)
+		.filter((r) => r.Type === 'AWS::IAM::Policy')
+		.flatMap((p) => p.Properties.PolicyDocument.Statement)
+		.filter((s: any) => [s.Action].flat().some((a: string) => a.startsWith('cloudformation:')));
+	assert.strictEqual(anyCfn.length, 1);
+});
+
+test('CDK: GSI custom resource properties are unchanged, so upgrading does not re-invoke it', () => {
+	const resources = gsiTemplate();
+	const custom = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFormation::CustomResource');
+	assert.strictEqual(custom.length, 1);
+	const { ServiceToken: _token, ...props } = custom[0].Properties;
+	assert.deepStrictEqual(Object.keys(props).sort(), ['Indexes', 'SandboxMode', 'TableName', 'Version']);
+	assert.strictEqual(props.Version, '3');
+	assert.strictEqual(props.SandboxMode, 'false');
+});
+
+test('CDK: the table name is a literal in the template, as the GSI manager Delete check requires', () => {
+	// On Delete the GSI manager compares this literal with the custom resource's
+	// TableName to tell whether the table stays in the stack. A token here would
+	// never match, and removing `indexes` would silently stop dropping them.
+	const resources = gsiTemplate();
+	const tables = Object.values(resources).filter((r) => r.Type === 'AWS::DynamoDB::Table');
+	assert.strictEqual(tables.length, 1);
+	assert.strictEqual(tables[0].Properties.TableName, 'TestStack-app-users');
+});
+
+test('CDK: a table without indexes gets no stack-status lookup', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const json = JSON.stringify(Template.fromStack(stack).toJSON());
+	assert.ok(!json.includes('cloudformation:'));
 });

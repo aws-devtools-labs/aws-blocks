@@ -1,5 +1,59 @@
 # @aws-blocks/bb-async-job
 
+## 0.2.3
+
+### Patch Changes
+
+- 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
+  
+  Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
+  so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
+  the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
+  export:
+  
+  - `@aws-blocks/bb-agent`: `InterruptError`
+  - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
+  - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
+    session lifetime is configured.
+  - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
+  
+  `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
+  test now also checks every Building Block's `cdk` entry.
+- 023f02c: Internal: route the remaining per-package error mint sites through core's `blocksError`, and tighten the brand-coverage guard to per-site. No behavior change; two latent unbranded realtime timeout rejects are now wire-safe.
+- Updated dependencies [ec7eebe]
+- Updated dependencies [e682ba7]
+- Updated dependencies [e7e96e6]
+- Updated dependencies [9ebda66]
+- Updated dependencies [78f4396]
+- Updated dependencies [440ecce]
+- Updated dependencies [92fa27b]
+- Updated dependencies [1a5c18e]
+- Updated dependencies [4ae500e]
+- Updated dependencies [6d764f7]
+- Updated dependencies [4fe7be4]
+- Updated dependencies [5d6656a]
+- Updated dependencies [60616b1]
+- Updated dependencies [a50fb46]
+- Updated dependencies [8a1a4a9]
+- Updated dependencies [38ce80c]
+- Updated dependencies [94a914a]
+- Updated dependencies [cb0ec01]
+- Updated dependencies [005c095]
+- Updated dependencies [b8649dc]
+- Updated dependencies [2da2fd4]
+- Updated dependencies [66f4be2]
+- Updated dependencies [32a4b73]
+- Updated dependencies [da6d4c7]
+- Updated dependencies [e3e5e22]
+- Updated dependencies [e9241b5]
+- Updated dependencies [f1eb149]
+- Updated dependencies [122c49c]
+- Updated dependencies [7c19c4f]
+  - @aws-blocks/core@0.7.0
+  - @aws-blocks/bb-lambda-compute@0.6.0
+  - @aws-blocks/bb-distributed-table@0.2.2
+  - @aws-blocks/bb-logger@0.2.2
+
 ## 0.2.2
 
 ### Patch Changes
