@@ -198,6 +198,7 @@ class DartNativePackage {
 /// An `x-blocks-native-bindings` entry, before validation.
 class NativeBinding {
   const NativeBinding({
+    required this.id,
     required this.kind,
     required this.tag,
     required this.package,
@@ -205,6 +206,8 @@ class NativeBinding {
     required this.abi,
     required this.genericArity,
   });
+
+  final String id;
 
   /// Open enumeration; only `transferable` is defined in schema 1.
   final String kind;

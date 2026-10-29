@@ -9,6 +9,7 @@ const _catalogSchemaVersion = 1;
 const _transferableKind = 'transferable';
 const _transferableAbiV1 = 'blocks-transferable-v1';
 const _maxGenericArity = 1;
+final _exportGrammar = RegExp(r'^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$');
 
 final _pubPackageName = RegExp(r'^[a-z_][a-z0-9_]*$');
 
@@ -176,6 +177,13 @@ class OpenRpcParser {
         );
       }
       final abi = _requiredField(binding, 'abi', path);
+      final export = _requiredField(binding, 'export', path);
+      if (!_exportGrammar.hasMatch(export)) {
+        throw FormatException(
+          "Binding export '${escapeForDiagnostic(export)}' does not name a "
+          'public Dart type',
+        );
+      }
       final kind = _requiredField(binding, 'kind', path);
       if (kind == _transferableKind && abi != _transferableAbiV1) {
         throw FormatException(
@@ -184,10 +192,11 @@ class OpenRpcParser {
         );
       }
       return NativeBinding(
+        id: _requiredField(binding, 'id', path),
         kind: kind,
         tag: tag,
         package: _requiredField(binding, 'package', path),
-        export: _requiredField(binding, 'export', path),
+        export: export,
         abi: abi,
         genericArity: arity,
       );

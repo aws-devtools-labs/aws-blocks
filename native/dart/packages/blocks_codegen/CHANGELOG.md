@@ -15,6 +15,17 @@
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
   references, since nothing imports it.
+- Warn with `AWSBLOCKS-NATIVE-004` for a binding whose `kind` schema 1 does not
+  define. It was skipped in silence, so a typo in `kind` was indistinguishable
+  from a binding that applied.
+- **Breaking:** `NativeBinding` gains a required `id`, which the new diagnostic names.
+  It is exported, so every external construction must add the field.
+- **A binding entry with a missing or empty `id` is now a spec error.** The
+  field was never read before, so such an entry generated.
+- **An `export` that cannot name a public Dart type is now a spec error
+  whatever the binding's `kind`.** The grammar check ran only where a binding
+  was applied, so one of an undefined kind generated, matching the single
+  enforcement point in `validate-native-catalogs.ts`.
 - Warn with `AWSBLOCKS-NATIVE-006` when an opt-out names a package the spec does
   not declare. A misspelled identity used to opt nothing out in silence,
   indistinguishable from a working opt-out.

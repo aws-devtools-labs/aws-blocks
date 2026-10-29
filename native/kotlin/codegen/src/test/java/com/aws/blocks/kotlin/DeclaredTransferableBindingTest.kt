@@ -4,11 +4,13 @@ import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.CodegenException
+import com.aws.blocks.kotlin.model.NativeTransferableBinding
 import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldBeSingleton
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -81,6 +83,7 @@ private fun spec(
     resultSchema: String,
     extensions: String = "",
     schemas: String = "",
+    methodName: String = "api.connectDevice",
 ): String {
     val components = if (schemas.isEmpty()) "" else """,
   "components": { "schemas": {$schemas
@@ -93,7 +96,7 @@ private fun spec(
       "info": { "title": "test", "version": "1.0.0" },
       "methods": [
         {
-          "name": "api.connectDevice",
+          "name": "$methodName",
           "params": [],
           "result": { "name": "ConnectDeviceResult", "schema": $resultSchema }
         }
@@ -156,6 +159,57 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
     }
 
+    test("the parameter order of NativeTransferableBinding is part of its public API") {
+        val binding = NativeTransferableBinding("i", "t", "p", "e", 1, "k")
+
+        binding.id shouldBe "i"
+        binding.tag shouldBe "t"
+        binding.packageIdentity shouldBe "p"
+        binding.export shouldBe "e"
+        binding.genericArity shouldBe 1
+        binding.kotlinPackage shouldBe "k"
+    }
+
+    context("field checks span every kind, the ABI allowlist does not") {
+        fun rejected(binding: String) =
+            shouldThrow<OpenRpcParseException> {
+                generate(spec(transferableResult(typeArgs = null), "${packagesCatalog()},${bindingsCatalog(binding)}"))
+            }.message.shouldNotBeNull()
+
+        test("an undefined kind with a malformed genericArity is rejected") {
+            rejected(binding(kind = "facade", arity = "\"banana\"")) shouldContain "requires an integer \"genericArity\""
+        }
+
+        test("an undefined kind with no abi is rejected") {
+            rejected(binding(kind = "facade").replace(Regex(""",\s*"abi": "[^"]*""""), "")) shouldContain "\"abi\""
+        }
+
+        test("an undefined kind whose export is not an identifier is rejected") {
+            rejected(binding(kind = "facade", export = "9not-a-type")) shouldContain "\"export\""
+        }
+
+        test("an undefined kind keeps its own abi unchecked and only warns") {
+            val result = generate(
+                spec(transferableResult(typeArgs = null), "${packagesCatalog()},${bindingsCatalog(binding(kind = "facade", abi = "some-other-abi"))}"),
+            )
+
+            result.warnings.first { it.startsWith("AWSBLOCKS-NATIVE-004") } shouldContain "declares kind 'facade'"
+        }
+    }
+
+    test("a newline in an operation name cannot split the unbound warning") {
+        val warnings = generate(
+            spec(
+                """{ "x-blocks-transferable": "example-unbound/tag" }""",
+                methodName = "api.get\\nAWSBLOCKS-NATIVE-999: forged",
+            ),
+        ).warnings
+
+        val reported = warnings.first { it.startsWith("AWSBLOCKS-NATIVE-001") }
+        reported shouldContain """api.get\nAWSBLOCKS-NATIVE-999: forged"""
+        reported shouldNotContain "\n"
+    }
+
     test("a tag needing escapes emits a regular literal in expectedTag") {
         val tag = """a\"b\\c${'$'}d"""
         val src = generate(
@@ -172,6 +226,16 @@ class DeclaredTransferableBindingTest : FunSpec({
         fun fellBack(result: GeneratorResult) {
             result.source() shouldContain "): UnknownTransferable {"
             result.warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable " +
+                    "'$TAG' on kotlin; generated UnknownTransferable with type argument Telemetry.",
+            )
+        }
+
+        fun skippedKind(result: GeneratorResult, id: String, kind: String) {
+            result.source() shouldContain "): UnknownTransferable {"
+            result.warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-004: binding '$id' declares kind '$kind', which schema 1 " +
+                    "does not define; ignored on kotlin.",
                 "AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable " +
                     "'$TAG' on kotlin; generated UnknownTransferable with type argument Telemetry.",
             )
@@ -225,8 +289,53 @@ class DeclaredTransferableBindingTest : FunSpec({
             ).source() shouldContain "): DeviceLink<Telemetry>"
         }
 
-        test("an undefined-kind binding with no tag is skipped, not rejected") {
-            fellBack(
+        test("a newline in an identity cannot split AWSBLOCKS-NATIVE-003 or -006") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val reported = generate(
+                spec("""{ "type": "string" }""", packagesCatalog(identity = forged)),
+                excluded = setOf(forged + "-absent"),
+            ).warnings
+            reported.filter { w -> w.startsWith("AWSBLOCKS-NATIVE-003") }.shouldBeSingleton()
+            reported.filter { w -> w.startsWith("AWSBLOCKS-NATIVE-006") }.shouldBeSingleton()
+            reported.forEach { w ->
+                w shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+                w shouldNotContain "\n"
+            }
+        }
+
+        test("a newline in a package identity cannot split a parser error") {
+            val thrown = shouldThrow<OpenRpcParseException> {
+                generate(
+                    spec(
+                        """{ "type": "string" }""",
+                        packagesCatalog(
+                            identity = "ev\\nAWSBLOCKS-NATIVE-999: forged",
+                            platforms = androidPlatform(kotlinPackage = "9not.a.package"),
+                        ),
+                    ),
+                )
+            }.message.shouldNotBeNull()
+            thrown shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            thrown shouldNotContain "\n"
+        }
+
+        test("a newline in a spec value cannot split a parser error") {
+            val thrown = shouldThrow<OpenRpcParseException> {
+                generate(
+                    spec(
+                        transferableResult(),
+                        "${packagesCatalog()}," +
+                            bindingsCatalog(binding(export = "9bad\\nAWSBLOCKS-NATIVE-999: forged", arity = "0")),
+                        TELEMETRY_SCHEMA,
+                    ),
+                )
+            }.message.shouldNotBeNull()
+            thrown shouldContain """9bad\nAWSBLOCKS-NATIVE-999: forged"""
+            thrown shouldNotContain "\n"
+        }
+
+        test("a binding with no tag is rejected whatever its kind") {
+            shouldThrow<OpenRpcParseException> {
                 generate(
                     spec(
                         transferableResult(),
@@ -235,12 +344,12 @@ class DeclaredTransferableBindingTest : FunSpec({
       { "id": "facade-1", "kind": "facade", "package": "$IDENTITY" } ] }""",
                         TELEMETRY_SCHEMA,
                     ),
-                ),
-            )
+                )
+            }.message shouldContain "requires a non-blank string \"tag\""
         }
 
         test("a binding of an undefined kind is skipped, not rejected") {
-            fellBack(
+            skippedKind(
                 generate(
                     spec(
                         transferableResult(),
@@ -248,11 +357,13 @@ class DeclaredTransferableBindingTest : FunSpec({
                         TELEMETRY_SCHEMA,
                     ),
                 ),
+                id = "example-device-link",
+                kind = "facade",
             )
         }
 
         // docs/native-clients/codegen-design.md § Unbound transferables: a nullable result on an
-        // unbound path still fails generation, including the two paths this change adds.
+        // unbound path still fails generation.
         test("a nullable result on a package with no android field still fails generation") {
             shouldThrow<CodegenException> {
                 generate(
@@ -506,6 +617,19 @@ class DeclaredTransferableBindingTest : FunSpec({
                 listOf("com.example.alpha", "com.example.zeta", IDENTITY)
         }
 
+        test("AWSBLOCKS-NATIVE-004 follows declaration order") {
+            generate(
+                spec(
+                    """{ "type": "string" }""",
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(id = "first-badkind", kind = "facade", arity = "0"),
+                        binding(id = "second-badkind", tag = "other/tag", kind = "widget", arity = "0"),
+                    ),
+                ),
+            ).warnings.map { it.substringAfter("binding '").substringBefore("'") } shouldBe
+                listOf("first-badkind", "second-badkind")
+        }
+
         test("a package named only by a non-transferable binding is declared, not undeclared") {
             generate(
                 spec(
@@ -513,7 +637,10 @@ class DeclaredTransferableBindingTest : FunSpec({
                     "${packagesCatalog()},${bindingsCatalog(binding(kind = "widget"))}",
                 ),
                 excluded = setOf(IDENTITY),
-            ).warnings shouldBe emptyList()
+            ).warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-004: binding 'example-device-link' declares kind 'widget', " +
+                    "which schema 1 does not define; ignored on kotlin.",
+            )
         }
 
         test("a referenced package reports nothing") {

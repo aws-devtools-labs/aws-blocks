@@ -1,6 +1,8 @@
 package com.aws.blocks.kotlin.parser
 
 import com.aws.blocks.kotlin.NamingUtils
+import com.aws.blocks.kotlin.forDiagnostic
+import com.aws.blocks.kotlin.model.DeclaredBinding
 import com.aws.blocks.kotlin.model.NativeCatalogs
 import com.aws.blocks.kotlin.model.NativeTransferableBinding
 import kotlinx.serialization.json.JsonArray
@@ -32,11 +34,14 @@ internal object NativeCatalogParser {
 
         val kotlinPackages = packagesCatalog?.let { parsePackages(it) } ?: emptyMap()
         val referenced = mutableSetOf<String>()
-        val bindings = bindingsCatalog?.let { parseBindings(it, kotlinPackages, referenced) } ?: emptyList()
+        val declared = mutableListOf<DeclaredBinding>()
+        val bindings = bindingsCatalog?.let { parseBindings(it, kotlinPackages, referenced, declared) }
+            ?: emptyList()
         return NativeCatalogs(
             bindings = bindings,
             unreferencedPackages = kotlinPackages.keys - referenced,
             declaredPackages = kotlinPackages.keys,
+            declaredBindings = declared,
         )
     }
 
@@ -47,7 +52,7 @@ internal object NativeCatalogParser {
             ?: throw OpenRpcParseException("$PACKAGES requires a \"packages\" object")
 
         return packages.entries.associate { (identity, entry) ->
-            val path = "$PACKAGES.packages.$identity"
+            val path = "$PACKAGES.packages.${identity.forDiagnostic()}"
             val platforms = entry.asObject(path)["platforms"]?.asObject("$path.platforms")
                 ?: throw OpenRpcParseException("$path requires a \"platforms\" object")
             val android = platforms["android"]?.asObject("$path.platforms.android")
@@ -61,7 +66,7 @@ internal object NativeCatalogParser {
         val kotlinPackage = declared.requireString("kotlinPackage", "$path.package")
         if (!KOTLIN_PACKAGE.matches(kotlinPackage) || kotlinPackage.split('.').any(NamingUtils::isKotlinKeyword)) {
             throw OpenRpcParseException(
-                "$path.package \"kotlinPackage\" is not a Kotlin package name: \"$kotlinPackage\"",
+                "$path.package \"kotlinPackage\" is not a Kotlin package name: \"${kotlinPackage.forDiagnostic()}\"",
             )
         }
         return kotlinPackage
@@ -71,6 +76,7 @@ internal object NativeCatalogParser {
         catalog: JsonObject,
         kotlinPackages: Map<String, String?>,
         referenced: MutableSet<String>,
+        declaredBindings: MutableList<DeclaredBinding>,
     ): List<NativeTransferableBinding> {
         catalog.requireSchemaVersion(BINDINGS)
         val declared = catalog["bindings"] as? JsonArray
@@ -87,35 +93,39 @@ internal object NativeCatalogParser {
             referenced.add(identity)
             if (identity !in kotlinPackages) {
                 throw OpenRpcParseException(
-                    "$path (\"$id\") names package \"$identity\", which $PACKAGES does not declare",
+                    "$path (\"${id.forDiagnostic()}\") names package \"${identity.forDiagnostic()}\", " +
+                        "which $PACKAGES does not declare",
                 )
             }
-            // `kind` is an open enumeration, so uniqueness has to span every kind, and a
-            // kind that carries no tag is skipped rather than rejected.
-            val declaredTag = if (binding.containsKey("tag")) binding.requireString("tag", path) else null
-            if (declaredTag != null && !seenTags.add(declaredTag)) {
-                throw OpenRpcParseException("$BINDINGS binds tag \"$declaredTag\" more than once")
+            // `kind` is an open enumeration, so every check but the ABI allowlist spans it,
+            // matching the single enforcement point in validate-native-catalogs.ts.
+            val tag = binding.requireString("tag", path)
+            if (!seenTags.add(tag)) {
+                throw OpenRpcParseException("$BINDINGS binds tag \"${tag.forDiagnostic()}\" more than once")
             }
-            if (kind != TRANSFERABLE_KIND) continue
-            val tag = declaredTag
-                ?: throw OpenRpcParseException("$path (\"$id\") requires a non-blank string \"tag\"")
-
             val abi = binding.requireString("abi", path)
-            if (abi != TRANSFERABLE_ABI) {
-                throw OpenRpcParseException("$path (\"$id\") declares unsupported abi \"$abi\"")
-            }
             val arity = (binding["genericArity"] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
             if (arity == null || arity < 0 || arity > MAX_GENERIC_ARITY) {
                 throw OpenRpcParseException(
-                    "$path (\"$id\") requires an integer \"genericArity\" " +
+                    "$path (\"${id.forDiagnostic()}\") requires an integer \"genericArity\" " +
                         "between 0 and $MAX_GENERIC_ARITY, got ${binding["genericArity"]}",
+                )
+            }
+            val export = binding.requireExport(path, id)
+            declaredBindings.add(DeclaredBinding(id, kind))
+            if (kind != TRANSFERABLE_KIND) continue
+
+            if (abi != TRANSFERABLE_ABI) {
+                throw OpenRpcParseException(
+                    "$path (\"${id.forDiagnostic()}\") declares unsupported abi \"${abi.forDiagnostic()}\"",
                 )
             }
             transferables.add(
                 NativeTransferableBinding(
+                    id = id,
                     tag = tag,
                     packageIdentity = identity,
-                    export = binding.requireExport(path, id),
+                    export = export,
                     genericArity = arity,
                     kotlinPackage = kotlinPackages.getValue(identity),
                 ),
@@ -144,7 +154,10 @@ internal object NativeCatalogParser {
     private fun JsonObject.requireExport(path: String, id: String): String {
         val export = requireString("export", path)
         if (!EXPORT.matches(export)) {
-            throw OpenRpcParseException("$path (\"$id\") \"export\" is not an identifier: \"$export\"")
+            throw OpenRpcParseException(
+                "$path (\"${id.forDiagnostic()}\") \"export\" is not an identifier: " +
+                    "\"${export.forDiagnostic()}\"",
+            )
         }
         return export
     }

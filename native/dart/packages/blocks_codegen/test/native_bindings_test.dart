@@ -397,6 +397,56 @@ void main() {
       expect(model.warnings, isEmpty);
     });
 
+    test('a kind schema 1 does not define reports AWSBLOCKS-NATIVE-004', () {
+      final model = _build(
+        _specWith(_binding(id: 'typo', kind: 'transferrable')),
+      );
+
+      expect(
+        model.warnings.first,
+        "AWSBLOCKS-NATIVE-004: binding 'typo' declares kind 'transferrable', "
+        'which schema 1 does not define; ignored on dart.',
+      );
+    });
+
+    test('a newline in a reported binding id cannot split the diagnostic', () {
+      final model = _build(
+        _specWith(
+          _binding(id: 'a\nAWSBLOCKS-NATIVE-001: forged', kind: 'facade'),
+        ),
+      );
+
+      final reported = model.warnings.first;
+      expect(reported, startsWith('AWSBLOCKS-NATIVE-004: '));
+      expect(reported, contains(r'a\nAWSBLOCKS-NATIVE-001: forged'));
+      expect(reported, isNot(contains('\n')));
+    });
+
+    test('an undefined kind whose export cannot name a type is an error', () {
+      expect(
+        () => _build(_specWith(_binding(kind: 'facade', export: '_private'))),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains("export '_private' does not name a public Dart type"),
+          ),
+        ),
+      );
+    });
+
+    test('a newline in an operation name cannot split the diagnostic', () {
+      final model = _build(
+        _specJson(methodName: 'api.get\nAWSBLOCKS-NATIVE-999: forged'),
+      );
+
+      final reported = model.warnings.firstWhere(
+        (w) => w.startsWith('AWSBLOCKS-NATIVE-001'),
+      );
+      expect(reported, contains(r'api.get\nAWSBLOCKS-NATIVE-999: forged'));
+      expect(reported, isNot(contains('\n')));
+    });
+
     test('a nullable bound direct result stays dynamic', () {
       final model = _build(
         _specJson(
@@ -1182,6 +1232,21 @@ void main() {
       );
     });
 
+    test('a binding with a missing id', () {
+      final binding = _binding()..remove('id');
+      expect(
+        () => _build(_specWith(binding)),
+        _throwsFormat(".id' to be a non-empty string"),
+      );
+    });
+
+    test('a binding with an empty id', () {
+      expect(
+        () => _build(_specWith(_binding(id: ''))),
+        _throwsFormat(".id' to be a non-empty string"),
+      );
+    });
+
     test('a binding with a blank kind', () {
       expect(
         () => _build(_specWith(_binding(kind: ''))),
@@ -1433,6 +1498,7 @@ String _secondMethodBoundSpec() => jsonEncode({
 });
 
 Map<String, dynamic> _binding({
+  String id = 'example-device-link',
   String kind = 'transferable',
   String tag = _tag,
   String package = 'example-iot-native',
@@ -1440,7 +1506,7 @@ Map<String, dynamic> _binding({
   String abi = 'blocks-transferable-v1',
   int genericArity = 0,
 }) => {
-  'id': 'example-device-link',
+  'id': id,
   'kind': kind,
   'tag': tag,
   'package': package,
@@ -1475,12 +1541,13 @@ String _specJson({
   Map<String, dynamic> extras = const {},
   Map<String, dynamic>? schemas,
   List<Map<String, dynamic>> params = const [],
+  String methodName = 'api.connectDevice',
 }) => jsonEncode({
   'openrpc': '1.3.2',
   'info': {'title': 'test', 'version': '1.0.0'},
   'methods': [
     {
-      'name': 'api.connectDevice',
+      'name': methodName,
       'params': params,
       'result': {'name': 'ConnectDeviceResult', 'schema': resultSchema},
     },
