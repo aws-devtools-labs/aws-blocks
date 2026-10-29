@@ -77,7 +77,7 @@ class ScriptedEngine implements DatabaseEngine {
 }
 
 const files = {
-	'001_t.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);',
+	'001_t.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INT);\nCREATE INDEX ASYNC t_n ON t (n);',
 	'002_seed.sql': "INSERT INTO t VALUES ('a', 1);\nINSERT INTO t VALUES ('b', 2);",
 };
 const quiet = { log: () => {} };

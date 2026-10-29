@@ -52,13 +52,6 @@ export const BINDING_MARKER_FILE = 'binding.json';
 /** Default root (relative to the project root) of per-block migration directories. */
 export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 
-/**
- * Sequence cache the rewriter gives identity columns and sequences on a
- * `dsql` cluster. DSQL accepts `CACHE 1` or `CACHE >= 65536`; the large
- * cache avoids a coordination round per value, at the cost of strict ordering.
- */
-export const DSQL_IDENTITY_CACHE = 65536;
-
 /** Prefix of the custom database role the migration Lambda creates for the app on a DSQL cluster. */
 export const DB_ROLE_PREFIX = 'blocks_app_';
 

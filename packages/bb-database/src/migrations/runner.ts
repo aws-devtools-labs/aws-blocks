@@ -129,6 +129,11 @@ async function jobStatus(engine: DatabaseEngine, jobId: string): Promise<{ statu
  * step (DDL on a `dsql` cluster, a job wait, a constraint validation)
  * runs on its own. Progress is recorded after every unit of work so a failure
  * resumes where it stopped.
+ *
+ * A `wait-job` step polls `sys.jobs` for the job id the statement before it
+ * returned. When that statement returned none, the wait is a no-op: the local
+ * PGlite runs `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE
+ * CONSTRAINT` synchronously (the mock strips `ASYNC`), so there is no job.
  */
 export async function runMigrationPlan(
 	engine: DatabaseEngine,

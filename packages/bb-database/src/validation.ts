@@ -7,16 +7,19 @@
  *
  * Statement compatibility is decided by AWS's `dsql-lint` (see `dsql-lint.ts`),
  * which parses the SQL and whose rule set the DSQL team maintains. The checks
- * run on the rewritten SQL (see `migrations/plan.ts`), so a `SERIAL` or a
- * synchronous `CREATE INDEX` in a migration file is rewritten rather than
- * rejected, while a `TRUNCATE`, a trigger, Row Level Security, or an array
- * column fails here, on the laptop, with dsql-lint's message and suggestion.
+ * run on the SQL as written: a migration file (see `migrations/plan.ts`) and
+ * every statement a handler issues locally. A `TRUNCATE`, a trigger, Row Level
+ * Security, an array column, and the PostgreSQL spellings of DSQL forms (a
+ * `SERIAL` column, a `CREATE INDEX` without `ASYNC`, an `ADD CONSTRAINT`
+ * without `NOT VALID`) all fail here, on the laptop, with dsql-lint's message
+ * and suggestion. One check is the block's own: `GRANT … ON SCHEMA public`,
+ * which dsql-lint accepts and DSQL rejects at runtime.
  *
  * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
  */
 
 import { brandBlocksError } from '@aws-blocks/core';
-import { DOLLAR_QUOTE_TAG_RE, splitStatements } from '@aws-blocks/data-common';
+import { DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
 import { TRANSACTION_ROW_LIMIT, TRANSACTION_SIZE_LIMIT_BYTES } from './constants.js';
 import { formatDiagnostic, type LintDiagnostic, lintSql } from './dsql-lint.js';
 import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from './errors.js';
@@ -24,7 +27,6 @@ import { DatabaseErrors, DSQL_VALIDATION_ERROR_NAME } from './errors.js';
 const DOCS = 'https://docs.aws.amazon.com/aurora-dsql/latest/userguide';
 export const COMPAT_DOC = `${DOCS}/working-with-postgresql-compatibility.html`;
 export const DDL_DOC = `${DOCS}/working-with-ddl.html`;
-export const ALTER_TABLE_DOC = `${DOCS}/alter-table-syntax-support.html`;
 export const QUOTAS_DOC = `${DOCS}/CHAP_quotas.html`;
 
 /** Strip string literals and comments before classifying a statement. */
@@ -201,5 +203,3 @@ function validationError(message: string, doc: string): Error {
 	err.name = DSQL_VALIDATION_ERROR_NAME;
 	return brandBlocksError(err);
 }
-
-export { splitStatements };

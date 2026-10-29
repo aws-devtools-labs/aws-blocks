@@ -29,9 +29,6 @@
     "src",
     "LICENSE"
   ],
-  "bin": {
-    "bb-database": "./dist/cli.js"
-  },
   "exports": {
     ".": {
       "browser": "./dist/index.browser.js",
