@@ -174,17 +174,18 @@ export interface FileBucketOptions {
 	 */
 	bucket?: ExternalBucketRef;
 	/**
-	 * CDK removal behavior for the underlying S3 bucket. When omitted,
-	 * CDK's default applies (RETAIN — the bucket and its contents are
-	 * preserved on `cdk destroy`).
+	 * CDK removal behavior for the underlying S3 bucket. When omitted, it
+	 * falls back to the stack's posture default (`BlocksDefaults.removalPolicy`
+	 * from the chosen `BlocksPresets` entry — DESTROY in `sandbox`, RETAIN in
+	 * `production`).
 	 *
 	 * Pass `'destroy'` for sandbox / ephemeral stacks where the bucket
 	 * should be dropped on teardown. This also enables `autoDeleteObjects`
 	 * so CloudFormation can empty the bucket before deletion — required
 	 * since S3 rejects DELETE on a non-empty bucket.
 	 *
-	 * Pass `'retain'` to set the policy explicitly (identical to omitting
-	 * it today, but robust against stack-layer policy overrides).
+	 * Pass `'retain'` to set the policy explicitly, keeping the bucket and its
+	 * contents on `cdk destroy` regardless of the stack default.
 	 *
 	 * Templates that apply `RemovalPolicies.of(stack).destroy()` at the
 	 * top level override this setting.
