@@ -92,7 +92,7 @@ function methodBody(source: string, method: string): string {
 }
 
 describe('create-blocks-app template key-value methods require auth', () => {
-  for (const name of ['demo', 'auth']) {
+  for (const name of ['demo']) {
     const source = stripComments(readFileSync(join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts'), 'utf-8'));
 
     for (const method of ['getValue', 'setValue']) {
@@ -104,6 +104,24 @@ describe('create-blocks-app template key-value methods require auth', () => {
         assert.ok(storeCall > gate, `${name} ${method} must call requireAuth before the store`);
       });
     }
+  }
+});
+
+describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
+  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
+  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+
+  it('the template\'s api namespace is auth.protect(...)', () => {
+    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
+  });
+
+  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
+    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
+      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
+      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    });
   }
 });
 

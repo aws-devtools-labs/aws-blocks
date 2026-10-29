@@ -20,7 +20,7 @@ import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
-import { API_NAMESPACE_MARKER } from '../api.js';
+import { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from '../api.js';
 import {
 	CodegenTagError,
 	extractMethodTypes,
@@ -345,14 +345,29 @@ export async function generateSpec(
 		const routingName = exportName;
 
 		// ApiNamespace is a function (context) => { method1, method2, ... }
-		// Call it with a stub context to get the method map.
+		// Call it with a stub context to get the method map — or, for a namespace
+		// that can't list its methods before a request is authorized
+		// (`auth.protect(...)`), its discovery handler.
 		const stubContext = createStubContext();
+		const discover: unknown = (exportValue as any)?.[API_NAMESPACE_DISCOVER];
 		let methodMap: Record<string, Function>;
 		try {
-			const result = typeof exportValue === 'function' ? exportValue(stubContext) : exportValue;
+			const result =
+				typeof discover === 'function'
+					? discover(stubContext)
+					: typeof exportValue === 'function'
+						? exportValue(stubContext)
+						: exportValue;
 			methodMap = result && typeof result === 'object' ? result : {};
-		} catch {
-			// If the handler throws during stub invocation, skip this namespace
+		} catch (e) {
+			// If the handler throws during stub invocation, skip this namespace. A
+			// discovery handler exists only to describe the namespace, so its failure
+			// is the author's to fix: say which namespace was left out, and why.
+			if (typeof discover === 'function') {
+				console.warn(
+					`[blocks] Could not list the methods of namespace '${exportName}' (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec leaves it out.`,
+				);
+			}
 			continue;
 		}
 

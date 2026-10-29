@@ -78,6 +78,7 @@ import {
 	signValidatedMarker,
 	VALIDATED_MARKER_KEY,
 } from './presignup-trigger.js';
+import { protectNamespace } from './protect.js';
 import {
 	type ContactVerification,
 	contactVerificationOf,
@@ -109,6 +110,7 @@ import {
 import type {
 	AdminGetterOf,
 	AdminSurface,
+	ApiMethods,
 	AttrOf,
 	AuthActionInputOf,
 	AuthenticatedUser,
@@ -135,6 +137,9 @@ import type {
 	PasskeyDescription,
 	PasskeyGate,
 	PasswordGate,
+	ProtectedApi,
+	ProtectHandlers,
+	ProtectOptions,
 	ProviderIdOf,
 	ReadAttrOf,
 	RequireAuthOptions,
@@ -666,6 +671,77 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			setAuthState: async (input: AuthActionInput): Promise<AuthState<AuthStateUser<O>>> =>
 				this.dispatch(input, context),
 		}));
+	}
+
+	/**
+	 * Define an API namespace that is **deny by default**. Use it in place of
+	 * `new ApiNamespace(scope, name, handler)` so a method that forgets
+	 * `await auth.requireAuth(context)` — or calls it without `await`, which
+	 * protects nothing — can't serve data to an anonymous caller.
+	 *
+	 * Give it two method factories:
+	 *
+	 * - `methods: (context, user) => ({ ... })` — the protected methods. For each
+	 *   call, `protect` first awaits `requireAuth(context)` (or
+	 *   `requireRole(context, role)` with `options.role`), and only then calls
+	 *   this factory, once, with the signed-in user, typed by this block's
+	 *   options. Nothing in it runs for an anonymous caller.
+	 * - `public: (context) => ({ ... })` (optional) — methods anyone may call.
+	 *   They behave exactly as in a plain `ApiNamespace`: no check, no user (call
+	 *   `getCurrentUser(context)` for an optional one).
+	 *
+	 * With no valid session, a call to any name that isn't a public method fails
+	 * with 401 `NotAuthenticatedException` — whether or not the method exists, so
+	 * an anonymous caller can't list your protected methods. A signed-in caller
+	 * gets "method not found" for a name `methods` doesn't define. With `role`, a
+	 * signed-in user outside the group gets 403 `NotAuthorizedException`. A name
+	 * in both factories is a compile error. Untyped (plain JavaScript) code can
+	 * still define one: a call to that name always runs the public method, with
+	 * no check, and the clash is reported (500, logged) only when another
+	 * protected method is called — `protect` can't see `methods`' names any
+	 * earlier without calling it before the check.
+	 *
+	 * The result is an ordinary `ApiNamespace`: export it from the backend module
+	 * and the frontend imports and calls every method, public and protected, like
+	 * any other namespace, fully typed. Works the same in local dev and on AWS.
+	 *
+	 * @param scope - The scope the namespace belongs to, as for `new ApiNamespace(...)`.
+	 * @param name - The namespace name, as for `new ApiNamespace(...)`.
+	 * @param handlers - `{ public?, methods }`: see {@link ProtectHandlers}.
+	 * @param options - An optional `role`, and the `ApiNamespace` options (`compute`).
+	 * @returns The namespace — the same client-facing type `new ApiNamespace(...)` returns, over both factories' methods.
+	 * @throws {ApiError} 401 `NotAuthenticatedException` from a protected (or unknown) method when there is no valid session.
+	 * @throws {ApiError} 403 `NotAuthorizedException` from a protected method with `role`, for a user outside the group.
+	 *
+	 * @example
+	 * ```ts
+	 * export const notesApi = auth.protect(scope, 'notesApi', {
+	 *   public: (context) => ({
+	 *     async health() {
+	 *       return { ok: true };
+	 *     },
+	 *   }),
+	 *   methods: (context, user) => ({
+	 *     async addNote(text: string) {
+	 *       await notes.put(`${user.userSub}:${crypto.randomUUID()}`, text);
+	 *     },
+	 *   }),
+	 * });
+	 * ```
+	 */
+	protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(
+		scope: ScopeParent,
+		name: string,
+		handlers: ProtectHandlers<P, M, O>,
+		options?: ProtectOptions<O>,
+	): ProtectedApi<P & M> {
+		return protectNamespace<M, P, O>(
+			(context, role) => (role === undefined ? this.requireAuth(context) : this.requireRole(context, role)),
+			scope,
+			name,
+			handlers,
+			options,
+		);
 	}
 
 	// ── Federated sign-in ───────────────────────────────────────────────────

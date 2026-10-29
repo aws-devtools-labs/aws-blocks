@@ -4,6 +4,7 @@
 
 ```ts
 
+import type { ApiNamespaceOptions } from '@aws-blocks/core';
 import type { AuthActionInput } from '@aws-blocks/auth-common';
 import { AuthErrorName } from '@aws-blocks/auth-common';
 import { AuthErrors } from '@aws-blocks/auth-common';
@@ -148,6 +149,9 @@ export type AnySignInNextStep = {
 };
 
 // @public
+export type ApiMethods = Record<string, (...args: any[]) => any>;
+
+// @public
 export interface AppleCredentials {
     clientId: string;
     keyId: string;
@@ -206,6 +210,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
     getUserAttributes(context: BlocksContext): Promise<Partial<Record<ReadAttrOf<O>, string>>>;
     listPasskeys(context: BlocksContext, ...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>): Promise<PasskeyDescription[]>;
     protected readonly log: ChildLogger;
+    protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(scope: ScopeParent, name: string, handlers: ProtectHandlers<P, M, O>, options?: ProtectOptions<O>): ProtectedApi<P & M>;
     rememberDevice(context: BlocksContext, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>): Promise<void>;
     requireAuth(context: BlocksContext, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
     requireRole(context: BlocksContext, role: GroupOf<O>, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
@@ -345,6 +350,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
     getSignInUrl(context: BlocksContext, provider: ProviderIdOf<O>, ...ERROR_no_federated_provider_is_configured: FederationGate<O, [options?: SignInUrlOptions]>): Promise<string>;
     getUserAttributes(context: BlocksContext): Promise<Partial<Record<ReadAttrOf<O>, string>>>;
     listPasskeys(context: BlocksContext, ...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>): Promise<PasskeyDescription[]>;
+    protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(scope: ScopeParent, name: string, handlers: ProtectHandlers<P, M, O>, options?: ProtectOptions<O>): ProtectedApi<P & M>;
     rememberDevice(context: BlocksContext, ...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>): Promise<void>;
     requireAuth(context: BlocksContext, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
     requireRole(context: BlocksContext, role: GroupOf<O>, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
@@ -701,6 +707,11 @@ export type MfaTypeOf<O extends AuthOptions> = O extends {
 } ? M extends MfaFactor ? M : MfaFactor : MfaFactor : MfaFactor;
 
 // @public
+export type NoSharedMethodNames<P extends ApiMethods, M extends ApiMethods> = {
+    [K in keyof M & keyof [P][P extends unknown ? 0 : never]]: never;
+};
+
+// @public
 export interface OAuth2ProviderOptions extends DirectOidcProviderOptions {
     issuer: `oauth2:${string}`;
     oauth2: {
@@ -786,6 +797,22 @@ export type ProfileAttributeMapping = Record<string, string> & {
     userSub?: never;
     userId?: never;
 };
+
+// @public
+export type ProtectedApi<T extends ApiMethods> = {
+    [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
+};
+
+// @public
+export interface ProtectHandlers<P extends ApiMethods, M extends ApiMethods, O extends AuthOptions = AuthOptions> {
+    methods: (context: BlocksContext, user: AuthenticatedUser<O>) => M & NoSharedMethodNames<P, M>;
+    public?: (context: BlocksContext) => P;
+}
+
+// @public
+export interface ProtectOptions<O extends AuthOptions = AuthOptions> extends ApiNamespaceOptions {
+    role?: GroupOf<O>;
+}
 
 // @public
 export interface ProviderCommon {

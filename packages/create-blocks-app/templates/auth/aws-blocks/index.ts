@@ -78,185 +78,187 @@ export const hello = new ApiNamespace(scope, 'hello', (context) => ({
 // State machine driving the <Authenticator> UI component
 export const authApi = auth.createApi();
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  // ── Public ────────────────────────────────────────────────────────────
-  async ping() {
-    return { message: 'pong', timestamp: Date.now() };
-  },
+// Deny by default: `auth.protect` runs `methods` only after the session check,
+// with the signed-in `user`, so no method there can be left open by a missing
+// (or un-awaited) `requireAuth`. A signed-out call to anything but a `public`
+// method gets 401 `NotAuthenticatedException`. The frontend calls both kinds
+// the same way: `api.ping()`, `api.listTodos()`.
+export const api = auth.protect(scope, 'api', {
+  // ── Public (no session) ──────────────────────────────────────────────
+  public: () => ({
+    async ping() {
+      return { message: 'pong', timestamp: Date.now() };
+    },
 
-  // ── Protected (requireAuth) ──────────────────────────────────────────
-  async whoAmI() {
-    const user = await auth.requireAuth(context);
-    return {
-      username: user.username,
-      userSub: user.userSub,
-      groups: user.groups,
-      attributes: user.attributes,
-    };
-  },
+    // ── Mock-only helper ─────────────────────────────────────────────────
+    /**
+     * Returns the most recently issued verification code (sign-up / reset /
+     * attribute verification). Only available in local dev: on AWS the
+     * `codeDelivery` hook never runs, and the `BLOCKS_STACK_NAME` env gate (set in
+     * every deployed Lambda) forces `null` as well, so a live code can never leak
+     * through this method — Cognito emails codes and the UI should instruct the
+     * user to check their mailbox.
+     *
+     * The `@blocksSkipCodegen` JSDoc tag tells the OpenRPC spec emitter to drop
+     * this method, so Swift / Kotlin / other native code generators never see
+     * it. The TypeScript client (Proxy-based) still resolves the call at
+     * runtime, which is exactly what the local browser demo wants.
+     *
+     * @blocksSkipCodegen
+     */
+    async getLastCode() {
+      // BLOCKS_STACK_NAME is set in every deployed Lambda; unset locally/mock —
+      // gate the OTP so it never leaks in prod/sandbox.
+      return !process.env.BLOCKS_STACK_NAME ? lastCode : null;
+    },
+  }),
 
-  // ── Role-gated (requireRole) ─────────────────────────────────────────
-  // These throw 403 `NotAuthorizedException` when the signed-in user isn't in
-  // the named group. `requireRole` reads the user's current membership, so a
-  // group change applies on their next request. Membership is assigned
-  // out-of-band — see the UI hint for the CLI command, or use the AWS Console →
-  // Cognito → Users pages (or the opt-in `auth.admin` surface, `admin: {}`).
-  async editorsOnly() {
-    const user = await auth.requireRole(context, 'editors');
-    return { message: `Welcome, editor ${user.username}` };
-  },
+  // ── Protected (signed in) ────────────────────────────────────────────
+  methods: (context, user) => ({
+    async whoAmI() {
+      return {
+        username: user.username,
+        userSub: user.userSub,
+        groups: user.groups,
+        attributes: user.attributes,
+      };
+    },
 
-  async readersOnly() {
-    const user = await auth.requireRole(context, 'readers');
-    return { message: `Hello reader ${user.username}` };
-  },
+    // ── Role-gated (requireRole) ─────────────────────────────────────────
+    // These also throw 403 `NotAuthorizedException` when the signed-in user isn't
+    // in the named group. `requireRole` reads the user's current membership, so a
+    // group change applies on their next request. Membership is assigned
+    // out-of-band — see the UI hint for the CLI command, or use the AWS Console →
+    // Cognito → Users pages (or the opt-in `auth.admin` surface, `admin: {}`).
+    async editorsOnly() {
+      const editor = await auth.requireRole(context, 'editors');
+      return { message: `Welcome, editor ${editor.username}` };
+    },
 
-  // ── Todos (per-user DistributedTable) ────────────────────────────────
-  async createTodo(title: string, priority: number = 2) {
-    const user = await auth.requireAuth(context);
-    const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
-    const todo = {
-      userSub: user.userSub,
-      todoId: ulid,
-      title,
-      completed: false,
-      priority,
-      createdAt: Date.now(),
-    };
-    await todos.put(todo);
-    return todo;
-  },
+    async readersOnly() {
+      const reader = await auth.requireRole(context, 'readers');
+      return { message: `Hello reader ${reader.username}` };
+    },
 
-  async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
-    const user = await auth.requireAuth(context);
-    const list = await Array.fromAsync(
-      todos.query({ where: { userSub: { equals: user.userSub } } })
-    );
-    // Sort in the API (not via a secondary index) — a per-user todo list is
-    // small, so an in-memory sort is simpler and avoids provisioning GSIs.
-    if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
-    if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
-    // Default (and 'createdAt'): newest-last by creation time.
-    return list.sort((a, b) => a.createdAt - b.createdAt);
-  },
+    // ── Todos (per-user DistributedTable) ────────────────────────────────
+    async createTodo(title: string, priority: number = 2) {
+      const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
+      const todo = {
+        userSub: user.userSub,
+        todoId: ulid,
+        title,
+        completed: false,
+        priority,
+        createdAt: Date.now(),
+      };
+      await todos.put(todo);
+      return todo;
+    },
 
-  async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
-    const user = await auth.requireAuth(context);
-    const existing = await todos.get({ userSub: user.userSub, todoId });
-    if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
-    // Copy only the editable fields. The RPC layer does not strip properties the
-    // signature doesn't declare, so spreading `updates` would let a caller rewrite
-    // `userSub` / `todoId` and write into another user's partition.
-    const { completed, priority, title } = updates ?? {};
-    await todos.put({
-      ...existing,
-      ...(completed !== undefined ? { completed } : {}),
-      ...(priority !== undefined ? { priority } : {}),
-      ...(title !== undefined ? { title } : {}),
-    });
-    return { success: true };
-  },
+    async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
+      const list = await Array.fromAsync(
+        todos.query({ where: { userSub: { equals: user.userSub } } })
+      );
+      // Sort in the API (not via a secondary index) — a per-user todo list is
+      // small, so an in-memory sort is simpler and avoids provisioning GSIs.
+      if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
+      if (sortBy === 'title') return list.sort((a, b) => a.title.localeCompare(b.title));
+      // Default (and 'createdAt'): newest-last by creation time.
+      return list.sort((a, b) => a.createdAt - b.createdAt);
+    },
 
-  async deleteTodo(todoId: string) {
-    const user = await auth.requireAuth(context);
-    await todos.delete({ userSub: user.userSub, todoId });
-    return { success: true };
-  },
+    async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
+      const existing = await todos.get({ userSub: user.userSub, todoId });
+      if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+      // Copy only the editable fields. The RPC layer does not strip properties the
+      // signature doesn't declare, so spreading `updates` would let a caller rewrite
+      // `userSub` / `todoId` and write into another user's partition.
+      const { completed, priority, title } = updates ?? {};
+      await todos.put({
+        ...existing,
+        ...(completed !== undefined ? { completed } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(title !== undefined ? { title } : {}),
+      });
+      return { success: true };
+    },
 
-  // ── Profile ──────────────────────────────────────────────────────────
-  // Live-read attributes from the user pool (custom ones read back as
-  // `custom:<name>`).
-  async getUserAttributes() {
-    return await auth.getUserAttributes(context);
-  },
+    async deleteTodo(todoId: string) {
+      await todos.delete({ userSub: user.userSub, todoId });
+      return { success: true };
+    },
 
-  // Update a custom attribute. Returns a per-attribute outcome — for `email`,
-  // the outcome has `nextStep = CONFIRM_ATTRIBUTE_WITH_CODE` and the user must
-  // call `confirmAttribute` with the emailed code.
-  //
-  // `updateUserAttributes` only accepts the attributes declared in
-  // `users.attributes` (plus the standard ones).
-  async updateDepartment(department: string) {
-    return await auth.updateUserAttributes(context, { department });
-  },
+    // ── Profile ──────────────────────────────────────────────────────────
+    // Live-read attributes from the user pool (custom ones read back as
+    // `custom:<name>`).
+    async getUserAttributes() {
+      return await auth.getUserAttributes(context);
+    },
 
-  async updateEmail(newEmail: string) {
-    return await auth.updateUserAttributes(context, { email: newEmail });
-  },
+    // Update a custom attribute. Returns a per-attribute outcome — for `email`,
+    // the outcome has `nextStep = CONFIRM_ATTRIBUTE_WITH_CODE` and the user must
+    // call `confirmAttribute` with the emailed code.
+    //
+    // `updateUserAttributes` only accepts the attributes declared in
+    // `users.attributes` (plus the standard ones).
+    async updateDepartment(department: string) {
+      return await auth.updateUserAttributes(context, { department });
+    },
 
-  // Attribute names are narrowed at the BB boundary, so we only accept the
-  // ones this pool actually exposes. The UI never calls these with other
-  // names — the type narrows both sides of the wire.
-  async confirmAttribute(name: 'email' | 'department', code: string) {
-    await auth.confirmUserAttribute(context, name, code);
-    return { success: true };
-  },
+    async updateEmail(newEmail: string) {
+      return await auth.updateUserAttributes(context, { email: newEmail });
+    },
 
-  async sendAttributeVerificationCode(name: 'email' | 'department') {
-    await auth.sendUserAttributeVerificationCode(context, name);
-    return { success: true };
-  },
+    // Attribute names are narrowed at the BB boundary, so we only accept the
+    // ones this pool actually exposes. The UI never calls these with other
+    // names — the type narrows both sides of the wire.
+    async confirmAttribute(name: 'email' | 'department', code: string) {
+      await auth.confirmUserAttribute(context, name, code);
+      return { success: true };
+    },
 
-  async changePassword(oldPassword: string, newPassword: string) {
-    await auth.updatePassword(context, oldPassword, newPassword);
-    return { success: true };
-  },
+    async sendAttributeVerificationCode(name: 'email' | 'department') {
+      await auth.sendUserAttributeVerificationCode(context, name);
+      return { success: true };
+    },
 
-  // ── Devices ──────────────────────────────────────────────────────────
-  async listDevices() {
-    return await Array.fromAsync(auth.scanDevices(context));
-  },
+    async changePassword(oldPassword: string, newPassword: string) {
+      await auth.updatePassword(context, oldPassword, newPassword);
+      return { success: true };
+    },
 
-  // `forgetDevice` requires an explicit device key (the BB doesn't track
-  // "current device" on the server side — the caller identifies which
-  // device from `listDevices()`). When the demo passes no key we're a
-  // no-op on an empty slot, matching the button label's "forget current"
-  // ergonomics without the BB having to guess.
-  async forgetCurrentDevice(deviceKey: string = '') {
-    await auth.forgetDevice(context, deviceKey);
-    return { success: true };
-  },
+    // ── Devices ──────────────────────────────────────────────────────────
+    async listDevices() {
+      return await Array.fromAsync(auth.scanDevices(context));
+    },
 
-  // ── Sign-out modes ───────────────────────────────────────────────────
-  // `signOutEverywhere` calls Cognito's GlobalSignOut, which invalidates
-  // the refresh token at the pool — all sessions minted from this account
-  // become unable to refresh on their next attempt.
-  async signOutEverywhere() {
-    await auth.signOut(context, { global: true });
-    return { success: true };
-  },
+    // `forgetDevice` requires an explicit device key (the BB doesn't track
+    // "current device" on the server side — the caller identifies which
+    // device from `listDevices()`). When the demo passes no key we're a
+    // no-op on an empty slot, matching the button label's "forget current"
+    // ergonomics without the BB having to guess.
+    async forgetCurrentDevice(deviceKey: string = '') {
+      await auth.forgetDevice(context, deviceKey);
+      return { success: true };
+    },
 
-  // ── KV demo (requireAuth-gated, keys namespaced per user) ────────────
-  async getValue(key: string) {
-    const user = await auth.requireAuth(context);
-    return await store.get(`${user.userSub}:${key}`);
-  },
+    // ── Sign-out modes ───────────────────────────────────────────────────
+    // `signOutEverywhere` calls Cognito's GlobalSignOut, which invalidates
+    // the refresh token at the pool — all sessions minted from this account
+    // become unable to refresh on their next attempt.
+    async signOutEverywhere() {
+      await auth.signOut(context, { global: true });
+      return { success: true };
+    },
 
-  async setValue(key: string, value: string) {
-    const user = await auth.requireAuth(context);
-    await store.put(`${user.userSub}:${key}`, value);
-    return { success: true };
-  },
+    // ── KV demo (signed in, keys namespaced per user) ────────────────────
+    async getValue(key: string) {
+      return await store.get(`${user.userSub}:${key}`);
+    },
 
-  // ── Mock-only helper ─────────────────────────────────────────────────
-  /**
-   * Returns the most recently issued verification code (sign-up / reset /
-   * attribute verification). Only available in local dev: on AWS the
-   * `codeDelivery` hook never runs, and the `BLOCKS_STACK_NAME` env gate (set in
-   * every deployed Lambda) forces `null` as well, so a live code can never leak
-   * through this method — Cognito emails codes and the UI should instruct the
-   * user to check their mailbox.
-   *
-   * The `@blocksSkipCodegen` JSDoc tag tells the OpenRPC spec emitter to drop
-   * this method, so Swift / Kotlin / other native code generators never see
-   * it. The TypeScript client (Proxy-based) still resolves the call at
-   * runtime, which is exactly what the local browser demo wants.
-   *
-   * @blocksSkipCodegen
-   */
-  async getLastCode() {
-    // BLOCKS_STACK_NAME is set in every deployed Lambda; unset locally/mock —
-    // gate the OTP so it never leaks in prod/sandbox.
-    return !process.env.BLOCKS_STACK_NAME ? lastCode : null;
-  },
-}));
+    async setValue(key: string, value: string) {
+      await store.put(`${user.userSub}:${key}`, value);
+      return { success: true };
+    },
+  }),
+});
