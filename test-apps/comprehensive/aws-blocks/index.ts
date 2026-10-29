@@ -2290,6 +2290,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await versionedBucket.listVersions(path);
   },
 
+  async vFileGetUrl(path: string, versionId?: string) {
+    return await versionedBucket.getUrl(path, versionId ? { versionId } : undefined);
+  },
+
   async vFileRestoreVersion(path: string, versionId: string) {
     await versionedBucket.restoreVersion(path, versionId);
     return { success: true };
