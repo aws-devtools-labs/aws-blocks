@@ -342,9 +342,13 @@ export interface CognitoFederatedOpts<N extends string = string> {
 
 /**
  * Cognito-federated sign-in. Delegates the entire OIDC flow to a Cognito
- * User Pool's Hosted UI — Cognito handles PKCE, token verification, MFA,
- * and brute-force protection. Your Lambda only exchanges the code and
- * reads the session.
+ * User Pool's Hosted UI — Cognito handles PKCE and token verification.
+ * Your Lambda only exchanges the code and reads the session.
+ *
+ * Cognito does **not** add MFA, device tracking, or adaptive authentication
+ * for federated users — it delegates all authentication to the IdP and offers
+ * no additional factors. Enforce MFA at the IdP (e.g. Google 2-Step
+ * Verification, your Okta / Entra ID MFA policy).
  *
  * User IDs are stable across engine switches: `userId = ${iss}:${sub}` is
  * derived from the original IdP identity (extracted from Cognito's

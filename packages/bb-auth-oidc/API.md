@@ -6,6 +6,7 @@
 
 import type { AuthActionInput } from '@aws-blocks/auth-common';
 import type { AuthState } from '@aws-blocks/auth-common';
+import { AuthUser } from '@aws-blocks/auth-common';
 import type { BlocksAuth } from '@aws-blocks/auth-common';
 import { BlocksContext } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';

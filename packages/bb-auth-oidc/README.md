@@ -337,7 +337,9 @@ Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so
 
 ## Cognito-mediated federation
 
-Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verification, MFA, and brute-force protection. Your Lambda only exchanges the code and reads the session.
+Delegate the OIDC flow to a Cognito User Pool. Cognito handles the redirect to the IdP, PKCE, and token verification. Your Lambda only exchanges the code and reads the session.
+
+> **MFA for federated users is enforced at the IdP, not by Cognito.** For federated users, Amazon Cognito "delegates all authentication processes to the IdP and doesn't offer them additional authentication factors" ([AWS: Adding MFA to a user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-mfa.html)). Cognito MFA, remembered devices, and threat protection (adaptive authentication, compromised-credentials detection) don't apply to users who sign in through `cognitoFederated()`. To require a second factor, turn it on at the IdP — for example Google 2-Step Verification, or the MFA policy in your Okta / Microsoft Entra ID tenant.
 
 `cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials. The IdP is registered on the User Pool by a **deploy-time custom resource**: a Lambda reads and decrypts those SecureString parameters via the SDK at deploy time and calls Cognito's `CreateIdentityProvider`. (A native `AWS::Cognito::UserPoolIdentityProvider` resource can't be used — CloudFormation rejects the `{{resolve:ssm-secure}}` dynamic references it would need in `ProviderDetails`.) The credential values therefore never appear in the CloudFormation template.
 
@@ -409,7 +411,7 @@ In local dev (`npm run dev`), `cognitoFederated` is **not available** — Cognit
 ### When to use Cognito federation vs self-hosted
 
 - **Self-hosted** (`google()`, `customOidc()`): Simpler, cheaper, faster deploys. You own the security surface.
-- **Cognito-mediated** (`cognitoFederated()`): Managed security (SOC 2, HIPAA-eligible), MFA on social sign-in, adaptive authentication, brute-force protection. Adds Cognito MAU pricing.
+- **Cognito-mediated** (`cognitoFederated()`): Managed security (SOC 2, HIPAA-eligible) — Cognito runs the OAuth exchange with the IdP and issues its own tokens, so no `openid-client` / JWKS / PKCE code runs in your Lambda. It does **not** add MFA, device tracking, or adaptive authentication to social or other federated sign-in: those are enforced at the IdP (see the note above). Adds Cognito MAU pricing.
 
 ## Native clients (iOS, Android, desktop)
 

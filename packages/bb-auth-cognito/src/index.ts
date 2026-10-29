@@ -87,6 +87,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
+import { fabricateCodeDelivery, incorrectCredentialsError, maskEmail, maskPhone } from './enumeration.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-auth-cognito');
@@ -578,7 +579,11 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	/**
 	 * Confirm a new user's sign-up with the code delivered to them.
 	 *
-	 * @throws {AuthCognitoErrors.UserNotFound}
+	 * An unknown username is answered exactly like a wrong code
+	 * (`CodeMismatch`), never `UserNotFound`, so the call cannot be used to
+	 * probe which accounts exist — matching Cognito with
+	 * `PreventUserExistenceErrors`.
+	 *
 	 * @throws {AuthCognitoErrors.CodeMismatch}
 	 * @throws {AuthCognitoErrors.ExpiredCode}
 	 *
@@ -591,7 +596,9 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		code: string,
 		context?: BlocksContext,
 	): Promise<ConfirmSignUpResult> {
-		const user = this.requireUser(username);
+		const user = this.state.users[username];
+		// Same error verifyCode raises for a wrong code — indistinguishable.
+		if (!user) throw new ApiError('Invalid code', 400, { name: AuthCognitoErrors.CodeMismatch });
 		this.verifyCode('signUp', username, code);
 		user.confirmed = true;
 		// Real Cognito marks the delivered attribute (email or phone) as
@@ -665,12 +672,14 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	/**
 	 * Resend the sign-up verification code.
 	 *
-	 * @throws {AuthCognitoErrors.UserNotFound}
+	 * Resolves for an unknown username too (no code is sent), never throwing
+	 * `UserNotFound`, so the call cannot be used to probe which accounts
+	 * exist — matching Cognito with `PreventUserExistenceErrors`.
 	 *
 	 * @category client
 	 */
 	async resendSignUpCode(username: string): Promise<void> {
-		this.requireUser(username);
+		if (!this.state.users[username]) return;
 		await this.generateCode('signUp', username);
 		this.flushToDisk();
 	}
@@ -966,7 +975,9 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			throw new ApiError('Challenge session expired', 400, { name: AuthCognitoErrors.ExpiredCode });
 		}
 		const user = this.state.users[challenge.username];
-		if (!user) throw new ApiError('User not found', 404, { name: AuthCognitoErrors.UserNotFound });
+		// A user removed mid-challenge looks like any other credential failure,
+		// never a 404 that would confirm the account existed.
+		if (!user) throw incorrectCredentialsError();
 
 		switch (challenge.step) {
 			case 'CONFIRM_SIGN_IN_WITH_SMS_CODE':
@@ -1208,14 +1219,6 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	}
 
 	/**
-	 * Return the authenticated user, additionally asserting they belong to
-	 * `role`. Throws 403 if not a member.
-	 *
-	 * @throws {AuthCognitoErrors.NotAuthenticated}
-	 * @throws {AuthCognitoErrors.NotAuthorized}
-	 * @category client
-	 */
-	/**
 	 * Return the current auth session's tokens, or `{ tokens: undefined }`
 	 * when there is no valid session. Pass `{ forceRefresh: true }` to rotate
 	 * the tokens (mock: re-mints with a fresh `exp`; AWS: calls
@@ -1287,6 +1290,14 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		};
 	}
 
+	/**
+	 * Return the authenticated user, additionally asserting they belong to
+	 * `role`. Throws 403 if not a member.
+	 *
+	 * @throws {AuthCognitoErrors.NotAuthenticated}
+	 * @throws {AuthCognitoErrors.NotAuthorized}
+	 * @category client
+	 */
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
 		// Read membership live from the source of truth rather than the session
@@ -1427,12 +1438,14 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	async resetPassword(username: string): Promise<ResetPasswordResult> {
 		const user = this.state.users[username];
 		if (!user) {
-			// Match Cognito: silently succeed to avoid leaking which users exist.
+			// Match Cognito: silently succeed to avoid leaking which users exist,
+			// with plausible delivery details (an obviously-fake destination
+			// would itself reveal that the account does not exist).
 			return {
 				isPasswordReset: false,
 				nextStep: {
 					name: 'CONFIRM_RESET_PASSWORD_WITH_CODE',
-					codeDeliveryDetails: this.codeDeliveryFor({}, '------'),
+					codeDeliveryDetails: fabricateCodeDelivery(username, this.state.sessionSecret),
 				},
 			};
 		}
@@ -1447,9 +1460,17 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		};
 	}
 
-	/** @category client */
+	/**
+	 * Complete a password reset with the code from `resetPassword`.
+	 * An unknown username is answered exactly like a wrong code
+	 * (`CodeMismatch`), never `UserNotFound`.
+	 *
+	 * @category client
+	 */
 	async confirmResetPassword(username: string, code: string, newPassword: string): Promise<void> {
-		const user = this.requireUser(username);
+		const user = this.state.users[username];
+		// Same error verifyCode raises for a wrong code — indistinguishable.
+		if (!user) throw new ApiError('Invalid code', 400, { name: AuthCognitoErrors.CodeMismatch });
 		this.verifyCode('resetPassword', username, code);
 		this.enforcePasswordPolicy(newPassword);
 		user.password = newPassword;
@@ -2308,13 +2329,11 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 // ─────────────────────────────────────────────────────────────────────────────
 
 function redact(value: string, kind: 'email' | 'phone'): string {
-	if (kind === 'email') {
-		const [local, domain] = value.split('@');
-		if (!domain) return value;
-		return `${local.slice(0, 1)}***@${domain.slice(0, 1)}***`;
-	}
-	// Phone: show last 4 digits only
-	return value.replace(/.(?=.{4})/g, '*');
+	// Cognito's masking (shared with the unknown-user fabrication in
+	// `enumeration.ts`, so a real and a fabricated destination look alike).
+	if (kind === 'email') return maskEmail(value);
+	// Phone: show last 4 digits only (and a leading `+`)
+	return maskPhone(value);
 }
 
 function generateTotpSecret(): string {
