@@ -102,8 +102,6 @@ export class ClusterInfra {
 	readonly configEntries: Record<string, string>;
 	/** The PostgreSQL role the app connects as on a `dsql` cluster. */
 	readonly dbRole: string;
-	/** CloudFormation logical id of the cluster resource (a token until synth); recorded in the binding record. */
-	readonly clusterLogicalId: string;
 
 	private readonly clusterResource: cdk.CfnResource;
 	private readonly clusterArn: string;
@@ -131,7 +129,6 @@ export class ClusterInfra {
 			removalPolicy === cdk.RemovalPolicy.SNAPSHOT ? cdk.RemovalPolicy.RETAIN : removalPolicy,
 		);
 		this.clusterResource = cluster;
-		this.clusterLogicalId = cluster.logicalId;
 		const endpoint = cluster.getAtt('Endpoint').toString();
 		this.clusterArn = `arn:aws:dsql:${stack.region}:${stack.account}:cluster/${cluster.ref}`;
 		this.configEntries = { [key('ENDPOINT')]: endpoint, [key('REGION')]: stack.region };

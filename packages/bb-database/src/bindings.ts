@@ -4,8 +4,7 @@
 /**
  * The binding rule: a `Database` is bound to one cluster, by id and type. This
  * module holds the per-block dev-server marker and the stop-message text. The
- * production deploy guard that enforces the rule at `cdk deploy` ships separately
- * and reuses `formatBindingStop`.
+ * production deploy guard that enforces the rule at `cdk deploy` ships separately.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -21,14 +20,15 @@ export interface BindingChange {
 }
 
 /** Describe a cluster for the stop message: `its default cluster (dsql)` or `'app-main' (dsql)`. */
-export function describeCluster(binding: DatabaseBinding): string {
+function describeCluster(binding: DatabaseBinding): string {
 	if (binding.cluster === DEFAULT_CLUSTER_ID) return `its default cluster (${binding.type})`;
 	return `'${binding.cluster}' (${binding.type})`;
 }
 
 /**
- * The guard's stop message. One text, printed by the dev server and the deploy
+ * The binding rule's stop message. One text, printed by the dev server and the deploy
  * guard alike. `removalPolicy` names what happens to the data left behind.
+ * @internal Exported for the unit tests.
  */
 export function formatBindingStop(
 	change: BindingChange,
