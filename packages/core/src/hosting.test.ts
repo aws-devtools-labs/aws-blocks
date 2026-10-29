@@ -537,16 +537,11 @@ describe('Hosting', () => {
     });
   });
 
-  // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
-  //
-  // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
-  // the same stack, the API belongs on Hosting's distribution — the standalone
-  // managed cloudfront distribution must stand down so there is exactly one.
   // A namespace on a container compute: Hosting routes its exact path straight to
   // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
   // behavior that would otherwise match first.
   describe('container API namespaces', () => {
-    function hostingWithDirectRoute(id: string, apiFrontDoorOwner?: Stack) {
+    function hostingWithDirectRoute(id: string) {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, id);
@@ -555,7 +550,6 @@ describe('Hosting', () => {
       const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
       const api: BlocksStackApi = {
         apiUrl: MOCK_API.apiUrl,
-        ...(apiFrontDoorOwner ? { claimApiFrontDoor: (url: string) => claimApiFrontDoor(apiFrontDoorOwner, url) } : {}),
         _apiDirectRoutes: [
           {
             path: `${BLOCKS_RPC_PREFIX}/render`,
@@ -599,6 +593,11 @@ describe('Hosting', () => {
     });
   });
 
+  // ── cloudfront front door + Hosting coexistence (P2) ─────────────────
+  //
+  // When the app sets apiFrontDoor: 'cloudfront' AND fronts its frontend with Hosting in
+  // the same stack, the API belongs on Hosting's distribution — the standalone
+  // managed cloudfront distribution must stand down so there is exactly one.
   describe('cloudfront front door + Hosting claim', () => {
     it('leaves exactly one distribution (Hosting’s) when Hosting fronts the API under cloudfront', () => {
       createSpaBuildOutput(tmpDir);

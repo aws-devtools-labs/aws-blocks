@@ -25,8 +25,15 @@ export interface ApiDirectRoute {
 /** The AWS-managed prefix list of CloudFront's origin-facing addresses (VPC origins included). */
 const CLOUDFRONT_ORIGIN_FACING_PREFIX_LIST = 'com.amazonaws.global.cloudfront.origin-facing';
 
-/** How long CloudFront waits on a container for a response — the per-origin maximum without a quota increase. */
+/**
+ * How long CloudFront waits on a container for a response: the load balancer's
+ * (default) 60 s idle timeout, which ends a longer call anyway — raise both
+ * together (CloudFront allows up to 120 s per origin by default).
+ */
 const DIRECT_ORIGIN_READ_TIMEOUT = cdk.Duration.seconds(60);
+
+/** Synth-warning id emitted when a distribution routes container namespaces directly but has no web ACL. */
+export const DIRECT_ROUTES_WITHOUT_WAF_WARNING = 'blocks:api:direct-routes-without-waf';
 
 /**
  * Viewer-request function on every direct behavior: stamp the host the viewer
@@ -58,6 +65,9 @@ const CLOUDFRONT_ADMITTED: unique symbol = Symbol.for('blocks:CloudFrontVpcOrigi
  * behaviors in the order they were added, and each direct path is an exact path
  * under that prefix.
  *
+ * A direct call skips the gateway's stage throttling and access logs, so the
+ * distribution's web ACL is its only rate control: synth warns when it has none.
+ *
  * @param behaviorOptions the options of the distribution's other API behaviors
  *   (caching off, all methods, viewer headers forwarded except `Host`)
  * @internal
@@ -68,6 +78,15 @@ export function addDirectApiBehaviors(
 	behaviorOptions: cloudfront.AddBehaviorOptions,
 ): void {
 	if (routes.length === 0) return;
+	if (!hasWebAcl(distribution)) {
+		cdk.Annotations.of(distribution).addWarningV2(
+			DIRECT_ROUTES_WITHOUT_WAF_WARNING,
+			'CloudFront routes container API namespaces straight to their load balancer, past the API gateway, so its ' +
+				'throttling and access logs do not apply to them, and this distribution has no web ACL to rate-limit ' +
+				"them. Turn on a WAF: `apiWaf` for the backend's managed distribution, `frontDoor: { features: { waf: " +
+				'{ enabled: true } } }` on Hosting.',
+		);
+	}
 	const forwardedHost = new cloudfront.Function(distribution, 'ApiForwardedHost', {
 		code: cloudfront.FunctionCode.fromInline(FORWARDED_HOST_FUNCTION),
 		runtime: cloudfront.FunctionRuntime.JS_2_0,
@@ -94,14 +113,28 @@ export function addDirectApiBehaviors(
 	}
 }
 
+/** Whether `distribution` has a web ACL — set at construction, as the managed distribution and Hosting do. */
+function hasWebAcl(distribution: cloudfront.Distribution): boolean {
+	const cfn = distribution.node.defaultChild as cloudfront.CfnDistribution;
+	const config = cfn.distributionConfig as cloudfront.CfnDistribution.DistributionConfigProperty;
+	return cdk.Stack.of(distribution).resolve(config.webAclId) !== undefined;
+}
+
 /**
  * Admit CloudFront's VPC origins to a load balancer's listener ports, once per
  * load balancer: one rule over the whole listener range, sourced from CloudFront's
  * origin-facing prefix list (VPC origin traffic keeps CloudFront's source
  * addresses). The prefix list's id differs per region, so it is looked up at
  * deploy time and the stack stays environment-agnostic.
+ *
+ * The gateway build calls it for every direct route, so the lookup's provider
+ * role (a stack-level singleton) is created during the backend's `create()` and
+ * gets the backend's role settings (its permissions boundary) like the rest;
+ * {@link addDirectApiBehaviors} calling it again is a no-op.
+ *
+ * @internal
  */
-function admitCloudFront(loadBalancer: elbv2.IApplicationLoadBalancer): void {
+export function admitCloudFront(loadBalancer: elbv2.IApplicationLoadBalancer): void {
 	const marked = loadBalancer as unknown as Record<symbol, boolean | undefined>;
 	if (marked[CLOUDFRONT_ADMITTED]) return;
 	marked[CLOUDFRONT_ADMITTED] = true;

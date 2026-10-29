@@ -14,6 +14,7 @@
 
 import { before, describe, test } from 'node:test';
 import assert from 'node:assert';
+import { request } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
 import { rpcCall, type ComputeTestContext } from './context.js';
@@ -39,6 +40,24 @@ export function containerApiTests(ctx: ComputeTestContext) {
       body: JSON.stringify({ jsonrpc: '2.0', method: `containerApi.${method}`, params, id: 1 }),
     });
 
+  /**
+   * `post`, but over `node:https`, which sends header names in the case given —
+   * `fetch` lower-cases them, and that is the case the front doors overwrite.
+   */
+  const postWithHeaderCase = (method: string, headers: Record<string, string>) =>
+    new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const body = JSON.stringify({ jsonrpc: '2.0', method: `containerApi.${method}`, params: [], id: 1 });
+      const req = request(`${ctx.apiUrl()}/containerApi`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers } }, (res) => {
+        let text = '';
+        res.on('data', (chunk) => {
+          text += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text }));
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+
   describe('API namespace on a container compute', () => {
     before(async () => {
       const deadline = Date.now() + READY_BUDGET_MS;
@@ -57,12 +76,34 @@ export function containerApiTests(ctx: ComputeTestContext) {
     test('is served by the container compute', async () => {
       const served = await containerApi().whereAmI();
       assert.match(served.computeId ?? '', /worker/, `computeId: ${served.computeId}`);
+      assert.doesNotMatch(served.computeId ?? '', /slow-worker/, 'the worker container, not the slow-worker one');
       assert.strictEqual(served.functionName, null, 'not a Lambda function');
     });
 
     test("sees the front door's public URL as ctx.request.url", async () => {
       const served = await containerApi().whereAmI();
       assert.strictEqual(served.url, `${ctx.apiUrl()}/containerApi`);
+    });
+
+    test('ignores the forwarded host and stage a client sends', async () => {
+      // Every front door overwrites them, so ctx.request.url stays the public URL.
+      const res = await post('whereAmI', [], { 'x-blocks-forwarded-host': 'attacker.example', 'x-blocks-forwarded-stage': 'evil' });
+      assert.strictEqual(res.status, 200);
+      const reply = (await res.json()) as { result?: WhereAmI };
+      assert.strictEqual(reply.result?.url, `${ctx.apiUrl()}/containerApi`);
+    });
+
+    test('never takes the host from a client copy under another letter case', async () => {
+      // A front door that overwrites only the exact name it maps could pass this one
+      // through alongside its own: the container then refuses the request (400)
+      // rather than pick one. Either way the attacker's host never reaches the URL.
+      const res = await postWithHeaderCase('whereAmI', { 'X-Blocks-Forwarded-Host': 'attacker.example' });
+      assert.ok(res.status === 200 || res.status === 400, `status ${res.status}: ${res.body}`);
+      if (res.status === 200) {
+        const reply = JSON.parse(res.body) as { result?: WhereAmI };
+        assert.strictEqual(reply.result?.url, `${ctx.apiUrl()}/containerApi`);
+      }
+      assert.ok(!res.body.includes('attacker.example'), res.body);
     });
 
     test('delivers every Set-Cookie to the client', async () => {

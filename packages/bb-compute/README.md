@@ -92,7 +92,8 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   client released before per-namespace paths — still runs on the default
   compute.
 - **The gateway's limits still apply.** An API call is capped at ~29 seconds
-  whatever the compute's `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
+  whatever the compute's `maxTimeoutSeconds` (except a container namespace that
+  CloudFront reaches directly, below); run longer work in an `AsyncJob`.
 - **It's placement, not isolation.** Every compute runs the same backend bundle
   under the app's one execution role, so a separate compute is not a security
   boundary.

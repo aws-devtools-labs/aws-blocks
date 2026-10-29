@@ -200,7 +200,8 @@ export interface BlocksStackApi {
   /**
    * The API paths served by a container compute, which this distribution routes
    * straight to the container's load balancer. Set on `BlocksStack`/`BlocksBackend`
-   * once `create()` resolves.
+   * once `create()` resolves — on the `cloudfront` tier only; on `apigateway`
+   * they reach the gateway like every other path.
    * @internal Framework-only.
    */
   readonly _apiDirectRoutes?: readonly ApiDirectRoute[];
@@ -1485,9 +1486,9 @@ export class Hosting extends Construct {
       responseHeadersPolicy: hosting.securityHeadersPolicy,
     };
 
-    // A namespace on a container compute skips the gateway: its exact path goes
-    // straight to the container's load balancer. Added before `/aws-blocks/api/*`,
-    // which would otherwise match first.
+    // On the `cloudfront` tier, a namespace on a container compute skips the
+    // gateway: its exact path goes straight to the container's load balancer.
+    // Added before `/aws-blocks/api/*`, which would otherwise match first.
     addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions);
 
     distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);

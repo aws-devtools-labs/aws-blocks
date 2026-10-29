@@ -126,7 +126,8 @@ export interface ApiNamespaceOptions {
    * call to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a
    * native client released before per-namespace paths — still runs on the
    * default compute. API calls stay capped at ~29 seconds by
-   * the gateway whatever the compute's `maxTimeoutSeconds`; run longer work in an
+   * the gateway whatever the compute's `maxTimeoutSeconds` (except a container
+   * namespace that CloudFront reaches directly, below); run longer work in an
    * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). In
    * local dev every namespace still runs in the one dev server process.
    *

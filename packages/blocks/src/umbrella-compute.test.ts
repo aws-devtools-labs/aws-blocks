@@ -14,15 +14,15 @@
  */
 
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 import { ApiNamespace, Compute, type Scope } from '@aws-blocks/blocks';
-import { BlocksBackend, BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, BlocksPresets, BlocksStack, Hosting } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
@@ -751,6 +751,76 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		for (const type of ['AWS::CloudFront::Distribution', 'AWS::CloudFront::VpcOrigin', 'AWS::CloudFront::Function', 'Custom::AWS']) {
 			assert.strictEqual(ofType(gateway, type).length, 0, type);
 		}
+	});
+
+	/** A Hosting (default CloudFront door) fronting a container backend on `apiFrontDoor`. */
+	const withHosting = async (id: string, apiFrontDoor?: 'cloudfront') => {
+		const root = join(tmpDir, `spa-${id}`);
+		mkdirSync(join(root, 'dist'), { recursive: true });
+		writeFileSync(join(root, 'dist', 'index.html'), '<!DOCTYPE html><html><body>app</body></html>');
+		writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'spa', dependencies: { react: '^18' } }));
+		const stack = await BlocksStack.create(new cdk.App(), id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerBackendPath,
+			defaults: BlocksPresets.production,
+			...(apiFrontDoor ? { apiFrontDoor } : {}),
+		});
+		new Hosting(stack, 'Hosting', { root, api: stack });
+		return Template.fromStack(stack).toJSON().Resources as Resources;
+	};
+
+	test("behind Hosting on the cloudfront tier, Hosting's distribution carries the direct routes", async () => {
+		const hosted = await withHosting('ContainerApiHostingCf', 'cloudfront');
+		const distributions = ofType(hosted, 'AWS::CloudFront::Distribution');
+		assert.strictEqual(distributions.length, 1, "Hosting's distribution only");
+		const config = distributions[0][1].Properties.DistributionConfig;
+		const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/aws-blocks/api/render');
+		const origin = config.Origins.find((o: Record<string, any>) => o.Id === render?.TargetOriginId);
+		assert.ok(origin?.VpcOriginConfig, 'the container path goes to a VPC origin');
+		assert.strictEqual(ofType(hosted, 'AWS::CloudFront::VpcOrigin').length, 1);
+	});
+
+	test('behind Hosting on the apigateway tier, container namespaces go through the gateway', async () => {
+		const hosted = await withHosting('ContainerApiHostingGw');
+		const [, dist] = ofType(hosted, 'AWS::CloudFront::Distribution')[0];
+		const patterns = dist.Properties.DistributionConfig.CacheBehaviors.map((b: Record<string, any>) => b.PathPattern);
+		assert.ok(!patterns.includes('/aws-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
+		assert.ok(patterns.includes('/aws-blocks/api/*'), 'the RPC subtree reaches the gateway');
+		for (const type of ['AWS::CloudFront::VpcOrigin', 'Custom::AWS']) assert.strictEqual(ofType(hosted, type).length, 0, type);
+		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
+		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+	});
+
+	test('an embedded BlocksBackend bounds the prefix-list lookup role too', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ContainerApiBoundaryParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerBackendPath,
+			defaults: { ...BlocksPresets.production, permissionsBoundary: 'app-boundary' },
+			apiFrontDoor: 'cloudfront',
+		});
+		const resources = Template.fromStack(parent).toJSON().Resources as Resources;
+		assert.ok(ofType(resources, 'Custom::AWS').length > 0, 'the prefix-list lookup exists');
+		const unbounded = ofType(resources, 'AWS::IAM::Role')
+			.filter(([, r]) => r.Properties.PermissionsBoundary === undefined)
+			.map(([id]) => id);
+		assert.deepStrictEqual(unbounded, [], 'every role carries the boundary');
+	});
+
+	test('warns when the distribution routing to a container has no web ACL', async () => {
+		const warningsFor = async (id: string, apiWaf?: { enabled: true }) => {
+			const stack = await BlocksStack.create(new cdk.App(), id, {
+				env: { account: '111111111111', region: 'us-east-1' },
+				backendHandlerPath: handlerPath,
+				backendCDKPath: containerBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'cloudfront',
+				...(apiWaf ? { apiWaf } : {}),
+			});
+			return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('container API namespaces straight to their load balancer'));
+		};
+		assert.strictEqual((await warningsFor('ContainerApiNoWaf')).length, 1);
+		assert.strictEqual((await warningsFor('ContainerApiWaf', { enabled: true })).length, 0);
 	});
 });
 

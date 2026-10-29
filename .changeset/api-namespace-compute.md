@@ -30,7 +30,8 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   the bare `/aws-blocks/api` endpoint — raw HTTP calls and older native clients —
   still run on the default compute.
 - API calls stay capped at ~29 seconds by the gateway whatever the compute's
-  `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
+  `maxTimeoutSeconds` (except a container namespace that CloudFront reaches
+  directly, up to 60 seconds); run longer work in an `AsyncJob`.
 - Routing follows the export name (what the frontend imports), not the second
   `ApiNamespace` argument.
 - One `Compute` can host several namespaces and `AsyncJob`s; they then run in
