@@ -1,0 +1,252 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "api.relay",
+      "params": [
+        {
+          "name": "feed",
+          "required": true,
+          "schema": {
+            "x-blocks-transferable": "realtime/channel",
+            "x-blocks-type-args": [
+              {
+                "$ref": "#/components/schemas/Note"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RelayResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.relayIfAny",
+      "params": [
+        {
+          "name": "room",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "feed",
+          "required": false,
+          "schema": {
+            "x-blocks-transferable": "realtime/channel",
+            "x-blocks-type-args": [
+              {
+                "$ref": "#/components/schemas/Note"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RelayIfAnyResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.relayOrNull",
+      "params": [
+        {
+          "name": "feed",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              {
+                "x-blocks-transferable": "realtime/channel",
+                "x-blocks-type-args": [
+                  {
+                    "$ref": "#/components/schemas/Note"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RelayOrNullResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.relayAll",
+      "params": [
+        {
+          "name": "feeds",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                {
+                  "$ref": "#/components/schemas/Note"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "byRoom",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "x-blocks-transferable": "realtime/channel",
+              "x-blocks-type-args": [
+                {
+                  "$ref": "#/components/schemas/Note"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "RelayAllResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.relayInline",
+      "params": [
+        {
+          "name": "feed",
+          "required": true,
+          "schema": {
+            "x-blocks-transferable": "realtime/channel",
+            "x-blocks-type-args": [
+              {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RelayInlineResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.share",
+      "params": [
+        {
+          "name": "download",
+          "required": true,
+          "schema": {
+            "x-blocks-transferable": "file-bucket/download"
+          }
+        },
+        {
+          "name": "upload",
+          "required": true,
+          "schema": {
+            "x-blocks-transferable": "file-bucket/upload"
+          }
+        }
+      ],
+      "result": {
+        "name": "ShareResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.forward",
+      "params": [
+        {
+          "name": "bundle",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Bundle"
+          }
+        }
+      ],
+      "result": {
+        "name": "ForwardResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Note": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "body"
+        ]
+      },
+      "Bundle": {
+        "type": "object",
+        "properties": {
+          "feed": {
+            "x-blocks-transferable": "realtime/channel",
+            "x-blocks-type-args": [
+              {
+                "$ref": "#/components/schemas/Note"
+              }
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "x-blocks-transferable": "file-bucket/download"
+            }
+          },
+          "upload": {
+            "x-blocks-transferable": "file-bucket/upload"
+          }
+        },
+        "required": [
+          "feed",
+          "files"
+        ]
+      }
+    }
+  }
+}

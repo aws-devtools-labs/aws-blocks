@@ -23,16 +23,6 @@ public final nonisolated class AuthApi: Sendable {
 
     public enum SetAuthState {
 
-        public struct SignIn: Codable {
-            public let password: String
-            public let username: String
-
-            public init(password: String, username: String) {
-                self.password = password
-                self.username = username
-            }
-        }
-
         public struct SignUp: Codable {
             public let password: String
             public let username: String
@@ -78,6 +68,32 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
+        public struct ResetPassword: Codable {
+            public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
+        }
+
+        public struct SignIn: Codable {
+            public let password: String
+            public let username: String
+
+            public init(password: String, username: String) {
+                self.password = password
+                self.username = username
+            }
+        }
+
+        public struct SignInWithPasskey: Codable {
+            public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
+        }
+
         public struct ConfirmSignUp: Codable {
             public let code: String
             public let password: String?
@@ -104,14 +120,6 @@ public final nonisolated class AuthApi: Sendable {
         }
 
         public struct ResendSignUpCode: Codable {
-            public let username: String
-
-            public init(username: String) {
-                self.username = username
-            }
-        }
-
-        public struct ResetPassword: Codable {
             public let username: String
 
             public init(username: String) {
@@ -201,6 +209,14 @@ public final nonisolated class AuthApi: Sendable {
                 }
             }
 
+            public struct Webauthn: Codable {
+                public let credential: String
+
+                public init(credential: String) {
+                    self.credential = credential
+                }
+            }
+
             public enum ConfirmSignInChallenge: Codable {
                 case code(Code)
                 case mfaType(MfaType)
@@ -209,6 +225,7 @@ public final nonisolated class AuthApi: Sendable {
                 case email(Email)
                 case password(Password)
                 case firstFactor(FirstFactor)
+                case webauthn(Webauthn)
 
                 enum CodingKeys: String, CodingKey {
                     case challenge
@@ -238,6 +255,9 @@ public final nonisolated class AuthApi: Sendable {
                     case .firstFactor(let params):
                         try container.encode("firstFactor", forKey: .challenge)
                         try params.encode(to: encoder)
+                    case .webauthn(let params):
+                        try container.encode("webauthn", forKey: .challenge)
+                        try params.encode(to: encoder)
                     }
                 }
 
@@ -252,6 +272,7 @@ public final nonisolated class AuthApi: Sendable {
                     case "email": self = .email(try Email(from: decoder))
                     case "password": self = .password(try Password(from: decoder))
                     case "firstFactor": self = .firstFactor(try FirstFactor(from: decoder))
+                    case "webauthn": self = .webauthn(try Webauthn(from: decoder))
                     default:
                         throw DecodingError.dataCorruptedError(forKey: .challenge, in: container, debugDescription: "Unknown value: \(disc)")
                     }
@@ -280,16 +301,37 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
+        public struct CompletePasskeyRegistration: Codable {
+            public let credential: String
+
+            public init(credential: String) {
+                self.credential = credential
+            }
+        }
+
+        public struct DeletePasskey: Codable {
+            public let credentialId: String
+
+            public init(credentialId: String) {
+                self.credentialId = credentialId
+            }
+        }
+
         public enum Input: Codable {
-            case signIn(SignIn)
             case signUp(SignUp)
+            case resetPassword(ResetPassword)
+            case signIn(SignIn)
+            case signInWithPasskey(SignInWithPasskey)
             case confirmSignUp(ConfirmSignUp)
             case resendSignUpCode(ResendSignUpCode)
             case signOut
-            case resetPassword(ResetPassword)
             case confirmResetPassword(ConfirmResetPassword)
             case autoSignIn(AutoSignIn)
             case confirmSignIn(ConfirmSignIn)
+            case startPasskeyRegistration
+            case completePasskeyRegistration(CompletePasskeyRegistration)
+            case listPasskeys
+            case deletePasskey(DeletePasskey)
 
             enum CodingKeys: String, CodingKey {
                 case action
@@ -298,11 +340,17 @@ public final nonisolated class AuthApi: Sendable {
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
+                case .signUp(let params):
+                    try container.encode("signUp", forKey: .action)
+                    try params.encode(to: encoder)
+                case .resetPassword(let params):
+                    try container.encode("resetPassword", forKey: .action)
+                    try params.encode(to: encoder)
                 case .signIn(let params):
                     try container.encode("signIn", forKey: .action)
                     try params.encode(to: encoder)
-                case .signUp(let params):
-                    try container.encode("signUp", forKey: .action)
+                case .signInWithPasskey(let params):
+                    try container.encode("signInWithPasskey", forKey: .action)
                     try params.encode(to: encoder)
                 case .confirmSignUp(let params):
                     try container.encode("confirmSignUp", forKey: .action)
@@ -312,9 +360,6 @@ public final nonisolated class AuthApi: Sendable {
                     try params.encode(to: encoder)
                 case .signOut:
                     try container.encode("signOut", forKey: .action)
-                case .resetPassword(let params):
-                    try container.encode("resetPassword", forKey: .action)
-                    try params.encode(to: encoder)
                 case .confirmResetPassword(let params):
                     try container.encode("confirmResetPassword", forKey: .action)
                     try params.encode(to: encoder)
@@ -324,6 +369,16 @@ public final nonisolated class AuthApi: Sendable {
                 case .confirmSignIn(let params):
                     try container.encode("confirmSignIn", forKey: .action)
                     try params.encode(to: encoder)
+                case .startPasskeyRegistration:
+                    try container.encode("startPasskeyRegistration", forKey: .action)
+                case .completePasskeyRegistration(let params):
+                    try container.encode("completePasskeyRegistration", forKey: .action)
+                    try params.encode(to: encoder)
+                case .listPasskeys:
+                    try container.encode("listPasskeys", forKey: .action)
+                case .deletePasskey(let params):
+                    try container.encode("deletePasskey", forKey: .action)
+                    try params.encode(to: encoder)
                 }
             }
 
@@ -331,15 +386,20 @@ public final nonisolated class AuthApi: Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 let disc = try container.decode(String.self, forKey: .action)
                 switch disc {
-                case "signIn": self = .signIn(try SignIn(from: decoder))
                 case "signUp": self = .signUp(try SignUp(from: decoder))
+                case "resetPassword": self = .resetPassword(try ResetPassword(from: decoder))
+                case "signIn": self = .signIn(try SignIn(from: decoder))
+                case "signInWithPasskey": self = .signInWithPasskey(try SignInWithPasskey(from: decoder))
                 case "confirmSignUp": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                 case "resendSignUpCode": self = .resendSignUpCode(try ResendSignUpCode(from: decoder))
                 case "signOut": self = .signOut
-                case "resetPassword": self = .resetPassword(try ResetPassword(from: decoder))
                 case "confirmResetPassword": self = .confirmResetPassword(try ConfirmResetPassword(from: decoder))
                 case "autoSignIn": self = .autoSignIn(try AutoSignIn(from: decoder))
                 case "confirmSignIn": self = .confirmSignIn(try ConfirmSignIn(from: decoder))
+                case "startPasskeyRegistration": self = .startPasskeyRegistration
+                case "completePasskeyRegistration": self = .completePasskeyRegistration(try CompletePasskeyRegistration(from: decoder))
+                case "listPasskeys": self = .listPasskeys
+                case "deletePasskey": self = .deletePasskey(try DeletePasskey(from: decoder))
                 default:
                     throw DecodingError.dataCorruptedError(forKey: .action, in: container, debugDescription: "Unknown value: \(disc)")
                 }

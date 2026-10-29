@@ -41,13 +41,6 @@ public class AuthApi(
     @Serializable
     @JsonClassDiscriminator("action")
     public sealed class Input {
-      @Serializable
-      @SerialName("signIn")
-      public data class SignIn(
-        public val username: String,
-        public val password: String,
-      ) : Input()
-
       @Serializable(with = SignUp.OpenRecordSerializer::class)
       @SerialName("signUp")
       public data class SignUp(
@@ -95,6 +88,25 @@ public class AuthApi(
       }
 
       @Serializable
+      @SerialName("resetPassword")
+      public data class ResetPassword(
+        public val username: String,
+      ) : Input()
+
+      @Serializable
+      @SerialName("signIn")
+      public data class SignIn(
+        public val username: String,
+        public val password: String,
+      ) : Input()
+
+      @Serializable
+      @SerialName("signInWithPasskey")
+      public data class SignInWithPasskey(
+        public val username: String,
+      ) : Input()
+
+      @Serializable
       @SerialName("confirmSignUp")
       public data class ConfirmSignUp(
         public val username: String,
@@ -111,12 +123,6 @@ public class AuthApi(
       @Serializable
       @SerialName("signOut")
       public data object SignOut : Input()
-
-      @Serializable
-      @SerialName("resetPassword")
-      public data class ResetPassword(
-        public val username: String,
-      ) : Input()
 
       @Serializable
       @SerialName("confirmResetPassword")
@@ -183,6 +189,12 @@ public class AuthApi(
           public data class FirstFactor(
             public val firstFactor: String,
           ) : Challenge()
+
+          @Serializable
+          @SerialName("webauthn")
+          public data class Webauthn(
+            public val credential: String,
+          ) : Challenge()
         }
 
         @Serializable
@@ -214,6 +226,26 @@ public class AuthApi(
           }
         }
       }
+
+      @Serializable
+      @SerialName("startPasskeyRegistration")
+      public data object StartPasskeyRegistration : Input()
+
+      @Serializable
+      @SerialName("completePasskeyRegistration")
+      public data class CompletePasskeyRegistration(
+        public val credential: String,
+      ) : Input()
+
+      @Serializable
+      @SerialName("listPasskeys")
+      public data object ListPasskeys : Input()
+
+      @Serializable
+      @SerialName("deletePasskey")
+      public data class DeletePasskey(
+        public val credentialId: String,
+      ) : Input()
     }
   }
 }

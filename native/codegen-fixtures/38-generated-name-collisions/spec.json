@@ -1,0 +1,254 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "api.send",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "class",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "args",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "json",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ApiSendResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "sent": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sent"
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.getProfile",
+      "params": [
+        {
+          "name": "profile",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Profile"
+          }
+        }
+      ],
+      "result": {
+        "name": "ApiGetProfileResult",
+        "schema": {
+          "$ref": "#/components/schemas/Profile"
+        }
+      }
+    },
+    {
+      "name": "api.one",
+      "params": [],
+      "result": {
+        "name": "Same",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.two",
+      "params": [],
+      "result": {
+        "name": "Same",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "b": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "b"
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.relay",
+      "params": [
+        {
+          "name": "client",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ApiRelayResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "name": "api.putBag",
+      "params": [
+        {
+          "name": "bag",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Bag"
+          }
+        }
+      ],
+      "result": {
+        "name": "ApiPutBagResult",
+        "schema": {
+          "$ref": "#/components/schemas/Bag"
+        }
+      }
+    },
+    {
+      "name": "api.getWeird",
+      "params": [
+        {
+          "name": "weird",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Weird"
+          }
+        }
+      ],
+      "result": {
+        "name": "ApiGetWeirdResult",
+        "schema": {
+          "$ref": "#/components/schemas/Weird"
+        }
+      }
+    },
+    {
+      "name": "a.b.ping",
+      "params": [],
+      "result": {
+        "name": "ABPingResult",
+        "schema": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "user_name": {
+            "type": "object",
+            "properties": {
+              "first": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "first"
+            ]
+          },
+          "userName": {
+            "type": "object",
+            "properties": {
+              "last": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "last"
+            ]
+          },
+          "Meta": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "x"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "in_progress"
+            ]
+          }
+        },
+        "required": [
+          "user_name",
+          "userName",
+          "Meta",
+          "state"
+        ]
+      },
+      "Bag": {
+        "type": "object",
+        "properties": {
+          "attributes": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attributes"
+        ],
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "Weird": {
+        "type": "object",
+        "properties": {
+          "back\\slash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "back\\slash"
+        ]
+      }
+    }
+  }
+}

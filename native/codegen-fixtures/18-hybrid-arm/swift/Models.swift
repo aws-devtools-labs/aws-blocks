@@ -1,12 +1,18 @@
 import Foundation
 
 
+public nonisolated enum Capability: String, Codable {
+    case webauthnGet = "webauthn-get"
+    case webauthnCreate = "webauthn-create"
+}
+
 public nonisolated enum AuthActionMethod: String, Codable {
     case get = "GET"
     case post = "POST"
 }
 
 public nonisolated struct AuthAction: Codable {
+    public let capability: Capability?
     public let fields: [AuthField]
     public let label: String
     public let method: AuthActionMethod?
@@ -14,6 +20,7 @@ public nonisolated struct AuthAction: Codable {
     public let url: String?
 
     enum CodingKeys: String, CodingKey {
+        case capability
         case fields
         case label
         case method
@@ -23,6 +30,7 @@ public nonisolated struct AuthAction: Codable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(self.capability, forKey: .capability)
         try c.encode(self.fields, forKey: .fields)
         try c.encode(self.label, forKey: .label)
         try c.encodeIfPresent(self.method, forKey: .method)
@@ -30,7 +38,8 @@ public nonisolated struct AuthAction: Codable {
         try c.encodeIfPresent(self.url, forKey: .url)
     }
 
-    public init(fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, url: String? = nil) {
+    public init(capability: Capability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, url: String? = nil) {
+        self.capability = capability
         self.fields = fields
         self.label = label
         self.method = method
@@ -41,9 +50,9 @@ public nonisolated struct AuthAction: Codable {
 
 public nonisolated enum AuthFieldType: String, Codable {
     case number
+    case password
     case email
     case text
-    case password
     case tel
     case hidden
 }
@@ -93,6 +102,7 @@ public nonisolated enum AuthStateState: String, Codable {
 public nonisolated struct AuthState: Codable {
     public let actions: [AuthAction]
     public let error: String?
+    public let errorName: String?
     public let retriable: Bool?
     public let state: AuthStateState
     public let user: AuthUser?
@@ -100,6 +110,7 @@ public nonisolated struct AuthState: Codable {
     enum CodingKeys: String, CodingKey {
         case actions
         case error
+        case errorName
         case retriable
         case state
         case user
@@ -109,14 +120,16 @@ public nonisolated struct AuthState: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(self.actions, forKey: .actions)
         try c.encodeIfPresent(self.error, forKey: .error)
+        try c.encodeIfPresent(self.errorName, forKey: .errorName)
         try c.encodeIfPresent(self.retriable, forKey: .retriable)
         try c.encode(self.state, forKey: .state)
         try c.encodeIfPresent(self.user, forKey: .user)
     }
 
-    public init(actions: [AuthAction], error: String? = nil, retriable: Bool? = nil, state: AuthStateState, user: AuthUser? = nil) {
+    public init(actions: [AuthAction], error: String? = nil, errorName: String? = nil, retriable: Bool? = nil, state: AuthStateState, user: AuthUser? = nil) {
         self.actions = actions
         self.error = error
+        self.errorName = errorName
         self.retriable = retriable
         self.state = state
         self.user = user
@@ -124,10 +137,25 @@ public nonisolated struct AuthState: Codable {
 }
 
 public nonisolated struct AuthUser: Codable {
+    public let displayName: String?
     public let userId: String
     public let username: String
 
-    public init(userId: String, username: String) {
+    enum CodingKeys: String, CodingKey {
+        case displayName
+        case userId
+        case username
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(self.displayName, forKey: .displayName)
+        try c.encode(self.userId, forKey: .userId)
+        try c.encode(self.username, forKey: .username)
+    }
+
+    public init(displayName: String? = nil, userId: String, username: String) {
+        self.displayName = displayName
         self.userId = userId
         self.username = username
     }

@@ -306,9 +306,9 @@ public final nonisolated class Api: Sendable {
         }
 
         public struct SignedIn: Codable {
-            public let user: CognitoUser
+            public let user: AuthenticatedUser
 
-            public init(user: CognitoUser) {
+            public init(user: AuthenticatedUser) {
                 self.user = user
             }
         }
@@ -623,9 +623,9 @@ public final nonisolated class Api: Sendable {
         }
 
         public struct SignedIn: Codable {
-            public let user: CognitoUser
+            public let user: AuthenticatedUser
 
-            public init(user: CognitoUser) {
+            public init(user: AuthenticatedUser) {
                 self.user = user
             }
         }
