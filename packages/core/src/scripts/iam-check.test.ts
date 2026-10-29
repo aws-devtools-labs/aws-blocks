@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -13,7 +13,10 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { stubComputeFactory } from '../cdk/__fixtures__/stub-lambda-compute.js';
 import { type BlocksDefaults, BlocksPresets } from '../cdk/blocks-defaults.js';
 import { BlocksStack } from '../cdk/index.js';
+import { config, secret } from '@aws-blocks/hosting';
+import { Hosting } from '../hosting.js';
 import { checkCloudAssembly, IamCheckUsageError } from './iam-check.js';
+import { generateExecutionPolicy, resourceTypesOf } from './iam-policies.js';
 
 /** On a shared platform each app's bootstrap qualifier is its app id. */
 const QUALIFIER = { '@aws-cdk/core:bootstrapQualifier': 'appa' };
@@ -142,4 +145,141 @@ describe('blocks-iam-check', () => {
 		assert.strictEqual(run([bad, '--app', 'appa']), 1);
 		assert.strictEqual(run([clean, '--app']), 2);
 	});
+
+	test('an app that calls execute-api (a WebSocket API) gets a note, not a violation', async () => {
+		const clean = checkCloudAssembly(await synth('app-identity-backend.js', appDefaults), 'appa');
+		assert.deepStrictEqual(clean.notes, []);
+		const dir = await synth('app-identity-backend.js', appDefaults, 'appa', (app) => {
+			new cdk.CfnResource(app.node.findChild('appa') as cdk.Stack, 'Ws', {
+				type: 'AWS::ApiGatewayV2::Api',
+				properties: { Name: 'appa-ws', ProtocolType: 'WEBSOCKET', RouteSelectionExpression: '$request.body.action' },
+			});
+		});
+		const result = checkCloudAssembly(dir, 'appa');
+		assert.deepStrictEqual(result.violations, []);
+		assert.strictEqual(result.notes.length, 1);
+		assert.match(result.notes[0], /WebSocket API \(Ws\).*--api-id/);
+	});
 });
+
+describe('blocks-iam-check — Hosting under defaults.app (stackId = app id)', () => {
+	const root = mkdtempSync(join(tmpdir(), 'blocks-iam-check-hosting-'));
+	dirs.push(root);
+	const cwd = process.cwd();
+	before(() => {
+		// The convention under defaults.app: `.blocks/config.json` names the stackId after the app id,
+		// so Hosting's secret()/config() values live under blocks/<id>/.
+		mkdirSync(join(root, '.blocks'), { recursive: true });
+		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'appa' }));
+		writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 't', dependencies: { next: '15.0.0', react: '^18' } }));
+		mkdirSync(join(root, '.next'), { recursive: true });
+		writeFileSync(join(root, '.next', 'BUILD_ID'), 'b');
+		for (const fn of ['default', 'edge1']) {
+			mkdirSync(join(root, '.hosting', 'compute', fn), { recursive: true });
+			writeFileSync(join(root, '.hosting', 'compute', fn, 'index.mjs'), 'export const handler = async (e) => e;');
+		}
+		mkdirSync(join(root, '.hosting', 'static'), { recursive: true });
+		writeFileSync(join(root, '.hosting', 'static', 'index.html'), 'x');
+	});
+
+	/** An off-region app (so Hosting adds the us-east-1 support and Lambda@Edge stacks), strict. */
+	async function synthHosting(): Promise<string> {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-iam-check-hosting-out-'));
+		dirs.push(dir);
+		const app = new cdk.App({ outdir: dir, context: QUALIFIER });
+		const stack = await BlocksStack.create(app, 'appa', {
+			env: { account: '111111111111', region: 'eu-west-1' },
+			backendHandlerPath: fixture('handler.js'),
+			backendCDKPath: fixture('app-identity-backend.js'),
+			defaults: { ...appDefaults, app: { id: 'appa', strict: true } },
+			defaultComputeFactory: stubComputeFactory,
+		});
+		const compute = (fn: string) => join(root, '.hosting', 'compute', fn);
+		// Hosting reads `stackId` from `.blocks/config.json` in the working directory.
+		process.chdir(root);
+		try {
+			new Hosting(stack, 'Web', {
+				root,
+				api: stack,
+				environment: { DEMO_SECRET: secret('DEMO_SECRET'), FEATURE_FLAGS: config('FEATURE_FLAGS') },
+				customAdapter: () => ({
+					version: 1 as const,
+					compute: {
+						default: { type: 'handler' as const, bundle: compute('default'), handler: 'index.handler', placement: 'regional' as const },
+						edge1: { type: 'edge' as const, bundle: compute('edge1'), handler: 'index.handler', placement: 'global' as const },
+					},
+					staticAssets: { directory: join(root, '.hosting', 'static') },
+					routes: [
+						{ pattern: '/edge/*', target: 'edge1' },
+						{ pattern: '/*', target: 'default' },
+					],
+				}),
+			});
+		} finally {
+			process.chdir(cwd);
+		}
+		app.synth();
+		return dir;
+	}
+
+	test('strict synth and the check pass: secret()/config(), cross-region references and the support stacks are the app\'s own', async () => {
+		const dir = await synthHosting();
+		const result = checkCloudAssembly(dir, 'appa');
+		assert.deepStrictEqual(result.violations.map((v) => `[${v.rule}] ${v.message}`), []);
+		const names = readdirSync(dir).filter((f) => f.endsWith('.template.json'));
+		assert.ok(names.some((f) => f.startsWith('appa-CfMonitoring-')), names.join(', '));
+		assert.ok(names.includes('appa-edge.template.json'), names.join(', '));
+		const template = readFileSync(join(dir, 'appa.template.json'), 'utf8');
+		assert.match(template, /secret:blocks\/appa\/secrets\/DEMO_SECRET/);
+		assert.match(template, /parameter\/blocks\/appa\/config\/FEATURE_FLAGS/);
+		// Every type Hosting's stacks use has a rule: nothing left for the platform to add by hand.
+		const exec = generateExecutionPolicy(resourceTypesOf(names.map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')))), {
+			appId: 'appa',
+			account: '111111111111',
+		});
+		assert.deepStrictEqual(exec.unscoped, []);
+		assert.ok(exec.accepted.includes('AWS::CloudFront::OriginAccessControl'), exec.accepted.join(', '));
+	});
+
+	test("the us-east-1 support stack and the edge stack are tagged app=<id>: stack tags, and its key, topic and alarm", async () => {
+		const dir = await synthHosting();
+		const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as {
+			artifacts: Record<string, { type?: string; properties?: { tags?: Record<string, string>; templateFile?: string } }>;
+		};
+		const stacks = Object.entries(manifest.artifacts).filter(([, a]) => a.type === 'aws:cloudformation:stack');
+		const support = stacks.find(([id]) => id.startsWith('appa-CfMonitoring-'));
+		assert.ok(support, 'support stack');
+		for (const [id, a] of stacks) {
+			// A stack tag reaches what a tag aspect can't (CloudFormation propagates it), e.g. CDK's provider function.
+			assert.strictEqual(a.properties?.tags?.app, 'appa', `${id} stack tag`);
+		}
+		const { Resources } = JSON.parse(readFileSync(join(dir, support[1].properties?.templateFile ?? ''), 'utf8')) as {
+			Resources: Record<string, { Type: string; Properties?: { Tags?: { Key: string; Value: string }[] } }>;
+		};
+		const tagged = (type: string) =>
+			Object.values(Resources)
+				.filter((r) => r.Type === type)
+				.map((r) => r.Properties?.Tags?.find((t) => t.Key === 'app')?.Value);
+		for (const type of ['AWS::KMS::Key', 'AWS::SNS::Topic', 'AWS::CloudWatch::Alarm', 'AWS::IAM::Role']) {
+			const values = tagged(type);
+			assert.ok(values.length > 0, `${type} in the support stack`);
+			assert.deepStrictEqual(values, values.map(() => 'appa'), type);
+		}
+		assert.ok(tagged('AWS::Lambda::Function').length > 0, 'the provider function (tagged through the stack tag)');
+	});
+
+	test('CloudFront Functions and KeyValueStores are named <id>-<region>-…', async () => {
+		const dir = await synthHosting();
+		const { Resources } = JSON.parse(readFileSync(join(dir, 'appa.template.json'), 'utf8')) as {
+			Resources: Record<string, { Type: string; Properties?: { Name?: unknown } }>;
+		};
+		const named = Object.values(Resources).filter((r) => /^AWS::CloudFront::(Function|KeyValueStore)$/.test(r.Type));
+		assert.ok(named.length >= 2, `${named.length} CloudFront functions / stores`);
+		for (const r of named) {
+			const name = String(r.Properties?.Name);
+			assert.match(name, /^appa-eu-west-1-[A-Za-z0-9_-]+$/, name);
+			assert.ok(name.length <= 64, name);
+		}
+	});
+});
+

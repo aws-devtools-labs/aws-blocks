@@ -34,6 +34,7 @@ import {
 	isResourcePolicyType,
 	type ResolvedStatement,
 } from '../cdk/app-isolation-rules.js';
+import { callsExecuteApi } from './iam-policies.js';
 
 /** A violation with where it was found: the report file, or the template. */
 export interface IamCheckViolation extends AppViolation {
@@ -49,6 +50,12 @@ export interface IamCheckResult {
 	/** The templates checked. */
 	templates: string[];
 	violations: IamCheckViolation[];
+	/**
+	 * Not violations: things a platform must act on for the app to work, e.g. the
+	 * app calls its APIs through `execute-api` (Realtime, Agent streaming), which
+	 * the shared boundary denies — it needs its own boundary (`--api-id`).
+	 */
+	notes: string[];
 }
 
 /** A usage problem (no assembly, no report): exit code 2, not a violation. */
@@ -246,6 +253,7 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 	}
 	const id = expectedApp ?? [...appIds][0];
 	const templates: string[] = [];
+	const executeApi = new Set<string>();
 	if (id) {
 		for (const stack of stacks) {
 			const source = relative(dir, stack.file);
@@ -261,6 +269,7 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 				continue;
 			}
 			templates.push(source);
+			for (const use of callsExecuteApi([template])) executeApi.add(`${use} in ${stack.label}`);
 			for (const v of checkTemplate(template, id, stack.label)) violations.push({ ...v, source });
 			// Every stack is named after the app — including Hosting's us-east-1 edge
 			// stack, which AWS Blocks names `<id>-edge` when `defaults.app` is set.
@@ -279,5 +288,13 @@ export function checkCloudAssembly(dir: string, expectedApp?: string): IamCheckR
 		seen.add(key);
 		return true;
 	});
-	return { appIds: [...appIds], reports, templates, violations: unique };
+	const notes =
+		executeApi.size > 0
+			? [
+					`The app calls its APIs through execute-api (${[...executeApi].sort().join('; ')}). The shared boundary ` +
+						'denies execute-api, so Realtime and Agent streaming fail under it: give this app its own boundary ' +
+						'(blocks-iam-policies --api-id).',
+				]
+			: [];
+	return { appIds: [...appIds], reports, templates, violations: unique, notes };
 }

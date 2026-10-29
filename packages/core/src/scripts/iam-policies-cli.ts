@@ -21,7 +21,14 @@
  * and a Realtime WebSocket API), also writes `<out>/boundary-<id>.json`, a boundary
  * for that one app that allows `execute-api` on exactly those APIs, and pins the
  * execution policy's API Gateway management to them; the execution policy then
- * requires that boundary.
+ * requires that boundary. Without `--api-id`, it warns when the app calls its
+ * APIs through `execute-api` (a WebSocket API, or a role granted an
+ * `execute-api:` action), which the shared boundary denies.
+ *
+ * The execution policy is split into parts of at most 5,120 characters (IAM's
+ * limit is 6,144), so each part has room for statements added by hand. The CLI
+ * prints the types it grants as accepted exceptions (no app scope possible) and
+ * the types it has no scoped rule for.
  *
  * Exit codes: 0 written · 2 usage error.
  */
@@ -29,6 +36,8 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+	callsExecuteApi,
+	EXECUTION_POLICY_SPLIT_CHARS,
 	generateBoundaryPolicy,
 	generateDeployGuardPolicy,
 	generateExecutionPolicy,
@@ -38,6 +47,7 @@ import {
 	policySize,
 	resourceTypesOf,
 	splitPolicy,
+	UNSCOPED_REASONS,
 } from './iam-policies.js';
 
 function usage(message?: string): never {
@@ -100,7 +110,7 @@ if (executeApiIds.length > 0) {
 }
 
 if (options.appId || options.account) {
-	let templates: { Resources?: Record<string, { Type?: string }> }[];
+	let templates: { Resources?: Record<string, { Type?: string; Properties?: Record<string, unknown> }> }[];
 	try {
 		templates = readdirSync(resolve(assembly))
 			.filter((f) => f.endsWith('.template.json'))
@@ -115,8 +125,9 @@ if (options.appId || options.account) {
 	} catch (error) {
 		usage(error instanceof Error ? error.message : String(error));
 	}
-	// One file per managed policy: IAM caps each at 6,144 characters.
-	const parts = splitPolicy(result.document);
+	// One file per managed policy. IAM caps each at 6,144 characters; split lower,
+	// so every part has room for statements the platform adds by hand.
+	const parts = splitPolicy(result.document, EXECUTION_POLICY_SPLIT_CHARS);
 	for (const [i, part] of parts.entries()) {
 		write(join(out, `execution-${options.appId}${i === 0 ? '' : `-${i + 1}`}.json`), part);
 	}
@@ -126,10 +137,28 @@ if (options.appId || options.account) {
 		);
 	}
 	write(join(out, `deploy-guard-${options.appId}.json`), generateDeployGuardPolicy(options));
+	if (result.accepted.length > 0) {
+		process.stdout.write(
+			"\nAccepted exceptions — granted without an app scope, because the service can't scope them by name or tag " +
+				'(statement "CloudFrontUnscopableConfig"; see the README\'s Limits):\n' +
+				result.accepted.map((t) => `  • ${t}\n`).join(''),
+		);
+	}
 	if (result.unscoped.length > 0) {
 		process.stdout.write(
 			`\nNo scoped rule for these resource types — add statements for them to execution-${options.appId}.json by hand:\n` +
-				result.unscoped.map((t) => `  • ${t}\n`).join(''),
+				result.unscoped.map((t) => `  • ${t}${UNSCOPED_REASONS[t] ? ` — ${UNSCOPED_REASONS[t]}` : ''}\n`).join(''),
+		);
+	}
+	const executeApi = callsExecuteApi(templates);
+	if (executeApi.length > 0 && executeApiIds.length === 0) {
+		process.stdout.write(
+			'\n!!! WARNING: this app calls its APIs through execute-api, which the shared boundary denies:\n' +
+				executeApi.map((w) => `  • ${w}\n`).join('') +
+				'  Under boundary.json, Realtime publish/subscribe and Agent streaming fail at runtime (AccessDenied on\n' +
+				'  execute-api:ManageConnections). Give this app its own boundary, ' +
+				`"${options.boundaryName ?? 'apps-boundary'}-${options.appId}", from its first deploy, and once its APIs exist\n` +
+				'  regenerate with --api-id <api id> (once per API).\n',
 		);
 	}
 }
