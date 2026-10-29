@@ -39,6 +39,7 @@ FAILED=0
 check() {
   local name="$1" want_exit="$2" want="$3" config="$4" args=()
   rm -rf "$WORK/out"
+  rm -f "$WORK/blocks.codegen.json"
   if [[ "$config" != "NONE" ]]; then
     printf '%s' "$config" > "$WORK/blocks.codegen.json"
     args=("$WORK/blocks.codegen.json")
@@ -67,15 +68,39 @@ check "mistyped identity is reported"                0 "AWSBLOCKS-NATIVE-006" '{
 check "a JSON array is rejected as not an object"    1 "is not a JSON object" '["example-iot-native"]'
 check "malformed JSON is named as such"              1 "is not valid codegen configuration" '{"optOutNativePackages":'
 
-# The changeset tells a customer to write this file, so the CLI must not ignore it.
+# The README tells a customer to write this file, so the CLI must not ignore it.
 rm -rf "$WORK/out"
 printf '%s' '{"optOutNativePackages":["example-iot-native"]}' > "$WORK/blocks.codegen.json"
-UNPASSED="$("$TOOL" "$WORK/blocks.spec.json" "$WORK/out" 2>&1)" || true
-if grep -qF "exists but was not passed" <<<"$UNPASSED"; then
-  echo "ok an unpassed sidecar config is refused"
+UNPASSED_RC=0
+UNPASSED="$("$TOOL" "$WORK/blocks.spec.json" "$WORK/out" 2>&1)" || UNPASSED_RC=$?
+# REMEDY is the text after the message's own fixed prefix, so the assertions below
+# cannot match an interpolated path. A prefix change leaves the slice equal to the
+# whole message, which the != check below catches.
+REMEDY="${UNPASSED#*was not passed; }"
+if [[ $UNPASSED_RC -ne 0 ]] && [[ ! -e "$WORK/out" ]] && [[ "$REMEDY" != "$UNPASSED" ]] \
+  && grep -qF "exists but was not passed" <<<"$UNPASSED" \
+  && grep -qF "a member of the target, like the spec" <<<"$REMEDY" \
+  && grep -qF "third argument, after the output directory" <<<"$REMEDY" \
+  && ! grep -qF ".copy(" <<<"$REMEDY" \
+  && ! grep -qiE "target'?s? resources" <<<"$REMEDY"; then
+  echo "ok an unpassed sidecar config is refused, naming both remedies"
 else
-  echo "FAIL unpassed sidecar: the config was ignored" >&2; echo "$UNPASSED" | tail -3 >&2; FAILED=1
+  echo "FAIL unpassed sidecar: generated anyway, or the remedy names no step the reader can take" >&2
+  echo "$UNPASSED" | tail -3 >&2; FAILED=1
 fi
+
+rm -rf "$WORK/out"
+printf '%s' '{"optOutNativePackages":["example-iot-native"]}' > "$WORK/blocks.codegen.json"
+PASSED_RC=0
+PASSED="$("$TOOL" "$WORK/blocks.spec.json" "$WORK/out" "$WORK/blocks.codegen.json" 2>&1)" || PASSED_RC=$?
+if [[ $PASSED_RC -eq 0 ]] && [[ -f "$WORK/out/API.swift" ]] && [[ -f "$WORK/out/Models.swift" ]] \
+  && grep -qF "BlocksRuntime.UnknownTransferable" "$WORK/out/API.swift"; then
+  echo "ok the remedy the refusal names generates, and honours the opt-out"
+else
+  echo "FAIL remedy: following the refusal's own instruction did not generate, or ignored the opt-out" >&2
+  echo "$PASSED" | tail -3 >&2; FAILED=1
+fi
+
 rm -f "$WORK/blocks.codegen.json"
 
 cat > "$WORK/nocat.spec.json" <<'JSON'
@@ -145,7 +170,8 @@ let package = Package(
             name: "App",
             dependencies: [.product(name: "BlocksRuntime", package: "swift")],
             path: "Sources/App",
-            resources: [.copy("blocks.codegen.json")],
+            // Intentionally no \`resources:\` entry — this fixture proves the plugin
+            // forwards the sidecar without one.
             plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "swift")]
         )
     ]

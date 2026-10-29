@@ -117,3 +117,6 @@ native/swift/Demo/typescript-demo/package-lock.json
 
 # Local multi-agent orchestration handoff notes (not for the repo)
 .sisyphus/
+
+# Per-run fixture of packages/core/src/cdk/lambda-code.test.ts (removed after the run)
+.lambda-code-fixture.*/

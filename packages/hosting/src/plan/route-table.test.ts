@@ -165,6 +165,59 @@ describe('buildRouteTable — coalescing, basePath, ordering', () => {
     assert.ok(entries.length <= 4, `expected a bounded table, got ${entries.length} rows`);
     assert.ok(entries.some((e) => e.pattern === '/blog/*'));
   });
+
+  it('keeps exact routes out of coalescing and the ISR flip', () => {
+    // A frozen page and a file inside an ISR subtree (the Nitro adapter marks
+    // them `exact`), next to crawl-prerendered siblings that may coalesce.
+    const routes: RouteBehavior[] = [
+      { pattern: '/blog/featured', target: 'static', exact: true },
+      { pattern: '/blog/featured/*', target: 'static', exact: true },
+      { pattern: '/blog/hero.png', target: 'static', exact: true },
+      { pattern: '/blog/a', target: 'static' },
+      { pattern: '/blog/b', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ];
+    const manifest = manifestWith(routes, { cache: { computeResource: 'default', driver: 'nitro-s3' } });
+    const entries = buildRouteTable({ manifest, hasServer: true, hasImage: false, isrActive: true });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern.startsWith('/blog')),
+      [
+        { pattern: '/blog/featured/*', kind: 'static' },
+        { pattern: '/blog/featured', kind: 'static' },
+        { pattern: '/blog/hero.png', kind: 'static' },
+        { pattern: '/blog/*', kind: 'server' },
+      ],
+    );
+  });
+
+  it('an exact row replaces a coalesced wildcard with the same pattern', () => {
+    const routes: RouteBehavior[] = [
+      { pattern: '/blog/featured/*', target: 'static', exact: true },
+      { pattern: '/blog/featured/x', target: 'static' },
+      { pattern: '/blog/featured/y', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ];
+    const manifest = manifestWith(routes, { cache: { computeResource: 'default', driver: 'nitro-s3' } });
+    const entries = buildRouteTable({ manifest, hasServer: true, hasImage: false, isrActive: true });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern === '/blog/featured/*'),
+      [{ pattern: '/blog/featured/*', kind: 'static' }],
+    );
+  });
+
+  it('without ISR, the same Nitro shape collapses to a single static /blog/* row', () => {
+    const routes: RouteBehavior[] = [
+      { pattern: '/blog/*', target: 'static' },
+      { pattern: '/blog/featured', target: 'static' },
+      { pattern: '/blog/featured/*', target: 'static' },
+      { pattern: '/*', target: 'default' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern === '/blog/*'),
+      [{ pattern: '/blog/*', kind: 'static' }],
+    );
+  });
 });
 
 describe('coalesceRoutes / routeSpecificity (relocated, still exported here)', () => {

@@ -285,6 +285,16 @@ export type RouteBehavior = {
 
   /** Fallback if target fails */
   fallback?: string;
+
+  /**
+   * Keep this route as its own row in the front door's route table: never
+   * merge it with its siblings into a `<parent>/*` wildcard, and never switch
+   * it to the server when ISR/SWR is active. An adapter sets this for a
+   * static file or a frozen prerendered page inside an ISR/SWR subtree, where
+   * a merged wildcard would either shadow pages that render on demand (as
+   * static) or send real files to the server (as compute). Default: `false`.
+   */
+  exact?: boolean;
 };
 
 export type CacheConfig = {

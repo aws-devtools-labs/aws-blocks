@@ -5,7 +5,7 @@
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — start here), then `<block>/README.md`, plus `<block>/API.md` and `<block>/DESIGN.md` where present.
+- **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
 
@@ -63,6 +63,73 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 import { api } from 'aws-blocks';
 const res = await api.ping('world');   // { message: 'hi world' }
 ```
+
+### Live data: push with Realtime, or poll safely
+
+For data that changes while the page is open (dashboards, counters, feeds), prefer **push over poll**: the `Realtime` block delivers updates to the browser as they happen. A backend method returns a channel handle (`await rt.getChannel(namespace, channel)`), the frontend calls `subscribe(handler)` on it, and the backend calls `rt.publish(...)` when the data changes. See the `bb-realtime` docs for the full API.
+
+If you poll instead, every open tab calls the backend on a timer: each call is a Lambda invocation and an API Gateway request, so a careless poller wastes money and can hit the stage's rate limit. A safe poller:
+
+1. **Never overlaps calls.** Schedule the next call after the previous one settles: chain `setTimeout`, never a fixed `setInterval`.
+2. **Pauses while the tab is hidden.** Stop on `visibilitychange` → `hidden`, and refresh right away on `visible`.
+3. **Makes one call per tick.** Add one backend method that returns everything the view shows, not several calls per tick.
+4. **Backs off on errors**, up to a ceiling.
+5. **Stops on dispose**, and ignores a response that arrives after it.
+
+The typed client has no abort option, so a response can't be cancelled. Rules 1 and 5 make that safe: there is never more than one call in flight, and a late response is dropped.
+
+```ts
+// src/poll.ts — replace getDashboard with your own one-call-per-tick method
+import { api } from 'aws-blocks';
+
+type Dashboard = Awaited<ReturnType<typeof api.getDashboard>>;
+
+export function pollDashboard(render: (data: Dashboard) => void, intervalMs = 5_000): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = false;
+  let stopped = false;
+  let failures = 0;
+
+  const visible = () => document.visibilityState === 'visible';
+
+  async function tick(): Promise<void> {
+    timer = undefined;
+    if (stopped || inFlight || !visible()) return;
+    inFlight = true;
+    try {
+      const data = await api.getDashboard();
+      if (stopped) return;
+      failures = 0;
+      render(data);
+    } catch {
+      failures++;
+    } finally {
+      inFlight = false;
+    }
+    if (stopped || !visible()) return;
+    timer = setTimeout(tick, Math.min(intervalMs * 2 ** failures, 60_000));
+  }
+
+  function onVisibilityChange(): void {
+    if (!visible()) {
+      clearTimeout(timer);
+      timer = undefined;
+    } else if (timer === undefined) {
+      void tick();
+    }
+  }
+
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  void tick();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+  };
+}
+```
+
+Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` when it unmounts.
 
 ## Workflow
 

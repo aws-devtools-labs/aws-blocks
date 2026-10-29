@@ -5,7 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
-import { API_NAMESPACE_COMPUTE } from '../api.js';
+import { API_NAMESPACE_COMPUTE, API_NAMESPACE_EXPLICIT_COMPUTE } from '../api.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
@@ -18,6 +18,26 @@ import type { ComputeBase } from './compute/compute.js';
  * name the export and its compute instead of CDK's generic one.
  */
 const API_GATEWAY_PATH_PART = /^[A-Za-z0-9:._$-]+$/;
+
+/**
+ * Integration timeout for every API-Gateway→Lambda integration on the shared
+ * REST API, in seconds. This is API Gateway's **existing** default integration
+ * timeout for a REST integration (`LambdaIntegration` already defaults to
+ * `Duration.seconds(29)` when unset) — setting it explicitly changes no runtime
+ * behaviour; it documents the boundary in synthesized output so it is visible at
+ * review and in the template rather than implicit. A request still in flight at
+ * 29s is cut off with a 504 regardless of how long the Lambda may run: the
+ * shared handler's function timeout is the async-work ceiling (up to 900s for
+ * SQS/AsyncJob invocations) and is unreachable on the synchronous HTTP path.
+ * The explicit value is aligned with the handler's own 28s deadline guard
+ * (`APIGW_TIMEOUT_MS`), which emits a structured 504 just before this cut-off.
+ *
+ * 29s is API Gateway's default integration timeout and the hard cap for
+ * edge-optimized APIs. Regional and private REST APIs can raise it via a service
+ * quota increase (CDK validates only the lower bound, ~50 ms, so a larger value
+ * synthesizes without error). Kept at 29s here to match the handler's 28s guard.
+ */
+const API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS = 29;
 
 /** Inputs the shared REST API gateway is built from. @internal */
 export interface SharedGatewayProps {
@@ -169,7 +189,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		restApi.deploymentStage.node.addDependency(apiGatewayAccount);
 	}
 
-	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler);
+	const defaultIntegration = new apigateway.LambdaIntegration(defaultHandler, {
+		timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+	});
 
 	// Nested resource tree for /aws-blocks/api. The intermediate resource
 	// gets a proxy so sub-paths (RawRoutes) still reach the function.
@@ -199,7 +221,10 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		// API, instead of CDK's default two per method (stage + test-invoke), so the
 		// function's resource policy stays flat however many namespaces it hosts.
 		// Safe because the only routes integrating this function are the ones below.
-		const integration = new apigateway.LambdaIntegration(handler, { scopePermissionToMethod: false });
+		const integration = new apigateway.LambdaIntegration(handler, {
+			scopePermissionToMethod: false,
+			timeout: cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
+		});
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(
@@ -232,8 +257,8 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  * Each namespace's compute is resolved here — after the backend module has been
  * imported — by calling the namespace's own resolver (`API_NAMESPACE_COMPUTE`),
  * so the result doesn't depend on the order computes, assignments and namespaces
- * were created in, and the precedence rule (today: the scope's compute) lives
- * with `ApiNamespace`, not here.
+ * were created in, and the precedence rule (the namespace's own `compute`, else
+ * its scope's) lives with `ApiNamespace`, not here.
  *
  * Contributes no route — leaving the request to the default compute's catch-all
  * resources — for a namespace on the default compute, a plain exported
@@ -243,7 +268,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
  * synthesizes several backends from the same backend module: `create()`
  * re-runs only the top-level module per backend, so a namespace from a cached
  * sub-module stays bound to the first backend that imported it. Routing it here
- * would wire this backend's path to that backend's Lambda.
+ * would wire this backend's path to that backend's Lambda. A namespace given that
+ * compute explicitly (`{ compute }`) is skipped the same way, but with a synth
+ * warning: its memory and scaling don't apply on this backend.
  *
  * @param backendModule the imported backend module (`backendCDKPath`)
  * @param defaultCompute the owner's default compute
@@ -261,7 +288,17 @@ export function resolveNamespaceRoutes(
 		if (!isDispatchableExport(exportName, value)) continue;
 		const resolveCompute = (value as Record<symbol, (() => ComputeBase | undefined) | undefined>)[API_NAMESPACE_COMPUTE];
 		const compute = resolveCompute?.();
-		if (!compute || compute === defaultCompute || !owned.has(compute)) continue;
+		if (!compute || compute === defaultCompute) continue;
+		if (!owned.has(compute)) {
+			if ((value as Record<symbol, unknown>)[API_NAMESPACE_EXPLICIT_COMPUTE]) {
+				cdk.Annotations.of(compute).addWarningV2(
+					'blocks:apigateway:namespace-compute-not-owned',
+					`API namespace export '${exportName}' was given compute '${compute.node.path}', which belongs to another backend. ` +
+						"This backend's API runs it on its default compute instead; give it a compute created in this backend.",
+				);
+			}
+			continue;
+		}
 		const names = routes.get(compute);
 		if (names) names.push(exportName);
 		else routes.set(compute, [exportName]);

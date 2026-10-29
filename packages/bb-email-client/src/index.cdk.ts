@@ -33,14 +33,14 @@ export class EmailClient extends BuildingBlockScope {
 
 		// Grant the Lambda handler permission to send emails
 		// Scoped to this account's SES identities rather than '*'
+		// Only the two SESv2 actions the runtime calls: send() uses SendEmail and
+		// sendBatch() uses SendBulkEmail with an inline template. No raw-MIME or
+		// stored-template sends are made, so those actions are not granted.
 		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			effect: Effect.ALLOW,
 			actions: [
 				'ses:SendEmail',
 				'ses:SendBulkEmail',
-				'ses:SendRawEmail',
-				'ses:SendTemplatedEmail',
-				'ses:SendBulkTemplatedEmail',
 			],
 			resources: [
 				`arn:aws:ses:*:${Stack.of(this).account}:identity/*`,

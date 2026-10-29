@@ -104,6 +104,9 @@ public struct SwiftCodeGenerator {
                     }
                 }
                 walkNodes(operation.nestedTypes, parentPath: opName)
+                if let provider = oidcProviderEnum(operation) {
+                    nameMap[provider.name] = "\(opName).\(provider.name)"
+                }
                 operationQualifiedNames[opKey] = nameMap
             }
         }
@@ -145,13 +148,19 @@ public struct SwiftCodeGenerator {
             }
 
             // Emit nested types as operation enums inside the class
-            for operation in namespace.operations where !operation.nestedTypes.isEmpty {
+            for operation in namespace.operations where !operation.nestedTypes.isEmpty || oidcProviderEnum(operation) != nil {
                 apiLines.append("")
-                emitOperationEnum(operation: operation, indent: "    ", lines: &apiLines)
+                emitOperationEnum(operation: operation, namespace: namespace.name, indent: "    ", lines: &apiLines)
             }
 
             apiLines.append("}")
             apiLines.append("")
+
+            for operation in namespace.operations {
+                if let warning = oidcProviderRenameWarning(operation, namespace: namespace.name, className: names.className) {
+                    warnings.append(warning)
+                }
+            }
         }
 
         emitBlocksEntryPoint(entryPoint.names, defaultServer: defaultServerName, lines: &apiLines)
@@ -166,12 +175,13 @@ public struct SwiftCodeGenerator {
 
     // MARK: - Nested Type Emission
 
-    private func emitOperationEnum(operation: Operation, indent: String, lines: inout [String]) {
+    private func emitOperationEnum(operation: Operation, namespace: String, indent: String, lines: inout [String]) {
         let opName = pascalCase(operation.name)
         emitDeclaration(opName, line: "\(indent)public enum \(opName) {", lines: &lines)
         for node in operation.nestedTypes {
             emitNestedTypeNode(node, indent: indent + "    ", lines: &lines)
         }
+        emitOIDCProviderEnum(operation, namespace: namespace, indent: indent + "    ", lines: &lines)
         lines.append("\(indent)}")
     }
 
@@ -1343,8 +1353,9 @@ public struct SwiftCodeGenerator {
                     returnLines = ["        return try \(runtimePrefix)FileUploadHandle.fromJSON(descriptor)"]
                 case "oidc/client":
                     descriptorNoun = "OIDC client"
+                    let provider = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "String"
                     returnLines = [
-                        "        return try \(runtimePrefix)OIDCClient"
+                        "        return try \(runtimePrefix)OIDCClient<\(provider)>"
                             + ".fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"
                     ]
                 default:

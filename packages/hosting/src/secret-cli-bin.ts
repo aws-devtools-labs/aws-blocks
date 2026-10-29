@@ -9,7 +9,10 @@
  *
  *   npx hosting-secret set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]
  *   npx hosting-secret list [--stage <name>] [--prefix <path>]
- *   npx hosting-secret remove <KEY> [--stage <name>] [--prefix <path>]
+ *   npx hosting-secret remove <KEY> [--force --yes] [--stage <name>] [--prefix <path>]
+ *
+ * `remove` is recoverable by default (Secrets Manager's recovery window). `--force`
+ * deletes immediately with no recovery and always needs `--yes` (or `-y`) to confirm.
  */
 
 import { runValueCli } from './secret-cli.js';

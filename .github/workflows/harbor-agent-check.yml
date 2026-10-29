@@ -84,27 +84,52 @@ jobs:
           ref: ${{ matrix.arm == 'baseline' && needs.revisions.outputs.baseline || needs.revisions.outputs.candidate }}
           repository: ${{ matrix.arm == 'baseline' && github.repository || needs.revisions.outputs.source_repository }}
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22.23.3'
-      - name: Build and pack selected revision
+      # The selected revision's install and build scripts are PR code, and this run is on main, so
+      # they run in a container that sees no runner environment or files: an explicit environment
+      # (no ACTIONS_*, GITHUB_* or runner variables) and only a copy of the tree without .git mounted
+      # (no actions directory, other runner files or Docker socket); it keeps network access for npm.
+      # The slim image has no git, no native toolchain and no passwd entry for the runner uid, so a
+      # revision needing any of them fails here. No setup-node here either: its default
+      # package-manager cache would save into the main branch's Actions cache scope.
+      - name: Build and pack selected revision in an isolated container
+        id: build
         env:
-          HUSKY: '0'
-          BLOCKS_DISABLE_TELEMETRY: '1'
-          NPM_CONFIG_USERCONFIG: /dev/null
-          NPM_CONFIG_GLOBALCONFIG: /etc/harbor-empty-npmrc
-          NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-${{ matrix.arm }}
+          # node:22.23.3-bookworm-slim (multi-arch index digest).
+          NODE_IMAGE: node:22.23.3-bookworm-slim@sha256:3ed98443660ff48413b5af19ecefce3b9d50845a901a43420d47cc63a9fddbe9
+          BUILD_DIR: ${{ runner.temp }}/harbor-build
         run: |
           set -euo pipefail
-          sudo touch /etc/harbor-empty-npmrc
-          unset S3_BUCKET CLOUDFRONT_DOMAIN CLOUDFRONT_DISTRIBUTION_ID
-          npm ci
-          npm run build
-          npm run publish:local
+          mkdir "$BUILD_DIR"
+          tar -C "$GITHUB_WORKSPACE" --exclude=./.git -cf - . | tar -C "$BUILD_DIR" -xf -
+          docker run --rm --init \
+            --user "$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges \
+            --mount "type=bind,src=$BUILD_DIR,dst=/work" --workdir /work \
+            --env HOME=/tmp/home --env CI=true --env HUSKY=0 --env BLOCKS_DISABLE_TELEMETRY=1 \
+            --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_GLOBALCONFIG=/dev/null/npmrc \
+            --env NPM_CONFIG_CACHE=/tmp/npm-cache \
+            "$NODE_IMAGE" \
+            bash -euo pipefail -c 'mkdir -p "$HOME" && npm ci && npm run build && npm run publish:local'
+          # The upload follows symlinks, so only a plain tree of regular files leaves the container.
+          # A find error (e.g. an unreadable directory) aborts the step under set -e. It stays inline:
+          # this job's checkout is the PR revision, so a script from it could not be trusted.
+          # scripts/ci/harbor-packages-isolation.test.mjs runs the block between the markers.
+          # plain-tree-guard: begin
+          out="$BUILD_DIR/dist-registry"
+          if [ -L "$out" ] || [ ! -d "$out" ]; then
+            echo '::error::dist-registry must be a directory of regular files'
+            exit 1
+          fi
+          bad=$(find "$out" -mindepth 1 ! -type f ! -type d -print -quit)
+          if [ -n "$bad" ]; then
+            echo '::error::dist-registry must be a directory of regular files'
+            exit 1
+          fi
+          echo "registry=$out/" >> "$GITHUB_OUTPUT"
+          # plain-tree-guard: end
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: harbor-packages-${{ matrix.arm }}
-          path: dist-registry/
+          path: ${{ steps.build.outputs.registry }}
           retention-days: 7
           if-no-files-found: error
 
@@ -129,7 +154,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

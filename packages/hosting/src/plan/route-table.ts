@@ -233,7 +233,9 @@ export type BuildRouteTableInput = {
  * lifted here so every front-door adapter shares one implementation):
  *   1. Classify each `manifest.routes` entry as static / server / image
  *      (basePath-RELATIVE patterns; catch-all and edge-target routes excluded).
- *   2. Coalesce SSG fan-out into `parent/*` wildcards (bounded table).
+ *   2. Coalesce SSG fan-out into `parent/*` wildcards (bounded table). Routes
+ *      marked `exact` skip this step and keep their own row; an exact row
+ *      replaces a coalesced wildcard with the same pattern.
  *   3. Prepend basePath ONCE (idempotent), after coalescing.
  *   4. Sort by descending specificity (first-match ordering).
  *
@@ -256,6 +258,9 @@ export const buildRouteTable = (input: BuildRouteTableInput): RouteEntry[] => {
   // relative keeps the root parent at `''` so the behavior is identical to the
   // no-basePath case, just shifted under the prefix.
   const rows: [string, TerseRouteKind][] = [];
+  // Routes the adapter marked `exact` skip coalescing (and its ISR flip) and
+  // keep their own row — see `RouteBehavior.exact`.
+  const exactRows: [string, TerseRouteKind][] = [];
   for (const route of manifest.routes) {
     if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
     // Lambda@Edge route functions get a dedicated CloudFront behavior that
@@ -277,10 +282,16 @@ export const buildRouteTable = (input: BuildRouteTableInput): RouteEntry[] => {
         (imagePrefix !== undefined &&
           rel === normalizePattern(`${imagePrefix}/*`)));
     const kind: TerseRouteKind = isImage ? 'i' : isStatic ? 's' : 'c';
-    rows.push([rel, kind]);
+    (route.exact === true ? exactRows : rows).push([rel, kind]);
   }
 
-  const coalescedRel = coalesceRoutes(rows, { isrActive });
+  // An exact row wins over a coalesced wildcard with the same pattern (e.g. a
+  // frozen page's `/blog/featured/*` and a coalesced `/blog/featured/*`).
+  const exactPatterns = new Set(exactRows.map(([p]) => p));
+  const coalescedRel = [
+    ...coalesceRoutes(rows, { isrActive }).filter(([p]) => !exactPatterns.has(p)),
+    ...exactRows,
+  ];
   // Prepend basePath ONCE, after coalescing (idempotent).
   const coalesced: [string, TerseRouteKind][] = coalescedRel.map(([p, k]) => [
     prependBasePath(basePath, p),

@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync, isPackageExists } from 'local-pkg';
+import { getProjectPackageInfo, projectHasPackage } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import type {
@@ -174,7 +174,7 @@ export const VERIFIED_NITRO_RANGE = '>=2.10.0 <2.14.0';
  * @internal
  */
 export const warnIfNitroOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('nitropack', { paths: [projectDir] });
+  const info = getProjectPackageInfo('nitropack', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_NITRO_RANGE)) return;
@@ -1111,7 +1111,7 @@ const pruneImageOptBundle = (bundleDir: string): void => {
  * count.
  */
 const projectUsesNuxtImage = (projectDir: string): boolean => {
-  if (!isPackageExists('@nuxt/image', { paths: [projectDir] })) {
+  if (!projectHasPackage('@nuxt/image', projectDir)) {
     return false;
   }
   // The package is installed, but the user may have disabled the
@@ -1405,16 +1405,45 @@ const buildManifest = (input: {
 const usesIsrFeatures = (
   routeRules: Record<string, NitroRouteRule>,
 ): boolean => {
-  return Object.values(routeRules).some((rule) => {
-    const raw = rule as Record<string, unknown>;
-    // `swr` and `isr` aren't typed on our local NitroRouteRule yet —
-    // Nitro emits any of these three for ISR semantics. Truthy values
-    // mean "use cache" (e.g. `swr: 60`, `cache: { swr: true }`); falsy
-    // values (`cache: false`, `swr: 0`) mean the rule explicitly opts
-    // out and shouldn't trigger cache provisioning.
-    return Boolean(rule.cache) || Boolean(raw.swr) || Boolean(raw.isr);
-  });
+  return Object.values(routeRules).some(ruleUsesCache);
 };
+
+/** Whether one route rule asks for ISR/SWR caching (see {@link usesIsrFeatures}). */
+const ruleUsesCache = (rule: NitroRouteRule): boolean => {
+  const raw = rule as Record<string, unknown>;
+  // `swr` and `isr` aren't typed on our local NitroRouteRule yet —
+  // Nitro emits any of these three for ISR semantics. Truthy values
+  // mean "use cache" (e.g. `swr: 60`, `cache: { swr: true }`); falsy
+  // values (`cache: false`, `swr: 0`) mean the rule explicitly opts
+  // out and shouldn't trigger cache provisioning.
+  return Boolean(rule.cache) || Boolean(raw.swr) || Boolean(raw.isr);
+};
+
+/**
+ * The literal path prefix of a route-rule pattern, up to its first wildcard
+ * segment: `/blog/**` → `/blog`, `/about` → `/about`, `/**` → `''`. A
+ * pattern with a wildcard in the middle stops at that segment.
+ */
+const ruleLiteralPrefix = (pattern: string): string => {
+  const literal: string[] = [];
+  for (const segment of pattern.split('/').filter(Boolean)) {
+    if (segment.includes('*')) break;
+    literal.push(segment);
+  }
+  return literal.length > 0 ? `/${literal.join('/')}` : '';
+};
+
+/** `true` when `urlPath` is `prefix` or lies under it. */
+const isUnderPrefix = (urlPath: string, prefix: string): boolean =>
+  urlPath === prefix || urlPath.startsWith(`${prefix}/`);
+
+/**
+ * Upper bound on the `exact` asset rows one ISR/SWR folder may add before the
+ * adapter warns. Every exact row is a row the CloudFront router scans per
+ * request, and a large table trips its instruction limit (a 503 on every
+ * route) — the reason sibling routes are coalesced at all.
+ */
+const ISR_DIR_EXACT_ROW_WARN_THRESHOLD = 50;
 
 /**
  * Lambda Web Adapter start script for the `node-server` preset on Lambda:
@@ -1513,6 +1542,29 @@ const buildRoutes = (
     });
   }
 
+  // Literal prefixes of the ISR/SWR rules that name a path (`/blog/**` →
+  // `/blog`). A site-wide rule (`/**`) has no prefix and is left out: it
+  // doesn't name a folder, and treating every public folder (including the
+  // hashed `_nuxt/`) as an ISR subtree would explode the route table.
+  const isrPrefixes = Object.entries(routeRules)
+    .filter(([, rule]) => ruleUsesCache(rule))
+    .map(([pattern]) => ruleLiteralPrefix(pattern))
+    .filter((prefix) => prefix.length > 0);
+  const isUnderIsr = (urlPath: string): boolean =>
+    isrPrefixes.some((prefix) => isUnderPrefix(urlPath, prefix));
+
+  // Pages an explicit `prerender: true` rule freezes (`/blog/featured`, or a
+  // `/blog/archive/**` subtree).
+  const prerenderRules = Object.entries(routeRules)
+    .filter(([, rule]) => rule.prerender)
+    .map(([pattern]) => normalizeRulePattern(pattern));
+  const isExplicitPrerender = (urlPath: string): boolean =>
+    prerenderRules.some((rule) =>
+      rule.endsWith('/*')
+        ? isUnderPrefix(urlPath, rule.slice(0, -2))
+        : rule === urlPath,
+    );
+
   if (fs.existsSync(publicDir)) {
     // Everything in `.output/public/` is, by definition, a static
     // asset. Walk the top level and route each entry to S3:
@@ -1521,9 +1573,21 @@ const buildRoutes = (
     // This catches both framework-emitted dirs (`_nuxt/`, `_build/`,
     // `assets/`) and user-supplied ones (anything dropped into
     // `public/`, e.g. `public/img/`, `public/fonts/`).
+    //
+    // Exception: a folder that an ISR/SWR rule names (`public/blog/` under
+    // `/blog/**`) does NOT get a blanket `/<name>/*` static row. Every front
+    // door takes the first match, so that row would send every page under the
+    // folder that renders on demand (`/blog/any-other-post`) to S3 and 404.
+    // Its real files get their own `exact` rows instead (see
+    // `addIsrFolderAssets`), and requests for anything else fall through to
+    // the server.
     for (const entry of fs.readdirSync(publicDir, { withFileTypes: true })) {
       // Skip prerendered HTML routes — handled below as `<route>/*`.
       if (entry.isFile() && entry.name.endsWith('.html')) continue;
+      if (entry.isDirectory() && isUnderIsrFolder(`/${entry.name}`, isrPrefixes)) {
+        addIsrFolderAssets(path.join(publicDir, entry.name), `/${entry.name}`, addRoute);
+        continue;
+      }
       const pattern = entry.isDirectory()
         ? `/${entry.name}/*`
         : `/${entry.name}`;
@@ -1548,8 +1612,15 @@ const buildRoutes = (
       const rel = path.relative(publicDir, htmlFile).replace(/\\/g, '/');
       const urlPath = htmlFileToUrlPath(rel);
       if (urlPath === '/') continue;
-      addRoute({ pattern: urlPath, target: 'static' });
-      addRoute({ pattern: `${urlPath}/*`, target: 'static' });
+      // Inside an ISR/SWR subtree, a page an explicit `prerender: true` rule
+      // freezes keeps its own rows (`exact`), so it's still served frozen from
+      // S3 and isn't merged into a server wildcard. Pages prerendered only
+      // because the crawler found them stay mergeable: under ISR they coalesce
+      // into one server wildcard and render through the ISR cache, which keeps
+      // the table small for a large site.
+      const exact = isUnderIsr(urlPath) && isExplicitPrerender(urlPath);
+      addRoute({ pattern: urlPath, target: 'static', ...(exact ? { exact } : {}) });
+      addRoute({ pattern: `${urlPath}/*`, target: 'static', ...(exact ? { exact } : {}) });
     }
   }
 
@@ -1562,11 +1633,13 @@ const buildRoutes = (
   for (const [routePattern, rule] of Object.entries(routeRules)) {
     if (rule.prerender) {
       const normalized = normalizeRulePattern(routePattern);
+      const exact = isUnderIsr(ruleLiteralPrefix(routePattern) || '/');
+      const flag = exact ? { exact } : {};
       if (normalized.endsWith('/*')) {
-        addRoute({ pattern: normalized, target: 'static' });
+        addRoute({ pattern: normalized, target: 'static', ...flag });
       } else {
-        addRoute({ pattern: normalized, target: 'static' });
-        addRoute({ pattern: `${normalized}/*`, target: 'static' });
+        addRoute({ pattern: normalized, target: 'static', ...flag });
+        addRoute({ pattern: `${normalized}/*`, target: 'static', ...flag });
       }
     }
   }
@@ -1575,6 +1648,58 @@ const buildRoutes = (
   addRoute({ pattern: '/*', target: 'default' });
 
   return routes;
+};
+
+/**
+ * Whether a top-level public folder (`/blog`) is an ISR/SWR subtree, or holds
+ * one: an ISR/SWR rule's literal prefix is the folder or lies under it.
+ */
+const isUnderIsrFolder = (folderPath: string, isrPrefixes: string[]): boolean =>
+  isrPrefixes.some((prefix) => isUnderPrefix(prefix, folderPath));
+
+/**
+ * Emit `exact` static rows for the real files in a public folder that an
+ * ISR/SWR rule names, in place of the folder's blanket `/<dir>/*` row:
+ *   - a non-HTML file              → `/<dir>/<file>`
+ *   - a sub-folder with no HTML    → `/<dir>/<sub>/*` (one row for the assets)
+ *   - a prerendered page's folder  → skipped; the page's own rows cover it
+ *   - any other sub-folder         → walked the same way
+ * `exact` keeps these rows out of route coalescing, so they're never merged
+ * into a wildcard that the ISR switch would send to the server (which has no
+ * copy of `public/`).
+ */
+const addIsrFolderAssets = (
+  absDir: string,
+  urlDir: string,
+  addRoute: (route: RouteBehavior) => void,
+): void => {
+  let rows = 0;
+  const walk = (dir: string, url: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name);
+      const childUrl = `${url}/${entry.name}`;
+      if (entry.isFile()) {
+        if (entry.name.endsWith('.html')) continue;
+        addRoute({ pattern: childUrl, target: 'static', exact: true });
+        rows++;
+      } else if (entry.isDirectory()) {
+        if (walkHtmlFiles(abs).length === 0) {
+          addRoute({ pattern: `${childUrl}/*`, target: 'static', exact: true });
+          rows++;
+        } else if (!fs.existsSync(path.join(abs, 'index.html'))) {
+          walk(abs, childUrl);
+        }
+      }
+    }
+  };
+  walk(absDir, urlDir);
+  if (rows > ISR_DIR_EXACT_ROW_WARN_THRESHOLD) {
+    process.stderr.write(
+      `⚠️  public${urlDir}/ is under an ISR/SWR route rule, so its ${rows} files get their own route rows. ` +
+        'A large route table can exceed the CloudFront router function\'s instruction limit. ' +
+        'Move the files into a sub-folder (one row per sub-folder) to keep the table small.\n',
+    );
+  }
 };
 
 const walkHtmlFiles = (dir: string): string[] => {
