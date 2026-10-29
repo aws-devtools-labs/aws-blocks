@@ -266,7 +266,9 @@ jobs:
     needs: [detect-changes, setup]
     if: needs.detect-changes.outputs.swift-changed == 'true'
     runs-on: macos-26
-    timeout-minutes: 20
+    # A green run takes ~16 min, but macOS arm64 runners are capacity-constrained
+    # and the simulator boot alone can stall for minutes; 20 tripped the wall.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -338,6 +340,34 @@ jobs:
           echo "❌ Server never became ready"
           exit 1
 
+      # Boot the simulator in its own step, with its own timeout, so a slow boot
+      # on a capacity-constrained runner fails here, visibly, instead of silently
+      # eating the test step's budget. It is the device the test step names
+      # (iPhone 17 Pro, on the newest installed iOS runtime); the test step then
+      # targets it by UDID so xcodebuild runs on the simulator booted here.
+      - name: Boot iOS simulator
+        timeout-minutes: 10
+        run: |
+          SIM_UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          name = "iPhone 17 Pro"
+          devices = json.load(sys.stdin)["devices"]
+          def version(runtime):
+              m = re.search(r"SimRuntime\.iOS-([0-9-]+)$", runtime)
+              return tuple(int(p) for p in m.group(1).split("-")) if m else None
+          runtimes = sorted((r for r in devices if version(r)), key=version, reverse=True)
+          print(next((d["udid"] for r in runtimes for d in devices[r] if d["name"] == name), ""))
+          ')"
+          if [ -z "$SIM_UDID" ]; then
+            echo "❌ No available iPhone 17 Pro simulator"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "SIM_UDID=${SIM_UDID}" >> "$GITHUB_ENV"
+          echo "Booting iPhone 17 Pro (${SIM_UDID})"
+          # -b boots the device if it is shut down, then waits until it is ready.
+          xcrun simctl bootstatus "$SIM_UDID" -b
+
       - name: Run E2E tests
         env:
           BLOCKS_URL: ${{ env.BLOCKS_URL }}
@@ -345,7 +375,7 @@ jobs:
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
             -scheme BlocksE2ETests \
-            -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+            -destination "platform=iOS Simulator,id=${SIM_UDID}"
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
@@ -374,7 +404,14 @@ jobs:
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run: the PR number (d<run number> for manual runs), then the
+      # run number, then the attempt. Every push starts a new run with a new run
+      # number, and a re-run keeps it and bumps the attempt. Without the run
+      # number, the first attempt of every push reused the previous push's stack
+      # and bucket names and the deploy failed with AlreadyExists. The run number,
+      # not the 11-digit run id, keeps the derived bucket name short (see
+      # kotlin-e2e-sandbox).
+      BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -519,7 +556,8 @@ jobs:
     timeout-minutes: 45
     environment: e2e
     env:
-      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run, as in dart-e2e-sandbox.
+      BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -641,11 +679,13 @@ jobs:
             # in #986.
             timeout: 45
     env:
-      # Manual runs have no PR number. They use the short run number (d-prefixed
-      # so it can't match a PR number), not the 11-digit run id: with the run id
-      # the derived bucket name `bb-test-nb-<suffix>-native-bindings-files` is
-      # 64 characters for the Kotlin legs, over S3's 63-character limit.
-      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_attempt }}
+      # Unique per run, as in dart-e2e-sandbox: PR number (d<run number> for
+      # manual runs, d-prefixed so it can't match a PR number), run number,
+      # attempt. The suffix uses the short run number, not the 11-digit run id:
+      # with the run id the derived bucket name
+      # `bb-test-nb-<suffix>-native-bindings-files` would exceed S3's 63-character
+      # limit on the Kotlin legs and fall back to FileBucket's hashed short form.
+      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || format('d{0}', github.run_number) }}-${{ github.run_number }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
