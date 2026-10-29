@@ -8,6 +8,8 @@
  * rather than throwing — use `if (!file)` for that case. `FileNotFound` is only
  * thrown by methods that require the object to exist. `VersionNotFound` is thrown
  * by `restoreVersion()` when the target `versionId` cannot be resolved.
+ * `PresignedUploadUnsupported` is thrown by `putUrl()` / `createUploadHandle()`
+ * on a bucket with `objectLock` (use server-side `put()` there).
  *
  * @example
  * ```typescript
@@ -30,4 +32,5 @@ export const FileBucketErrors = {
 	FileNotFound: 'NoSuchKey',
 	FileTooLarge: 'EntityTooLarge',
 	VersionNotFound: 'NoSuchVersion',
+	PresignedUploadUnsupported: 'PresignedUploadUnsupported',
 } as const;

@@ -173,7 +173,11 @@ const SITE_WINDOW = 8;
  * is intentionally unbranded, each with a reason. Prefer branding the site over
  * adding an entry — every entry is a documented exception, not a hiding place.
  */
-const SITE_ALLOWLIST: Record<string, string> = {};
+const SITE_ALLOWLIST: Record<string, string> = {
+	'bb-agent/src/providers/throwing.ts:cause.name = \'AccessDeniedException\'':
+		'Test-only provider imitating a raw AWS SDK error as the cause of a model failure. It must stay unbranded: ' +
+		'bb-agent classifies it server-side and only its own composed, branded ModelUnavailable error crosses the wire.',
+};
 
 test('every site that mints a BB error name brands it at that site', () => {
 	const offenders: string[] = [];

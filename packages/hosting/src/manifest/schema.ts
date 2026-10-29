@@ -51,6 +51,7 @@ export const routeBehaviorSchema = z.object({
   pattern: z.string().min(1, 'Route pattern must not be empty'),
   target: z.string().min(1, 'Route target must not be empty'),
   fallback: z.string().optional(),
+  exact: z.boolean().optional(),
 });
 
 /**

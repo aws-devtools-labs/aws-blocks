@@ -84,7 +84,7 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         super.invokeTest()
     }
 
-    private func getOidcClient() async throws -> OIDCClient {
+    private func getOidcClient() async throws -> OIDCClient<String> {
         try await blocks.oidcAuthApi.getClient()
     }
 
