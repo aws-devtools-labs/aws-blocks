@@ -1,0 +1,8 @@
+{
+  "_comment": "Captured from bb-auth-cognito@0.1.10 (src/cookies.ts as fixed by B6): signSessionId(sessionId, secret) and the Set-Cookie line setSessionCookie(ctx, fullId, signed, 34560000) writes for a non-loopback request. Regenerate only if AuthCognito itself changes — Auth must keep accepting these bytes.",
+  "fullId": "fixture-app-auth",
+  "secret": "fixture-session-secret-5f1c0e8a9b7d4c3e2a1f",
+  "sessionId": "Qm9vdHN0cmFwU2Vzc2lvbklkRml4dHVyZTAx",
+  "signedCookieValue": "Qm9vdHN0cmFwU2Vzc2lvbklkRml4dHVyZTAx.36QYln30FBTXPcGSure1MFPm3xNeAC-i8hlwTYPdKmE",
+  "setCookieLine": "auth_fixture-app-auth=Qm9vdHN0cmFwU2Vzc2lvbklkRml4dHVyZTAx.36QYln30FBTXPcGSure1MFPm3xNeAC-i8hlwTYPdKmE; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age=34560000"
+}
