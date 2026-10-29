@@ -127,7 +127,7 @@ class CodegenModelBuilder {
     // ── Narrowed type arguments ──────────────────────────────────────
 
     /**
-     * Names the values each narrowed ([TransferableTypeArg.Narrowed]) type argument of an
+     * Names the values each narrowed ([TransferableTypeArg.In]) type argument of an
      * operation's own result permits, as an enum the generator emits in the operation's object.
      *
      * Only an operation's own result is narrowed: a transferable in any other position doesn't
@@ -144,7 +144,7 @@ class CodegenModelBuilder {
         var narrowed = resolved
         for ((position, arg) in transferable.typeArgs.withIndex()) {
             val declared = transferableTypeArg(transferable.transferableName, position)
-            if (declared !is TransferableTypeArg.Narrowed) continue
+            if (declared !is TransferableTypeArg.In) continue
             val values = (arg as? ResolvedType.Enum)?.takeIf { it.name.isEmpty() && it.values.isNotEmpty() }
                 ?: continue
             val name = narrowedTypeName(declared.name, taken)

@@ -304,7 +304,7 @@ class KotlinCodeGenerator(
         val binding = knownTransferableBindings[transferable.transferableName] ?: return emptyList()
         return transferable.typeArgs.mapIndexedNotNull { position, arg ->
             val declared = transferableTypeArg(transferable.transferableName, position)
-            if (declared !is TransferableTypeArg.Narrowed) return@mapIndexedNotNull null
+            if (declared !is TransferableTypeArg.In) return@mapIndexedNotNull null
             val argBinding = binding.typeArgs.getOrNull(position) as? TypeArgBinding.Narrowed
                 ?: return@mapIndexedNotNull null
             val values = namedTypeArg(arg) ?: return@mapIndexedNotNull null

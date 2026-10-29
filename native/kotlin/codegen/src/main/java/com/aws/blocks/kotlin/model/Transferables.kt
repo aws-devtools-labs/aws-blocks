@@ -1,48 +1,51 @@
 package com.aws.blocks.kotlin.model
 
 /**
- * How a transferable uses one of its type arguments, which decides whether the values a spec
- * permits for it can become a closed type.
+ * Which way one of a transferable's type arguments crosses the wire.
  *
- * Direction is a fact about the runtime type's own API — which of its members take the argument
- * and which return it — rather than anything the spec says, so it is declared here per tag.
+ * Direction is a fact about the runtime type's own API — which of its members take the argument and
+ * which return it — rather than anything the spec says, so it is declared here per tag.
+ *
+ * It decides how faithful a generated type has to be. An argument the runtime returns has to
+ * represent anything the backend may send, so narrowing it would drop whatever arrives that the
+ * narrowed type can't hold. One the runtime only takes has to express just what a caller may send,
+ * so it can be narrowed to the values the spec permits.
  */
 sealed interface TransferableTypeArg {
 
-    /**
-     * An argument the runtime decodes, whether or not it also encodes it. It has to represent
-     * anything the backend may send, so it is generated from the spec's schema and never narrowed:
-     * narrowing it would drop whatever arrives that the narrowed type can't hold.
-     */
-    data object Decoded : TransferableTypeArg
+    /** Returned by the runtime, so generated from the spec's schema and never narrowed. */
+    data object Out : TransferableTypeArg
+
+    /** Both taken and returned, which needs everything [Out] does. */
+    data object InOut : TransferableTypeArg
 
     /**
-     * An argument the runtime only ever encodes. It has to express just what a caller may send, so
-     * it is narrowed to the values the spec permits.
+     * Only ever taken by the runtime, so narrowed to the values the spec permits.
      *
      * [name] names the generated enum, which the generator has to supply because the spec gives
-     * the values no name of their own.
+     * the values no name of their own. Only this direction has one: the others are generated from
+     * the spec's schema, which names them from where they appear.
      */
-    data class Narrowed(val name: String) : TransferableTypeArg
+    data class In(val name: String) : TransferableTypeArg
 }
 
 /**
  * The declared type arguments of each tag, in the order the runtime type takes them.
  *
  * A tag absent here, including one a spec declares for a third-party binding, carries only
- * [TransferableTypeArg.Decoded] arguments — the treatment a transferable with no narrowing gets.
+ * [TransferableTypeArg.Out] arguments — the treatment a transferable with no narrowing gets.
  */
 private val declaredTypeArgs: Map<String, List<TransferableTypeArg>> = mapOf(
-    // RealtimeChannel<T> deserializes T out of the socket; nothing sends one yet.
-    "realtime/channel" to listOf(TransferableTypeArg.Decoded),
-    // OidcClient<P> only ever sends a P, which is why its values can be narrowed to an enum.
-    "oidc/client" to listOf(TransferableTypeArg.Narrowed(name = "Provider")),
+    // RealtimeChannel<T> returns T out of the socket; nothing sends one yet.
+    "realtime/channel" to listOf(TransferableTypeArg.Out),
+    // OidcClient<P> only ever takes a P, which is why its values can be narrowed to an enum.
+    "oidc/client" to listOf(TransferableTypeArg.In(name = "Provider")),
 )
 
 /** How [transferableName] uses the type argument at [position]. */
 fun transferableTypeArg(transferableName: String, position: Int): TransferableTypeArg =
-    declaredTypeArgs[transferableName]?.getOrNull(position) ?: TransferableTypeArg.Decoded
+    declaredTypeArgs[transferableName]?.getOrNull(position) ?: TransferableTypeArg.Out
 
 /** Whether [transferableName] narrows the type argument at [position] to the spec's values. */
 fun narrowsTypeArg(transferableName: String, position: Int): Boolean =
-    transferableTypeArg(transferableName, position) is TransferableTypeArg.Narrowed
+    transferableTypeArg(transferableName, position) is TransferableTypeArg.In
