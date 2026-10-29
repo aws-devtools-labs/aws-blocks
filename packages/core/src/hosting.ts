@@ -4,7 +4,7 @@
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
   detectFramework,
@@ -866,7 +866,9 @@ const VOLATILE_STATIC_FILE = /(^|\/)(builds\/latest\.json|builds\/meta\/[^/]+\.j
 function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly string[] = []): string {
   const hash = createHash('sha256');
   const addFile = (name: string, file: string) => hash.update(name).update('\0').update(readFileSync(file)).update('\0');
-  const add = (root: string | undefined, skip?: RegExp) => {
+  // Each section is labelled with a constant and each file named relative to
+  // its section, so the same build in another checkout keeps the id.
+  const add = (label: string, root: string | undefined, skip?: RegExp) => {
     if (!root || !existsSync(root)) return;
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -876,15 +878,15 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
         else if (entry.isFile() && !skip?.test(name)) addFile(name, file);
       }
     };
-    hash.update(`${root.length}\0`);
+    hash.update(`${label}\0`);
     walk(root);
   };
-  add(manifest.staticAssets.directory, VOLATILE_STATIC_FILE);
-  add(manifest.cache?.seedDirectory);
-  add(manifest.cache?.initFunction?.bundle);
+  add('static', manifest.staticAssets.directory, VOLATILE_STATIC_FILE);
+  add('cache', manifest.cache?.seedDirectory);
+  add('init', manifest.cache?.initFunction?.bundle);
   for (const file of errorPageFiles) {
     hash.update('errorPage\0');
-    if (existsSync(file)) addFile(file, file);
+    if (existsSync(file)) addFile(basename(file), file);
   }
   return `${FIXED_BUILD_ID}-${hash.digest('hex').slice(0, 16)}`;
 }

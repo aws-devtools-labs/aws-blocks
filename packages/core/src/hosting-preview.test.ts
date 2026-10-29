@@ -193,6 +193,31 @@ describe('Hosting with HostingPresets.preview', () => {
     assert.notStrictEqual(prefixOf('VolatileC'), first, 'an edited custom error page changes the id');
   });
 
+  it('the fixed build id is the same for the same build in another checkout', () => {
+    // Two CI runners (or two machines) build the same app under different
+    // workspace paths: the id must not depend on the absolute path.
+    const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-preview-other-checkout-'));
+    try {
+      const prefixOf = (root: string, name: string) => {
+        createSpaBuildOutput(root);
+        const notFound = path.join(root, '404.html');
+        fs.writeFileSync(notFound, '<!DOCTYPE html><html><body>Not here</body></html>');
+        const stack = newStack(name);
+        new Hosting(stack, 'Hosting', {
+          root, api: MOCK_API, frontDoor: { kind: 'alb' }, buildId: 'fixed', errorPages: { notFound },
+        });
+        const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function', {
+          Properties: { Environment: { Variables: { ASSET_KEY_PREFIX: Match.anyValue() } } },
+        });
+        return Object.values(fns)[0].Properties.Environment.Variables.ASSET_KEY_PREFIX;
+      };
+      assert.notStrictEqual(tmpDir.length, otherRoot.length);
+      assert.strictEqual(prefixOf(otherRoot, 'CheckoutB'), prefixOf(tmpDir, 'CheckoutA'));
+    } finally {
+      fs.rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
   it('uses a content-keyed fixed build id', () => {
     const seen: { profile?: BuildProfile } = {};
     const stack = newStack('PreviewBuildId');
