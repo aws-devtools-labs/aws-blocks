@@ -8,6 +8,7 @@ import { EmailClient } from '@aws-blocks/blocks';
 import type { EmailMessage, Scope } from '@aws-blocks/blocks';
 import type { DisconnectReason, NamespaceConfig, RealtimeServer, RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { param, pollFor, runCase } from '../server/helpers.js';
+import { trackBlock } from '../server/track.js';
 import type { ParityCase, ProbeRun, ProbeRunner } from '../core/types.js';
 
 /** The app's cursor schema (`index.ts`): the padding goes in `color`. */
@@ -273,9 +274,9 @@ function emailCase(email: EmailClient, c: ParityCase): Promise<ProbeRun> {
  * at synth it only adds an SES send grant to the shared execution role.
  */
 export function msgProbe(scope: Scope, deps: MsgProbeDeps): ProbeRunner {
-	const email = new EmailClient(scope, 'pty-mail', {
+	const email = trackBlock(new EmailClient(scope, 'pty-mail', {
 		fromAddress: process.env.E2E_FROM_EMAIL || 'noreply@example.com',
-	});
+	}));
 	return (c) => {
 		if (c.block === 'bb-realtime') return realtimeCase(deps.realtime, c);
 		if (c.block === 'bb-email-client') return emailCase(email, c);

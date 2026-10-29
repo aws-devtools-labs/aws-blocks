@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { FileBucket } from '@aws-blocks/blocks';
 import type { Scope } from '@aws-blocks/blocks';
 import { describeError, param, runCase } from '../server/helpers.js';
+import { trackBlock } from '../server/track.js';
 import type { ProbeRunner } from '../core/types.js';
 
 // Keys that should round-trip byte-for-byte on S3. Each is appended to the
@@ -98,8 +99,8 @@ function sha256(b: Uint8Array): string {
 
 /** Constructs two buckets of its own: `pty-fb` (unversioned) and `pty-fbv` (versioned, the default). */
 export function fbProbe(scope: Scope): ProbeRunner {
-	const bucket = new FileBucket(scope, 'pty-fb', { versioned: false, removalPolicy: 'destroy' });
-	const versioned = new FileBucket(scope, 'pty-fbv', { removalPolicy: 'destroy' });
+	const bucket = trackBlock(new FileBucket(scope, 'pty-fb', { versioned: false, removalPolicy: 'destroy' }));
+	const versioned = trackBlock(new FileBucket(scope, 'pty-fbv', { removalPolicy: 'destroy' }));
 
 	/** Remove everything under `prefix` from the unversioned bucket, plus `known` keys a buggy scan could miss. */
 	async function purge(prefix: string, known: readonly string[] = []): Promise<void> {

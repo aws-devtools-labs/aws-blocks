@@ -18,6 +18,7 @@
 
 import { ApiError, getDeploymentType } from '@aws-blocks/core';
 import type { ParityCase, ProbeResult, ProbeRunner } from '../core/types.js';
+import { traceCase } from './track.js';
 
 export type ProbeRunners = Readonly<Record<string, ProbeRunner>>;
 
@@ -53,7 +54,8 @@ export function createProbeMethods(catalog: readonly ParityCase[], runners: Prob
 		async run(caseId: string): Promise<ProbeResult> {
 			const { c, runner } = resolve(caseId);
 			if (c.sweep) throw new ApiError('Slider case: use attempt(caseId, value)', 400);
-			return { caseId, ...(await runner(c)) };
+			const { result, methods } = await traceCase(() => runner(c));
+			return { caseId, ...result, methods };
 		},
 
 		/** Execute one slider case at `value`, which must lie inside the case's declared sweep range. */
@@ -64,7 +66,8 @@ export function createProbeMethods(catalog: readonly ParityCase[], runners: Prob
 			if (!Number.isInteger(value) || value < sweep.min || value > sweep.max) {
 				throw new ApiError(`value must be an integer in [${sweep.min}, ${sweep.max}]`, 400);
 			}
-			return { caseId, ...(await runner({ ...c, params: { ...c.params, [sweep.param]: value } })) };
+			const { result, methods } = await traceCase(() => runner({ ...c, params: { ...c.params, [sweep.param]: value } }));
+			return { caseId, ...result, methods };
 		},
 	};
 }

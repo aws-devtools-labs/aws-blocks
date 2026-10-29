@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ProbeError, ProbeOutcome, ProbeRun } from '../core/types.js';
+import { inActPhase } from './track.js';
 
 /** Wire-visible error shape plus the first `code` found down the `cause` chain (e.g. a driver's SQLSTATE). */
 export function describeError(e: unknown): ProbeError {
@@ -30,7 +31,8 @@ export async function observe(act: () => Promise<unknown>): Promise<ProbeOutcome
 /**
  * The standard case shape: `setup` → `act` → `cleanup`, timed. A throwing setup
  * reports `setup-failed` (a harness problem, not a parity finding); a throwing
- * cleanup reports `cleanup: 'failed'`. Cleanup always runs.
+ * cleanup reports `cleanup: 'failed'`. Cleanup always runs. Only the block methods
+ * `act` calls count as what the case exercised (see `trackBlock`).
  */
 export async function runCase<S>(steps: {
 	setup: () => Promise<S>;
@@ -42,7 +44,7 @@ export async function runCase<S>(steps: {
 	let outcome: ProbeOutcome;
 	try {
 		state = await steps.setup();
-		outcome = await observe(() => steps.act(state as S));
+		outcome = await observe(() => inActPhase(() => steps.act(state as S)));
 	} catch (e) {
 		outcome = { status: 'setup-failed', error: describeError(e) };
 	}

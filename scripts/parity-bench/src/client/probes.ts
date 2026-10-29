@@ -41,9 +41,11 @@ export function parityProbeTests(
 				test(c.id, { timeout: options.sweepTimeoutMs ?? 600_000 }, async () => {
 					const started = Date.now();
 					let cleanupFailed = false;
+					const methods = new Set<string>();
 					const result = await findBreakpoint(sweep, async (value) => {
 						const r = await getProbe().attempt(c.id, value);
 						if (r.cleanup !== 'ok') cleanupFailed = true;
+						for (const m of r.methods ?? []) methods.add(m);
 						return r.outcome;
 					});
 					const failure = result.failure;
@@ -60,6 +62,7 @@ export function parityProbeTests(
 						monotonic: result.monotonic,
 						...(result.aborted ? { aborted: result.aborted } : {}),
 						attempts: result.attempts,
+						...(methods.size ? { methods: [...methods].sort() } : {}),
 						ms: Date.now() - started,
 					});
 					assert.strictEqual(result.aborted, undefined, `sweep aborted: ${result.aborted}`);
@@ -76,6 +79,7 @@ export function parityProbeTests(
 					caseId: c.id,
 					outcome: r.outcome,
 					cleanup: r.cleanup,
+					...(r.methods?.length ? { methods: [...r.methods] } : {}),
 					ms: r.durationMs,
 				});
 				assert.notStrictEqual(r.outcome.status, 'setup-failed', `setup failed: ${JSON.stringify(r.outcome)}`);

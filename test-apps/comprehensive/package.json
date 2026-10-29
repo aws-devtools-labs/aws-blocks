@@ -23,6 +23,7 @@
     "parity:local": "E2E_PARITY_DIR=.parity/local E2E_PARITY_PROBES=true npm run test:local",
     "parity:sandbox": "E2E_PARITY_DIR=.parity/sandbox E2E_PARITY_PROBES=true npm run test:sandbox",
     "parity:report": "tsx ../../scripts/parity-bench/src/cli/report.ts --local .parity/local --deployed .parity/sandbox",
+    "parity:coverage": "tsx ../../scripts/parity-bench/src/cli/coverage.ts --app . --recordings .parity/local --recordings .parity/sandbox",
     "vendorize": "node ../../packages/blocks/dist/vendorize.js"
   },
   "dependencies": {

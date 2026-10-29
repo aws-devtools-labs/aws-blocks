@@ -17,7 +17,8 @@
 		"typecheck": "tsc --noEmit",
 		"test": "tsx --test 'test/**/*.test.ts' && tsx src/cli/validate-catalog.ts",
 		"validate-catalog": "tsx src/cli/validate-catalog.ts",
-		"report": "tsx src/cli/report.ts"
+		"report": "tsx src/cli/report.ts",
+		"coverage": "tsx src/cli/coverage.ts"
 	},
 	"dependencies": {
 		"@aws-blocks/bb-app-setting": "*",
@@ -27,6 +28,7 @@
 		"@aws-blocks/bb-secret": "*",
 		"@aws-blocks/blocks": "*",
 		"@aws-blocks/core": "*",
+		"typescript": "^5.9.3",
 		"zod": "^4.6.7"
 	},
 	"peerDependencies": {
@@ -34,7 +36,6 @@
 	},
 	"devDependencies": {
 		"@types/node": "^20.19.43",
-		"tsx": "^4.23.15",
-		"typescript": "^5.9.3"
+		"tsx": "^4.23.15"
 	}
 }

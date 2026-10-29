@@ -11,6 +11,7 @@ import type { Scope } from '@aws-blocks/blocks';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
 import { describeError, param, pollFor, runCase } from '../server/helpers.js';
+import { trackBlock } from '../server/track.js';
 import type { ProbeRunner } from '../core/types.js';
 
 /** A random ASCII string of exactly `bytes` UTF-8 bytes (hex head, so every call differs). */
@@ -50,12 +51,12 @@ const fresh = async (): Promise<Wrote> => ({ wrote: false });
  * - `pty-asr`  `AppSetting.fromExisting()` pointing at `pty-as`'s parameter name (read-only, creates nothing).
  */
 export function cfgProbe(scope: Scope): ProbeRunner {
-	const sec = new Secret(scope, 'pty-sec', { allowRuntimeWrite: true, removalPolicy: 'destroy' });
-	const gen = new Secret(scope, 'pty-sgen', { generate: true, removalPolicy: 'destroy' });
+	const sec = trackBlock(new Secret(scope, 'pty-sec', { allowRuntimeWrite: true, removalPolicy: 'destroy' }));
+	const gen = trackBlock(new Secret(scope, 'pty-sgen', { generate: true, removalPolicy: 'destroy' }));
 	const settingName = `/${scope.fullId}/pty-as`;
 	const SETTING_BASELINE = 'parity-baseline';
-	const plain = new AppSetting(scope, 'pty-as', { name: settingName, value: SETTING_BASELINE });
-	const secure = new AppSetting(scope, 'pty-ass', { secret: true });
+	const plain = trackBlock(new AppSetting(scope, 'pty-as', { name: settingName, value: SETTING_BASELINE }));
+	const secure = trackBlock(new AppSetting(scope, 'pty-ass', { secret: true }));
 	const alias = AppSetting.fromExisting(scope, 'pty-asr', { name: settingName });
 
 	const restoreSecret = async (s: Wrote | undefined): Promise<void> => {

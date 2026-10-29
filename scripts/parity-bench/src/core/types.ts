@@ -66,6 +66,8 @@ export interface ProbeRun {
 
 export interface ProbeResult extends ProbeRun {
 	readonly caseId: string;
+	/** The Building Block methods the case called (`KVStore.put`), sorted. Empty when it called none. */
+	readonly methods?: readonly string[];
 }
 
 /** A pack's runner: executes one of its own cases (with a sweep value already applied) against the real block. */
@@ -110,6 +112,8 @@ export interface ProbeRecord {
 	caseId: string;
 	outcome: ProbeOutcome;
 	cleanup: string;
+	/** The Building Block methods the case called (see `ProbeResult.methods`). */
+	methods?: string[];
 	ms: number;
 }
 
@@ -131,6 +135,8 @@ export interface SweepRecord {
 	/** A harness problem (seeding or cleanup failed) aborted the sweep; the breakpoint is not trustworthy. */
 	aborted?: string;
 	attempts: { value: number; status: ProbeOutcome['status'] }[];
+	/** The Building Block methods any attempt called (see `ProbeResult.methods`). */
+	methods?: string[];
 	ms: number;
 }
 

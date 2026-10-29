@@ -9,6 +9,7 @@ import type { Scope } from '@aws-blocks/blocks';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import type { AsyncJobStatus } from '@aws-blocks/bb-async-job';
 import { param, pollFor, runCase } from '../server/helpers.js';
+import { trackBlock } from '../server/track.js';
 import type { ProbeRunner } from '../core/types.js';
 
 /** The job's maxRetries (the block default), so cleanup knows how many attempt records can exist. */
@@ -144,7 +145,7 @@ interface CaseState {
 export function jobProbe(scope: Scope): ProbeRunner {
 	const results = new KVStore<string>(scope, 'pty-jres', { ttl: true });
 
-	const job = new AsyncJob<JobPayload>(scope, 'pty-job', {
+	const job = trackBlock(new AsyncJob<JobPayload>(scope, 'pty-job', {
 		trackStatus: true,
 		maxRetries: MAX_RETRIES,
 		maxBatchingWindowSeconds: 0,
@@ -169,10 +170,10 @@ export function jobProbe(scope: Scope): ProbeRunner {
 			});
 			if (ctx.receiveCount <= p.failTimes) throw new Error('parity probe: planned handler failure');
 		},
-	});
+	}));
 
 	const cronInput = { tag: 'pty', when: new Date(0) };
-	const cron: CronJob<typeof cronInput> = new CronJob(scope, 'pty-cron', {
+	const cron: CronJob<typeof cronInput> = trackBlock(new CronJob(scope, 'pty-cron', {
 		schedule: 'rate(1 minute)',
 		input: cronInput,
 		handler: async (event) => {
@@ -186,7 +187,7 @@ export function jobProbe(scope: Scope): ProbeRunner {
 			};
 			await results.put(CRON_KEY, JSON.stringify(rec), { ttlSeconds: 600 });
 		},
-	});
+	}));
 
 	async function record(run: string, slot: number, attempt: number): Promise<HandlerRecord | null> {
 		const raw = await results.get(recordKey(run, slot, attempt));

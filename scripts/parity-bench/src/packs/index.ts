@@ -17,6 +17,7 @@ import type { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
 import { parityProbesEnabled } from '../server/namespace.js';
 import type { ProbeRunners } from '../server/namespace.js';
 import { cfgProbe } from './cfg.probe.js';
+import { trackBlock } from '../server/track.js';
 import { dsqlProbe } from './dsql.probe.js';
 import { fbProbe } from './fb.probe.js';
 import { jobProbe } from './job.probe.js';
@@ -52,11 +53,11 @@ export const SELF_CONTAINED_PACKS = ['kv', 'fb', 'cfg', 'job'] as const;
 export function createProbeRunners(scope: Scope, deps: ProbeDeps = {}): ProbeRunners {
 	if (!parityProbesEnabled()) return {};
 	return {
-		...(deps.dsql ? { dsql: dsqlProbe(deps.dsql) } : {}),
+		...(deps.dsql ? { dsql: dsqlProbe(trackBlock(deps.dsql)) } : {}),
 		kv: kvProbe(scope),
 		fb: fbProbe(scope),
 		cfg: cfgProbe(scope),
 		job: jobProbe(scope),
-		...(deps.realtime ? { msg: msgProbe(scope, { realtime: deps.realtime }) } : {}),
+		...(deps.realtime ? { msg: msgProbe(scope, { realtime: trackBlock(deps.realtime) }) } : {}),
 	};
 }

@@ -9,6 +9,7 @@ import type { Scope } from '@aws-blocks/blocks';
 import { z } from 'zod';
 import { DDB_ITEM_LIMIT } from './kv.cases.js';
 import { describeError, param, runCase } from '../server/helpers.js';
+import { trackBlock } from '../server/track.js';
 import type { ParityCase, ProbeError, ProbeRun, ProbeRunner } from '../core/types.js';
 
 /** Attribute-name bytes of a KVStore item: `pk` + `value` (bb-kv-store/src/index.aws.ts). */
@@ -92,14 +93,14 @@ async function count(it: AsyncIterable<unknown>): Promise<number> {
  * a case can probe an index key). Call once, at module load.
  */
 export function kvProbe(scope: Scope): ProbeRunner {
-	const store = new KVStore(scope, 'pty-kv', {});
-	const table = new DistributedTable(scope, 'pty-dt', {
+	const store = trackBlock(new KVStore(scope, 'pty-kv', {}));
+	const table = trackBlock(new DistributedTable(scope, 'pty-dt', {
 		schema: ptySchema,
 		key: { partitionKey: 'pk', sortKey: 'sk' },
 		indexes: { byTag: { partitionKey: 'tag', sortKey: 'sk' } },
 		// Report what was stored, not a schema-coerced view of it.
 		readValidation: 'off',
-	});
+	}));
 
 	/** Write `items` through the cheapest path the block offers, in the case's setup. */
 	async function seed(items: PtyItem[]): Promise<void> {

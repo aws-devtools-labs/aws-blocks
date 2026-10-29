@@ -80,15 +80,42 @@ list that keeps the last outcome; when the two environments needed a different n
 report shows `[×n]`. Shape and order are judged on what the e2e suites recorded, beyond what their
 assertions check.
 
+## Functional coverage
+
+`parity:coverage` answers a different question from the report: **how much of each block do we
+exercise at all?** It reads every `packages/bb-*` from source with the TypeScript compiler, so
+nothing is declared by hand:
+
+| Column | Where it comes from |
+|---|---|
+| **Public methods** | Public instance methods of the Building Block classes each package exports from `src/index.aws.ts`, keyed `<BB_NAME>.<method>` (`KVStore.put`) |
+| **Called by the e2e app** | A call site in the app's backend (`<app>/aws-blocks/**`) whose target is one of those methods |
+| **Hit by edge cases** | Methods a parity case called, from the `methods` field of the recordings. The packs wrap the blocks they create with `trackBlock`, and `runCase` counts only the calls made in `act` |
+| **AWS operations** | `new XCommand(…)` from `@aws-sdk/*` reachable from a method, following calls into the package's own code (lib-dynamodb commands map to the DynamoDB operation they send) |
+| **AWS error types** / **Hit on AWS** | The `@throws` tags of those commands in the SDK, and how many of them a **deployed** case raised |
+
+```bash
+cd test-apps/comprehensive
+npm run parity:local       # recordings with methods (optional; without them the edge-case columns are empty)
+npm run parity:coverage    # → .parity/coverage/coverage.md + coverage.json
+```
+
+Limits: a call to an interface method (or a body-less method in a sibling workspace package) follows
+every same-named method in the package, so per-method operations can over-approximate (`bb-data`'s
+engines). Blocks that reach AWS through a driver (DSQL) or plain HTTP (OIDC) show no operations.
+Calls into another block (an agent storing conversations in a table) are not followed. An AWS error a
+block rebrands under its own name doesn't count as hit.
+
 ## Layout
 
 ```
 src/core/      pure, no I/O: types (the contract), catalog validation, breakpoint search, shape/order comparison, differ + report
 src/kinds/     reusable probe shapes and exact-size payload generators: countLimit, sizeLimit, utf8OfBytes, idBatches
-src/server/    the default-deny `probe` namespace (createProbeMethods), runCase/observe helpers, CDK wiring (./cdk)
+src/server/    the default-deny `probe` namespace (createProbeMethods), runCase/observe helpers, the per-case method tracker (trackBlock), CDK wiring (./cdk)
 src/client/    the e2e client and HTTP edge recorders, and the node:test driver for fixed and slider cases
 src/packs/     one pack per block area: <pack>.cases.ts (pure data) + <pack>.probe.ts (runner); catalog.ts
-src/cli/       report.ts, validate-catalog.ts (run through npm scripts / tsx)
+src/surface/   static extraction of each block's public methods, AWS operations and error types (TypeScript compiler API)
+src/cli/       report.ts, coverage.ts, validate-catalog.ts (run through npm scripts / tsx)
 test/          unit tests for the pure core
 ```
 
