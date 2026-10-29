@@ -100,7 +100,11 @@ in-process. See `@aws-blocks/bb-compute`.
 
 The queue is a standard SQS queue, so delivery is at-least-once and a handler must
 already be idempotent to be correct — a message can be delivered more than once
-regardless of `batchSize`. Batching widens the window in which that happens: with
+regardless of compute type or `batchSize`.
+
+`batchSize` and `maxBatchingWindowSeconds` control the Lambda event-source path,
+not the container poller's concurrency. On Lambda, batching widens the window in
+which duplicate work happens: with
 `batchSize: 10`, a Lambda that times out or runs out of memory partway through a
 batch redelivers all ten messages, including the ones whose handler had already
 finished. Per-record failures on their own are isolated (only the failed message is
@@ -112,9 +116,12 @@ latency-sensitive work — a batching window makes SQS wait up to
 a user-facing path starts up to that many seconds late. `maxBatchingWindowSeconds: 0`
 opts out of the wait while keeping batching.
 
-The queue's visibility timeout is set to the Lambda timeout plus
-`maxBatchingWindowSeconds`, because a message's visibility clock starts when the
-poller receives it — before the batching window elapses and before the handler runs.
+The queue's configured visibility timeout is `900 + maxBatchingWindowSeconds`
+seconds, using the framework's default Lambda timeout constant. On the Lambda
+path, the batching window consumes part of this visibility period before the
+handler runs. On the container path, the poller overrides visibility when receiving
+messages and extends it with a heartbeat while each worker runs; the queue setting
+is not a container job's execution-time limit.
 
 ## Handler Context
 
@@ -140,29 +147,41 @@ AsyncJobErrors.ValidationFailed   // schema validation failed
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled
 AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
-AsyncJobErrors.UnsupportedCompute // resolved compute is not Lambda (thrown at synth time)
+AsyncJobErrors.UnsupportedCompute // resolved compute is neither Lambda nor container (synth time)
 ```
 
 ## Compute Compatibility
 
-AsyncJob attaches its SQS event source to its resolved compute. It currently
-supports Lambda compute only; constructing an AsyncJob under another compute
-fails at synth time with `UnsupportedComputeException`.
+AsyncJob supports Lambda and container compute:
+
+- **Lambda:** attaches a native SQS event source to the resolved compute's function.
+- **Container:** uses an owner-matched SQS poller in the container runtime, with
+  each delivery dispatched to a worker thread. No Lambda event source is created.
+
+The `compute` option selects a compute explicitly; otherwise the job uses its
+scope's resolved compute. Other compute types fail at synth time with
+`UnsupportedComputeException`. See [Running on a container compute](#running-on-a-container-compute)
+for an example.
 
 ## Local Development
 
 In local dev mode, AsyncJob uses an in-process queue. Jobs process via `setTimeout` in the same Node.js process. Retries, DLQ behavior, and payload limits are enforced identically to AWS.
 
+Selecting container compute does not create worker threads locally or enforce
+the container delivery timeout. Use a sandbox deployment to exercise those behaviors.
+
 ## AWS Deployment
 
-Automatically provisions an SQS queue, dead-letter queue, and attaches the event
-source to the resolved Lambda compute. Failed jobs become visible for retry when
-the configured visibility timeout elapses: the 900-second Lambda timeout plus
-`maxBatchingWindowSeconds`.
+Automatically provisions an SQS queue and dead-letter queue. Lambda jobs attach
+an event source to their resolved Lambda compute; container jobs grant queue
+consumption to their compute's task role and are received by its runtime poller.
+The container poller deletes a message only after its worker succeeds. On either
+path, an unsuccessful delivery becomes available for retry when its visibility
+period expires, with SQS redrive moving exhausted messages to the DLQ.
 
 ## How Do I Know My Job Ran?
 
-`submit()` is fire-and-forget — it returns as soon as the payload is queued, and the handler runs later in a separate Lambda invocation. Pass `trackStatus: true` and AsyncJob records the job's state for you:
+`submit()` is fire-and-forget — it returns as soon as the payload is queued, and the handler runs asynchronously on the job's compute: a Lambda invocation or a container worker thread. Pass `trackStatus: true` and AsyncJob records the job's state for you:
 
 ```typescript
 const job = new AsyncJob(scope, 'ingest', {

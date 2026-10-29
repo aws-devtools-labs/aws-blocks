@@ -232,4 +232,4 @@ CronJob is a **pure infrastructure declaration** — the constructor defines the
 | Trigger | Time-based (cron/rate) | Programmatic (`submit()`) |
 | Runtime methods | None | `submit()`, `submitBatch()` |
 | Use case | Periodic recurring tasks | One-off event-driven work |
-| AWS service | EventBridge Scheduler | SQS + Lambda |
+| AWS service | EventBridge Scheduler | SQS with Lambda or container compute |
