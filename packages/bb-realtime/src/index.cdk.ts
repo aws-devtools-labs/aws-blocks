@@ -22,7 +22,7 @@ import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -80,8 +80,9 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 	return getOrCreateOnRoot(parent, SHARED_KEY, (root): SharedInfra => {
 		const stack = cdk.Stack.of(parent);
 
-		// ── Token secret via AppSetting ─────────────────────────────────────
-		new AppSetting(parent, 'token-secret', { secret: true });
+		// ── Token secret via frameworkKey ───────────────────────────────────
+		// Secrets Manager or SSM SecureString, per `defaults.secretsStore`.
+		frameworkKey(parent, 'token-secret');
 
 		// ── DynamoDB connections table via DistributedTable ──────────────────
 		new DistributedTable(parent, 'connections', {
