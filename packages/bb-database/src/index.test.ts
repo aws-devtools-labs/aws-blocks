@@ -382,6 +382,25 @@ describe('Database (owned DSQL cluster)', () => {
 		);
 		assert.strictEqual(await db.queryOne(sql`SELECT 1 FROM pg_tables WHERE tablename = 't'`), null, 'nothing ran');
 	});
+
+	test('a job wait copied from the AWS examples runs locally as a no-op', async () => {
+		const db = new Database(app(), 'db');
+		await withMigrations(db, {
+			'001_init.sql': [
+				'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL);',
+				'CREATE INDEX ASYNC t_n ON t (n);',
+				// What the DSQL user guide shows: wait for the job the statement returned. Locally there is no job.
+				"SELECT sys.wait_for_job('jh2gbtx4mzhgfkbimtgwn5j45y');",
+				"SELECT sys.wait_for_job(job_id) FROM sys.jobs WHERE status IN ('submitted', 'processing');",
+			].join('\n'),
+		});
+		assert.ok(await db.queryOne(sql`SELECT 1 FROM pg_indexes WHERE indexname = 't_n'`), 'the index was built');
+		assert.deepStrictEqual(await db.query(sql`SELECT job_id FROM sys.jobs`), [], 'sys.jobs is empty locally');
+		assert.deepStrictEqual(
+			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			['001_init.sql'],
+		);
+	});
 });
 
 describe('DatabaseCluster (shared DSQL)', () => {

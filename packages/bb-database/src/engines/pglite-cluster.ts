@@ -7,6 +7,10 @@
  * a mutex held for each statement or whole transaction keeps blocks from
  * interleaving. A query from inside a block's own transaction joins it
  * (`tx-scope.ts`) instead of deadlocking.
+ *
+ * The cluster also carries a stub of DSQL's `sys` schema (see
+ * {@link SYS_SCHEMA_STUB}), so a migration that waits for an asynchronous DDL
+ * job the way the AWS documentation shows runs locally as a no-op.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
@@ -16,6 +20,31 @@ import { PGlite } from '@electric-sql/pglite';
 import { quoteIdent } from '../constants.js';
 import { translatePgError } from '../errors.js';
 import { currentTransactionHandle } from './tx-scope.js';
+
+/**
+ * A local stand-in for the `sys` schema Aurora DSQL exposes for asynchronous
+ * DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC … VALIDATE
+ * CONSTRAINT` return a `job_id`; `sys.jobs` lists the job while it runs, and
+ * `sys.wait_for_job(job_id)` blocks the session until it completes or fails and
+ * returns a boolean. PGlite runs those statements synchronously (the mock strips
+ * `ASYNC`), so there is never a job: here `sys.jobs` is empty and
+ * `sys.wait_for_job()` returns `true` at once. Both forms a migration copied
+ * from the AWS examples can take then run locally unchanged:
+ * `SELECT sys.wait_for_job('…')` and `SELECT sys.wait_for_job(job_id) FROM sys.jobs …`.
+ * `CREATE OR REPLACE` keeps this idempotent across dev-server restarts on the
+ * same data directory.
+ *
+ * @see https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html
+ */
+const SYS_SCHEMA_STUB = `
+CREATE SCHEMA IF NOT EXISTS sys;
+CREATE OR REPLACE FUNCTION sys.wait_for_job(job_id text) RETURNS boolean LANGUAGE sql AS 'SELECT true';
+CREATE OR REPLACE VIEW sys.jobs AS
+  SELECT NULL::text AS job_id, NULL::text AS status, NULL::text AS details, NULL::text AS job_type,
+         NULL::oid AS class_id, NULL::oid AS object_id, NULL::text AS object_name,
+         NULL::timestamptz AS start_time, NULL::timestamptz AS update_time
+  WHERE false;
+`;
 
 const PGLITE_INITIALIZED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global', 'global/pg_control'];
 const PGLITE_DATA_DIR_MARKERS = [
@@ -124,14 +153,18 @@ export class PgliteCluster {
 		return this.createClient(this.dataDir);
 	}
 
-	/** Force PGlite's lazy WASM init, retrying past intermittent initdb traps. */
+	/** Force PGlite's lazy WASM init, retrying past intermittent initdb traps, then install the `sys` stub. */
 	private ensureReady(): Promise<PGlite> {
 		if (!this.ready) {
 			this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
 				onRetry: (attempt, error) =>
 					console.warn(`[bb-database] PGlite init trap on attempt ${attempt}; recreating instance`, error),
 			})
-				.then((db) => (this.db = db))
+				.then(async (db) => {
+					this.db = db;
+					await db.exec(SYS_SCHEMA_STUB);
+					return db;
+				})
 				.catch((error) => {
 					this.ready = undefined;
 					try {
