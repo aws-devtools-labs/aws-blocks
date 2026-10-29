@@ -35,7 +35,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.strictEqual(info.dbxb.schemaName, 'dbxb');
     });
 
-    test('dbx - insert / get / list / delete through migrations run by the rewriter', async () => {
+    test('dbx - insert / get / list / delete on tables a DSQL migration created', async () => {
       const api = getApi();
       const id = `x-${Date.now().toString(36)}`;
       assert.strictEqual((await api.dbxInsert(id, 'alice', 100)).rowCount, 1);
@@ -151,7 +151,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const account = `acct-${stamp}`;
       const before = await api.sharedClusterCounts();
       const item = await api.dbxaAdd(sku, 3);
-      assert.ok(item && typeof item.id === 'number', 'the rewritten identity column assigned an id, returned as a number');
+      assert.ok(item && typeof item.id === 'number', 'the identity column assigned an id, returned as a number');
       assert.deepStrictEqual(await api.dbxbAdd(account, 'alice', 40), { account_id: account, total: 40 });
       assert.deepStrictEqual(await api.dbxbAdd(account, 'alice', 2), { account_id: account, total: 42 });
       const after = await api.sharedClusterCounts();

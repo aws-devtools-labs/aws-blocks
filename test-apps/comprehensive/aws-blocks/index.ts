@@ -387,14 +387,14 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
 });
 
 // bb-database: one Database block, running on a cluster.
-// `dbx` owns a distributed (Aurora DSQL) cluster; migrations default to
-// ./aws-blocks/migrations/dbx and go through the rewriter.
+// `dbx` owns an Aurora DSQL cluster; its migrations default to
+// ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
 const dbx = new SqlDatabase(scope, 'dbx');
 // A result schema: the row type derives from this value, and every row is validated against it.
 const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
-// `dbxa` and `dbxb` share one distributed cluster, each in its own schema.
+// `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
-// check constraint, an index and a view, all rewritten for DSQL.
+// check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
 const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
 const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
 const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
