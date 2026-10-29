@@ -114,6 +114,15 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   the compute provisions in the app's VPC (with a VPC link), so the same
   ~29-second cap applies. One load balancer (and one listener) is shared by
   every container in the backend that hosts a namespace.
+
+  - It needs at least one running task: `scaling.minInstances: 0` fails synth.
+  - Without a `scaling.strategy`, a container that also runs an `AsyncJob`
+    scales on CPU (the API load), and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during
+    that deploy, its calls can get 503s for the minute or two the new tasks take
+    to start, because the route switches before they're healthy.
+  - The load balancer allows 100 namespaces by default (synth warns past that;
+    the quota can be raised), and an export name can be at most 112 characters.
 - **Everything else stays on the default compute:** namespaces without a
   `compute`, `RawRoute`s, and the auth routes.
 

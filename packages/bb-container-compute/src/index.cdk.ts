@@ -30,6 +30,9 @@ import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/c
 import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
 import {
 	API_LISTENER_PORTS,
+	CONTAINER_HTTP_PORT,
+	CONTAINER_READINESS_PORT,
+	CONTAINER_SERVES_API_ENV,
 	ComputeBase,
 	type ComputeApiIngress,
 	getBlocksRoot,
@@ -78,10 +81,10 @@ const DEFAULT_MEMORY_MB = 1024;
  * Container port the runtime's HTTP server listens on: the backend's API when the
  * compute hosts an API namespace, a health check otherwise (see `runContainer`).
  */
-const CONTAINER_PORT = 8080;
+const CONTAINER_PORT = CONTAINER_HTTP_PORT;
 
 /** Container port the API server reports readiness on — the load balancer's health check. */
-const READINESS_PORT = 8081;
+const READINESS_PORT = CONTAINER_READINESS_PORT;
 
 /**
  * Port of the listener every container compute's API namespaces share on the
@@ -92,6 +95,19 @@ const RPC_LISTENER_PORT = API_LISTENER_PORTS.min;
 
 /** Listener rule priorities ALB accepts. */
 const MAX_RULE_PRIORITY = 50_000;
+
+/** Listener rules an Application Load Balancer allows by default (an adjustable quota). */
+const DEFAULT_RULES_PER_LOAD_BALANCER = 100;
+
+/** Longest path pattern a listener rule condition accepts. */
+const MAX_PATH_PATTERN_LENGTH = 128;
+
+/**
+ * How long the load balancer lets a stopping task's in-flight requests finish
+ * before ECS sends it SIGTERM: past the longest call a front door allows (a
+ * CloudFront VPC origin's 60 s), so a deploy or scale-in never cuts one short.
+ */
+const API_DEREGISTRATION_DELAY = cdk.Duration.seconds(65);
 
 /** Per-root registry keys for the shared API load balancer, its RPC listener, and the rule priorities taken on it. */
 const API_LOAD_BALANCER: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_LOAD_BALANCER');
@@ -287,6 +303,11 @@ export class ContainerCompute extends ComputeBase {
 			maxHealthyPercent: 200,
 			circuitBreaker: { rollback: true },
 		});
+		// Always render the service's load balancers — none until the compute serves
+		// API traffic (apiIngress replaces this). CloudFormation keeps an attached
+		// target group when the property is simply absent, so a compute that stops
+		// serving API traffic must say `[]` to detach it.
+		(this.service.node.defaultChild as ecs.CfnService).addPropertyOverride('LoadBalancers', []);
 	}
 
 	/**
@@ -315,6 +336,14 @@ export class ContainerCompute extends ComputeBase {
 		if (!this.apiIngressInfo) {
 			const vpcContext = getVpcContext(this);
 			if (!this.service || !this.container || !vpcContext) return undefined;
+			// The load balancer forwards only to running tasks, and nothing starts one
+			// on a request: with none, every call would get a 503.
+			if (this.scalingConfig?.minInstances === 0) {
+				throw new Error(
+					`Compute '${this.node.id}' serves API namespaces, so it needs a running task: set scaling.minInstances ` +
+						'to 1 or more (a container compute does not start a task for an incoming request).',
+				);
+			}
 			this.apiIngressInfo = this.provisionApiIngress(this.service, this.container, vpcContext.vpc, vpcContext.computeSubnets);
 		}
 		return this.apiIngressInfo.ingress;
@@ -355,6 +384,8 @@ export class ContainerCompute extends ComputeBase {
 		);
 
 		container.addPortMappings({ containerPort: READINESS_PORT });
+		// Tells the image entry to serve the backend's API (see containerMainEntry).
+		container.addEnvironment(CONTAINER_SERVES_API_ENV, 'true');
 		const targetGroup = new elbv2.ApplicationTargetGroup(this, 'ApiTargets', {
 			vpc,
 			port: CONTAINER_PORT,
@@ -370,7 +401,7 @@ export class ContainerCompute extends ComputeBase {
 			// ECS deregisters a stopping task and lets in-flight requests finish for
 			// this long before it sends SIGTERM (then the container drains for up to
 			// 25 s within ECS's 30 s stop timeout).
-			deregistrationDelay: cdk.Duration.seconds(30),
+			deregistrationDelay: API_DEREGISTRATION_DELAY,
 		});
 
 		// The tasks' own API security group: only the load balancer reaches the API
@@ -383,8 +414,13 @@ export class ContainerCompute extends ComputeBase {
 		});
 		service.connections.addSecurityGroup(apiSecurityGroup);
 		const tasks = new ec2.Connections({ securityGroups: [apiSecurityGroup] });
-		loadBalancer.connections.allowTo(tasks, ec2.Port.tcp(CONTAINER_PORT), 'Blocks container API traffic');
-		loadBalancer.connections.allowTo(tasks, ec2.Port.tcp(READINESS_PORT), 'Blocks container API readiness');
+		// One rule for the API and readiness ports (adjacent), so each container adds
+		// a single egress rule to the shared load balancer's security group.
+		loadBalancer.connections.allowTo(
+			tasks,
+			ec2.Port.tcpRange(CONTAINER_PORT, READINESS_PORT),
+			'Blocks container API traffic and readiness',
+		);
 
 		// Register the service with the target group at the CloudFormation level.
 		// The L2 route (`listener.addTargets(service)`) would also open the load
@@ -404,16 +440,26 @@ export class ContainerCompute extends ComputeBase {
 
 		const routedPaths: string[] = [];
 		const routePath = (path: string) => {
-			routedPaths.push(path);
-			// The construct id follows the path (`/aws-blocks/api/render` → `Route-aws-blocks-api-render`).
-			const rule = new elbv2.ApplicationListenerRule(this, `Route${path.replaceAll('/', '-')}`, {
+			if (path.length > MAX_PATH_PATTERN_LENGTH) {
+				throw new Error(
+					`API path '${path}' is ${path.length} characters; a load balancer rule matches at most ` +
+						`${MAX_PATH_PATTERN_LENGTH}. Shorten the namespace's export name.`,
+				);
+			}
+			// Scoped to the shared listener and named after the path alone
+			// (`/aws-blocks/api/render` → `Route-aws-blocks-api-render`), so moving a
+			// namespace to another container compute updates the rule's target in place
+			// rather than replacing it — a new rule couldn't take the priority the old
+			// one still holds until CloudFormation deletes it.
+			const rule = new elbv2.ApplicationListenerRule(listener, `Route${path.replaceAll('/', '-')}`, {
 				listener,
-				priority: this.allocateRulePriority(path),
+				priority: this.allocateRulePriority(path, listener),
 				conditions: [elbv2.ListenerCondition.pathPatterns([path])],
 				action: elbv2.ListenerAction.forward([targetGroup]),
 			});
 			// ECS rejects a target group no listener rule forwards to yet.
 			service.node.addDependency(rule);
+			routedPaths.push(path);
 		};
 
 		return {
@@ -425,23 +471,34 @@ export class ContainerCompute extends ComputeBase {
 	}
 
 	/**
-	 * A listener rule priority for `path`: derived from the path, so a namespace
-	 * keeps its rule's priority across deploys whatever namespaces come and go
-	 * (renumbering would update rules in place, and two rules can't hold one
-	 * priority even mid-update). Probes forward past a priority another rule on the
-	 * shared listener already holds.
+	 * A listener rule priority for `path`, derived from the path alone, so a
+	 * namespace keeps its rule's priority across deploys whatever namespaces come
+	 * and go (renumbering would update rules in place, and two rules can't hold one
+	 * priority even mid-update). Two paths that hash to the same priority fail
+	 * synth: shifting one to a free priority would make it depend on its neighbours,
+	 * and break a later deploy that removes or adds one. Warns once the shared
+	 * listener passes the load balancer's default rule quota.
 	 */
-	private allocateRulePriority(path: string): number {
-		const taken = getOrCreateOnRoot(this, API_RULE_PRIORITIES, () => new Set<number>());
-		const start = hashPath(path);
-		for (let i = 0; i < MAX_RULE_PRIORITY; i++) {
-			const priority = 1 + ((start + i) % MAX_RULE_PRIORITY);
-			if (!taken.has(priority)) {
-				taken.add(priority);
-				return priority;
-			}
+	private allocateRulePriority(path: string, listener: elbv2.ApplicationListener): number {
+		const taken = getOrCreateOnRoot(this, API_RULE_PRIORITIES, () => new Map<number, string>());
+		const priority = 1 + (hashPath(path) % MAX_RULE_PRIORITY);
+		const holder = taken.get(priority);
+		if (holder !== undefined) {
+			throw new Error(
+				`API paths '${holder}' and '${path}' map to the same load balancer rule priority (${priority}). ` +
+					'Rename one of the two namespace exports.',
+			);
 		}
-		throw new Error(`No free listener rule priority for API path '${path}'.`);
+		taken.set(priority, path);
+		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
+			cdk.Annotations.of(listener).addWarningV2(
+				'@aws-blocks/bb-container-compute:api-rule-quota',
+				`More than ${DEFAULT_RULES_PER_LOAD_BALANCER} container API namespaces share one load balancer, over its ` +
+					`default quota of ${DEFAULT_RULES_PER_LOAD_BALANCER} listener rules: request an increase of "Rules per ` +
+					'Application Load Balancer" before deploying.',
+			);
+		}
+		return priority;
 	}
 
 	/**
@@ -482,11 +539,22 @@ export class ContainerCompute extends ComputeBase {
 		});
 
 		// Resolve the strategy: explicit signals, or an inferred default. A compute
-		// that drains queues defaults to queue-depth; otherwise CPU.
+		// that drains queues defaults to queue-depth; otherwise CPU. One that also
+		// serves API traffic tracks CPU (the API load) too, and its queue backlog only
+		// adds capacity: a queue-depth scale-in step would remove tasks the API still
+		// needs whenever the queue is empty. CPU tracking scales it in.
 		const ownedQueues = (this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
+		const servesApi = (this.apiIngressInfo?.routedPaths.length ?? 0) > 0;
 		let signals: ScalingSignal[];
+		let queueScaleIn = true;
 		if (cfg.strategy) {
 			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
+		} else if (ownedQueues.length > 0 && servesApi) {
+			signals = [
+				{ on: 'cpu', targetPercent: 65 },
+				{ on: 'queue-depth', backlogPerInstance: 100 },
+			];
+			queueScaleIn = false;
 		} else if (ownedQueues.length > 0) {
 			signals = [{ on: 'queue-depth', backlogPerInstance: 100 }];
 		} else {
@@ -534,7 +602,7 @@ export class ContainerCompute extends ComputeBase {
 					// exists — leaving tasks pinned at the scaled-out count (full Fargate
 					// cost) long after the queue drains.
 					scalingSteps: [
-						{ upper: 0, change: -1 },
+						...(queueScaleIn ? [{ upper: 0, change: -1 }] : []),
 						{ upper: per, change: 0 },
 						{ lower: per, change: +1 },
 						{ lower: per * 5, change: +3 },

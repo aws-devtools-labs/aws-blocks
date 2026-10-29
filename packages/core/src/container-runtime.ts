@@ -35,18 +35,19 @@
 
 import { createServer } from 'node:http';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
+import { CONTAINER_HTTP_PORT, CONTAINER_READINESS_PORT } from './constants.js';
 import { serveHttp } from './http-server.js';
 
 /** Container port the health server listens on. Matches the CDK port mapping. */
-const HEALTH_PORT = 8080;
+const HEALTH_PORT = CONTAINER_HTTP_PORT;
 
 /**
  * Ports the API server listens on when the container serves the backend's API:
  * requests on {@link API_PORT}, readiness on {@link API_READINESS_PORT}. Match the
  * container compute's port mappings and load balancer target group.
  */
-const API_PORT = 8080;
-const API_READINESS_PORT = 8081;
+const API_PORT = CONTAINER_HTTP_PORT;
+const API_READINESS_PORT = CONTAINER_READINESS_PORT;
 
 /** How long graceful shutdown waits for in-flight workers before exiting. */
 const DRAIN_GRACE_MS = 25_000;
@@ -244,7 +245,9 @@ export interface RunContainerOptions {
 	 * the container serves the backend's API — the same RawRoute and JSON-RPC
 	 * dispatch as the Lambda handler — on port 8080, with readiness on port 8081,
 	 * for the load balancer in front of a container that hosts an API namespace.
-	 * Without it, the container answers a health check on port 8080 only.
+	 * Without it, the container answers a health check on port 8080 only. The
+	 * container compute's image entry passes it only to a compute that serves API
+	 * traffic (the `BLOCKS_CONTAINER_SERVES_API` env var its CDK sets).
 	 */
 	backend?: unknown;
 }

@@ -572,9 +572,17 @@ describe('ApiNamespace on a container compute', () => {
 			assert.strictEqual(tg.TargetType, 'ip');
 			assert.strictEqual(tg.HealthCheckPort, '8081');
 			assert.strictEqual(tg.HealthCheckPath, '/');
+			// Past the longest call a front door allows (60 s), so a deploy or scale-in never cuts one short.
+			const attributes = Object.fromEntries(tg.TargetGroupAttributes.map((a: { Key: string; Value: string }) => [a.Key, a.Value]));
+			assert.strictEqual(attributes['deregistration_delay.timeout_seconds'], '65');
 		}
-		const withLb = ofType(resources, 'AWS::ECS::Service').filter(([, s]) => s.Properties.LoadBalancers);
-		assert.strictEqual(withLb.length, 2, 'the two API services are load balanced; the job-only one is not');
+		const services = ofType(resources, 'AWS::ECS::Service');
+		const withLb = services.filter(([, s]) => s.Properties.LoadBalancers.length > 0);
+		assert.strictEqual(withLb.length, 2, 'the two API services are load balanced');
+		// The job-only one says so explicitly, so a compute that stops serving API traffic detaches its target group.
+		const jobOnly = services.find(([id]) => id.toLowerCase().includes('batchbacking'));
+		assert.ok(jobOnly);
+		assert.deepStrictEqual(jobOnly[1].Properties.LoadBalancers, []);
 		const render = withLb.find(([id]) => id.toLowerCase().includes('renderbacking'));
 		assert.ok(render);
 		assert.deepStrictEqual(render[1].Properties.LoadBalancers, [
@@ -600,7 +608,9 @@ describe('ApiNamespace on a container compute', () => {
 		assert.strictEqual(integration.ConnectionType, 'VPC_LINK');
 		assert.deepStrictEqual(integration.ConnectionId, { Ref: linkId });
 		assert.deepStrictEqual(integration.IntegrationTarget, { Ref: lbId }, 'the load balancer ARN, not a listener ARN');
-		assert.ok(JSON.stringify(integration.Uri).includes(':10000/aws-blocks/api/render'), JSON.stringify(integration.Uri));
+		assert.deepStrictEqual(integration.Uri, {
+			'Fn::Join': ['', ['http://', { 'Fn::GetAtt': [lbId, 'DNSName'] }, ':10000/aws-blocks/api/render']],
+		});
 		assert.deepStrictEqual(integration.RequestParameters, {
 			'integration.request.header.x-blocks-forwarded-host': 'context.domainName',
 			'integration.request.header.x-blocks-forwarded-stage': 'context.stage',
@@ -624,13 +634,14 @@ describe('ApiNamespace on a container compute', () => {
 		const sharedSg = serviceSgs.find((g) => /BlocksLambdaSg/.test(g));
 		assert.ok(apiSg && sharedSg, `API + shared compute groups, got ${serviceSgs.join(', ')}`);
 		assert.deepStrictEqual(
-			into(apiSg).map((r) => [r.FromPort, fromSg(r)]).sort(),
-			[
-				[8080, lbSg],
-				[8081, lbSg],
-			],
+			into(apiSg).map((r) => [r.FromPort, r.ToPort, fromSg(r)]),
+			[[8080, 8081, lbSg]],
 		);
 		assert.deepStrictEqual(into(sharedSg), [], 'the shared compute group admits nothing');
+		// Nor inline: CDK writes a CIDR peer's rule into the group itself, not as a standalone resource.
+		for (const sg of [apiSg, sharedSg, lbSg]) {
+			assert.deepStrictEqual(resources[sg].Properties.SecurityGroupIngress ?? [], [], `${sg} has no inline ingress`);
+		}
 
 		// Load balancer: the listener port range from the VPC link only, in one rule.
 		const [linkSgId] = ofType(resources, 'AWS::EC2::SecurityGroup').find(([id]) => /ApiVpcLinkSg/.test(id)) ?? [];

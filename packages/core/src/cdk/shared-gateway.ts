@@ -78,7 +78,7 @@ export interface SharedGatewayProps {
 
 /** What {@link createSharedGateway} returns. @internal */
 export interface SharedGateway {
-	/** The shared REST API that fronts every compute's function. */
+	/** The shared REST API that fronts every compute: a function, or a container's load balancer. */
 	readonly restApi: apigateway.RestApi;
 	/** The RPC endpoint URL (`{gateway}/{stage}/aws-blocks/api`). */
 	readonly apiUrl: string;
@@ -107,10 +107,11 @@ export interface SharedGateway {
  *
  * **Multi-compute fan-out.** When a namespace is assigned to a non-default
  * compute, the gateway adds a literal `/aws-blocks/api/{namespace}` resource
- * (ANY), integrated with the function of the compute hosting it. `{namespace}`
+ * (ANY), integrated with the compute hosting it: its function, or — for a
+ * container compute — its load balancer, through a VPC link. `{namespace}`
  * is the namespace's **export** name — what the client calls and dispatch
  * resolves — from {@link resolveNamespaceRoutes}. A literal resource wins over
- * the sibling `{proxy+}`, so each per-namespace path reaches ITS function while
+ * the sibling `{proxy+}`, so each per-namespace path reaches ITS compute while
  * everything else — the RPC root, auth, raw routes, and every namespace left on
  * the default compute — still reaches the default compute. The client POSTs to
  * exactly that path, so the literal resource has no `{proxy+}` subtree.

@@ -34,7 +34,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 - Routing follows the export name (what the frontend imports), not the second
   `ApiNamespace` argument.
 - One `Compute` can host several namespaces and `AsyncJob`s; they then run in
-  the same function.
+  the same function (or the same container tasks).
 - A `serverless` or a `container` compute can serve API namespaces.
 - Namespaces without a `compute`, `RawRoute`s and auth routes stay on the
   default compute. In local dev every namespace still runs in the dev server.

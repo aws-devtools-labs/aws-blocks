@@ -97,7 +97,7 @@ export function buildContainerApiWidgets(
 		left: [targetGroup.metrics.requestCount({ period, label: 'Requests' })],
 		right: [
 			targetGroup.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { period, label: 'Task 5xx' }),
-			loadBalancer.metrics.httpCodeElb(elbv2.HttpCodeElb.ELB_5XX_COUNT, { period, label: 'Load balancer 5xx' }),
+			loadBalancer.metrics.httpCodeElb(elbv2.HttpCodeElb.ELB_5XX_COUNT, { period, label: 'Load balancer 5xx (all container APIs)' }),
 		],
 	});
 	const latency = new GraphWidget({

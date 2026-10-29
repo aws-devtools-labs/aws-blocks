@@ -17,6 +17,11 @@ export type BlocksContext = {
      * In AWS: derived from `event.path`, `event.queryStringParameters`,
      * and `event.headers.host`. May include a trusted `x-forwarded-proto`
      * to pick http vs https.
+     *
+     * On a container compute: the host and stage the front door the request
+     * came through stamped on it (`x-blocks-forwarded-host` /
+     * `x-blocks-forwarded-stage`), so the URL is the one the Lambda handler
+     * reports for the same request.
      */
     url: URL;
     /**
@@ -35,6 +40,9 @@ export type BlocksContext = {
      * after the client has already received a timeout.
      *
      * `undefined` in local dev or when no deadline is configured.
+     *
+     * On a container compute there is no deadline: it fires when the client
+     * disconnects before the response is written.
      */
     signal?: AbortSignal;
   };
@@ -132,6 +140,9 @@ export interface ApiNamespaceOptions {
    *
    * The gateway reaches the container's tasks through an internal load balancer
    * the compute provisions in the app's VPC; the same ~29-second cap applies.
+   * The compute keeps at least one task running (`scaling.minInstances: 0` fails
+   * synth). Moving a namespace that already serves traffic onto a container: during
+   * that deploy, its calls can get 503s until the new tasks are healthy.
    * `RawRoute`s always run on the default compute.
    *
    * Typed structurally — anything whose `resolve()` yields a compute, which is
