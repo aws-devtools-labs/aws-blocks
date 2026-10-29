@@ -6,6 +6,11 @@
 # there is no per-package or per-test-app lockfile to configure separately.
 # The create-blocks-app templates are the exception: each has its own
 # package.json and no lockfile, so they get a second npm entry.
+# scripts/ci/agent-bench-playwright is another exception: it has a lockfile on
+# purpose and no entry here, because it pins the agent bench's Playwright to
+# PW_VERSION (scripts/agent-bench/steps/3-build-and-test.sh) and is bumped with
+# it. A security PR for it fails scripts/ci/agent-bench-playwright.test.mjs
+# until PW_VERSION moves too.
 #
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*

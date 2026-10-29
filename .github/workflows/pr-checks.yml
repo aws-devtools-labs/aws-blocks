@@ -247,6 +247,12 @@ jobs:
       - name: Test the Playwright install wrapper
         run: node --test scripts/ci/install-playwright.test.mjs
 
+      # The Harbor agent check and agent bench only run from main or with model credentials, so
+      # their cache-scope hardening (the Harbor build container and output guard, agent bench's
+      # lockfile-pinned Playwright matching PW_VERSION) is checked here on every PR.
+      - name: Test the benchmark workflows' cache-scope hardening
+        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/agent-bench-playwright.test.mjs
+
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
       - name: Check runtime mock-guard coverage
