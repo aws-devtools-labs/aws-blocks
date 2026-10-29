@@ -103,6 +103,11 @@ Your CloudFormation stack names derive from the `stackId` in
 `.blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
 `aws-blocks/index.cdk.ts` for dynamic naming logic.
 
+On a shared platform, keep `stackId` equal to the app id (scaffolding with
+`APP_ID` set writes it so). Hosting's `secret()` and `config()` values are
+named `blocks/<stackId>/…`, and the platform's boundary and checks treat only
+`blocks/<id>/…` as this app's own.
+
 ## Adding a frontend later
 
 This template is backend-only. The `backend` template's README documents adding a
