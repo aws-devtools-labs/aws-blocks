@@ -47,6 +47,10 @@
     "./ui": {
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
+    },
+    "./browser-client": {
+      "types": "./dist/browser-client.d.ts",
+      "default": "./dist/browser-client.js"
     }
   },
   "scripts": {

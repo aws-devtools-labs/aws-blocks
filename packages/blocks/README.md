@@ -107,6 +107,8 @@ onAuthChange(authApi, (user) => {
 });
 ```
 
+A frontend served from another origin than the API signs in with a federated provider through `createAuthClient()` from the same entry: see `@aws-blocks/bb-auth`'s README, *Frontend on a different origin*.
+
 ## Building Blocks
 
 Start from what you need:

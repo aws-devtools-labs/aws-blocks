@@ -432,6 +432,48 @@ The scaffolded `default` template's `src/index.ts` is a complete working app bui
 
 To restyle, replace or drive the forms yourself, and for the `data-testid` contract e2e suites rely on, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
 
+## Frontend on a different origin
+
+When the frontend and the API share an origin (`Hosting`'s default), the `Authenticator`'s "Sign in with …" links are all you need. When the frontend is served from another origin, for example `https://app.example.com` calling `https://api.example.com`, use the browser redirect client from `@aws-blocks/bb-auth/browser-client` (also exported from `@aws-blocks/blocks/ui`). It signs in with a federated provider through the block's own routes, then reads and ends the session:
+
+```typescript
+import { createAuthClient } from '@aws-blocks/bb-auth/browser-client';
+
+const auth = createAuthClient<'okta'>({
+  baseUrl: 'https://api.example.com',            // where /aws-blocks/auth/* is served
+  redirectUri: 'https://app.example.com/return', // the page that calls handleSignInRedirect()
+});
+
+// A "Sign in" button:
+await auth.signInWithRedirect({ provider: 'okta', customState: location.pathname });
+
+// On the return page (safe to call on every page load: null when there is nothing to finish):
+const result = await auth.handleSignInRedirect();
+if (result?.customState) history.replaceState(null, '', result.customState);
+
+const session = await auth.fetchAuthSession();
+if (session.signedIn) render(session.user.displayName);
+
+await auth.signOut({ endProviderSession: true });
+```
+
+On the backend, allow the frontend's origin in three places:
+
+```typescript
+new Auth(scope, 'auth', {
+  oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+  redirects: { allowedRelayOrigins: [relayOrigin('https://app.example.com')] }, // where sign-in may return
+  session: { crossDomain: true }, // only when the two are on different registrable domains
+});
+// …and the frontend origin in the stack's CORS allowlist: `defaults.allowedOrigins` (see the core README).
+```
+
+- **What it does.** `signInWithRedirect()` gets a signed `state` from the block, bound to a fresh CSRF value and to `redirectUri`, then sends the browser to the provider with PKCE. The provider returns to the block's callback, which re-checks `redirectUri` against `allowedRelayOrigins` and forwards only the one-time code. `handleSignInRedirect()` checks the response belongs to the sign-in this tab started and exchanges the code; the session is the block's usual `HttpOnly` cookie. No token is ever stored in JavaScript or put in a URL. The provider's `redirect_uri` is `<baseUrl><callbackPath>`, so `baseUrl` must be the origin your providers have registered (for providers federated through Cognito, the app origin the block registers on its managed-login client).
+- **Local development.** A frontend at `http://127.0.0.1:<port>` is always allowed, and the dev server's CORS already admits it. Open both the frontend and the dev server at `127.0.0.1` (not `localhost`), so they are the same site and the session cookie needs no `crossDomain`.
+- **Which providers.** Every provider that signs in by redirect: `oidcProviders` (including `stubIdp()` locally), `socialProviders` and `samlProviders`. Email and password sign-in keeps using `authApi` (`getAuthState` / `setAuthState`), which works across origins with the same CORS and cookie settings.
+- **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
+- **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). Note that `user.userId` is the block's id; Amplify's `getCurrentUser().userId` is the Cognito `sub`, which is `user.userSub` here.
+
 ## Planning to use Amplify client libraries?
 
 `Auth` signs users in on your backend: the browser talks to your API, and the session lives in an `HttpOnly` cookie. The Amplify client libraries (JavaScript, Swift, Android, Flutter) do the opposite: the app signs in directly against Amazon Cognito and holds the tokens itself. Both can share one user pool, so you can start with `Auth` and add an Amplify frontend later. A few choices decide whether that stays possible, and some of them are permanent:

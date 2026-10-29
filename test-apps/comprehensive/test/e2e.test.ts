@@ -26,6 +26,7 @@ import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authAdminScanFilterTests, authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
+import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
@@ -265,6 +266,9 @@ test('Auth - full purge clears every code record and leaves other keys alone', {
 // self-contained refresh tokens to fix this: see
 // https://github.com/aws-devtools-labs/aws-blocks/issues/988.
 oidcAuthTests(() => api);
+
+// The browser redirect client: a frontend on another origin signs in (L69).
+browserClientTests();
 
 // Auth createApi() narrowing: typed by the block options, refused at runtime (separate file)
 authApiNarrowingTests(() => authStateApis);

@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
 import * as shared from '@aws-blocks/auth-common/ui';
+import * as browserClient from '@aws-blocks/bb-auth/browser-client';
 import * as authUi from '@aws-blocks/bb-auth/ui';
 import * as ui from './ui.js';
 
@@ -30,5 +31,10 @@ test('@aws-blocks/blocks/ui re-exports the auth UI, notifier and store from auth
 test("@aws-blocks/blocks/ui re-exports Auth's UI helpers from @aws-blocks/bb-auth/ui", () => {
 	assert.strictEqual(typeof ui.authOverrides, 'function');
 	assert.strictEqual(ui.authOverrides, authUi.authOverrides);
-	assert.deepStrictEqual(Object.keys(ui).sort(), Object.keys(authUi).sort());
+	assert.deepStrictEqual(Object.keys(ui).sort(), [...Object.keys(authUi), ...Object.keys(browserClient)].sort());
+});
+
+test('@aws-blocks/blocks/ui re-exports the browser redirect client from @aws-blocks/bb-auth/browser-client', () => {
+	assert.strictEqual(typeof ui.createAuthClient, 'function');
+	assert.strictEqual(ui.createAuthClient, browserClient.createAuthClient);
 });

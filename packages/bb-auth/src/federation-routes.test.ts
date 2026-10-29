@@ -93,6 +93,8 @@ describe('route table', () => {
 			// The sign-out landing: Cognito's /logout returns here with a GET (D6b).
 			'GET /aws-blocks/auth/signout',
 			'POST /aws-blocks/auth/exchange',
+			// The browser redirect client's session read (L69).
+			'GET /aws-blocks/auth/session',
 			'POST /aws-blocks/auth/refresh',
 			'POST /aws-blocks/auth/exchange/refresh',
 			...['google', 'corp', 'okta', 'gh', 'entra', 'my%20idp', 'acme'].flatMap(perProvider),
@@ -137,6 +139,7 @@ describe('route table', () => {
 			'POST /aws-blocks/auth/real/authorize-params/corp',
 			'POST /aws-blocks/auth/real/signout',
 			'GET /aws-blocks/auth/real/signout',
+			'GET /aws-blocks/auth/real/session',
 		]) {
 			assert.ok(paths.includes(p), p);
 		}
@@ -463,6 +466,24 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 		const body = await google.json();
 		assert.strictEqual(body.name, AuthErrors.ProviderMisconfigured);
 		assert.match(body.error, /no Cognito managed-login configuration/);
+	});
+
+	test('GET session: 401 NotAuthenticatedException without a session (the browser redirect client)', async () => {
+		new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		const res = await fetch(`${server.origin}/aws-blocks/auth/session`);
+		assert.strictEqual(res.status, 401);
+		assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+		assert.deepStrictEqual(await res.json(), { error: 'Not signed in', name: AuthErrors.NotAuthenticated });
+	});
+
+	test('POST sign-out: 204 for the native SDKs; `?format=json` answers 200 with the body the browser can read', async () => {
+		new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
+		const native = await fetch(`${server.origin}/aws-blocks/auth/signout`, { ...json, redirect: 'manual' });
+		assert.strictEqual(native.status, 204, 'the native contract is unchanged');
+		const browser = await fetch(`${server.origin}/aws-blocks/auth/signout?format=json`, json);
+		assert.strictEqual(browser.status, 200);
+		assert.deepStrictEqual(await browser.json(), {}, 'no provider session to end without a sign-in');
 	});
 
 	test('GET on the sign-out path is the sign-out landing: 302 to postSignOutPath, no state change', async () => {
