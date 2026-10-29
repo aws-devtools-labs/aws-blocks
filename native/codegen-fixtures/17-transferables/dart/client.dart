@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -54,22 +55,22 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<RealtimeChannel<GetChannelResultMessage>> getChannel() async {
-    final result = await _client.call('api.getChannel', <String, dynamic>{});
+    final result = await _client.call('api.getChannel', const <dynamic>[]);
     return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => GetChannelResultMessage.fromJson(json));
   }
 
   Future<FileDownloadHandle> getFile({required String path}) async {
-    final params = <String, dynamic>{
-      'path': path,
-    };
+    final params = <dynamic>[
+      path,
+    ];
     final result = await _client.call('api.getFile', params);
     return FileDownloadHandle.fromJson(result as Map<String, dynamic>);
   }
 
   Future<FileUploadHandle> getUpload({required String path}) async {
-    final params = <String, dynamic>{
-      'path': path,
-    };
+    final params = <dynamic>[
+      path,
+    ];
     final result = await _client.call('api.getUpload', params);
     return FileUploadHandle.fromJson(result as Map<String, dynamic>);
   }

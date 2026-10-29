@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -96,9 +97,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<SetScoreResult> setScore({required ApiSetScoreInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.setScore', params);
     return SetScoreResult.fromJson(result as Map<String, dynamic>);
   }

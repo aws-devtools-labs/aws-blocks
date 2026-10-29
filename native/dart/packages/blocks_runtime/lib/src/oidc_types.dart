@@ -42,7 +42,7 @@ class AuthorizeParamsResponse {
 
 /// Decoded payload of the signed `state` envelope.
 ///
-/// Wire format (see `packages/bb-auth-oidc/src/state.ts`):
+/// Wire format (see `packages/bb-auth/src/state-envelope.ts`):
 /// `base64url(JSON(payload)) + '.' + base64url(hmac-sha256(body))`, no padding.
 ///
 /// The client only decodes and reads the payload portion to verify [csrf]; it

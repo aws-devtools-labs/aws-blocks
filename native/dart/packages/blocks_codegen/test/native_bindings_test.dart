@@ -133,22 +133,44 @@ void main() {
       expect(output, isNot(contains("RegExp(r'^a")));
     });
 
-    test('a namespace segment that is not a Dart identifier is an error', () {
-      for (final name in ['api.f\u00f3o.m', '.foo.m', 'foo..m', 'api..foo.m']) {
-        expect(
-          () => _generateFrom(_namespaceSpec(name)),
-          _throwsFormat('cannot name the Dart class and field it emits'),
-          reason: name,
-        );
-      }
-    });
+    // This generator allocates a legal, distinct Dart class and field for any
+    // namespace (see `identifiers.dart`) rather than refusing the spec, so a
+    // segment that isn't a Dart identifier, and two namespaces that differ only
+    // by punctuation, still generate a client that compiles.
+    test(
+      'a namespace segment that is not a Dart identifier still names a legal class and field',
+      () {
+        for (final name in [
+          'api.f\u00f3o.m',
+          '.foo.m',
+          'foo..m',
+          'api..foo.m',
+        ]) {
+          final output = _generateFrom(_namespaceSpec(name));
+          final classes = RegExp(
+            r'^class ([\w$]+) \{',
+            multiLine: true,
+          ).allMatches(output).map((m) => m.group(1)).toList();
+          expect(classes, isNotEmpty, reason: name);
+          expect(classes.where((c) => c != 'Blocks'), isNotEmpty, reason: name);
+          expect(output, isNot(contains('class Api.')), reason: name);
+        }
+      },
+    );
 
-    test('two namespaces differing only by punctuation are an error', () {
-      expect(
-        () => _generateFrom(_collidingNamespaceSpec()),
-        _throwsFormat('both generate ApiFooApi'),
-      );
-    });
+    test(
+      'two namespaces differing only by punctuation get distinct classes',
+      () {
+        final output = _generateFrom(_collidingNamespaceSpec());
+        final classes = RegExp(
+          r'^class ([\w$]+) \{',
+          multiLine: true,
+        ).allMatches(output).map((m) => m.group(1)).toList();
+        final apis = classes.where((c) => c != 'Blocks').toList();
+        expect(apis.length, 2, reason: '$classes');
+        expect(apis.toSet().length, 2, reason: '$classes');
+      },
+    );
 
     test('a dotted namespace yields one class and one identifier', () {
       final output = _generateFrom(_namespaceSpec('api.foo.bar'));
@@ -306,7 +328,7 @@ void main() {
       );
 
       expect(output, contains('Future<RealtimeChannel<dynamic>> '));
-      expect(output, contains('RealtimeChannel.fromJson('));
+      expect(output, contains('RealtimeChannel.fromJsonValue('));
       expect(output, isNot(contains('example_iot_native')));
       expect(output, isNot(contains('fromBlocksDescriptor')));
     });
@@ -434,6 +456,8 @@ void main() {
       expect(reported, isNot(contains('\n')));
     });
 
+    // This generator types a nullable transferable result `dynamic` (a
+    // `dynamic?` would only restate it).
     test('a nullable bound direct result stays dynamic', () {
       final model = _build(
         _specJson(
@@ -448,7 +472,7 @@ void main() {
       );
       final output = _generate(model);
 
-      expect(output, contains('Future<dynamic?> '));
+      expect(output, contains('Future<dynamic> '));
       expect(output, isNot(contains('fromBlocksDescriptor')));
       expect(model.warnings, isEmpty);
     });
@@ -497,8 +521,10 @@ void main() {
         ),
       );
 
+      // This runtime hydrates a channel of any payload type
+      // (`RealtimeChannel.fromJsonValue`), so no AWSBLOCKS-NATIVE-002.
       expect(_generate(model), contains('Future<RealtimeChannel<String>> '));
-      expect(model.warnings, contains(contains('AWSBLOCKS-NATIVE-002')));
+      expect(model.warnings, isNot(contains(contains('AWSBLOCKS-NATIVE-002'))));
     });
   });
 

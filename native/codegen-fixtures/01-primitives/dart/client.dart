@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -63,12 +64,12 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<EchoResult> echo({required String text, required int count, required num score, required bool enabled}) async {
-    final params = <String, dynamic>{
-      'text': text,
-      'count': count,
-      'score': score,
-      'enabled': enabled,
-    };
+    final params = <dynamic>[
+      text,
+      count,
+      score,
+      enabled,
+    ];
     final result = await _client.call('api.echo', params);
     return EchoResult.fromJson(result as Map<String, dynamic>);
   }

@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -169,12 +170,12 @@ class AuthAction {
       other is AuthAction &&
           name == other.name &&
           label == other.label &&
-          fields == other.fields &&
+          blocksDeepEquals(fields, other.fields) &&
           url == other.url &&
           method == other.method;
 
   @override
-  int get hashCode => Object.hash(name, label, fields, url, method);
+  int get hashCode => Object.hash(name, label, blocksDeepHash(fields), url, method);
 
   @override
   String toString() => 'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method)';
@@ -553,12 +554,12 @@ class AuthState {
       other is AuthState &&
           state == other.state &&
           user == other.user &&
-          actions == other.actions &&
+          blocksDeepEquals(actions, other.actions) &&
           error == other.error &&
           retriable == other.retriable;
 
   @override
-  int get hashCode => Object.hash(state, user, actions, error, retriable);
+  int get hashCode => Object.hash(state, user, blocksDeepHash(actions), error, retriable);
 
   @override
   String toString() => 'AuthState(state: $state, user: $user, actions: $actions, error: $error, retriable: $retriable)';
@@ -626,16 +627,23 @@ class SignInInput extends AuthApiSetAuthStateInput {
 class SignUpInput extends AuthApiSetAuthStateInput {
   final String username;
   final String password;
+  final Map<String, String> additionalProperties;
 
   const SignUpInput({
     required this.username,
     required this.password,
+    this.additionalProperties = const {},
   });
 
   factory SignUpInput.fromJson(Map<String, dynamic> json) {
+    const knownKeys = {'action', 'username', 'password'};
     return SignUpInput(
       username: json['username'] as String,
       password: json['password'] as String,
+      additionalProperties: Map.fromEntries(
+        json.entries.where((e) => !knownKeys.contains(e.key))
+            .map((e) => MapEntry(e.key, e.value as String)),
+      ),
     );
   }
 
@@ -645,6 +653,8 @@ class SignUpInput extends AuthApiSetAuthStateInput {
       'action': 'signUp',
       'username': username,
       'password': password,
+      for (final e in additionalProperties.entries)
+        if (!const {'action', 'username', 'password'}.contains(e.key)) e.key: e.value,
     };
   }
 
@@ -653,13 +663,14 @@ class SignUpInput extends AuthApiSetAuthStateInput {
       identical(this, other) ||
       other is SignUpInput &&
           username == other.username &&
-          password == other.password;
+          password == other.password &&
+          blocksDeepEquals(additionalProperties, other.additionalProperties);
 
   @override
-  int get hashCode => Object.hash(username, password);
+  int get hashCode => Object.hash(username, password, blocksDeepHash(additionalProperties));
 
   @override
-  String toString() => 'SignUpInput(username: $username, password: $password)';
+  String toString() => 'SignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
 }
 
 class ConfirmSignUpInput extends AuthApiSetAuthStateInput {
@@ -928,9 +939,9 @@ class AuthApiApi {
   AuthApiApi(this._client);
 
   Future<AuthState> setAuthState({required AuthApiSetAuthStateInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('authApi.setAuthState', params);
     return AuthState.fromJson(result as Map<String, dynamic>);
   }

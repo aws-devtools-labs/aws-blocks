@@ -80,6 +80,50 @@ RpcModel _nestedVsFlat() {
   );
 }
 
+/// Two namespaces whose `setState` input unions share the `signUp` arm but
+/// differ in shape. Dart names an `…Input` union's arms `<Value>Input`, so both
+/// arms want `SignUpInput`.
+RpcModel _sharedArmNames({bool reversed = false}) {
+  RpcMethod setState(String ns, Map<String, TypeRef> signUp) => RpcMethod(
+    name: '$ns.setState',
+    params: [
+      RpcParam(
+        name: 'input',
+        isRequired: true,
+        schema: DiscriminatedUnionRef(
+          discriminant: 'action',
+          variants: [
+            UnionVariant(
+              discriminantValue: 'signUp',
+              properties: signUp,
+              required: signUp.keys.toSet(),
+            ),
+            const UnionVariant(
+              discriminantValue: 'signOut',
+              properties: {},
+              required: {},
+            ),
+          ],
+        ),
+      ),
+    ],
+    result: const PrimitiveRef('void'),
+  );
+  final methods = [
+    setState('basic', const {'username': PrimitiveRef('String')}),
+    setState('cognito', const {
+      'username': PrimitiveRef('String'),
+      'code': PrimitiveRef('String'),
+    }),
+  ];
+  return RpcModel(
+    title: 't',
+    version: '1',
+    schemas: {},
+    methods: reversed ? methods.reversed.toList() : methods,
+  );
+}
+
 void main() {
   group('param qualification', () {
     test(
@@ -394,6 +438,69 @@ void main() {
           ),
         ),
         returnsNormally,
+      );
+    });
+  });
+
+  group('union arms shared by two unions', () {
+    test('get distinct classes, qualified by their union', () {
+      for (final reversed in [false, true]) {
+        final model = CodegenModelBuilder().build(
+          _sharedArmNames(reversed: reversed),
+        );
+        final out = const DartCodeGenerator().generate(model);
+        final classes = RegExp(
+          r'^class (\w+)',
+          multiLine: true,
+        ).allMatches(out).map((m) => m[1]).toList();
+        expect(classes.toSet(), hasLength(classes.length), reason: '$classes');
+        // The union whose name sorts first keeps the short names.
+        expect(out, contains('class SignUpInput extends BasicSetStateInput {'));
+        expect(
+          out,
+          contains('class SignOutInput extends BasicSetStateInput {'),
+        );
+        expect(
+          out,
+          contains(
+            'class CognitoSetStateInputSignUp extends CognitoSetStateInput {',
+          ),
+        );
+        expect(
+          out,
+          contains(
+            'class CognitoSetStateInputSignOut extends CognitoSetStateInput {',
+          ),
+        );
+        expect(
+          out,
+          contains(
+            "case 'signUp': return CognitoSetStateInputSignUp.fromJson(json);",
+          ),
+        );
+        expect(
+          model.warnings,
+          contains(
+            contains(
+              '`SignUpInput` of CognitoSetStateInput -> '
+              'CognitoSetStateInputSignUp',
+            ),
+          ),
+        );
+      }
+    });
+
+    test('throws with --fail-on-collision', () {
+      expect(
+        () =>
+            CodegenModelBuilder(failOnCollision: true).build(_sharedArmNames()),
+        throwsA(
+          isA<NamingConflictException>().having(
+            (e) => e.message,
+            'message',
+            contains('`SignUpInput`'),
+          ),
+        ),
       );
     });
   });

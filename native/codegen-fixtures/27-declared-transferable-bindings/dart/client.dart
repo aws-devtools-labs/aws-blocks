@@ -1,6 +1,7 @@
 // GENERATED CODE — DO NOT MODIFY BY HAND
 // Generator: blocks-codegen
 // Source: test v1.0.0
+// Requires blocks_runtime 0.1.5 or later.
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -92,49 +93,49 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<DeviceHandle> getDeviceHandle({required String deviceId}) async {
-    final params = <String, dynamic>{
-      'deviceId': deviceId,
-    };
+    final params = <dynamic>[
+      deviceId,
+    ];
     final result = await _client.call('api.getDeviceHandle', params);
     return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-handle'));
   }
 
   Future<DeviceLink<ConnectDeviceResultMessage>> connectDevice({required String deviceId}) async {
-    final params = <String, dynamic>{
-      'deviceId': deviceId,
-    };
+    final params = <dynamic>[
+      deviceId,
+    ];
     final result = await _client.call('api.connectDevice', params);
     return DeviceLink<ConnectDeviceResultMessage>.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-link'), (json) => ConnectDeviceResultMessage.fromJson(json));
   }
 
   Future<DeviceHandle> findDeviceHandle({required String serialNumber}) async {
-    final params = <String, dynamic>{
-      'serialNumber': serialNumber,
-    };
+    final params = <dynamic>[
+      serialNumber,
+    ];
     final result = await _client.call('api.findDeviceHandle', params);
     return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-handle'));
   }
 
   Future<SensorStream> openSensorStream({required String sensorId}) async {
-    final params = <String, dynamic>{
-      'sensorId': sensorId,
-    };
+    final params = <dynamic>[
+      sensorId,
+    ];
     final result = await _client.call('api.openSensorStream', params);
     return SensorStream.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-sensor/stream'));
   }
 
   Future<UnknownTransferable> openGatewayLink({required String gatewayId}) async {
-    final params = <String, dynamic>{
-      'gatewayId': gatewayId,
-    };
+    final params = <dynamic>[
+      gatewayId,
+    ];
     final result = await _client.call('api.openGatewayLink', params);
     return UnknownTransferable.fromJson(result, expectedTag: 'example-gateway/link');
   }
 
   Future<UnknownTransferable> getFirmwareSession({required String deviceId}) async {
-    final params = <String, dynamic>{
-      'deviceId': deviceId,
-    };
+    final params = <dynamic>[
+      deviceId,
+    ];
     final result = await _client.call('api.getFirmwareSession', params);
     return UnknownTransferable.fromJson(result, expectedTag: 'example-iot/firmware-session');
   }

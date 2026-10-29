@@ -11,9 +11,15 @@ environment:
 dependencies:
   args: ^2.4.0
   build: ^4.0.0
+  # Generated clients need blocks_runtime 0.1.5 (`minimumRuntimeVersion` in
+  # lib/src/generator.dart, named in each generated header). Raise this to ^0.1.5
+  # in the same change that publishes blocks_runtime 0.1.5.
   blocks_runtime: ^0.1.4
 
 dev_dependencies:
+  # analyzer 14.5.0 (2026-10-06) removed a setter build_runner 2.16.1 still uses, so
+  # `dart run build_runner build` fails to compile. Drop this cap once build_runner ships a fix.
+  analyzer: '<14.5.0'
   build_runner: ^2.14.0
   lints: ^6.0.0
   test: ^1.25.0
