@@ -17,8 +17,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync } from 'local-pkg';
+import { getProjectPackageInfo } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
+import { targetCompute } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
   FRAMEWORK_COMPUTE_RUNTIME,
   FRAMEWORK_EDGE_COMPUTE_RUNTIME,
@@ -164,7 +166,9 @@ export const nextjsAdapter = (
 
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
-    patchStreamingWrapperForApiGateway(openNextDir);
+    // Web Functions use OpenNext's `node` wrapper (a plain HTTP server, no
+    // API Gateway framing), so there is nothing to patch.
+    if (targetCompute() !== 'web-function') patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
     // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
@@ -1019,6 +1023,12 @@ const escapeRegex = (s: string): string =>
  * separate edge function — OpenNext refuses to build a project that
  * declares `runtime = 'edge'` without an explicit split function.
  *
+ * When the run targets Lambda Web Functions (`compute.type:
+ * 'web-function'`) the server is a plain Node.js HTTP server instead, so the
+ * required overrides are `wrapper: 'node'`, `converter: 'node'` and
+ * `generateDockerfile: true` (the container origin the adapter maps to
+ * http-server compute).
+ *
  * Why textual scan: the file is TypeScript that may be transpiled at
  * build time; importing it here would require running the TS compiler
  * before OpenNext even starts. We strip comments + look for either a
@@ -1047,19 +1057,32 @@ const validateUserOpenNextConfig = (
   }
   const source = stripCommentsForScan(raw);
   const missing: string[] = [];
-  if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
-    missing.push("converter: 'aws-apigw-v1'");
-  }
-  // Accept either the patched community wrapper (`aws-lambda-streaming`) or
-  // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
-  // the upstream PR). Both produce a handler compatible with the REST API
-  // STREAM integration; rejecting the native one would force users onto the
-  // wrapper we monkeypatch even after upstream ships the proper fix.
-  const hasStreamingWrapper =
-    findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
-    findOverride(source, 'wrapper', 'aws-apigw-streaming');
-  if (!hasStreamingWrapper) {
-    missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+  if (targetCompute() === 'web-function') {
+    // Lambda Web Functions run the server as a plain Node.js HTTP server:
+    // OpenNext's `node` wrapper + converter, emitted as a container (`ecs`)
+    // origin so the adapter maps it to http-server compute.
+    for (const [key, value] of [
+      ['wrapper', 'node'],
+      ['converter', 'node'],
+    ] as const) {
+      if (!findOverride(source, key, value)) missing.push(`${key}: '${value}'`);
+    }
+    if (!/\bgenerateDockerfile\s*:\s*true\b/.test(source)) missing.push('generateDockerfile: true');
+  } else {
+    if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
+      missing.push("converter: 'aws-apigw-v1'");
+    }
+    // Accept either the patched community wrapper (`aws-lambda-streaming`) or
+    // OpenNext's native API Gateway streaming wrapper (`aws-apigw-streaming`,
+    // the upstream PR). Both produce a handler compatible with the REST API
+    // STREAM integration; rejecting the native one would force users onto the
+    // wrapper we monkeypatch even after upstream ships the proper fix.
+    const hasStreamingWrapper =
+      findOverride(source, 'wrapper', 'aws-lambda-streaming') ||
+      findOverride(source, 'wrapper', 'aws-apigw-streaming');
+    if (!hasStreamingWrapper) {
+      missing.push("wrapper: 'aws-lambda-streaming' (or 'aws-apigw-streaming')");
+    }
   }
   // Edge functions must be split out per OpenNext's build-time
   // requirement. Detect by checking for any `runtime: 'edge'` token in
@@ -1104,13 +1127,23 @@ const installGeneratedOpenNextConfig = (
   // semantically-equivalent fix would be externalizing `@aws-sdk/*`
   // (Lambda runtime ships AWS SDK v3), but OpenNext does not yet expose
   // an `external` knob in its public config.
+  // Lambda Web Functions (compute.type: 'web-function') run the server as a
+  // plain Node.js HTTP server: OpenNext's `node` wrapper/converter, emitted as
+  // a container (`ecs`) origin so it maps to http-server compute. (The
+  // Dockerfile OpenNext writes alongside is unused.)
+  const defaultOverride =
+    targetCompute() === 'web-function'
+      ? `converter: 'node',
+      wrapper: 'node',
+      generateDockerfile: true,`
+      : `converter: 'aws-apigw-v1',
+      wrapper: 'aws-lambda-streaming',`;
   const configBody = `// AUTO-GENERATED by @aws-blocks/hosting — do not edit.
 const config = {
   default: {
     minify: true,
     override: {
-      converter: 'aws-apigw-v1',
-      wrapper: 'aws-lambda-streaming',
+      ${defaultOverride}
     },
   },${edgeBlock}
 };
@@ -1234,13 +1267,72 @@ export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
  * `.open-next/`) or when the version can't be parsed.
  */
 const warnIfOpenNextOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('@opennextjs/aws', { paths: [projectDir] });
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_OPENNEXT_RANGE)) return;
   process.stderr.write(
     `⚠️  @opennextjs/aws@${version} is outside the version range this adapter was verified against (${VERIFIED_OPENNEXT_RANGE}). ` +
       `If the streaming-wrapper or edge-bundle patcher errors with UpstreamPatchPatternChangedError, that's the most likely cause — pin to a verified version or file an issue with the OpenNext release notes.\n`,
+  );
+};
+
+/**
+ * The `@opennextjs/aws` version the adapter builds with when the project
+ * doesn't declare one. It sits inside {@link VERIFIED_OPENNEXT_RANGE}, so an
+ * undeclared OpenNext never resolves to whatever `npx` would fetch as the
+ * newest (unverified) release. It is the newest verified release.
+ *
+ * Bump together with {@link OPENNEXT_FALLBACK_NEXT_PEER_RANGE} and the
+ * `@opennextjs/aws` pin in the `create-blocks-app` `nextjs` template
+ * (`version_pins.test.ts` checks the template pin).
+ * @internal
+ */
+export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
+
+/**
+ * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares in its
+ * `package.json`. Used to check the app's Next.js version when OpenNext isn't
+ * installed (so there's no installed `package.json` to read it from). Must be
+ * copied from the fallback version's published `peerDependencies.next`.
+ * @internal
+ */
+export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
+
+/** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
+type InstalledOpenNext = { version: string; nextPeerRange?: string };
+
+const findInstalledOpenNext = (
+  projectDir: string,
+): InstalledOpenNext | undefined => {
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
+  if (!info?.version) return undefined;
+  const peers = (info.packageJson as { peerDependencies?: Record<string, string> })
+    .peerDependencies;
+  return { version: info.version, nextPeerRange: peers?.next };
+};
+
+/**
+ * Warn when the app's Next.js version is outside the `next` peer range of the
+ * OpenNext that will build it. Package managers that skip peer checks (pnpm,
+ * `--legacy-peer-deps`) let such a pair install, and OpenNext then builds a
+ * combination it was never released against. Warn rather than fail: the pair
+ * may still work, and the fix (upgrade `next` within its major, or pick a
+ * different OpenNext) is the user's call.
+ */
+const warnIfNextOutsideOpenNextPeerRange = (
+  projectDir: string,
+  openNextVersion: string,
+  nextPeerRange: string | undefined,
+): void => {
+  const nextVersion = detectNextVersion(projectDir);
+  if (!nextVersion || !nextPeerRange || !semver.validRange(nextPeerRange)) return;
+  // `includePrerelease`: a `next` canary/rc inside the range (e.g.
+  // `16.3.0-canary.5`) is not a mismatch.
+  if (semver.satisfies(nextVersion, nextPeerRange, { includePrerelease: true })) return;
+  process.stderr.write(
+    `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextPeerRange}). ` +
+      'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
   );
 };
 
@@ -1418,9 +1510,55 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
  * @internal
  */
 export const detectNextVersion = (projectDir: string): string | undefined => {
-  const info = getPackageInfoSync('next', { paths: [projectDir] });
+  const info = getProjectPackageInfo('next', projectDir);
   const version = info?.version;
   return version && semver.valid(version) ? version : undefined;
+};
+
+/**
+ * The `next` versions whose `fetchInternalImage` takes the 5-arg
+ * `(href, _req, _res, maximumResponseBody, handleRequest)` signature, from the
+ * published packages' `dist/server/image-optimizer.js`: 15.5.16 and later on
+ * the 15.x line, 16.2.5 and later on 16.x (16.0.x, 16.1.x and 16.2.0–16.2.4
+ * are still 4-arg). Used when the installed source can't be read.
+ * @internal
+ */
+export const NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE = '>=15.5.16 <16 || >=16.2.5';
+
+/**
+ * How many parameters the installed Next.js's `fetchInternalImage` takes:
+ * read from `next/dist/server/image-optimizer.js` (the code OpenNext bundles),
+ * else derived from `nextVersion` and
+ * {@link NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE}. `undefined` when neither is
+ * known.
+ * @internal
+ */
+export const detectFetchInternalImageArity = (
+  projectDir: string,
+  nextVersion: string | undefined,
+): 4 | 5 | undefined => {
+  const rootPath = getProjectPackageInfo('next', projectDir)?.rootPath;
+  if (rootPath) {
+    try {
+      const src = fs.readFileSync(
+        path.join(rootPath, 'dist', 'server', 'image-optimizer.js'),
+        'utf-8',
+      );
+      const params = /function fetchInternalImage\(([^)]*)\)/.exec(src)?.[1];
+      if (params !== undefined) {
+        const count = params.split(',').filter((p) => p.trim()).length;
+        if (count === 4 || count === 5) return count;
+      }
+    } catch {
+      // Unreadable or a different layout — fall back to the version.
+    }
+  }
+  if (!nextVersion) return undefined;
+  return semver.satisfies(nextVersion, NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE, {
+    includePrerelease: true,
+  })
+    ? 5
+    : 4;
 };
 
 /**
@@ -1433,6 +1571,11 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
  *   |--------|-------------------------------------------------------------------|
  *   | 15.5.x | `(href, _req, _res, handleRequest)` — 4 args                       |
  *   | 16.x   | `(href, _req, _res, maximumResponseBody, handleRequest)` — 5 args  |
+ *
+ *   Correction: the change landed in PATCH releases on both lines — 4 args up
+ *   to 15.5.15 and on 16.0.x, 16.1.x and 16.2.0–16.2.4; 5 args from 15.5.16
+ *   and from 16.2.5. The gate therefore reads the installed `next`'s
+ *   signature ({@link detectFetchInternalImageArity}) instead of its major.
  *
  * `@opennextjs/aws` (≤3.10.x) calls it with FOUR positional args
  * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`). That call is:
@@ -1463,20 +1606,22 @@ export const patchImageOptimizerForNext16 = (
   const root = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(root)) return; // image optimization disabled for this app
 
-  // Version gate: the `void 0` insertion is ONLY correct for Next ≥ 16 (the
-  // 5-arg `fetchInternalImage`). On Next 15.x the OpenNext 4-arg call is
-  // already correct, so patching would corrupt it. When the version is
-  // knowable and < 16, skip entirely.
+  // Arity gate: the `void 0` insertion is ONLY correct for a Next.js whose
+  // `fetchInternalImage` takes 5 args. On a 4-arg Next the OpenNext call is
+  // already correct, so patching would corrupt it. The 5-arg signature
+  // arrived in patch releases (15.5.16, 16.2.5), not at a major, so read it
+  // from the installed `next` and fall back to the published boundaries.
   const nextVersion = projectDir ? detectNextVersion(projectDir) : undefined;
-  if (nextVersion && semver.major(nextVersion) < 16) {
+  const arity = projectDir ? detectFetchInternalImageArity(projectDir, nextVersion) : undefined;
+  if (arity === 4) {
     process.stderr.write(
-      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion} uses the ` +
+      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion ?? '(unknown version)'} uses the ` +
         `4-arg fetchInternalImage signature that OpenNext already calls correctly ` +
-        `(the maximumResponseBody parameter was added in Next 16).\n`,
+        `(the maximumResponseBody parameter arrived in Next 15.5.16 and 16.2.5).\n`,
     );
     return;
   }
-  if (!nextVersion) {
+  if (arity === undefined) {
     // Version unknown (e.g. a pre-built `.open-next/` with no resolvable
     // `next` in scope). Default to patching, since Next 16 (5-arg) is the
     // common case — log it so the build output explains the choice.
@@ -1631,7 +1776,10 @@ export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
  * Best-effort + idempotent: skips when the image fn dir is absent (image
  * optimization disabled) or a linux sharp is already present; warns (not fatal)
  * if the install fails, since the crash-level bug is already fixed and the app
- * still serves originals.
+ * still serves originals. "Already present" means a linux-x64 sharp within
+ * {@link SHARP_VERSION_RANGE}: a bundled sharp below that floor is vulnerable
+ * (GHSA-wq5f-xc86-pv6w) and an arm64-only one can't load, so both are
+ * reinstalled.
  * @internal
  */
 export const installLinuxSharpForImageOptimizer = (
@@ -1640,16 +1788,8 @@ export const installLinuxSharpForImageOptimizer = (
   const imgDir = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(imgDir)) return; // image optimization disabled
 
-  // Already has a linux sharp binary? (idempotent — avoid reinstalling.)
-  const linuxSharp = fg.sync(
-    'node_modules/@img/sharp-linux*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  const linuxSharpLegacy = fg.sync(
-    'node_modules/sharp/**/linux-x64*/**/*.node',
-    { cwd: imgDir, absolute: true },
-  );
-  if (linuxSharp.length > 0 || linuxSharpLegacy.length > 0) return;
+  // Already has a patched linux-x64 sharp? (idempotent — avoid reinstalling.)
+  if (hasPatchedLinuxSharp(imgDir, 'x64')) return;
 
   // Pin a MODERN sharp (>=0.33). The `--os/--cpu/--libc` cross-install flags
   // (which fetch the `@img/sharp-linux-x64` prebuilt) only exist on sharp
@@ -1657,8 +1797,8 @@ export const installLinuxSharpForImageOptimizer = (
   // sits in `node_modules/sharp/build/Release/*.node` and is NOT replaced by
   // those flags (0.32 used `prebuild-install`/SHARP_* env, not npm os/cpu) —
   // so reinstalling `^0.32` would leave the darwin binary in place and the
-  // optimizer would keep serving unoptimized originals. Force 0.34.x.
-  const SHARP_RANGE = '^0.34.0';
+  // optimizer would keep serving unoptimized originals. Force the shared
+  // patched range (see SHARP_VERSION_RANGE for the security floor).
   const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
   // Remove the wrong-platform / old bundled sharp so the reinstall is clean and
   // the fresh linux binary is unambiguously what loads at runtime.
@@ -1669,7 +1809,7 @@ export const installLinuxSharpForImageOptimizer = (
       /* best-effort — npm install below still overwrites */
     }
   }
-  const sharpVersion = SHARP_RANGE;
+  const sharpVersion = SHARP_VERSION_RANGE;
 
   // Minimal package.json so `npm install` only pulls sharp (+ its platform
   // optionalDependencies), not the whole app tree.
@@ -1815,15 +1955,69 @@ const runNextBuild = (projectDir: string): void => {
  * Execute the OpenNext build command.
  *
  * Runs `npx @opennextjs/aws build` from the project directory. The consumer
- * project must have @opennextjs/aws installed as a devDependency — this avoids
- * bloating the hosting package for SPA/static users who don't need OpenNext.
+ * project should have @opennextjs/aws installed as a devDependency — Hosting
+ * declares it only as an optional peer, which avoids bloating the hosting
+ * package for SPA/static users who don't need OpenNext.
  *
- * If @opennextjs/aws is not installed, npx will fail with a clear error.
- * We catch it and provide an actionable resolution message.
+ * If @opennextjs/aws is not installed, the build warns and runs
+ * `npx --yes @opennextjs/aws@<OPENNEXT_FALLBACK_VERSION> build` instead of
+ * letting npx fetch the newest (unverified) release. A failed build throws
+ * `OpenNextNotFoundError` when OpenNext wasn't installed (resolution: declare
+ * the pinned version) and `OpenNextBuildError` when it was. Before building,
+ * it also warns when the app's `next` version is outside the building
+ * OpenNext's `next` peer range.
  */
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
-  const args = ['@opennextjs/aws', 'build'];
+  // Hosting declares `@opennextjs/aws` as an optional peer, so nothing
+  // installs it for the app. Without a local install, a bare
+  // `npx @opennextjs/aws` fetches the newest release — outside the verified
+  // range more often than not. Build with the verified fallback version
+  // instead, and say so.
+  const installed = findInstalledOpenNext(projectDir);
+  const openNextVersion = installed?.version ?? OPENNEXT_FALLBACK_VERSION;
+  if (!installed) {
+    process.stderr.write(
+      `⚠️  @opennextjs/aws is not installed in this project; building with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}, the version this adapter falls back to. ` +
+        `Declare it to control the version and build without downloading it: npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n`,
+    );
+  }
+  warnIfNextOutsideOpenNextPeerRange(
+    projectDir,
+    openNextVersion,
+    installed ? installed.nextPeerRange : OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
+  );
+
+  const args = installed
+    ? ['@opennextjs/aws', 'build']
+    : ['--yes', `@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`, 'build'];
   if (configPath) args.push('--config-path', configPath);
+
+  // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
+  // the Next.js team's 2-year support window: `checkNextVersionSupport` prints
+  // `Next.js version X is not supported by the Next.js team` and calls
+  // `process.exit(1)` unless `--dangerously-use-unsupported-next-version` is
+  // set. That window is a wall-clock deadline, so a deploy that worked
+  // yesterday starts hard-failing the day the major expires — with no change
+  // on the user's side. We'd rather let the deploy proceed (the app still runs
+  // fine; the policy is about upstream security patches) than break it on a
+  // date.
+  //
+  // We pass the flag UNCONDITIONALLY rather than mirror OpenNext's release-date
+  // table and decide ourselves (which we'd have to keep in sync). It is inert
+  // on a supported version — OpenNext only reads the flag inside its
+  // `if (!isSupported)` branch, so a supported build ignores it entirely — and
+  // on an unsupported version it downgrades OpenNext's `exit(1)` to a
+  // `logger.warn` ("Continuing build due to … flag") and continues. OpenNext's
+  // own `isNextVersionSupported` stays the single source of truth for the
+  // supported/unsupported decision, and its warning is the one the user sees.
+  //
+  // The explicit `'true'` value is REQUIRED, not cosmetic: OpenNext's CLI
+  // `parseArgs` only records a `--flag` when a following non-`-` token exists
+  // (otherwise it stores `undefined`), and `build()` then applies the override
+  // only when the value `!== undefined`. A bare trailing `--flag` would parse
+  // as `undefined` and the override would silently NOT apply, so the value
+  // token is what makes it take effect.
+  args.push('--dangerously-use-unsupported-next-version', 'true');
 
   process.stderr.write(
     `\u{1F528} Running OpenNext build: npx ${args.join(' ')}\n`,
@@ -1856,22 +2050,22 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
   } catch (error) {
-    // Check if the error is because @opennextjs/aws is not installed
-    const errMsg = (error as Error).message || '';
-    if (
-      errMsg.includes('not found') ||
-      errMsg.includes('ERR_MODULE_NOT_FOUND') ||
-      errMsg.includes('Cannot find package')
-    ) {
+    // The child's output went straight to the terminal (`stdio: 'inherit'`),
+    // so the thrown error only carries the exit code — whether OpenNext was
+    // installed is the one thing we know for sure about the failure.
+    if (!installed) {
       throw new HostingError(
         'OpenNextNotFoundError',
         {
-          message:
-            '@opennextjs/aws is not installed. Next.js hosting requires OpenNext to build and deploy your app.',
+          message: `@opennextjs/aws is not installed, and the build with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION} failed. Next.js hosting requires OpenNext to build and deploy your app.`,
           resolution:
-            "Add @opennextjs/aws to your project's devDependencies:\n\n" +
-            '  npm install --save-dev @opennextjs/aws\n\n' +
-            'Then re-run your deployment.',
+            "Add @opennextjs/aws to your project's devDependencies (this also avoids downloading it during the build):\n\n" +
+            `  npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n\n` +
+            'Then re-run your deployment. If it still fails, check the build output above. Common issues:\n' +
+            '  - Missing Next.js dependencies (run: npm install)\n' +
+            '  - Invalid next.config.js\n' +
+            '  - TypeScript compilation errors in your app\n' +
+            '  - No network access to the npm registry during the build (declaring the dependency avoids the download)',
         },
         error as Error,
       );
@@ -2093,10 +2287,14 @@ const mapOriginToCompute = (
   }
 
   if (origin.type === 'ecs' || origin.type === 'docker') {
+    // OpenNext's container origin (`node` wrapper) starts its HTTP server from
+    // `index.mjs`; a custom entrypoint wins when declared.
+    const openNextServerEntry = fs.existsSync(path.join(effectiveBundle, 'index.mjs')) ? 'index.mjs' : undefined;
     return {
       type: 'http-server',
       bundle: effectiveBundle,
       entrypoint: origin.entrypoint ?? 'server.js',
+      serverEntry: origin.entrypoint ?? openNextServerEntry,
       port: origin.port ?? 3000,
       placement: 'regional',
       streaming: origin.streaming ?? false,

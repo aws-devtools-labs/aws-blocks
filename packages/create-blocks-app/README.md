@@ -125,6 +125,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   "scripts": {
     "dev": "tsx watch aws-blocks/scripts/server.ts",
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",

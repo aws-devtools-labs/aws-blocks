@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
+import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, rawRouteErrorFromCatch, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
 import { ApiError, isBlocksError, blocksError, brandBlocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
@@ -73,6 +73,64 @@ describe('-32600 Invalid Request error shape', () => {
   });
 });
 
+describe('parseRpcRequest — per-namespace path', () => {
+  const body = JSON.stringify({ jsonrpc: '2.0', method: 'orders.list', params: [], id: 3 });
+
+  it('accepts a path whose namespace matches the body prefix', () => {
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/orders' });
+    assert.ok(result.ok);
+    if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
+  });
+
+  it('accepts the bare endpoint and no pathname — the body prefix decides', () => {
+    for (const options of [{ pathname: '/aws-blocks/api' }, { pathname: '/aws-blocks/api/' }, {}]) {
+      const result = parseRpcRequest(body, options);
+      assert.ok(result.ok, JSON.stringify(options));
+      if (result.ok) assert.strictEqual(result.request.apiNamespace, 'orders');
+    }
+  });
+
+  it('accepts a trailing slash after the namespace', () => {
+    assert.ok(parseRpcRequest(body, { pathname: '/aws-blocks/api/orders/' }).ok);
+  });
+
+  it('compares namespaces case-sensitively', () => {
+    // Export names are case-sensitive, and so is API Gateway routing: accepting
+    // `/Orders` for `orders.list` would let a request reach the default compute's
+    // catch-all for a namespace routed elsewhere.
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/Orders' });
+    assert.strictEqual(result.ok, false);
+  });
+
+  it('rejects a per-namespace path deeper than one segment', () => {
+    for (const pathname of ['/aws-blocks/api/orders/list', '/aws-blocks/api//orders', '/aws-blocks/api/orders//']) {
+      const result = parseRpcRequest(body, { pathname });
+      assert.strictEqual(result.ok, false, pathname);
+      if (!result.ok) assert.match(JSON.parse(result.response).error.message, /not a deeper path/, pathname);
+    }
+  });
+
+  it('clips caller-supplied names it echoes in the error', () => {
+    const long = 'x'.repeat(10_000);
+    const result = parseRpcRequest(JSON.stringify({ jsonrpc: '2.0', method: `${long}.list`, id: 4 }), {
+      pathname: `/aws-blocks/api/${long}y`,
+    });
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) assert.ok(result.response.length < 400, `response stays small: ${result.response.length} chars`);
+  });
+
+  it('rejects a path whose namespace differs from the body prefix', () => {
+    const result = parseRpcRequest(body, { pathname: '/aws-blocks/api/reports' });
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) {
+      const parsed = JSON.parse(result.response);
+      assert.strictEqual(parsed.error.code, RpcErrorCode.InvalidRequest);
+      assert.strictEqual(parsed.error.data.name, 'InvalidRequest');
+      assert.strictEqual(parsed.id, 3);
+    }
+  });
+});
+
 describe('errorResponseFromCatch does not leak backend internals', () => {
   it('collapses a non-ApiError (driver exception) to a generic 500', () => {
     // Simulate a Postgres/DynamoDB driver throw: custom class name + raw message.
@@ -123,7 +181,7 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     // Most Building Blocks define a local blocksError() with a package-specific
     // message format, then stamp the wire-safe brand through core's
     // brandBlocksError(). This simulates that path: a fresh named Error built by a
-    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth-oidc) and
+    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth) and
     // branded. Its BB name AND message must cross the wire.
     const bbErr = new Error('Invalid email address');
     bbErr.name = 'InvalidInputException';
@@ -241,6 +299,49 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     // cause is server-side only — never serialized.
     assert.ok(!JSON.stringify(parsed).includes('relation'));
     assert.ok(!JSON.stringify(parsed).includes('cause'));
+  });
+});
+
+describe('rawRouteErrorFromCatch does not leak backend internals', () => {
+  it('collapses an uncaught raw SDK exception to a generic 500 with no name', () => {
+    class DynamoDBServiceException extends Error {
+      constructor(message: string) {
+        super(message);
+        this.name = 'DynamoDBServiceException';
+      }
+    }
+    const raw = new DynamoDBServiceException('arn:aws:dynamodb:us-east-1:123456789012:table/secret not authorized');
+
+    const { status, body } = rawRouteErrorFromCatch(raw);
+    const parsed = JSON.parse(body);
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(parsed, { error: 'Internal error' });
+    assert.ok(!body.includes('DynamoDBServiceException'));
+    assert.ok(!body.includes('not authorized'));
+    assert.ok(!JSON.stringify(parsed).includes('123456789012'));
+  });
+
+  it('collapses a non-Error throw to a generic 500', () => {
+    const { status, body } = rawRouteErrorFromCatch('raw string failure');
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(JSON.parse(body), { error: 'Internal error' });
+  });
+
+  it('keeps the name and message of a branded Building Block error', () => {
+    const raw = blocksError('BatchSubmitFailedException', 'Batch contains 150 payloads, exceeds the 100 limit');
+    const { status, body } = rawRouteErrorFromCatch(raw);
+    assert.strictEqual(status, 500);
+    assert.deepStrictEqual(JSON.parse(body), {
+      error: 'BatchSubmitFailedException: Batch contains 150 payloads, exceeds the 100 limit',
+      name: 'BatchSubmitFailedException',
+    });
+  });
+
+  it('keeps the status, name and message of an ApiError', () => {
+    const err = new ApiError('Username already taken', 409, { name: 'ConditionalCheckFailedException' });
+    const { status, body } = rawRouteErrorFromCatch(err);
+    assert.strictEqual(status, 409);
+    assert.deepStrictEqual(JSON.parse(body), { error: 'Username already taken', name: 'ConditionalCheckFailedException' });
   });
 });
 

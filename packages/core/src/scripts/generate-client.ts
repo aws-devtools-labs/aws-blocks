@@ -5,7 +5,7 @@ import { isManagedValue } from '@aws-blocks/hosting';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { API_NAMESPACE_MARKER } from '../api.js';
+import { isApiNamespace, isScopeLike } from '../rpc-dispatch.js';
 
 /**
  * Generate browser-safe client code from backend exports.
@@ -24,9 +24,13 @@ export async function generateClientCode(foundationPath: string): Promise<string
 
 	const backend = await import(pathToFileURL(foundationPath).href);
 
-	// Read collected middleware and clean up
+	// Read collected middleware, then clean up only the collector we created.
+	// Deleting one we didn't own would clobber a collector the dev server (or a
+	// concurrent generate-spec) is still using — mirrors generate-spec.ts.
 	const middleware: string[] = (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
-	delete (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
+	if (!collectorAlreadyActive) {
+		delete (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__;
+	}
 
 	const imports = new Set<string>();
 	const lines: string[] = [];
@@ -42,16 +46,16 @@ export async function generateClientCode(foundationPath: string): Promise<string
 	for (const [name, value] of Object.entries(backend)) {
 		if (name.startsWith('_')) continue;
 
-		const isApiNamespace = typeof (value as any)?.[API_NAMESPACE_MARKER] === 'string';
-		if (isApiNamespace) {
+		if (isApiNamespace(value)) {
 			lines.push(`export const ${name} = __BLOCKS_ApiNamespaceClient__('${name}');`);
 			namespaceNames.push(name);
 			continue;
 		}
 
 		// Fallback: any exported function/object that isn't a Scope gets a proxy.
-		const isScope = typeof (value as any)?.id === 'string' && typeof (value as any)?.fullId === 'string';
-		if (isScope) continue;
+		// Same Scope test the RPC dispatcher uses, so the server never serves a
+		// namespace the client has no proxy for (and vice versa).
+		if (isScopeLike(value)) continue;
 
 		// A secret()/config() marker is a deferred value, not an API — skip it, or
 		// `export const k = secret('K')` in index.ts would become a bogus HTTP namespace.
@@ -64,7 +68,8 @@ export async function generateClientCode(foundationPath: string): Promise<string
 		}
 	}
 
-	// Emit generateClient — creates new ApiNamespaceClient instances with the given url
+	// Emit generateClient — creates new ApiNamespaceClient instances with the given
+	// options (`url`, `retryStaleConnection`), passed through unchanged.
 	const nsEntries = namespaceNames.map((n) => `    ${n}: __BLOCKS_ApiNamespaceClient__('${n}', config),`).join('\n');
 	lines.push('');
 	lines.push(`export const generateClient = (config) => ({\n${nsEntries}\n});`);

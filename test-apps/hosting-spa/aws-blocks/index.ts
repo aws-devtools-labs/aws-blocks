@@ -4,7 +4,7 @@
 // Notes Manager — SPA e2e test backend
 // AuthBasic + notes CRUD + public stats
 
-import { ApiNamespace, Scope, KVStore, AuthBasic } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, RawRoute } from '@aws-blocks/blocks';
 
 const scope = new Scope('hosting-spa-test');
 
@@ -13,21 +13,41 @@ const scope = new Scope('hosting-spa-test');
 // deployed Lambda this is a no-op so codes never reach CloudWatch.
 const isDeployedLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
 
+// ── Data stores ─────────────────────────────────────────────────────────────
+
+const notes = new KVStore(scope, 'notes', {});
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 
-let lastDeliveredCode: { username: string; code: string } | null = null;
+// Delivered verification codes are persisted in the existing shared store keyed
+// by username (a distinct key prefix keeps them out of the notes keyspace), with
+// a short TTL so a stale code stops being returned (reads filter expired records;
+// physical reaping would need a ttl-enabled table, unneeded for a throwaway app).
+// See the comprehensive test-app for the full rationale (cross-instance race,
+// per-user keying, expiry).
+const codeKey = (username: string) => `__last-code:${username}`;
+
+// A stored record that somehow fails to parse is treated as absent (the poller
+// then times out on its own message) rather than throwing a SyntaxError out of
+// the API method. Mirrors parseStoredRecord in the comprehensive test-app.
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
+    return null;
+  }
+}
+
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await notes.put(codeKey(username), JSON.stringify({ username, code }), { ttlSeconds: 3600 });
     if (!isDeployedLambda) console.log(`[AuthBasic] Code for "${username}": ${code}`);
   },
 });
-
-// ── Data stores ─────────────────────────────────────────────────────────────
-
-const notes = new KVStore(scope, 'notes', {});
 const notesByUser = new KVStore(scope, 'notes-by-user', {});
 const globalStats = new KVStore(scope, 'stats', {});
 
@@ -68,8 +88,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       : { authenticated: false };
   },
 
-  async authGetLastCode() {
-    return lastDeliveredCode;
+  async authGetLastCode(username: string) {
+    return parseStoredRecord<{ username: string; code: string }>(codeKey(username), await notes.get(codeKey(username)));
   },
 
   // Notes CRUD (all require auth)
@@ -128,6 +148,43 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
     return { success: true };
   },
+
+  // Which function served this call — compared with isolatedApi below.
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
 
 export const authApi = auth.createApi();
+
+// Multi-compute behind Hosting: `isolatedApi` runs on its own, smaller compute.
+// Through Hosting's front door (CloudFront, or the ALB leg) the call still lands
+// on that compute, because Hosting forwards /aws-blocks/api/* to the shared
+// gateway, which routes it.
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
+
+// A raw route outside /aws-blocks/*: every front door must route it to the
+// backend same-origin. It echoes the decoded query, so the e2e can check that
+// an encoded value survives the door unchanged.
+new RawRoute(scope, 'echoQuery', {
+  method: 'GET',
+  path: '/hooks/echo',
+  handler: async (ctx) => {
+    ctx.response.headers.set('Content-Type', 'application/json');
+    ctx.response.send({ q: ctx.request.url.searchParams.get('q'), path: ctx.request.url.pathname });
+  },
+});
+

@@ -24,12 +24,16 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
       source-changed: ${{ steps.check.outputs.source-changed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
       - id: check
         run: |
           if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps|scripts)/|^\.github/workflows/e2e-amplify-interop\.yml$'; then
@@ -44,14 +48,14 @@ jobs:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -65,10 +69,10 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
       - name: Scaffold Amplify + Blocks app
         run: |
@@ -147,16 +151,16 @@ jobs:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    environment: publish
+    environment: e2e
     env:
       BLOCKS_STACK_SUFFIX: amp-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -170,13 +174,19 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: ./.github/actions/e2e-aws-credentials
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 17 min in all, leaving this 30-min job time to deploy, test
+      # and clean up; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 19
+        run: node scripts/ci/install-playwright.mjs --deadline-minutes 17 chromium
 
       - name: Deploy sandbox
         run: |
@@ -196,15 +206,22 @@ jobs:
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for
-  # unrelated PRs or forks) and only fails if a job that actually ran failed.
+  # unrelated PRs or forks) and only fails if a job that actually ran failed,
+  # or if detect-changes didn't succeed: that skips both e2e jobs, and a
+  # skipped job would read as passing here.
   e2e-amplify-interop-required:
     name: E2E Amplify Interop (Required)
     if: always()
-    needs: [e2e-amplify-interop-smoke, e2e-amplify-interop]
+    needs: [detect-changes, e2e-amplify-interop-smoke, e2e-amplify-interop]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
+          detect='${{ needs.detect-changes.result }}'
+          if [ "$detect" != "success" ]; then
+            echo "::error::Detect Changes ended $detect, so this run can't tell whether the Amplify interop jobs should run. Re-run the failed jobs."
+            exit 1
+          fi
           smoke='${{ needs.e2e-amplify-interop-smoke.result }}'
           browser='${{ needs.e2e-amplify-interop.result }}'
           echo "smoke=$smoke browser=$browser"

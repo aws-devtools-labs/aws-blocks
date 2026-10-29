@@ -110,6 +110,14 @@ export type ComputeConstructProps = {
    * Merged with (and overrides) the manifest's compute resource environment.
    */
   environment?: Record<string, string>;
+  /**
+   * How the front door invokes this function. `'buffered'` builds an
+   * `http-server` function's Lambda Web Adapter in buffered mode (and any
+   * Function URL as `BUFFERED`), for a door that invokes it without streaming
+   * (an ALB target, an API Gateway HTTP API integration). Default:
+   * `'streaming'` (the adapter's `response_stream` mode).
+   */
+  responseMode?: 'streaming' | 'buffered';
 };
 
 // ---- Construct ----
@@ -254,13 +262,35 @@ export class ComputeConstruct extends Construct {
         ],
         environment: {
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/bootstrap',
-          AWS_LWA_INVOKE_MODE: 'response_stream',
+          // A streaming invoke expects the response-stream framing; a plain
+          // invoke (ALB, HTTP API) needs the whole response, so buffer then.
+          AWS_LWA_INVOKE_MODE: props.responseMode === 'buffered' ? 'buffered' : 'response_stream',
           PORT: String(port),
           ...computeResource.environment,
           ...props.environment,
         },
       });
     } else if (computeResource.type === 'edge') {
+      // `experimental.EdgeFunction` needs a concrete stack region to decide
+      // whether to hoist the function into a us-east-1 stack, and otherwise
+      // fails synth with a CDK error that names neither the route nor the fix.
+      // An app reaches this through, e.g., a Next.js `runtime = 'edge'` route
+      // or a manifest `middleware` edge function, so name those and the
+      // one-line fix.
+      if (Token.isUnresolved(Stack.of(this).region)) {
+        throw new HostingError('EdgeComputeRequiresRegionError', {
+          message:
+            `Edge compute '${props.name}' runs as Lambda@Edge, which needs the stack's region at synth time, ` +
+            'but the stack has no explicit region. Edge compute comes from, e.g., Next.js routes with `runtime = \'edge\'` or a manifest `middleware` edge function.',
+          resolution:
+            'Set the region on the stack that holds Hosting, for example:\n\n' +
+            '  BlocksStack.create(app, stackName, {\n' +
+            '    env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },\n' +
+            '    // …\n' +
+            '  });\n\n' +
+            'For a Next.js route, you can instead move it to the Node.js runtime (remove `runtime = \'edge\'`).',
+        });
+      }
       // Edge function — Lambda@Edge does not support env vars or Function URLs
       const hasManifestEnv =
         computeResource.environment &&
@@ -328,7 +358,7 @@ export class ComputeConstruct extends Construct {
     // Function URL — skipped for edge (unsupported) or SSR (REST API instead).
     if (computeResource.type !== 'edge' && !props.skipFunctionUrl) {
       const invokeMode =
-        computeResource.streaming !== false
+        computeResource.streaming !== false && props.responseMode !== 'buffered'
           ? InvokeMode.RESPONSE_STREAM
           : InvokeMode.BUFFERED;
 

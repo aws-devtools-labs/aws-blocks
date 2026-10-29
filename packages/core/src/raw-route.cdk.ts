@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope } from './cdk/index.js';
+import { getBlocksRootId } from './cdk/root-registry.js';
 import type { ScopeParent } from './common/index.js';
 import { registerRoute, resolveRoutePath, type RawRouteOptions } from './raw-route.js';
 
@@ -51,6 +52,9 @@ export class RawRoute extends Scope {
   constructor(scope: ScopeParent, id: string, options: RawRouteOptions) {
     super(id, { parent: scope });
     this.path = resolveRoutePath(scope, id, options);
-    registerRoute({ ...options, path: this.path });
+    // Tag the route with its owning backend root so Hosting can filter the
+    // process-global registry to the backend its distribution fronts (a
+    // multi-stack synth otherwise cross-contaminates CloudFront behaviors).
+    registerRoute({ ...options, path: this.path, ownerRootId: getBlocksRootId(this) });
   }
 }

@@ -45,3 +45,29 @@ test('translatePgError: unique violation (23505) → ApiError status 409, name p
     },
   );
 });
+
+const REQUEST_ERROR_CASES = [
+  { code: '42501', driver: 'new row violates row-level security policy for table "notes"', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '42501', driver: 'permission denied for table projects', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '23514', driver: 'new row for relation "projects" violates check constraint "projects_name_check"', status: 400, name: DatabaseErrors.CheckViolation },
+  { code: '23502', driver: 'null value in column "name" of relation "projects" violates not-null constraint', status: 400, name: DatabaseErrors.NotNullViolation },
+  { code: '23503', driver: 'insert or update on table "notes" violates foreign key constraint "notes_project_id_fkey"', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+];
+
+for (const { code, driver, status, name } of REQUEST_ERROR_CASES) {
+  test(`translatePgError: request error ${code} (${driver.slice(0, 40)}…) → ${name}, ApiError status ${status}`, () => {
+    const err = Object.assign(new Error(driver), { code });
+    assert.throws(
+      () => translatePgError(err, 'PgClientEngine'),
+      (e: unknown) => {
+        assert.ok(e instanceof ApiError, 'expected an ApiError');
+        assert.strictEqual(e.status, status);
+        assert.strictEqual(e.name, name);
+        assert.strictEqual(e.retriable, false);
+        assert.strictEqual(e.cause, err);
+        assert.ok(!e.message.includes(driver), 'driver text must not reach the message');
+        return true;
+      },
+    );
+  });
+}

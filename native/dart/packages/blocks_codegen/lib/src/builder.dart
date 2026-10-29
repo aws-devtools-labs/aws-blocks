@@ -1,13 +1,105 @@
+import 'package:blocks_codegen/src/diagnostics.dart';
 import 'model.dart';
 
-/// Tags the generator maps to concrete runtime types; any other tag on a
-/// direct result falls back to `UnknownTransferable`. The switches gate on this set.
+const _packagesExtension = 'x-blocks-native-packages';
+const _transferableKind = 'transferable';
+final _exportGrammar = RegExp(r'^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$');
+
+/// A declared binding cannot replace one of these.
 const knownTransferableTags = {
   'realtime/channel',
   'file-bucket/download',
   'file-bucket/upload',
   'oidc/client',
 };
+
+/// A `show` of one of these does not collide, it silently shadows, so the
+/// generated client's body would bind the package's type and fail to compile.
+const dartCoreTypeNames = {
+  'ArgumentError',
+  'Comparable',
+  'DateTime',
+  'Duration',
+  'Enum',
+  'Exception',
+  'Function',
+  'Future',
+  'Iterable',
+  'Iterator',
+  'List',
+  'Map',
+  'MapEntry',
+  'Never',
+  'Null',
+  'Object',
+  'Pattern',
+  'Record',
+  'RegExp',
+  'Set',
+  'Stream',
+  'String',
+  'StringBuffer',
+  'Symbol',
+  'Type',
+  'Uri',
+  'bool',
+  'double',
+  'int',
+  'num',
+};
+
+/// The generated client imports the runtime wholesale, so a bound export
+/// resolving to one of these would be ambiguous.
+const blocksRuntimeTypeNames = {
+  'AuthProvider',
+  'AuthorizeParamsResponse',
+  'BlocksClient',
+  'BlocksConfig',
+  'BlocksRpcException',
+  'BrowserLauncher',
+  'FileDownloadHandle',
+  'FileUploadHandle',
+  'InMemorySessionStore',
+  'InMemoryTokenStore',
+  'OidcAuthState',
+  'OidcCallbackException',
+  'OidcCancelledException',
+  'OidcClient',
+  'OidcException',
+  'OidcExchangeException',
+  'OidcLoading',
+  'OidcSignedIn',
+  'OidcSignedOut',
+  'OidcUnknownProviderException',
+  'OidcUser',
+  'PersistentSessionStore',
+  'ProviderConfig',
+  'RealtimeChannel',
+  'SessionStore',
+  'StatePayload',
+  'TokenStore',
+  'UnknownTransferable',
+  'WebSocketPool',
+};
+
+class TransferableBinding {
+  const TransferableBinding({
+    required this.typeName,
+    required this.packageName,
+    required this.library,
+    required this.genericArity,
+  });
+
+  final String typeName;
+
+  final String packageName;
+
+  final String library;
+
+  final int genericArity;
+
+  String get importUri => 'package:$packageName/$library';
+}
 
 /// A type after the builder has resolved `$ref`s, deduplicated structurally
 /// identical shapes, and assigned a Dart name to everything that needs one.
@@ -97,8 +189,18 @@ class SealedVariant {
 class TransferableType extends ResolvedType {
   final String blocksType;
   final List<ResolvedType> typeArgs;
-  const TransferableType({required this.blocksType, this.typeArgs = const []});
+
+  final TransferableBinding? binding;
+
+  const TransferableType({
+    required this.blocksType,
+    this.typeArgs = const [],
+    this.binding,
+  });
 }
+
+bool transferableIsUnbound(TransferableType type) =>
+    type.binding == null && !knownTransferableTags.contains(type.blocksType);
 
 class SchemaReference extends ResolvedType {
   /// Mutable: kept in sync when the type it points at is renamed.
@@ -217,7 +319,12 @@ class CodegenModelBuilder {
   /// deterministic suffix and surfaced as a build warning.
   final bool failOnCollision;
 
-  CodegenModelBuilder({this.failOnCollision = false});
+  final Set<String> optedOutPackages;
+
+  CodegenModelBuilder({
+    this.failOnCollision = false,
+    this.optedOutPackages = const {},
+  });
 
   static const _reserved = {
     'RealtimeChannel',
@@ -227,12 +334,16 @@ class CodegenModelBuilder {
     'BlocksClient',
     'UnknownTransferable',
   };
+  final Map<String, TransferableBinding> _bindings = {};
   final Map<String, ResolvedType> _types = {};
   // Every named type synthesized during a build, in creation order.
   final List<_TypeOrigin> _origins = [];
   // SchemaReferences produced by structural dedup, keyed by their target object,
   // so a rename of the target can be propagated to all references.
   final Map<ResolvedType, List<SchemaReference>> _dedupRefs = {};
+
+  // Keyed by the spec schema name the `$ref` names, not the Dart name.
+  final Map<String, List<SchemaReference>> _schemaRefs = {};
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
   int _anonCounter = 0;
@@ -240,13 +351,18 @@ class CodegenModelBuilder {
   /// Resolves [rpc] into a model the generator can emit.
   ///
   /// Throws a [NamingConflictException] when [failOnCollision] is set and two
-  /// distinct inline types still claim the same Dart name.
+  /// distinct inline types still claim the same Dart name, and a
+  /// [FormatException] when a declared native binding cannot be applied.
   CodegenModel build(RpcModel rpc) {
     _types.clear();
     _origins.clear();
     _dedupRefs.clear();
+    _schemaRefs.clear();
     _warnings.clear();
+    _bindings.clear();
     _anonCounter = 0;
+    _warnUnmatchedOptOuts(rpc);
+    _resolveBindings(rpc);
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
     for (final entry in rpc.schemas.entries) {
       if (_reserved.contains(entry.key)) continue;
@@ -262,6 +378,8 @@ class CodegenModelBuilder {
     final namespaceMap = <String, List<Operation>>{};
     // Formatted after Pass 3 so type-arg names reflect any collision rename.
     final unboundResults = <(String, TransferableType)>[];
+    final boundDirectResults = <(String, int)>[];
+    final nonHydratableChannels = <(String, TransferableType)>[];
     for (final method in rpc.methods) {
       final parts = method.name.split('.');
       final ns = parts.length > 1
@@ -303,9 +421,26 @@ class CodegenModelBuilder {
 
       // Bare transferable only: a nullable/list/record-wrapped one is a
       // different ResolvedType and skipped, matching the generator's fallback.
-      if (resultType is TransferableType &&
-          !knownTransferableTags.contains(resultType.blocksType)) {
-        unboundResults.add((method.name, resultType));
+      // Decodability is settled after Pass 3, which can rename the payload a
+      // type-arg `$ref` resolves to, so deciding here would bind the result to
+      // a model the generator no longer sees.
+      if (resultType is TransferableType) {
+        _checkBindingArity(method.name, resultType);
+        boundDirectResults.add((ns, namespaceMap[ns]?.length ?? 0));
+      }
+
+      // A bound `realtime/channel` whose message type cannot be hydrated by the
+      // `Map`-only runtime is declared `RealtimeChannel<T>` but returned raw.
+      // Unwrap a nullable result first: `RealtimeChannel<T>?` emits the same raw
+      // body as the direct form, so it must be diagnosed too. Direct-result
+      // scope only (no field or nested scan).
+      final channelType = resultType is NullableType
+          ? resultType.inner
+          : resultType;
+      if (channelType is TransferableType &&
+          channelType.blocksType == 'realtime/channel' &&
+          !_channelMessageHydratable(channelType.typeArgs)) {
+        nonHydratableChannels.add((method.name, channelType));
       }
 
       namespaceMap
@@ -324,8 +459,32 @@ class CodegenModelBuilder {
     // distinct types before generation.
     _resolveNamingCollisions();
 
+    for (final (ns, index) in boundDirectResults) {
+      final operations = namespaceMap[ns];
+      if (operations == null || index >= operations.length) continue;
+      final operation = operations[index];
+      final result = operation.result;
+      if (result is! TransferableType) continue;
+      final settled = _withDecodableBinding(result);
+      if (!identical(settled, result)) {
+        operations[index] = Operation(
+          name: operation.name,
+          fullName: operation.fullName,
+          params: operation.params,
+          result: settled,
+        );
+      }
+      if (transferableIsUnbound(settled)) {
+        unboundResults.add((operation.fullName, settled));
+      }
+    }
+
     for (final (operation, transferable) in unboundResults) {
       _warnings.add(_formatUnboundTransferable(operation, transferable));
+    }
+
+    for (final (operation, transferable) in nonHydratableChannels) {
+      _warnings.add(_formatNonHydratableChannel(operation, transferable));
     }
 
     final namespaces = namespaceMap.entries
@@ -363,7 +522,7 @@ class CodegenModelBuilder {
       SchemaRefRef(name: final name) =>
         _reserved.contains(name)
             ? const PrimitiveType('dynamic')
-            : SchemaReference(name),
+            : _trackedSchemaRef(name),
       UnionLiteralRef(values: final values) => _resolveEnum(values, hint, path),
       InlineObjectRef() => _resolveInlineObject(
         ref,
@@ -375,9 +534,14 @@ class CodegenModelBuilder {
       TransferableRef(blocksType: final kt, typeArgs: final args) =>
         TransferableType(
           blocksType: kt,
-          typeArgs: args
-              .map((a) => _resolveTypeArgWithDedup(a, hint, path))
-              .toList(),
+          // An oidc/client's type argument names its providers, which the
+          // generated client doesn't use yet.
+          typeArgs: kt == 'oidc/client'
+              ? const []
+              : args
+                    .map((a) => _resolveTypeArgWithDedup(a, hint, path))
+                    .toList(),
+          binding: _bindings[kt],
         ),
       MapRef(valueType: final vt) => MapType(
         _resolveType(vt, hint, false, path),
@@ -733,13 +897,47 @@ class CodegenModelBuilder {
     } else {
       typeArgClause = 'type arguments ${models.join(', ')}';
     }
-    // Keep the diagnostic on one line if a tag contains a newline or CR.
-    final safeTag = transferable.blocksType
-        .replaceAll('\n', r'\n')
-        .replaceAll('\r', r'\r');
+    final safeTag = escapeForDiagnostic(transferable.blocksType);
     return 'AWSBLOCKS-NATIVE-001: $operation returns unbound transferable '
         "'$safeTag' on dart; generated UnknownTransferable "
         'with $typeArgClause.';
+  }
+
+  /// Whether a bound `realtime/channel` message type-arg can be hydrated by the
+  /// generated client. Delegates to the shared [channelMessageHydratable] so
+  /// this diagnostic and the generator's channel deserializer decide "raw vs
+  /// hydrated" from one place and cannot drift.
+  bool _channelMessageHydratable(List<ResolvedType> typeArgs) =>
+      channelMessageHydratable(typeArgs, _types);
+
+  /// A readable Dart-type label for a channel message type, for diagnostics.
+  String _messageTypeLabel(ResolvedType t) => switch (t) {
+    PrimitiveType(dartType: final dt) => dt,
+    NullableType(inner: final i) => '${_messageTypeLabel(i)}?',
+    ListType(items: final i) => 'List<${_messageTypeLabel(i)}>',
+    MapType(valueType: final v) => 'Map<String, ${_messageTypeLabel(v)}>',
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    SchemaReference(name: final n) => n,
+    TransferableType(blocksType: final kt) => kt,
+    TupleType(items: final items) =>
+      '(${items.map(_messageTypeLabel).join(', ')})',
+  };
+
+  /// Builds the `AWSBLOCKS-NATIVE-002` diagnostic: a bound `realtime/channel`
+  /// whose message type the `Map`-only runtime cannot decode, so the value is
+  /// returned un-hydrated. Names the operation and the message type only.
+  String _formatNonHydratableChannel(
+    String operation,
+    TransferableType transferable,
+  ) {
+    final messageLabel = transferable.typeArgs.isEmpty
+        ? 'dynamic'
+        : _messageTypeLabel(transferable.typeArgs.first);
+    return 'AWSBLOCKS-NATIVE-002: $operation returns realtime/channel with a '
+        "non-hydratable message type '$messageLabel' on dart; the value is "
+        'returned un-hydrated (not supported yet).';
   }
 
   /// Structural identity of a named type. Two types with the same display name
@@ -811,6 +1009,7 @@ class CodegenModelBuilder {
       for (var i = 1; i < reps.length; i++) {
         final newName = '${entry.key}${i + 1}';
         _renameType(reps[i].type, newName);
+        _followSchemaRefs(reps[i], newName);
         assigned.add(newName);
       }
       _warnings.add(_formatWarning(entry.key, reps, assigned));
@@ -827,6 +1026,12 @@ class CodegenModelBuilder {
       ..addAll(rebuilt);
   }
 
+  SchemaReference _trackedSchemaRef(String name) {
+    final ref = SchemaReference(name);
+    _schemaRefs.putIfAbsent(name, () => []).add(ref);
+    return ref;
+  }
+
   void _renameType(ResolvedType type, String newName) {
     switch (type) {
       case RecordType():
@@ -840,6 +1045,15 @@ class CodegenModelBuilder {
     }
     // Propagate to any dedup references that pointed at this object.
     for (final ref in _dedupRefs[type] ?? const <SchemaReference>[]) {
+      ref.name = newName;
+    }
+  }
+
+  void _followSchemaRefs(_TypeOrigin origin, String newName) {
+    const prefix = 'schema:';
+    if (!origin.canonicalKey.startsWith(prefix)) return;
+    final specName = origin.canonicalKey.substring(prefix.length);
+    for (final ref in _schemaRefs[specName] ?? const <SchemaReference>[]) {
       ref.name = newName;
     }
   }
@@ -885,6 +1099,140 @@ class CodegenModelBuilder {
         '(or pass --fail-on-collision to make this an error).';
   }
 
+  /// Because opt-outs are build configuration, an identity absent from the
+  /// package catalog produces a warning instead of an error. Platform
+  /// availability does not affect this check.
+  void _warnUnmatchedOptOuts(RpcModel rpc) {
+    for (final identity in optedOutPackages.toList()..sort()) {
+      if (rpc.nativePackages.containsKey(identity)) continue;
+      _warnings.add(
+        'AWSBLOCKS-NATIVE-006: opted-out package '
+        "'${escapeForDiagnostic(identity)}' is not declared by "
+        '$_packagesExtension; nothing was opted out for it on dart.',
+      );
+    }
+  }
+
+  void _resolveBindings(RpcModel rpc) {
+    final referenced = <String>{};
+    final claimed = <String, ({String package, String export})>{};
+    for (final binding in rpc.nativeBindings) {
+      if (!rpc.nativePackages.containsKey(binding.package)) {
+        throw FormatException(
+          "Binding for tag '${escapeForDiagnostic(binding.tag)}' names package "
+          "'${escapeForDiagnostic(binding.package)}', which "
+          '$_packagesExtension does not declare',
+        );
+      }
+      referenced.add(binding.package);
+      if (binding.kind != _transferableKind) continue;
+      if (knownTransferableTags.contains(binding.tag)) continue;
+      if (optedOutPackages.contains(binding.package)) continue;
+      final package = rpc.nativePackages[binding.package];
+      if (package == null) continue;
+      final typeName = _exportTypeName(binding.export);
+      _checkTypeNameUnclaimed(binding, typeName, claimed);
+      claimed[typeName] = (package: binding.package, export: binding.export);
+      _bindings[binding.tag] = TransferableBinding(
+        typeName: typeName,
+        packageName: package.name,
+        library: package.library,
+        genericArity: binding.genericArity,
+      );
+    }
+    for (final identity in rpc.nativePackages.keys) {
+      if (!referenced.contains(identity)) {
+        _warnings.add(
+          'AWSBLOCKS-NATIVE-003: no binding references native package '
+          "'${escapeForDiagnostic(identity)}'; it is not imported on dart.",
+        );
+      }
+    }
+  }
+
+  /// Two tags may share one export, but two exports cannot share a type name.
+  void _checkTypeNameUnclaimed(
+    NativeBinding binding,
+    String typeName,
+    Map<String, ({String package, String export})> claimed,
+  ) {
+    final String? occupant;
+    if (dartCoreTypeNames.contains(typeName)) {
+      occupant = 'dart:core or dart:async';
+    } else if (blocksRuntimeTypeNames.contains(typeName)) {
+      occupant = 'package:blocks_runtime/blocks_runtime.dart';
+    } else if (claimed[typeName] case final prior?
+        when prior != (package: binding.package, export: binding.export)) {
+      occupant =
+          "export '${escapeForDiagnostic(prior.export)}' in package "
+          "'${escapeForDiagnostic(prior.package)}'";
+    } else {
+      occupant = null;
+    }
+    if (occupant != null) {
+      throw FormatException(
+        "Binding for tag '${escapeForDiagnostic(binding.tag)}' exports "
+        "'${escapeForDiagnostic(binding.export)}' from package "
+        "'${escapeForDiagnostic(binding.package)}', but $occupant already "
+        'declares $typeName',
+      );
+    }
+  }
+
+  String _exportTypeName(String export) {
+    if (!_exportGrammar.hasMatch(export)) {
+      throw FormatException(
+        "Binding export '${escapeForDiagnostic(export)}' does not name a "
+        'public Dart type',
+      );
+    }
+    return export.split(RegExp(r'[-_.]+')).map(_capitalize).join();
+  }
+
+  void _checkBindingArity(String operation, TransferableType type) {
+    final binding = type.binding;
+    if (binding == null) return;
+    if (type.typeArgs.length != binding.genericArity) {
+      throw FormatException(
+        '$operation declares ${type.typeArgs.length} x-blocks-type-args for '
+        "tag '${escapeForDiagnostic(type.blocksType)}', but its binding "
+        'declares generic arity ${binding.genericArity}',
+      );
+    }
+  }
+
+  /// Dropping the binding routes the result to the `UnknownTransferable`
+  /// fallback and `AWSBLOCKS-NATIVE-001`, since the v1 ABI has no decoder-less
+  /// arity-one call.
+  TransferableType _withDecodableBinding(TransferableType type) {
+    final binding = type.binding;
+    if (binding == null || binding.genericArity == 0) return type;
+    if (channelMessageHydratable(type.typeArgs, _types)) return type;
+    return TransferableType(
+      blocksType: type.blocksType,
+      typeArgs: type.typeArgs,
+    );
+  }
+
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
+
+/// Whether a generic transferable's message type-arg can be hydrated by the
+/// `Map`-only runtime. An object (record or sealed class, including via `$ref`
+/// and the nullable `T?` form) hydrates via `fromJson`, a `Map` per-value, and
+/// `dynamic`/`dynamic?`/absent gets an identity decoder.
+bool channelMessageHydratable(
+  List<ResolvedType> typeArgs,
+  Map<String, ResolvedType> allTypes,
+) {
+  if (typeArgs.isEmpty) return true;
+  final arg = typeArgs[0] is NullableType
+      ? (typeArgs[0] as NullableType).inner
+      : typeArgs[0];
+  final resolved = arg is SchemaReference ? allTypes[arg.name] : arg;
+  return resolved is RecordType ||
+      resolved is SealedClassType ||
+      resolved is MapType ||
+      (resolved is PrimitiveType && resolved.dartType == 'dynamic');
 }

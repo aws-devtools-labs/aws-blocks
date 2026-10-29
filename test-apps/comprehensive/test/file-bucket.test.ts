@@ -4,10 +4,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
+import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import type { api as apiType } from 'aws-blocks';
-
-// FileBucketErrors.VersionNotFound — matched by name across the RPC wire.
-const VersionNotFound = 'NoSuchVersion';
 
 export function fileBucketTests(getApi: () => typeof apiType) {
   describe('FileBucket BB', () => {
@@ -226,7 +224,7 @@ export function fileBucketTests(getApi: () => typeof apiType) {
         // BB must map it to a clean, matchable NoSuchVersion in both runtimes.
         await assert.rejects(
           () => api.vFileRestoreVersion('err/restore-bad.txt', 'v9999-does-not-exist'),
-          (e: unknown) => isBlocksError(e, VersionNotFound),
+          (e: unknown) => isBlocksError(e, FileBucketErrors.VersionNotFound),
         );
       });
 

@@ -4,6 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
+import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
 type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
@@ -162,11 +163,9 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const api = getApi();
 				await assert.rejects(
 					() => api.realtimePublishBadData(),
-					(err: unknown) => {
-						const e = err as Error & { name: string };
-						return e.name === 'ValidationFailedException'
-							|| (e.message && e.message.includes('Validation'));
-					},
+					// Assert the error round-trips as a *branded* BB error
+					// (survives the wire sanitizer), not merely a name match.
+					(err: unknown) => isBlocksError(err, 'ValidationFailedException'),
 					'Should reject data that does not match the cursor schema',
 				);
 			});
@@ -187,7 +186,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const sub = badChannel.subscribe(() => {});
 				await assert.rejects(
 					sub.established,
-					(err: unknown) => (err as Error & { name: string }).name === 'ConnectionFailedException',
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
 					'Tampered token should reject the subscription',
 				);
 			});
@@ -206,7 +205,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const badSub = badChannel.subscribe(() => {});
 				await assert.rejects(
 					badSub.established,
-					(err: unknown) => (err as Error & { name: string }).name === 'ConnectionFailedException',
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
 					'Tampered token should be rejected even on an established connection',
 				);
 
@@ -474,16 +473,16 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				);
 			});
 
-			test('publish rejects message exceeding 32KB frame limit', async () => {
+			test('publish rejects message exceeding 128KiB message limit', async () => {
 				const api = getApi();
 				await assert.rejects(
 					() => api.realtimePublishOversizedPayload(),
 					(err: unknown) => {
 						const e = err as Error & { name: string };
 						return e.name === 'ValidationFailedException'
-							|| (e.message && e.message.includes('frame'));
+							|| (e.message && e.message.includes('128 KiB'));
 					},
-					'Should reject message exceeding WebSocket frame limit',
+					'Should reject message exceeding WebSocket logical message limit',
 				);
 			});
 		});

@@ -3,8 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
-import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER } from './constants.js';
+import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
@@ -14,9 +13,12 @@ import {
   errorResponse,
   errorResponseFromCatch,
   methodNotFoundResponse,
+  rawRouteErrorFromCatch,
 } from './rpc.js';
 import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
+import { errorResponseSetCookies } from './set-cookie.js';
+import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -46,6 +48,12 @@ export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>(
  */
 export const EventSourceMapping = {
   SQS: 'aws:sqs',
+  /**
+   * Cognito user pool Lambda triggers (e.g. PreSignUp). The identifier a
+   * Building Block registers under is the **user pool id** the trigger event
+   * carries (`event.userPoolId`), so each block answers only its own pool.
+   */
+  COGNITO_USER_POOL: 'aws:cognito-idp',
 } as const;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -202,8 +210,9 @@ const REMAINING_TIME_BUFFER_MS = 1_000;
  * - `'websocket'`: API Gateway WebSocket (CONNECT/DISCONNECT/MESSAGE)
  * - `'records'`: Event source mapping (SQS, Kinesis, DDB Streams)
  * - `'direct'`: Direct invoke with Blocks-controlled payload (EventBridge Scheduler)
+ * - `'cognito-trigger'`: A Cognito user pool Lambda trigger (`triggerSource` + `userPoolId`)
  */
-export type EventClass = 'http' | 'websocket' | 'records' | 'direct';
+export type EventClass = 'http' | 'websocket' | 'records' | 'direct' | 'cognito-trigger';
 
 /**
  * Classify a Lambda event into its source type.
@@ -222,6 +231,7 @@ export type EventClass = 'http' | 'websocket' | 'records' | 'direct';
 export function classifyEvent(event: any): EventClass {
   if (event.Records?.[0]?.eventSource) return 'records';
   if (event.source?.startsWith('blocks.')) return 'direct';
+  if (typeof event.triggerSource === 'string' && typeof event.userPoolId === 'string') return 'cognito-trigger';
   if (
     event.requestContext?.eventType &&
     ['CONNECT', 'DISCONNECT', 'MESSAGE'].includes(event.requestContext.eventType)
@@ -242,6 +252,7 @@ export function classifyEvent(event: any): EventClass {
  * - SQS/Kinesis/DDB Streams → `event.Records[0].eventSource`
  * - EventBridge Scheduler → `event.source` starts with 'blocks.'
  * - WebSocket → `event.requestContext.eventType` in CONNECT/DISCONNECT/MESSAGE
+ * - Cognito user pool triggers → `event.triggerSource` + `event.userPoolId`
  *
  * @internal Exported for testing only.
  */
@@ -397,8 +408,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // error envelope) or a plain HTTP path (simple error JSON).
         const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
-        const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
-        const body = isRpcPath
+        const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
         return {
@@ -456,6 +466,45 @@ function getRequestPath(event: any): string {
   return event.path || event.requestContext?.http?.path || '/';
 }
 
+/**
+ * The response field(s) that carry `Set-Cookie` values for the event's Lambda
+ * proxy payload format.
+ *
+ * - v1 (API Gateway REST proxy — what `bb-lambda-compute` provisions): the
+ *   `headers` map carries one value per name, so cookies go in
+ *   `multiValueHeaders['Set-Cookie']`.
+ * - v2 (`event.version === '2.0'` — HTTP API / Function URL): v2 has no
+ *   `multiValueHeaders`; cookies go in the top-level `cookies` array.
+ */
+function cookieResponseFields(
+  event: any,
+  cookies: string[],
+): { multiValueHeaders: { 'Set-Cookie': string[] } } | { cookies: string[] } {
+  if (event?.version === '2.0') return { cookies };
+  return { multiValueHeaders: { 'Set-Cookie': cookies } };
+}
+
+/**
+ * Convert a handler's response `Headers` into Lambda proxy response header
+ * fields for the event's payload format (see {@link cookieResponseFields}).
+ *
+ * `Set-Cookie` is the one header that must not be comma-joined, so every
+ * cookie goes into the format's cookie field and is kept out of `headers`
+ * (API Gateway merges the two). Other repeated headers stay comma-joined in
+ * `headers`. Without this, a response setting several cookies keeps only one
+ * on AWS.
+ */
+function toProxyResponseHeaders(event: any, responseHeaders: Headers): {
+  headers: Record<string, string>;
+} & ReturnType<typeof cookieResponseFields> {
+  return {
+    headers: Object.fromEntries(
+      [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
+    ),
+    ...cookieResponseFields(event, responseHeaders.getSetCookie?.() ?? []),
+  };
+}
+
 function createHandler(backend: any) {
   return async (event: any, signal?: AbortSignal) => {
     const eventClass = classifyEvent(event);
@@ -490,6 +539,16 @@ function createHandler(backend: any) {
         throw new Error(`No handler registered for "${key}"`);
       }
       return handler(event);
+    }
+
+    // ── Cognito user pool triggers (e.g. PreSignUp) ──
+    // Routed by the pool id the event carries. The handler validates and
+    // throws to reject; the event is returned unchanged, so a trigger never
+    // flips `response.autoConfirmUser` / `autoVerify*` on its own. With no
+    // handler for the pool the invocation fails, and Cognito rejects the
+    // operation — a misrouted trigger fails closed, never open.
+    if (eventClass === 'cognito-trigger') {
+      return handleCognitoTrigger(event);
     }
 
     const origin = event.headers?.origin || event.headers?.Origin || '';
@@ -531,33 +590,36 @@ function createHandler(backend: any) {
 
     return requestCookies.run(inboundCookies, () =>
       requestClientUserAgent.run(clientUserAgent, async () => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC
+    // RawRoute dispatch — check path-based routes before falling through to RPC.
+    // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
+    // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+    // JSON-RPC body, and a per-namespace path must name the same one (see
+    // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
+    // handling below.
     const requestPath = getRequestPath(event);
-    if (requestPath !== BLOCKS_RPC_PREFIX) {
+    if (!isRpcPath(requestPath)) {
       const matched = matchRoute(httpMethod, requestPath);
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // No RawRoute matched and the path is not under the RPC endpoint — 404.
       // Log it: an unmatched route used to be entirely silent, which is what
       // made a split route registry (duplicate @aws-blocks/core copies)
       // undiagnosable from CloudWatch alone. The path is already in the API
       // Gateway access logs, so this adds no new category of data.
-      if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
-        const copies = getLoadedCoreCopies();
-        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-        console.error(
-          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-        );
-        return {
-          statusCode: 404,
-          headers: {
-            'Content-Type': 'application/json',
-            ...corsHeaders,
-          },
-          body: JSON.stringify({ error: 'Not Found' }),
-        };
-      }
+      const copies = getLoadedCoreCopies();
+      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+      console.error(
+        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+      );
+      return {
+        statusCode: 404,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders,
+        },
+        body: JSON.stringify({ error: 'Not Found' }),
+      };
     }
 
     const rpcHeaders = {
@@ -569,7 +631,9 @@ function createHandler(backend: any) {
     };
 
     const { bodyText, bodyStream } = decodeEventBody(event);
-    const parsed = parseRpcRequest(bodyText);
+    // The path is validated against the body's namespace (see parseRpcRequest);
+    // dispatch always uses the body's `namespace.method`.
+    const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
 
     if (!parsed.ok) {
       return { statusCode: 200, headers: rpcHeaders, body: parsed.response };
@@ -577,11 +641,15 @@ function createHandler(backend: any) {
 
     const { apiNamespace, method, args, id: rpcId } = parsed.request;
 
+    // Declared outside the try so the error path can still deliver cookies the
+    // method set before throwing (e.g. clearing a dead session on a 401).
+    let responseHeaders: Headers | undefined;
+
     try {
       const headers = new Headers(event.headers || {});
 
       let responseStatus = 200;
-      const responseHeaders = new Headers(rpcHeaders);
+      responseHeaders = new Headers(rpcHeaders);
       let responseBody: any;
 
       const context = {
@@ -602,8 +670,9 @@ function createHandler(backend: any) {
         },
       };
 
-      // Get the API by export name
-      const apiHandler = backend[apiNamespace];
+      // Get the API by export name. resolveApiNamespace refuses exported Building
+      // Block instances and `_`-private exports, so only an API surface is callable.
+      const apiHandler = resolveApiNamespace(backend, apiNamespace);
       if (!apiHandler) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
       }
@@ -613,22 +682,32 @@ function createHandler(backend: any) {
         ? apiHandler(context)
         : apiHandler;
 
-      if (!apiMethods[method]) {
+      // Own/declared callable methods only — never an inherited Object.prototype member.
+      const apiMethod = resolveApiMethod(apiMethods, method);
+      if (!apiMethod) {
         return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
       }
 
-      const result = await apiMethods[method](...args);
+      const result = await apiMethod(...args);
 
       return {
         statusCode: responseStatus,
-        headers: Object.fromEntries(responseHeaders.entries()),
+        ...toProxyResponseHeaders(event, responseHeaders),
         body: successResponse(responseBody ?? result, rpcId),
       };
     } catch (error: any) {
       console.error('Lambda Error:', error);
+      // Only Set-Cookie values that DELETE a cookie survive into the error
+      // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
+      // session cookie, but a method that signs a user in and then throws can
+      // never hand out a live session. The method's other headers are dropped,
+      // as before, so the JSON-RPC error envelope keeps its standard headers.
+      // The body is unchanged (message/name only — never SDK metadata).
+      const cookies = errorResponseSetCookies(responseHeaders);
       return {
         statusCode: 200,
         headers: rpcHeaders,
+        ...(cookies.length > 0 ? cookieResponseFields(event, cookies) : {}),
         body: errorResponseFromCatch(error, rpcId),
       };
     }
@@ -679,30 +758,40 @@ async function handleRawRoute(
 
     return {
       statusCode: responseStatus,
-      headers: Object.fromEntries(
-        [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
-      ),
-      multiValueHeaders: {
-        'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
-      },
+      ...toProxyResponseHeaders(event, responseHeaders),
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('RawRoute Error:', error);
-    const status = error instanceof ApiError ? error.status : 500;
-    const body: Record<string, any> = { error: error.message };
-    if (error.name && error.name !== 'Error') body.name = error.name;
+    const { status, body } = rawRouteErrorFromCatch(error);
     return {
       statusCode: status,
-      headers: Object.fromEntries(
-        [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
-      ),
-      multiValueHeaders: {
-        'Set-Cookie': responseHeaders.getSetCookie?.() ?? [],
-      },
-      body: JSON.stringify(body),
+      ...toProxyResponseHeaders(event, responseHeaders),
+      body,
     };
   }
+}
+
+/**
+ * Dispatch a Cognito user pool trigger to the handler registered under
+ * `${EventSourceMapping.COGNITO_USER_POOL}:${event.userPoolId}`.
+ *
+ * Returns the event as received: a handler accepts by resolving and rejects by
+ * throwing (Cognito then answers the caller with `UserLambdaValidationException`
+ * and the thrown message). An unrouted event throws a generic message — the
+ * caller of Cognito sees it, so it names no resource.
+ */
+async function handleCognitoTrigger(event: any): Promise<unknown> {
+  const handlers: Map<string, (record: any) => Promise<void>> =
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ ?? new Map();
+  const key = `${EventSourceMapping.COGNITO_USER_POOL}:${event.userPoolId}`;
+  const handler = handlers.get(key);
+  if (!handler) {
+    console.error(`No Cognito trigger handler registered for "${key}" (triggerSource: ${event.triggerSource})`);
+    throw new Error('This user pool trigger is not configured.');
+  }
+  await handler(event);
+  return event;
 }
 
 async function handleEventSourceRecords(event: any, _backend: any) {

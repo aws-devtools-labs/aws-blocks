@@ -49,7 +49,6 @@ let lastCode: { username: string; code: string; purpose: string } | null = null;
 // Authenticator drives a "Continue" step that exchanges the bridging
 // session for tokens — no second OTP, no separate sign-in.
 const auth = new AuthCognito(scope, 'auth', {
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
   passwordPolicy: { minLength: 8, requireDigits: true },
   signInWith: 'email' as const,
   authFlowType: 'USER_AUTH' as const,
@@ -239,13 +238,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // ── KV demo (not auth-gated for brevity) ─────────────────────────────
+  // ── KV demo (requireAuth-gated, keys namespaced per user) ────────────
   async getValue(key: string) {
-    return await store.get(key);
+    const user = await auth.requireAuth(context);
+    return await store.get(`${user.userSub}:${key}`);
   },
 
   async setValue(key: string, value: string) {
-    await store.put(key, value);
+    const user = await auth.requireAuth(context);
+    await store.put(`${user.userSub}:${key}`, value);
     return { success: true };
   },
 

@@ -24,7 +24,8 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { Scope, isBlocksError } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
+import { deriveBucketName } from './bucket-name.js';
 import { FileBucket as MockFileBucket, FileBucketErrors } from './index.mock.js';
 import { FileBucket as AwsFileBucket } from './index.aws.js';
 
@@ -246,5 +247,69 @@ describe('deleteBatch rejects a mixed valid/invalid batch atomically on both lay
 			(err: Error) => err.name === 'ValidationFailed',
 		);
 		assert.strictEqual(sent().length, 0, 'no S3 command should have been sent');
+	});
+});
+
+describe('derived bucket name agrees between the AWS runtime and the mock', () => {
+	// The CDK layer provisions `deriveBucketName(fullId)` (index.cdk.test.ts); the
+	// runtime must resolve that same physical name, and the mock its `mock-` twin.
+	for (const [label, parentId] of [
+		['under the 63-char limit (unchanged)', 'root'],
+		['over the 63-char limit (shortened)', 'p'.repeat(60)],
+	] as const) {
+		test(label, () => {
+			const id = uniqueId();
+			const aws = new AwsFileBucket(new Scope(`${parentId}-aws`), id);
+			const mock = new MockFileBucket(new Scope(`${parentId}-mock`), id);
+			const awsName = getSdkIdentifiers(aws).bucketName;
+			assert.strictEqual(awsName, deriveBucketName(aws.fullId));
+			assert.strictEqual(getSdkIdentifiers(mock).bucketName, `mock-${deriveBucketName(mock.fullId)}`);
+			assert.ok(awsName.length <= 63, awsName);
+			if (aws.fullId.length <= 63) assert.strictEqual(awsName, aws.fullId);
+		});
+	}
+});
+
+describe('presigned uploads are rejected on an objectLock bucket in both runtimes', () => {
+	// Verified against real S3 (us-west-2): an upload to a bucket with an Object
+	// Lock default retention needs a SIGNED Content-MD5 / x-amz-checksum-* header
+	// (unsigned ones fail with "headers present in the request which were not
+	// signed"), so a URL presigned before the file is known always fails with 400.
+	// Both runtimes reject up front instead of returning a URL that can't work.
+	const objectLock = { mode: 'governance', retentionDays: 1 } as const;
+	const runtimes = [
+		['mock', () => new MockFileBucket(new Scope('root'), uniqueId(), { objectLock })],
+		['AWS', () => awsLockedBucket()],
+	] as const;
+	function awsLockedBucket(): AwsFileBucket {
+		const bucket = new AwsFileBucket(new Scope('root'), uniqueId(), { objectLock });
+		(bucket as any).s3.middlewareStack.add(
+			(_next: any) => async () => { throw new Error('reached S3'); },
+			{ step: 'initialize', name: 'fb-parity-no-s3', override: true },
+		);
+		return bucket;
+	}
+	for (const [label, make] of runtimes) {
+		for (const method of ['putUrl', 'createUploadHandle'] as const) {
+			test(`${label}: ${method}() throws PresignedUploadUnsupported`, async () => {
+				const bucket = make();
+				await assert.rejects(
+					() => bucket[method]('a.txt'),
+					(err: unknown) => isBlocksError(err, FileBucketErrors.PresignedUploadUnsupported)
+						&& /Upload through the backend with put\(\) instead/.test((err as Error).message),
+				);
+			});
+		}
+	}
+	test('mock: getUrl() still works on an objectLock bucket', async () => {
+		const bucket = new MockFileBucket(new Scope('root'), uniqueId(), { objectLock });
+		assert.ok(await bucket.getUrl('a.txt'));
+	});
+	test('a wrapped bucket (fromExisting) is not treated as objectLock', async () => {
+		const bucket = new MockFileBucket(new Scope('root'), uniqueId(), {
+			bucket: MockFileBucket.fromExisting('existing'),
+			objectLock,
+		});
+		assert.ok(await bucket.putUrl('a.txt'));
 	});
 });

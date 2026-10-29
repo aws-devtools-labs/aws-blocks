@@ -22,6 +22,12 @@ import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.TypeRef
 import com.aws.blocks.kotlin.model.UnionVariant
 
+/** Where the local dev server listens, for a spec that declares no server of its own. */
+private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
+
+/** The path a Blocks backend serves RPC on. */
+private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
+
 /**
  * Transforms an [RpcModel] into a language-independent [CodegenModel].
  *
@@ -48,7 +54,11 @@ class CodegenModelBuilder {
         val apiGroups = groupMethods(model.methods, collector)
 
         val servers = if (model.servers.isEmpty()) {
-            listOf(ServerDefinition("local", "http://localhost:3001"))
+            // The generator appends x-blocks-endpoint to every server URL, so the RPC path is only
+            // added here when the spec declares no endpoint of its own. Without it the fallback
+            // points at the origin, where the backend serves no RPC.
+            val path = if (model.endpoint == null) DEFAULT_RPC_PATH else ""
+            listOf(ServerDefinition("local", DEFAULT_LOCAL_ORIGIN + path))
         } else {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }
@@ -58,6 +68,7 @@ class CodegenModelBuilder {
             typeDefinitions = collector.typeDefinitions(),
             servers = servers,
             endpoint = model.endpoint,
+            nativeCatalogs = model.nativeCatalogs,
         )
     }
 
