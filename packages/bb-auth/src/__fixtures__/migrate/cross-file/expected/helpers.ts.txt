@@ -1,0 +1,6 @@
+import type { Auth, BlocksContext } from '@aws-blocks/blocks';
+
+export async function profile(a: Auth, context: BlocksContext, holder: { auth: unknown }) {
+	void holder;
+	return a.getUserAttributes(context);
+}

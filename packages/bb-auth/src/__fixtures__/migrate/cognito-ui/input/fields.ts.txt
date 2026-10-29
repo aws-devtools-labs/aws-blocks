@@ -1,0 +1,6 @@
+import type { CognitoActionFields, CognitoNextStepName } from '@aws-blocks/bb-auth-cognito/ui';
+import { cognitoOverrides as typed } from '@aws-blocks/bb-auth-cognito/ui';
+
+export type SignInField = CognitoActionFields['signIn'];
+export const step: CognitoNextStepName = 'CONFIRM_SIGN_IN_WITH_TOTP_CODE';
+export const overrides = typed({ headings: { signedOut: 'Welcome back' } });

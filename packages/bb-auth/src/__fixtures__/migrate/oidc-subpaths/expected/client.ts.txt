@@ -1,0 +1,20 @@
+// TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.
+import '@aws-blocks/bb-auth-oidc/middleware';
+// TODO(aws-blocks-auth-migrate): AuthenticatedUser has no iss / sub / provider / email / name: use claims?.iss, claims?.sub, signInProvider, attributes.email, attributes.name; userId is still `${iss}:${sub}`.
+import { AuthErrors, relayOrigin, type AuthenticatedUser } from '@aws-blocks/bb-auth';
+// TODO(aws-blocks-auth-migrate): Auth has no OIDC client handle: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.
+// TODO(aws-blocks-auth-migrate): AuthOIDCClient, handle401 have no equivalent in @aws-blocks/bb-auth: remove their uses.
+import { AuthOIDCClient, handle401 } from '@aws-blocks/bb-auth-oidc/client';
+import { isBlocksError } from '@aws-blocks/core/client';
+
+export const origin = relayOrigin('myapp://callback');
+export function name(user: AuthenticatedUser): string {
+	return user.username;
+}
+export function invalid(e: unknown): boolean {
+	return isBlocksError(e, AuthErrors.InvalidState);
+}
+export function onError(e: unknown): boolean {
+	return handle401(e, 'google');
+}
+export type Client = AuthOIDCClient;

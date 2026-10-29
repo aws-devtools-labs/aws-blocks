@@ -20,6 +20,9 @@
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
+  "bin": {
+    "bb-auth": "./dist/migrate/bin.js"
+  },
   "files": [
     "dist",
     "README.md",

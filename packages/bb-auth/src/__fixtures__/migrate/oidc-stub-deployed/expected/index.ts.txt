@@ -1,0 +1,18 @@
+import { Scope } from '@aws-blocks/core';
+import { Auth, stubIdp } from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+
+// AuthOIDC serves the stub IdP on sandbox deployments too (an e2e sandbox signs in through it).
+export const auth = new Auth(scope, 'e2e-auth', {
+	emailPassword: false,
+	oidcProviders: {
+		corp: stubIdp({
+
+		}),
+		staff: stubIdp({
+			onAuthorize: (req) => req.users[0],
+			users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } }],
+		}),
+	},
+});

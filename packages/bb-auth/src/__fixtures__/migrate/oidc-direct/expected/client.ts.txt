@@ -1,0 +1,9 @@
+// TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.
+import '@aws-blocks/bb-auth-oidc/middleware';
+import { oidcAuthApi } from 'aws-blocks';
+
+export async function signIn(): Promise<void> {
+	// TODO(aws-blocks-auth-migrate): getClient() is gone with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url).
+	const client = await oidcAuthApi.getClient();
+	await client.signIn('google');
+}

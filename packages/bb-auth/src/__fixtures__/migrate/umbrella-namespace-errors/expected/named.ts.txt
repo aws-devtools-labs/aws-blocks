@@ -1,0 +1,15 @@
+import { AuthErrors } from '@aws-blocks/bb-auth';
+import { isBlocksError } from '@aws-blocks/core';
+
+export function isWrongCode(e: unknown): boolean {
+	// TODO(aws-blocks-auth-migrate): review this auth error check: Auth renamed some error names and changed which flows return which (see MIGRATION.md, "Error names").
+	// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+	return isBlocksError(e, AuthErrors.CodeMismatch);
+}
+
+// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+export type WrongCode = typeof AuthErrors.CodeMismatch;
+export const expired = AuthErrors['NotAuthenticated'];
+// TODO(aws-blocks-auth-migrate): InvalidCodeException split in two: a wrong code is now CodeMismatchException (matched here), an expired or missing code is ExpiredCodeException (AuthErrors.ExpiredCode). Add that check if you handled expiry here.
+const { CodeMismatch: InvalidCode, NotAuthorized: badCredentials } = AuthErrors;
+export { InvalidCode, badCredentials };

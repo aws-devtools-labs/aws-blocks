@@ -1,0 +1,19 @@
+// The sign-in page, with typed overrides for the Cognito vocabulary.
+import { Authenticator } from '@aws-blocks/auth-common/ui';
+import {
+	cognitoOverrides,
+	type CognitoActionName,
+	type CognitoActionOverride,
+	type CognitoAuthenticatorOptions,
+} from '@aws-blocks/bb-auth-cognito/ui';
+import { authApi } from 'aws-blocks';
+
+const hidden: CognitoActionName[] = ['signUp'];
+
+const signIn: CognitoActionOverride<'signIn'> = {
+	fields: { username: { label: 'Email' } },
+};
+
+export const options: CognitoAuthenticatorOptions = { hideActions: hidden, actions: { signIn } };
+
+document.body.appendChild(Authenticator(authApi, cognitoOverrides(options)));

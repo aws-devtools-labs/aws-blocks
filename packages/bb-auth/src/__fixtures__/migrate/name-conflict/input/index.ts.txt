@@ -1,0 +1,7 @@
+import { Auth } from 'some-other-auth-library';
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+export const blocksAuth = new AuthCognito(scope, 'auth');
+export const other = Auth;

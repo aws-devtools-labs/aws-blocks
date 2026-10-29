@@ -1,0 +1,17 @@
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { isBlocksError, Scope } from '@aws-blocks/core';
+import type { AuthState } from '@aws-blocks/blocks';
+
+const scope = new Scope('app');
+export const auth = new AuthBasic(scope, 'auth', { sessionDuration: 3600 });
+
+// AuthBasic error names with no Auth equivalent: kept, each with a TODO.
+export function message(state: AuthState): string {
+	if (state.errorName === 'AccountLockedException') return 'Too many attempts, try again later';
+	if (state.errorName === 'SessionRevokedException') return 'You signed out';
+	return '';
+}
+
+export function shouldRetrySignOut(e: unknown): boolean {
+	return isBlocksError(e, 'SignOutIncompleteException');
+}

@@ -1,0 +1,11 @@
+import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
+import { isBlocksError } from '@aws-blocks/core';
+
+export function isWrongCode(e: unknown): boolean {
+	return isBlocksError(e, AuthBasicErrors.InvalidCode);
+}
+
+export type WrongCode = typeof AuthBasicErrors.InvalidCode;
+export const expired = AuthBasicErrors['SessionExpired'];
+const { InvalidCode, InvalidCredentials: badCredentials } = AuthBasicErrors;
+export { InvalidCode, badCredentials };

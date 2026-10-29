@@ -1,0 +1,16 @@
+import * as blocks from '@aws-blocks/blocks';
+
+const scope = new blocks.Scope('app');
+
+export const auth = new blocks.AuthBasic(scope, 'auth');
+
+// Every way an error key is named through the umbrella namespace gets the same
+// key mapping (and split TODO) as through a named import (named.ts).
+export function isWrongCode(e: unknown): boolean {
+	return blocks.isBlocksError(e, blocks.AuthBasicErrors.InvalidCode);
+}
+
+export type WrongCode = typeof blocks.AuthBasicErrors.InvalidCode;
+export const expired = blocks.AuthBasicErrors['SessionExpired'];
+const { InvalidCode, InvalidCredentials: badCredentials } = blocks.AuthBasicErrors;
+export { InvalidCode, badCredentials };

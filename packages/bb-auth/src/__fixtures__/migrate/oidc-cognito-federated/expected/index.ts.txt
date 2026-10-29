@@ -1,0 +1,40 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+const googleId = new AppSetting(scope, 'google-id', { secret: true });
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const entraId = new AppSetting(scope, 'entra-id', { secret: true });
+const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
+
+export const auth = new Auth(scope, 'auth', {
+	emailPassword: false,
+	socialProviders: {
+		// TODO(aws-blocks-auth-migrate): AuthOIDC federated through its own Cognito pool (child id `cognito-pool`); Auth uses `pool`, so the old pool and its
+		//   shadow users are deleted on deploy, and users sign in once more. Auth derives a NEW domain prefix by default:
+		//   re-register https://<new prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse in every IdP console.
+		//   To keep the old prefix instead, set hostedUi: { domainPrefix: <old cognitoDomain> } and deploy twice
+		//   (MIGRATION.md, "AuthOIDC with cognitoFederated()") — a single deploy fails on the domain collision.
+		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
+		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
+		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
+		google: {
+			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
+			clientId: googleId,
+			clientSecret: googleSecret,
+		},
+	},
+	oidcProviders: {
+		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
+		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
+		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
+		entra: {
+			federateVia: 'cognito',
+			issuer: 'https://login.microsoftonline.com/tenant/v2.0',
+			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
+			clientId: entraId,
+			clientSecret: entraSecret,
+		},
+	},
+});

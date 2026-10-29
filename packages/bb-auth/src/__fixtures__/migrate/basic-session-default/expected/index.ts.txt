@@ -1,0 +1,24 @@
+import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+
+// AuthBasic sessions lasted 24 hours unless sessionDuration was set; Auth's
+// default is 400 days. The codemod writes the old default out.
+const scope = new Scope('app');
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
+export const bare = new Auth(scope, 'bare', { session: { ttlSeconds: 86_400 } });
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
+export const shared = new Auth(scope, 'shared', { session: { crossDomain: true, ttlSeconds: 86_400 } });
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
+export const custom = new Auth(scope, 'custom', { session: { ttlSeconds: 3600 } });
