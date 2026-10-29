@@ -45,27 +45,38 @@ public final nonisolated class Api: Sendable {
                 try c.encodeIfPresent(self.fuzzy, forKey: .fuzzy)
                 try c.encode(self.text, forKey: .text)
             }
+
+            public init(fuzzy: Bool? = nil, text: String) {
+                self.fuzzy = fuzzy
+                self.text = text
+            }
         }
 
         public enum Query: Codable {
-            case query_Variant0
+            case query_Variant0(String)
             case query_Variant1(Query_Variant1)
 
             public func encode(to encoder: Encoder) throws {
                 switch self {
-                case .query_Variant0:
-                    _ = encoder.container(keyedBy: EmptyKey.self)
+                case .query_Variant0(let payload):
+                    var container = encoder.singleValueContainer()
+                    try container.encode(payload)
                 case .query_Variant1(let payload):
                     try payload.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
-                if let value = try? Query_Variant1(from: decoder) {
-                    self = .query_Variant1(value)
+                var lastError: Error?
+                do {
+                    self = .query_Variant0(try decoder.singleValueContainer().decode(String.self))
                     return
-                }
-                self = .query_Variant0
+                } catch { lastError = error }
+                do {
+                    self = .query_Variant1(try Query_Variant1(from: decoder))
+                    return
+                } catch { lastError = error }
+                throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Query variant matched"))
             }
 
             private enum EmptyKey: CodingKey {}
@@ -73,6 +84,10 @@ public final nonisolated class Api: Sendable {
 
         public struct Result: Codable {
             public let count: Int
+
+            public init(count: Int) {
+                self.count = count
+            }
         }
     }
 }

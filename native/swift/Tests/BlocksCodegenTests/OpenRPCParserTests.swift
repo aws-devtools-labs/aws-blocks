@@ -155,6 +155,29 @@ final class OpenRPCParserTests: XCTestCase {
         }
     }
 
+    func testParsesUnknownAsUnknownPrimitive() throws {
+        let spec = Data("""
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getClaims",
+                "params": [],
+                "result": { "name": "Claims", "schema": { "type": "object", "additionalProperties": { "type": "unknown" } } }
+            }]
+        }
+        """.utf8)
+
+        let model = try parser.parse(data: spec)
+        guard case .mapType(let valueType) = model.methods[0].result!.schema else {
+            return XCTFail("Expected mapType")
+        }
+        guard case .primitive(let kind, _) = valueType else {
+            return XCTFail("Expected the unknown map value to be a primitive, not an inline object")
+        }
+        XCTAssertEqual(kind, .unknown)
+    }
+
     // MARK: - Nullable
 
     func testParsesNullableOneOf() throws {

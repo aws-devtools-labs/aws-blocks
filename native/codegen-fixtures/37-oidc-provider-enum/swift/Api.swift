@@ -27,7 +27,7 @@ public final nonisolated class Auth: Sendable {
     public enum GetClient {
 
         /// The providers `auth.getClient` signs in with.
-        public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+        public nonisolated enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
             case google
             case github
             case mySso = "my-sso"

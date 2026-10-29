@@ -34,9 +34,18 @@ public final nonisolated class Api: Sendable {
         public struct IsUpdatedFalse: Codable {
             public let nextStep: NextStep
 
+            public init(nextStep: NextStep) {
+                self.nextStep = nextStep
+            }
+
             public struct NextStep: Codable {
                 public let destination: String
                 public let name: String
+
+                public init(destination: String, name: String) {
+                    self.destination = destination
+                    self.name = name
+                }
             }
         }
 
@@ -52,21 +61,19 @@ public final nonisolated class Api: Sendable {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .isUpdatedTrue:
-                    try container.encode("true", forKey: .isUpdated)
+                    try container.encode(true, forKey: .isUpdated)
                 case .isUpdatedFalse(let params):
-                    try container.encode("false", forKey: .isUpdated)
+                    try container.encode(false, forKey: .isUpdated)
                     try params.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                let disc = try container.decode(String.self, forKey: .isUpdated)
+                let disc = try container.decode(Bool.self, forKey: .isUpdated)
                 switch disc {
-                case "true": self = .isUpdatedTrue
-                case "false": self = .isUpdatedFalse(try IsUpdatedFalse(from: decoder))
-                default:
-                    throw DecodingError.dataCorruptedError(forKey: .isUpdated, in: container, debugDescription: "Unknown value: \(disc)")
+                case true: self = .isUpdatedTrue
+                case false: self = .isUpdatedFalse(try IsUpdatedFalse(from: decoder))
                 }
             }
         }
@@ -77,10 +84,19 @@ public final nonisolated class Api: Sendable {
         public struct Email: Codable {
             public let body: String
             public let subject: String
+
+            public init(body: String, subject: String) {
+                self.body = body
+                self.subject = subject
+            }
         }
 
         public struct Sms: Codable {
             public let message: String
+
+            public init(message: String) {
+                self.message = message
+            }
         }
 
         public enum Result: Codable {

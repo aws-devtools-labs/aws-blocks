@@ -29,6 +29,14 @@ public nonisolated struct AuthAction: Codable {
         try c.encode(self.name, forKey: .name)
         try c.encodeIfPresent(self.url, forKey: .url)
     }
+
+    public init(fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, url: String? = nil) {
+        self.fields = fields
+        self.label = label
+        self.method = method
+        self.name = name
+        self.url = url
+    }
 }
 
 public nonisolated enum AuthFieldType: String, Codable {
@@ -62,6 +70,14 @@ public nonisolated struct AuthField: Codable {
         try c.encode(self.name, forKey: .name)
         try c.encode(self.required, forKey: .required)
         try c.encode(self.`type`, forKey: .`type`)
+    }
+
+    public init(defaultValue: String? = nil, label: String, name: String, required: Bool, `type`: AuthFieldType) {
+        self.defaultValue = defaultValue
+        self.label = label
+        self.name = name
+        self.required = required
+        self.`type` = `type`
     }
 }
 
@@ -97,11 +113,24 @@ public nonisolated struct AuthState: Codable {
         try c.encode(self.state, forKey: .state)
         try c.encodeIfPresent(self.user, forKey: .user)
     }
+
+    public init(actions: [AuthAction], error: String? = nil, retriable: Bool? = nil, state: AuthStateState, user: AuthUser? = nil) {
+        self.actions = actions
+        self.error = error
+        self.retriable = retriable
+        self.state = state
+        self.user = user
+    }
 }
 
 public nonisolated struct AuthUser: Codable {
     public let userId: String
     public let username: String
+
+    public init(userId: String, username: String) {
+        self.userId = userId
+        self.username = username
+    }
 }
 
 public nonisolated struct Todo: Codable {
@@ -111,4 +140,13 @@ public nonisolated struct Todo: Codable {
     public let title: String
     public let todoId: String
     public let userId: String
+
+    public init(completed: Bool, createdAt: Double, priority: Double, title: String, todoId: String, userId: String) {
+        self.completed = completed
+        self.createdAt = createdAt
+        self.priority = priority
+        self.title = title
+        self.todoId = todoId
+        self.userId = userId
+    }
 }

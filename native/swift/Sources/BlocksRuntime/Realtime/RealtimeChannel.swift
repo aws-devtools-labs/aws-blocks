@@ -15,13 +15,6 @@ private enum RealtimeChannelWebSocketSession {
     static let shared = WebSocketSession()
 }
 
-/// A realtime descriptor's channel, socket URL and subscribe token.
-private struct RealtimeChannelParts {
-    let channel: String
-    let wsUrl: String
-    let token: String
-}
-
 /// Parsing of server WebSocket frames. Non-generic and internal so tests can
 /// exercise it without a socket.
 enum RealtimeFrame {
@@ -79,8 +72,12 @@ public final class RealtimeChannel<T> {
     /// Converts the raw JSON payload bytes from a WebSocket message into
     /// an instance of T. Receiving `Data` lets callers pass straight to
     /// `JSONDecoder` without a redundant `Data → String → Data` round trip.
-    /// Internal so tests can decode a payload without a socket.
     let deserializer: (Data) throws -> T
+
+    /// The descriptor's `wsUrl` and `connectToken` as the server sent them, before the localhost rewrite and the
+    /// connect-token query parameter. `nil` for a channel built with `init`. `encode(to:)` writes these back.
+    private var wireWsUrl: String?
+    private var wireConnectToken: String?
 
     private var closed = false
     private let lock = NSLock()
@@ -128,29 +125,81 @@ public final class RealtimeChannel<T> {
         baseHost: String? = nil,
         deserializer: @escaping (Data) throws -> T
     ) -> RealtimeChannel<T> {
-        guard let parts = parts(of: json, baseHost: baseHost) else {
+        guard let channelName = json["channel"] as? String,
+              let wsUrlStr = json["wsUrl"] as? String,
+              let tokenValue = json["token"] as? String else {
             fatalError("Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token")
         }
-        return RealtimeChannel(channel: parts.channel, wsUrl: parts.wsUrl, token: parts.token, deserializer: deserializer)
+
+        let connectToken = json["connectToken"] as? String
+        let channel = RealtimeChannel(
+            channel: channelName,
+            wsUrl: resolvedWsUrl(wsUrlStr, connectToken: connectToken, baseHost: baseHost),
+            token: tokenValue,
+            deserializer: deserializer
+        )
+        channel.wireWsUrl = wsUrlStr
+        channel.wireConnectToken = connectToken
+        return channel
     }
 
-    /// A descriptor's channel, socket URL and subscribe token, with `baseHost` and the connect token applied; nil if one is missing.
-    private static func parts(of json: [String: Any], baseHost: String?) -> RealtimeChannelParts? {
-        guard let channelName = json["channel"] as? String,
-              var wsUrlStr = json["wsUrl"] as? String,
-              let tokenValue = json["token"] as? String else {
-            return nil
-        }
-
+    /// The URL to connect to: `wsUrl` with `localhost` rewritten to `baseHost`, then a non-empty `connectToken`
+    /// appended as the `token` query parameter.
+    private static func resolvedWsUrl(_ wsUrl: String, connectToken: String?, baseHost: String?) -> String {
+        var wsUrlStr = wsUrl
         if let host = baseHost {
             wsUrlStr = wsUrlStr.replacingOccurrences(of: "://localhost", with: "://\(host)")
         }
 
-        if let connectToken = json["connectToken"] as? String, !connectToken.isEmpty {
+        if let connectToken, !connectToken.isEmpty {
             wsUrlStr = Self.appendingConnectToken(to: wsUrlStr, connectToken)
         }
+        return wsUrlStr
+    }
 
-        return RealtimeChannelParts(channel: channelName, wsUrl: wsUrlStr, token: tokenValue)
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case channel
+        case wsUrl
+        case connectToken
+        case token
+    }
+
+    /// Decodes a channel from its `{ "__blocks": "realtime/channel", … }` descriptor, the same way
+    /// ``fromJSON(_:baseHost:deserializer:)`` hydrates it with ``BlocksClient/baseHost``. This lets a generated
+    /// model hold a channel in a field, an array, a dictionary or an optional.
+    ///
+    /// Messages decode with a `JSONDecoder` that carries this decoder's `userInfo`. Unlike `fromJSON`, a malformed
+    /// descriptor throws a `DecodingError` rather than trapping. That decoder reads dates the way
+    /// ``BlocksClient/makeDecoder()`` does (ISO 8601 strings).
+    public required convenience init(from decoder: Decoder) throws where T: Decodable {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "realtime/channel")
+        let wsUrl = try container.decode(String.self, forKey: .wsUrl)
+        let connectToken = try container.decodeIfPresent(String.self, forKey: .connectToken)
+        let userInfo = decoder.userInfo
+        self.init(
+            channel: try container.decode(String.self, forKey: .channel),
+            wsUrl: Self.resolvedWsUrl(wsUrl, connectToken: connectToken, baseHost: BlocksClient.baseHost),
+            token: try container.decode(String.self, forKey: .token)
+        ) { data in
+            let messageDecoder = BlocksJSONCoding.makeDecoder()
+            messageDecoder.userInfo = userInfo
+            return try messageDecoder.decode(T.self, from: data)
+        }
+        self.wireWsUrl = wsUrl
+        self.wireConnectToken = connectToken
+    }
+
+    /// Encodes the channel's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "realtime/channel", "channel", "wsUrl", "connectToken"?, "token" }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("realtime/channel", forKey: .blocksType)
+        try container.encode(channel, forKey: .channel)
+        try container.encode(wireWsUrl ?? wsUrl, forKey: .wsUrl)
+        try container.encodeIfPresent(wireConnectToken, forKey: .connectToken)
+        try container.encode(token, forKey: .token)
     }
 
     /// Appends `connectToken` to `wsUrl` as a `token` query parameter. Keeps any
@@ -224,30 +273,9 @@ public final class RealtimeChannel<T> {
     }
 }
 
-// MARK: - Codable
+extension RealtimeChannel: Encodable {}
 
-extension RealtimeChannel: Decodable where T: Decodable {
-    /// Hydrates a channel from its descriptor in a generated result, at any depth; a bad descriptor throws.
-    public convenience init(from decoder: Decoder) throws {
-        guard let parts = try Self.parts(of: TransferableCoding.descriptor(from: decoder), baseHost: BlocksClient.baseHost) else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: decoder.codingPath,
-                debugDescription: "Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token"
-            ))
-        }
-        // Formed here, not in generated code: a closure formed under MainActor default isolation traps off it.
-        self.init(channel: parts.channel, wsUrl: parts.wsUrl, token: parts.token) { data in
-            try JSONDecoder().decode(T.self, from: data)
-        }
-    }
-}
-
-extension RealtimeChannel: Encodable {
-    /// Always throws: transferables are read-only.
-    public func encode(to encoder: Encoder) throws {
-        throw TransferableCoding.readOnlyError(self, encoder)
-    }
-}
+extension RealtimeChannel: Decodable where T: Decodable {}
 
 // MARK: - ChannelWebSocketDelegate
 

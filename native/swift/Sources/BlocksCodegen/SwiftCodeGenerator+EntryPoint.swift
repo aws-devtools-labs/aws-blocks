@@ -18,17 +18,18 @@ struct EntryPointName {
 }
 
 extension SwiftCodeGenerator {
-    /// Class and `Blocks` property per namespace, with one warning per rename.
-    func entryPointNames(for namespaces: [APINamespace]) -> (names: [EntryPointName], warnings: [String]) {
-        let classes = namespaceClassNames(namespaces.map(\.name))
+    /// Class and `Blocks` property per namespace, with one warning per rename. `classNames` are the namespace
+    /// classes `apiClassNames` allocated (in namespace order); a class steps aside for a top-level model type and
+    /// for the names the generated files declare or spell unqualified (`reservedNamespaceClassNames`).
+    func entryPointNames(for namespaces: [APINamespace], classNames: [String]) -> (names: [EntryPointName], warnings: [String]) {
         let properties = namespaceAccessorNames(namespaces.map(\.name))
         var warnings: [String] = []
-        let names = namespaces.map { namespace -> EntryPointName in
+        let names = zip(namespaces, classNames).map { namespace, className -> EntryPointName in
             let name = EntryPointName(
-                className: classes[namespace.name] ?? pascalCase(namespace.name),
+                className: className,
                 property: properties[namespace.name] ?? naturalAccessorName(namespace.name)
             )
-            let naturalClass = pascalCase(namespace.name)
+            let naturalClass = specTypeName(namespace.name)
             if name.className != naturalClass {
                 let reason = reservedNamespaceClassNames.contains(naturalClass) ? "reserved" : "taken"
                 warnings.append("swift: namespace '\(namespace.name)' generates class \(name.className); \(naturalClass) is \(reason).")
@@ -44,12 +45,13 @@ extension SwiftCodeGenerator {
 
     /// Opens a namespace class that runs on the client its `Blocks` owns. Every top-level generated type is
     /// `nonisolated`: it compiles in the app's target and must not inherit a `MainActor` default isolation.
-    func emitNamespaceHeader(_ name: EntryPointName, defaultServer: String, lines: inout [String]) {
+    /// `client` is the class's client property: `client`, unless an operation takes that name.
+    func emitNamespaceHeader(_ name: EntryPointName, client: String = "client", defaultServer: String, lines: inout [String]) {
         emitDeclaration(name.className, line: "public final nonisolated class \(name.className): Sendable {", lines: &lines)
-        lines.append("    private let client: \(runtimePrefix)BlocksClient")
+        lines.append("    private let \(client): \(runtimePrefix)BlocksClient")
         lines.append("")
         lines.append("    public init(client: \(runtimePrefix)BlocksClient) {")
-        lines.append("        self.client = client")
+        lines.append("        self.\(client) = client")
         lines.append("    }")
         lines.append("")
         lines.append("    @available(*, deprecated, message: \"Use blocks.\(name.property) from one Blocks() or Blocks(server:) you hold\")")
@@ -97,19 +99,17 @@ extension SwiftCodeGenerator {
         lines.append("}")
     }
 
-    /// Emits `Servers`; a keyword name such as `default` is backticked.
+    /// Emits `Servers`, one property per server; a keyword name such as `default` is backticked, and servers whose
+    /// names give the same property take `_2`, `_3`, … (`serverPropertyNames`).
     func emitServers(_ servers: [ServerDefinition], lines: inout [String]) {
         lines.append("")
         lines.append("// MARK: - Servers")
         lines.append("")
         emitDeclaration("Servers", line: "public nonisolated enum Servers {", lines: &lines)
-        for server in servers {
-            let name = swiftStringLiteral(server.name)
-            let url = swiftStringLiteral(server.url)
-            lines.append(
-                "    public static let \(serverPropertyName(server.name)) = "
-                    + "\(runtimePrefix)BlocksServer(name: \(name), url: \(url))"
-            )
+        for (server, propertyName) in zip(servers, serverPropertyNames(servers)) {
+            let name = swiftStringContent(server.name)
+            let url = swiftStringContent(server.url)
+            lines.append("    public static let \(propertyName) = \(runtimePrefix)BlocksServer(name: \"\(name)\", url: \"\(url)\")")
         }
         lines.append("}")
     }
