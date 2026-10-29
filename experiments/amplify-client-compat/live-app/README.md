@@ -1,7 +1,7 @@
 # Live sign-in test (M2)
 
 A Blocks app with one `AuthCognito` pool, plus a runner that signs into it
-with the real `aws-amplify@6` client. Nothing here has been deployed yet.
+with the real `aws-amplify@6` client.
 
 - `aws-blocks/index.ts`: `AuthCognito` (email sign-in, self sign-up, MFA off,
   `removalPolicy: 'destroy'`) and an `api.whoAmI` probe.
@@ -26,7 +26,7 @@ shell and the account CDK-bootstrapped in the target region:
 
 ```bash
 # once: node_modules from the main checkout
-ln -sfn /home/rhamouda/workspace/aws-blocks/node_modules node_modules
+ln -sfn <main-checkout>/node_modules node_modules
 
 cd experiments/amplify-client-compat/live-app
 export AWS_REGION=us-west-2
