@@ -501,7 +501,10 @@ describe('API Gateway asset proxy — image endpoints without an image function'
     ]) {
       const res = await proxy(get(endpoint, { url: src, href: src }));
       const location = res.headers?.location ?? '';
-      assert.doesNotMatch(location, /[\u0000-\u001f\\]/, `${endpoint} ${JSON.stringify(src)}`);
+      assert.ok(
+        ![...location].some((c) => c.charCodeAt(0) < 0x20 || c === '\\'),
+        `no control character or backslash in Location: ${endpoint} ${JSON.stringify(src)}`,
+      );
       assert.strictEqual(new URL(location, 'https://site.example/a/b').origin, 'https://site.example', `stays on the site: ${location}`);
     }
   });
