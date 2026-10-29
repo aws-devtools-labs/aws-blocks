@@ -51,6 +51,9 @@ export class Auth {
 	createApi(): never {
 		throw serverSide('createApi');
 	}
+	protect(): never {
+		throw serverSide('protect');
+	}
 	requireAuth(): never {
 		throw serverSide('requireAuth');
 	}

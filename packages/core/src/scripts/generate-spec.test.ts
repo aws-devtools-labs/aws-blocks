@@ -660,3 +660,87 @@ describe('generateSpec — tuples', () => {
 		assert.strictEqual(tagged.result.schema.prefixItems[1].oneOf.length, 2);
 	});
 });
+
+describe('generateSpec — a namespace typed through a mapped type (`(...args: A)` methods)', () => {
+	it('describes each parameter by its tuple label, required or optional', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-test-'));
+		writeTsconfig(dir);
+		// `AsyncAPI<T>` (core) and `ProtectedApi<T>` (bb-auth) both map each method to
+		// `(...args: Parameters) => Promise<…>`; a namespace built by a helper reaches
+		// the extractor only through that type.
+		writeFileSync(join(dir, 'index.ts'), `
+			type Mapped<T extends Record<string, (...args: any[]) => any>> = {
+				[K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
+			};
+			declare function helper<T extends Record<string, (...args: any[]) => any>>(make: () => T): Mapped<T>;
+			export const notes = helper(() => ({
+				async rename(id: string, title?: string): Promise<{ ok: boolean }> { return { ok: true }; },
+			}));
+		`);
+		const notes = new ApiNamespace(null as any, 'notes', () => ({ async rename(_id: string, _title?: string) { return { ok: true }; } }));
+		try {
+			const doc = await generateSpec(join(dir, 'index.ts'), async () => ({ notes }) as Record<string, unknown>);
+			const rename = doc.methods.find((m) => m.name === 'notes.rename');
+			assert.ok(rename, 'notes.rename is in the spec');
+			assert.deepStrictEqual(
+				rename.params.map((p: any) => ({ name: p.name, required: p.required, type: p.schema?.type })),
+				[
+					{ name: 'id', required: true, type: 'string' },
+					{ name: 'title', required: false, type: 'string' },
+				],
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('generateSpec — a namespace with a discovery handler', () => {
+	it('lists the methods the discovery handler returns, not only the request handler', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-test-'));
+		writeTsconfig(dir);
+		writeFileSync(join(dir, 'index.js'), 'export {};\n');
+		let served = 0;
+		const gated = new ApiNamespace(null as any, 'gated', () => {
+			served++;
+			return { async open() { return 1; } };
+		});
+		Reflect.set(gated, Symbol.for('blocks:ApiNamespaceDiscover'), () => ({
+			async open() { return 1; },
+			async closed(name: string) { return name; },
+		}));
+		try {
+			const doc = await generateSpec(join(dir, 'index.js'), async () => ({ gated }) as Record<string, unknown>);
+			assert.deepStrictEqual(doc.methods.map((m) => m.name).sort(), ['gated.closed', 'gated.open']);
+			assert.strictEqual(served, 0, 'the request handler is not called when a discovery handler exists');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('generateSpec — a discovery handler that throws', () => {
+	it('warns, naming the namespace and the error, and leaves only that namespace out', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-test-'));
+		writeTsconfig(dir);
+		writeFileSync(join(dir, 'index.js'), 'export {};\n');
+		const broken = new ApiNamespace(null as any, 'broken', () => ({ async a() { return 1; } }));
+		Reflect.set(broken, Symbol.for('blocks:ApiNamespaceDiscover'), () => {
+			throw new Error('user.profile is undefined');
+		});
+		const fine = new ApiNamespace(null as any, 'fine', () => ({ async b() { return 2; } }));
+		const warnings: string[] = [];
+		const original = console.warn;
+		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+		try {
+			const doc = await generateSpec(join(dir, 'index.js'), async () => ({ broken, fine }) as Record<string, unknown>);
+			assert.deepStrictEqual(doc.methods.map((m) => m.name), ['fine.b']);
+			const warning = warnings.find((w) => w.includes("'broken'"));
+			assert.ok(warning, `a warning names the namespace (got: ${JSON.stringify(warnings)})`);
+			assert.match(warning, /user\.profile is undefined/);
+		} finally {
+			console.warn = original;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

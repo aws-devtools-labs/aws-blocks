@@ -2766,6 +2766,26 @@ export const authCApi = authC.createApi();
 // `signIn:<id>` actions carrying the sign-in URL)
 export const oidcAuthApi = oidcAuth.createApi();
 
+// Deny by default (`auth.protect`): `methods` runs only after the session check
+// for a user signed in to `auth` (the `api.authSignIn` session), with that user,
+// typed by `auth`'s options; `ping` needs no session. See
+// test/auth-protect.test.ts.
+export const protectedApi = auth.protect(scope, 'protectedApi', {
+  public: () => ({
+    async ping() {
+      return { ok: true };
+    },
+  }),
+  methods: (_context, user) => ({
+    async whoAmI() {
+      return { username: user.username, userSub: user.userSub, signInProvider: user.signInProvider };
+    },
+    async echo(text: string) {
+      return { text, by: user.userSub };
+    },
+  }),
+});
+
 // ── e2e test support (only when `e2eBuild`) ────────────────────────────────
 
 // The secret guarding `testSupport`: a random value made fresh for each e2e run

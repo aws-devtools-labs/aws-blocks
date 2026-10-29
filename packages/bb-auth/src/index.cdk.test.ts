@@ -19,7 +19,7 @@ import { synthIdentity } from './test-support/identity.js';
 import type { AuthOptions, AuthShape } from './types.js';
 
 /**
- * Every runtime method of {@link AuthShape} (`createApi` has its own CDK stand-in).
+ * Every runtime method of {@link AuthShape} (`createApi` and `protect` have their own CDK stand-ins).
  * The type below fails to compile when `AuthShape` gains a method that is not
  * listed — i.e. one without a `synthGuard` stub on the CDK class.
  */
@@ -58,7 +58,7 @@ const RUNTIME_METHODS = [
 	'deletePasskey',
 ] as const satisfies readonly (keyof AuthShape)[];
 /** `admin` is a getter, stubbed separately (see its test below). */
-type Unlisted = Exclude<keyof AuthShape, (typeof RUNTIME_METHODS)[number] | 'createApi' | 'admin'>;
+type Unlisted = Exclude<keyof AuthShape, (typeof RUNTIME_METHODS)[number] | 'createApi' | 'protect' | 'admin'>;
 const everyMethodListed: [Unlisted] extends [never] ? true : Unlisted = true;
 
 /** A bare stack that the CDK `Scope` accepts as a parent (test plumbing). */
@@ -114,6 +114,26 @@ describe('Auth (CDK) — createApi and fromExisting', () => {
 		const api = Auth.prototype.createApi.call(undefined);
 		assert.strictEqual(typeof api, 'function');
 		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespace')), 'auth');
+	});
+
+	test('protect() builds a real namespace at synth: tagged, routed by compute, methods synthGuarded', () => {
+		// `protect` reads nothing from the instance, so (like `createApi` above) it
+		// runs off the prototype — an in-process `Auth` needs a full BlocksStack.
+		const compute = { resolve: () => ({ type: 'serverless' as const }) };
+		const api: unknown = Reflect.apply(Auth.prototype.protect, undefined, [
+			newStack(),
+			'notesApi',
+			{ public: () => ({ async health() {} }), methods: () => ({ async other() {} }) },
+			{ compute },
+		]);
+		assert.ok(typeof api === 'function');
+		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespace')), 'notesApi');
+		const resolveCompute: unknown = Reflect.get(api, Symbol.for('blocks:ApiNamespaceCompute'));
+		assert.strictEqual(typeof resolveCompute, 'function');
+		assert.deepStrictEqual((resolveCompute as () => unknown)(), { type: 'serverless' });
+		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespaceExplicitCompute')), true);
+		// The handler (and with it every method and the session check) is runtime-only.
+		assert.throws(() => api(), /^Error: Auth\.protect\(\) cannot be called during CDK synth/);
 	});
 
 	test('fromExisting() returns a reference object, not an Auth', () => {

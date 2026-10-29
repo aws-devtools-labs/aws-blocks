@@ -30,6 +30,7 @@ import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import type { ScopeParent } from '@aws-blocks/core';
 import {
+	ApiNamespace,
 	BuildingBlockScope,
 	EventSourceMapping,
 	isSandboxContext,
@@ -72,7 +73,16 @@ import {
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
-import type { AuthOptions, ExternalUserPoolRef, StubUser } from './types.js';
+import { apiNamespaceOptionsOf } from './protect.js';
+import type {
+	ApiMethods,
+	AuthOptions,
+	ExternalUserPoolRef,
+	ProtectedApi,
+	ProtectHandlers,
+	ProtectOptions,
+	StubUser,
+} from './types.js';
 import { BB_NAME } from './version.js';
 
 export type { AuthBase } from './auth-base.js';
@@ -454,6 +464,22 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 */
 	createApi() {
 		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
+	}
+
+	/**
+	 * Synth-time `protect()`: a real `ApiNamespace` (so the shared API gateway
+	 * routes it, honouring `options.compute` and every other `ApiNamespace` option), whose handler is a `synthGuard`
+	 * stub — the methods, and the session check before them, run at request time
+	 * only. Called at the top level of the backend module, so it must not throw.
+	 */
+	protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(
+		scope: ScopeParent,
+		name: string,
+		_handlers: ProtectHandlers<P, M, O>,
+		options?: ProtectOptions<O>,
+	): ProtectedApi<P & M> {
+		const guard = (): P & M => synthGuard('Auth', 'protect');
+		return new ApiNamespace(scope, name, guard, apiNamespaceOptionsOf(options));
 	}
 
 	// ── IAM ─────────────────────────────────────────────────────────────────

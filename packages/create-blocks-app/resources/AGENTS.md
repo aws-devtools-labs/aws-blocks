@@ -13,7 +13,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Backend defines APIs; the frontend imports the same names as a typed client
 
-- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`. You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
+- The backend (`aws-blocks/index.ts`) declares each API with `new ApiNamespace(scope, '<name>', (context) => ({ ...methods }))`, and auth with `auth.createApi()`; a namespace whose methods need a signed-in user is best declared with `auth.protect(scope, '<name>', { public, methods })` (see below). You `export` them (e.g. `export const api = …`, `export const authApi = auth.createApi()`).
 - The frontend imports those **same export names** from `'aws-blocks'`:
 
   ```ts
@@ -43,18 +43,33 @@ const auth = new Auth(scope, 'auth', {
   codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
 });
 export const authApi = auth.createApi();               // the state machine the sign-in UI drives
+// Deny by default: `methods` runs only after the session check, with the signed-in user.
+export const notesApi = auth.protect(scope, 'notesApi', {
+  public: (context) => ({                              // no session needed
+    async health() {
+      return { ok: true };
+    },
+  }),
+  methods: (context, user) => ({                       // 401 NotAuthenticatedException if signed out
+    async myNotes() {
+      return user.userSub;                             // key per-user data on userSub
+    },
+  }),
+});
+export const adminApi = auth.protect(scope, 'adminApi', {
+  methods: () => ({ async adminReport() {} }),
+}, { role: 'admins' });                                // 403 NotAuthorizedException if not in the group
+// A plain ApiNamespace is public: each method must await its own guard.
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async myNotes() {
+  async myProfile() {
     const user = await auth.requireAuth(context);      // 401 NotAuthenticatedException if signed out
-    return user.userSub;                               // key per-user data on userSub
-  },
-  async adminReport() {
-    await auth.requireRole(context, 'admins');         // 403 NotAuthorizedException if not in the group
+    return user.attributes.email;
   },
 }));
 ```
 
-- **Gate every method that needs a user.** API methods are public by default: call `await auth.requireAuth(context)` (or `auth.requireRole(context, '<group>')`) at the top. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
+- **Prefer `auth.protect(scope, '<name>', { public: (context) => ({ ... }), methods: (context, user) => ({ ... }) })` for any namespace with signed-in methods.** `methods` runs only after the session check (and the group check, with `{ role }` as the last argument), once per call, with the typed `user`; `public` methods need no session. A signed-out call to anything but a public method gets 401. This way a forgotten guard can't expose a method.
+- **In a plain `ApiNamespace`, gate every method that needs a user.** Its methods are public by default: call `await auth.requireAuth(context)` (or `await auth.requireRole(context, '<group>')`) at the top. Always `await` it: a guard that isn't awaited protects nothing, and no lint rule in this project catches the missing `await`. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
 - **Pass options inline.** The block narrows its types to the literal options: `requireRole` accepts only declared `users.groups`, and methods your configuration doesn't enable are compile errors. Don't route the options through a variable typed `AuthOptions`.
 - **Sign-up always confirms the email address with a 6-digit code.** With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it — no second password entry — but the code is always required. Locally the code goes to `codeDelivery` and to `.bb-data/<scope id>-<auth id>/last-code.json` (e.g. `.bb-data/my-app-auth/last-code.json`); once deployed, Amazon Cognito emails it (its default sender is limited to 50 emails a day).
 - **The flow over `authApi`** (what the `Authenticator` does for you, and what tests call): `setAuthState({ action: 'signUp', username, password, email })` → state `confirmingSignUp`; `setAuthState({ action: 'confirmSignUp', username, code })`; `setAuthState({ action: 'autoSignIn', username })` → `signedIn`. Later: `{ action: 'signIn', username, password }` and `{ action: 'signOut' }`. This app's pool uses `users: { signInWith: ['email'], caseSensitive: false }`: the email *is* the username (omit `email`), it matches ignoring case, and `user.username` is an id Cognito generates — show `user.displayName` (on `AuthState.user` / `onAuthChange`, the email) and read the address server-side from `user.attributes.email`. (Without `signInWith`, the block's default is `['username', 'email']`: users choose a username, which must not look like an email address, and can also sign in with their email once it is confirmed.)
@@ -64,7 +79,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 `Auth` supplies the backend only; the frontend must let a user sign in. On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui` — it renders sign-up, the code step and sign-in, and submits the automatic sign-in for you:
 
-- On the backend, call `await auth.requireAuth(context)` at the top of each protected method. It throws when the user is not signed in.
+- On the backend, define signed-in methods with `auth.protect(...)`, or call `await auth.requireAuth(context)` at the top of each protected method of a plain `ApiNamespace`. Either throws when the user is not signed in.
 - On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
   - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
   - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.

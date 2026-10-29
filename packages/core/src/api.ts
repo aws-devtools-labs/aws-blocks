@@ -92,6 +92,24 @@ export const API_NAMESPACE_COMPUTE = Symbol.for('blocks:ApiNamespaceCompute');
  */
 export const API_NAMESPACE_EXPLICIT_COMPUTE = Symbol.for('blocks:ApiNamespaceExplicitCompute');
 
+/**
+ * Symbol under which a namespace may expose a **discovery** handler: called by
+ * the OpenRPC spec generator (`blocks-generate-spec`) with a stub context, in
+ * place of the namespace's own handler, to list every method. Never called to
+ * serve a request.
+ *
+ * It is for a namespace whose handler can't list all its methods before a
+ * request is authorized — `auth.protect(...)` builds its protected methods only
+ * after the session check — so the spec still describes every method. A
+ * namespace without one is discovered through its handler, as before.
+ *
+ * A symbol key, like {@link API_NAMESPACE_MARKER}, so no RPC method name can
+ * reach it.
+ *
+ * @internal
+ */
+export const API_NAMESPACE_DISCOVER = Symbol.for('blocks:ApiNamespaceDiscover');
+
 /** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
 type ComputeResolvingScope = { compute?: unknown };
 
@@ -205,6 +223,27 @@ export interface ApiNamespaceOptions {
  * The local mock applies no auth either, so an ungated method passes every
  * local check and still ships callable by anyone. See the `Auth` README
  * (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+ *
+ * A guard protects only when awaited: `auth.requireRole(context, 'admins')`
+ * without `await` lets the method return before the check fails. To make a
+ * whole namespace deny by default, define it with `auth.protect(...)` instead:
+ * its `methods` run only after the session check, with the signed-in user, and
+ * only its `public` methods are callable without one:
+ *
+ * ```typescript
+ * export const posts = auth.protect(scope, 'posts', {
+ *   public: (context) => ({
+ *     async listPublicPosts() {
+ *       return db.posts.findPublished();
+ *     },
+ *   }),
+ *   methods: (context, user) => ({
+ *     async createPost(input: NewPost) {
+ *       return db.posts.create({ ...input, authorId: user.userId });
+ *     },
+ *   }),
+ * });
+ * ```
  *
  * The functions on the handler's returned object are callable: its own
  * enumerable properties (including spread-in ones) and, for a class instance,
