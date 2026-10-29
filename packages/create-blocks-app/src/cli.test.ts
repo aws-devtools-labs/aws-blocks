@@ -144,12 +144,14 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.match(pkg.scripts['check:iam'], /blocks-iam-check cdk\.out --app "\$APP_ID"/);
       assert.match(result.stdout, /no UI: the API runs at http:\/\/localhost:3001/);
       assert.match(result.stdout, /set APP_ID/);
+      assert.match(result.stdout, /"stackId" in \.blocks\/config\.json/);
+      assert.notStrictEqual(JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8')).stackId, undefined);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it('--template platform with APP_ID set pins the app\'s bootstrap qualifier and toolkit stack in cdk.json', () => {
+  it('--template platform with APP_ID set pins the app\'s bootstrap qualifier and toolkit stack in cdk.json, and its stackId', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-id-'));
     const target = join(tmpDir, 'my-app');
     try {
@@ -158,6 +160,9 @@ describe('create-blocks-app CLI argument parsing', () => {
       const cdkJson = JSON.parse(readFileSync(join(target, 'cdk.json'), 'utf-8'));
       assert.strictEqual(cdkJson.context['@aws-cdk/core:bootstrapQualifier'], 'orders');
       assert.strictEqual(cdkJson.toolkitStackName, 'CDKToolkit-orders');
+      // The stackId is the app id, so Hosting's secret()/config() values live under blocks/orders/.
+      const blocksConfig = JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8'));
+      assert.strictEqual(blocksConfig.stackId, 'orders');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

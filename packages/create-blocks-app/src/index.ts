@@ -129,21 +129,27 @@ const APP_ID = /^[a-z][a-z0-9]{0,9}$/;
 /**
  * For the platform template: when `APP_ID` is set, write the app's bootstrap
  * qualifier and toolkit stack name into cdk.json; otherwise say how to.
+ *
+ * @returns the app id when `APP_ID` is a valid one: the caller uses it as the
+ *   app's `stackId` (`.blocks/config.json`), so Hosting's `secret()` / `config()`
+ *   values live under `blocks/<id>/`, the app's own on a shared platform.
  */
-async function pinPlatformBootstrap(targetDir: string): Promise<void> {
+async function pinPlatformBootstrap(targetDir: string): Promise<string | undefined> {
   const appId = process.env.APP_ID;
   if (!appId || !APP_ID.test(appId)) {
     console.log(
       '\nPlatform app: set APP_ID (1–10 lowercase letters and digits) and re-run, or add ' +
-        '"@aws-cdk/core:bootstrapQualifier": "<id>" to cdk.json\'s context and "toolkitStackName": "CDKToolkit-<id>".',
+        '"@aws-cdk/core:bootstrapQualifier": "<id>" to cdk.json\'s context and "toolkitStackName": "CDKToolkit-<id>", ' +
+        'and set "stackId" in .blocks/config.json to "<id>".',
     );
-    return;
+    return undefined;
   }
   const cdkJsonPath = join(targetDir, 'cdk.json');
   const cdkJson = JSON.parse(await readFile(cdkJsonPath, 'utf-8'));
   cdkJson.context = { ...cdkJson.context, '@aws-cdk/core:bootstrapQualifier': appId };
   cdkJson.toolkitStackName = `CDKToolkit-${appId}`;
   await writeFile(cdkJsonPath, `${JSON.stringify(cdkJson, null, 2)}\n`);
+  return appId;
 }
 
 /** The dev-server port of a template with no frontend (no `src/` or `index.html`), or `undefined`. */
@@ -396,7 +402,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
 
   // The platform template: pin this app's own CDK bootstrap (qualifier = app id)
   // in cdk.json, which AWS Blocks' deploy scripts read for their bootstrap check.
-  if (templateName === 'platform') await pinPlatformBootstrap(targetDir);
+  const platformAppId = templateName === 'platform' ? await pinPlatformBootstrap(targetDir) : undefined;
 
   // Rename gitignore to .gitignore
   await rename(join(targetDir, 'gitignore'), join(targetDir, '.gitignore'));
@@ -431,8 +437,9 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Generate .blocks/config.json with a unique stackId
-  const stackId = generateStackId(appName);
+  // Generate .blocks/config.json with a unique stackId. A platform app's stackId is
+  // its app id, so Hosting's secret()/config() names (`blocks/<stackId>/…`) are the app's own.
+  const stackId = platformAppId ?? generateStackId(appName);
   const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
