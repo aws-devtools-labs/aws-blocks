@@ -67,12 +67,12 @@ jobs:
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Not the sum of the step caps: the capped steps add up to 125 min (Playwright install 25,
-    # agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3), plus the uncapped
-    # ones. Even the main path (install 25 + agent 35 + build/test 12 + judge 20 = 92) can
-    # exceed it, so a cell that runs long in an early step can hit this job timeout in a later
-    # step (the judge, the analysis or an upload) before that step's own cap fires. The caps
-    # bound each step on its own; only this line bounds the cell.
+    # Not the sum of the step caps: the capped steps add up to 130 min (Playwright package 5,
+    # browser install 25, agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3),
+    # plus the uncapped ones. Even the main path (package 5 + browser 25 + agent 35 + build/test
+    # 12 + judge 20 = 97) can exceed it, so a cell that runs long in an early step can hit this job
+    # timeout in a later step (the judge, the analysis or an upload) before that step's own cap
+    # fires. The caps bound each step on its own; only this line bounds the cell.
     timeout-minutes: 85
     permissions:
       id-token: write
@@ -250,25 +250,46 @@ jobs:
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
 
+      # The verifier's Playwright (PW_VERSION, 1.60.0), installed with `npm ci` from the lockfile in
+      # scripts/ci/agent-bench-playwright: npm checks every tarball against its integrity, where
+      # `npx playwright@<version>` would run whatever the npm cache restored above holds for that spec
+      # (the browser install below needs no package install script, hence --ignore-scripts). The
+      # drift warning is advisory; scripts/ci/agent-bench-playwright.test.mjs fails a PR that lets
+      # the pin and PW_VERSION differ. Best-effort like the step below, which is skipped if this fails.
+      # npm's fetch retries are bounded (3 tries of up to 60 s idle, 20 s backoff); the step cap
+      # stops a transfer that is slow but still sending.
+      - name: Install the pinned Playwright package
+        id: pwpin
+        continue-on-error: true
+        if: steps.init.outcome == 'success'
+        timeout-minutes: 5
+        run: |
+          want=$(sed -n 's/^PW_VERSION="\(.*\)"$/\1/p' scripts/agent-bench/steps/3-build-and-test.sh 2>/dev/null || true)
+          have=$(node -p "require('./scripts/ci/agent-bench-playwright/package.json').dependencies.playwright" 2>/dev/null || true)
+          [ -n "$want" ] && [ "$want" = "$have" ] ||
+            echo "::warning::scripts/ci/agent-bench-playwright pins Playwright '$have' but the verifier's PW_VERSION is '${want:-not found}'"
+          npm ci --prefix scripts/ci/agent-bench-playwright --ignore-scripts --no-audit --no-fund \
+            --fetch-timeout=60000 --fetch-retries=2 --fetch-retry-maxtimeout=20000
+
       # Provision the browser once, before the agent phase — step 2 used to run with
       # no chromium, so the agent wasted turns hunting for one. `--with-deps` pulls the OS libs;
-      # version-pinned to the verifier's PW_VERSION (1.60.0). Then wrap the system chromium so every
-      # launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of aborting on
-      # crashpad. Best-effort (continue-on-error): a blip must not red the cell — step 3's guarded
-      # fallback covers the install, and an unwrapped chromium still runs, just less reliably.
+      # `--bin` runs the playwright installed by the step above (never `npx`). Then wrap the system
+      # chromium so every launch (the agent's ad-hoc CDP sessions included) starts cleanly instead of
+      # aborting on crashpad. Best-effort (continue-on-error): a blip must not red the cell; step 3's
+      # guarded fallback covers the install, and an unwrapped chromium still runs, just less reliably.
       # The install retries an attempt that prints nothing for 8 min (a stalled apt mirror) and
       # gives up after 23 min in all; timeout-minutes is the backstop. See scripts/ci/install-playwright.mjs.
       # That cap counts against the job's 85 min (see the note on timeout-minutes above).
       - name: Provision Playwright chromium (before agent phase)
         id: pwprovision
         continue-on-error: true
-        if: steps.init.outcome == 'success'
+        if: steps.pwpin.outcome == 'success'
         timeout-minutes: 25
         run: |
-          node scripts/ci/install-playwright.mjs --package playwright@1.60.0 chromium
+          node scripts/ci/install-playwright.mjs --bin scripts/ci/agent-bench-playwright/node_modules/.bin/playwright chromium
           # sudo env_reset strips job-level env, so pass PLAYWRIGHT_BROWSERS_PATH through explicitly —
           # the shim wraps the Playwright-installed chromium under it, which is the binary reliably
-          # present on a stock runner (npx install above runs unprivileged and writes it there).
+          # present on a stock runner (the install above runs unprivileged and writes it there).
           # The wrapper is root-owned by design (the shim also wraps system-PATH binaries that need
           # root).
           sudo PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" bash scripts/agent-bench/steps/install-chromium-shim.sh

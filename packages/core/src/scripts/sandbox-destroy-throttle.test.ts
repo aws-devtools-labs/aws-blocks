@@ -4,9 +4,11 @@
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import type { S3Client } from '@aws-sdk/client-s3';
 
 import { productionDestroyDeps } from './destroy.js';
 import {
+	type AssemblyStack,
 	destroyWasThrottled,
 	emptySandboxBuckets,
 	isThrottleReason,
@@ -55,9 +57,9 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 				if (attempts <= 3)
 					throw new Error('DELETE_FAILED: Too Many Requests (Service: ApiGateway, Status Code: 429)');
 			},
-			listStackNames: () => ['stackA'],
-			emptyBuckets: async (stackNames) => {
-				steps.push(`empty ${stackNames.join(',')}`);
+			listStacks: () => [{ stackName: 'stackA' }],
+			emptyBuckets: async (stacks) => {
+				steps.push(`empty ${stacks.map((st) => st.stackName).join(',')}`);
 			},
 			isThrottled: async () => true,
 			sleep: async (ms) => {
@@ -108,7 +110,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					clock.attempt();
 					throw new Error('Too Many Requests (Service: ApiGateway, Status Code: 429)');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
 				isThrottled: async () => true,
 				sleep: async (ms) => {
@@ -141,7 +143,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					t += durations[attempts++] ?? 5 * MIN;
 					throw new Error('Too Many Requests (Service: ApiGateway, Status Code: 429)');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
 				isThrottled: async () => true,
 				sleep: async (ms) => {
@@ -167,7 +169,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 						clock.attempt();
 						throw new Error('Too Many Requests (Service: ApiGateway, Status Code: 429)');
 					},
-					listStackNames: () => ['stackA'],
+					listStacks: () => [{ stackName: 'stackA' }],
 					emptyBuckets: async () => {},
 					isThrottled: async () => true,
 					sleep: async (ms) => clock.advance(ms),
@@ -197,7 +199,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 						clock.attempt();
 						throw new Error('x');
 					},
-					listStackNames: () => ['stackA'],
+					listStacks: () => [{ stackName: 'stackA' }],
 					emptyBuckets: async () => {},
 					// Throttled 3 times (fail@5, 11, 18), then an ordinary failure at 27, past the budget.
 					isThrottled: async () => attempts <= 3,
@@ -230,7 +232,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 						clock.attempt();
 						throw new Error('distribution still deleting');
 					},
-					listStackNames: () => ['stackA'],
+					listStacks: () => [{ stackName: 'stackA' }],
 					emptyBuckets: async () => {},
 					isThrottled: async () => false,
 					sleep: async (ms) => {
@@ -258,7 +260,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					runDestroy: () => {
 						throw new Error('bucket not empty');
 					},
-					listStackNames: () => ['stackA'],
+					listStacks: () => [{ stackName: 'stackA' }],
 					emptyBuckets: async () => {},
 					isThrottled: async () => false,
 					sleep: async () => {},
@@ -289,7 +291,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 						attempts++;
 						throw new Error('x');
 					},
-					listStackNames: () => ['stackA'],
+					listStacks: () => [{ stackName: 'stackA' }],
 					emptyBuckets: async () => {},
 					isThrottled: async () => {
 						lastThrottled = sequence[attempts - 1] ?? false;
@@ -317,7 +319,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					clock.attempt();
 					throw new Error('x');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
 				// Throttled 3 times, then (the RestApi gone) an ordinary failure past the budget.
 				isThrottled: async () => attempts <= 3,
@@ -343,7 +345,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					attempts++;
 					throw new Error('bucket not empty');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
 				isThrottled: async () => false,
 				sleep: async (ms) => {
@@ -366,7 +368,7 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					attempts++;
 					throw new Error('boom');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
 				isThrottled: async () => {
 					throw new Error('AccessDenied: cloudformation:DescribeStackEvents');
@@ -381,6 +383,42 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		assert.deepStrictEqual(sleeps, [60_000, 120_000]);
 	});
 
+	it('stops on a Lambda@Edge replica failure even when the attempt was also throttled', async () => {
+		const errors: string[] = [];
+		const error = mock.method(console, 'error', (...a: unknown[]) => {
+			errors.push(a.join(' '));
+		});
+		let attempts = 0;
+		let slept = false;
+		let emptied = false;
+		try {
+			await assert.rejects(
+				runDestroyWithRetries({
+					runDestroy: () => {
+						attempts++;
+						throw new Error('x');
+					},
+					listStacks: () => [{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' }],
+					emptyBuckets: async () => {
+						emptied = true;
+					},
+					isThrottled: async () => true,
+					edgeReplicaBlocked: async () => ['edge-lambda-stack-x'],
+					sleep: async () => {
+						slept = true;
+					},
+				}),
+			);
+		} finally {
+			error.mock.restore();
+		}
+		assert.strictEqual(attempts, 1);
+		assert.strictEqual(slept, false);
+		assert.strictEqual(emptied, false);
+		assert.match(errors.join('\n'), /edge-lambda-stack-x can't be deleted yet/);
+		assert.doesNotMatch(errors.join('\n'), /throttled by AWS/);
+	});
+
 	it('passes the attempt start time so a stale throttle from an earlier attempt is not counted', async () => {
 		const clock = fakeClock(5 * MIN);
 		const seen: number[] = [];
@@ -391,9 +429,9 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 					clock.attempt();
 					throw new Error('x');
 				},
-				listStackNames: () => ['stackA'],
+				listStacks: () => [{ stackName: 'stackA' }],
 				emptyBuckets: async () => {},
-				isThrottled: async (_names: string[], since: number, prev?: number) => {
+				isThrottled: async (_stacks: AssemblyStack[], since: number, prev?: number) => {
 					seen.push(since);
 					previous.push(prev);
 					return false;
@@ -412,10 +450,40 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 describe('destroy call sites', () => {
 	// Deleting either `isThrottled` line would silently turn throttle backoff off
 	// on that path while every runDestroyWithRetries test stays green.
-	it('sandbox:destroy detects throttles and empties buckets before a retry', () => {
-		const deps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {});
-		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
-		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
+	it('sandbox:destroy detects throttles, empties buckets and checks Lambda@Edge before a retry, with its own clients', async () => {
+		const regions: Array<string | undefined> = [];
+		const { cfn, calls } = fakeCfn({ s: attempt('s', 1, THROTTLE) });
+		const listed: string[] = [];
+		const cfnFor = (region: string | undefined) => {
+			regions.push(region);
+			return {
+				send: async (cmd: { constructor: { name: string }; input: { StackName: string } }) => {
+					if (cmd.constructor.name === 'ListStackResourcesCommand') {
+						listed.push(cmd.input.StackName);
+						return { StackResourceSummaries: [] };
+					}
+					return cfn.send(cmd as never);
+				},
+			} as unknown as CloudFormationClient;
+		};
+		const s3 = { send: async () => ({}) } as unknown as S3Client;
+		const deps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {}, { cfnFor, s3 });
+		const stacks = [{ stackName: 's', region: 'eu-west-1' }];
+		assert.ok(deps.isThrottled, 'isThrottled is wired');
+		assert.strictEqual(await deps.isThrottled(stacks, SINCE), true);
+		assert.deepStrictEqual(calls, ['s:0']);
+		// The previous attempt's failure time reaches the check, so its throttle is not counted again.
+		const stale = fakeCfn({ s: shortPreviousAttempt() });
+		const staleDeps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {}, { cfnFor: () => stale.cfn, s3 });
+		assert.ok(staleDeps.isThrottled);
+		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE), true, 'without previousFailureAt the skew window lets it in');
+		assert.strictEqual(await staleDeps.isThrottled(stacks, SINCE, SINCE - 20_000), false);
+		await deps.emptyBuckets(stacks);
+		assert.deepStrictEqual(listed, ['s']);
+		assert.ok(deps.edgeReplicaBlocked, 'edgeReplicaBlocked is wired');
+		await deps.edgeReplicaBlocked([{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' }], SINCE);
+		assert.deepStrictEqual(listed, ['s', 'edge-lambda-stack-x']);
+		assert.deepStrictEqual(regions, ['eu-west-1', 'eu-west-1', 'us-east-1']);
 	});
 
 	it('production destroy detects throttles and empties buckets before a retry', () => {
@@ -528,6 +596,29 @@ function attempt(stack: string, startMin: number, reason: string | undefined): F
 	];
 }
 
+/**
+ * Events of a previous attempt that began 55s before SINCE (inside the clock
+ * skew window) and was throttled 30s before it; the attempt at SINCE never
+ * reached DeleteStack. Newest-first.
+ */
+function shortPreviousAttempt(): FakeEvent[] {
+	return [
+		{
+			Timestamp: new Date(SINCE - 30_000),
+			LogicalResourceId: 'DefaultComputeAPI5E5CE44A',
+			ResourceType: 'AWS::ApiGateway::RestApi',
+			ResourceStatus: 'DELETE_FAILED',
+			ResourceStatusReason: THROTTLE,
+		},
+		{
+			Timestamp: new Date(SINCE - 55_000),
+			LogicalResourceId: 's',
+			ResourceType: 'AWS::CloudFormation::Stack',
+			ResourceStatus: 'DELETE_IN_PROGRESS',
+		},
+	];
+}
+
 const THROTTLE = 'Too Many Requests (Service: ApiGateway, Status Code: 429, Request ID: x) (SDK Attempt Count: 5)';
 
 describe('stackDeleteThrottled', () => {
@@ -632,21 +723,7 @@ describe('stackDeleteThrottled', () => {
 	it("ignores the previous attempt's events when that attempt was short (notBeforeMs)", async () => {
 		// Previous attempt began 55s ago (inside the skew window) and was throttled 30s ago;
 		// this attempt (at SINCE) never reached DeleteStack, and the previous one failed 20s ago.
-		const events: FakeEvent[] = [
-			{
-				Timestamp: new Date(SINCE - 30_000),
-				LogicalResourceId: 'DefaultComputeAPI5E5CE44A',
-				ResourceType: 'AWS::ApiGateway::RestApi',
-				ResourceStatus: 'DELETE_FAILED',
-				ResourceStatusReason: THROTTLE,
-			},
-			{
-				Timestamp: new Date(SINCE - 55_000),
-				LogicalResourceId: 's',
-				ResourceType: 'AWS::CloudFormation::Stack',
-				ResourceStatus: 'DELETE_IN_PROGRESS',
-			},
-		];
+		const events = shortPreviousAttempt();
 		const { cfn } = fakeCfn({ s: events });
 		assert.strictEqual(
 			await stackDeleteThrottled(cfn, ['s'], SINCE),
@@ -654,6 +731,28 @@ describe('stackDeleteThrottled', () => {
 			'without notBeforeMs the skew window lets it in',
 		);
 		assert.strictEqual(await stackDeleteThrottled(cfn, ['s'], SINCE, SINCE - 20_000), false);
+	});
+
+	it("looks each stack up in its own Region when given a client per Region", async () => {
+		const home: Record<string, string> = { app: 'eu-west-1', 'edge-lambda-stack-x': 'us-east-1' };
+		const lookups: string[] = [];
+		const cfnFor = (region: string | undefined) => {
+			const { cfn } = fakeCfn({ 'edge-lambda-stack-x': attempt('edge-lambda-stack-x', 1, THROTTLE), app: [] });
+			return {
+				send: async (cmd: { constructor: { name: string }; input: { StackName: string } }) => {
+					lookups.push(`${cmd.input.StackName}@${region}`);
+					if (home[cmd.input.StackName] !== region) throw new Error(`Stack [${cmd.input.StackName}] does not exist`);
+					return cfn.send(cmd as never);
+				},
+			} as unknown as CloudFormationClient;
+		};
+		const stacks = [
+			{ stackName: 'app', region: 'eu-west-1' },
+			{ stackName: 'edge-lambda-stack-x', region: 'us-east-1' },
+		];
+		assert.strictEqual(await stackDeleteThrottled(cfnFor, stacks, SINCE), true);
+		assert.deepStrictEqual(lookups, ['app@eu-west-1', 'edge-lambda-stack-x@us-east-1']);
+		assert.strictEqual(await destroyWasThrottled(stacks, SINCE, undefined, cfnFor), true);
 	});
 
 	it('throws when every stack is missing (e.g. stacks in another Region), so the caller warns', async () => {
