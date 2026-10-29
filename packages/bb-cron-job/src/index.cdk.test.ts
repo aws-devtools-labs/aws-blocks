@@ -218,9 +218,11 @@ describe('CronJob one handler per event key, at synth', () => {
 /** The policy statements attached to the shared scheduler role. */
 function schedulerRoleStatements(template: Template): Array<{ Action: unknown; Resource: unknown }> {
 	const roles = template.findResources('AWS::IAM::Role');
-	const roleId = Object.keys(roles).find((k) =>
-		JSON.stringify(roles[k].Properties?.AssumeRolePolicyDocument ?? {}).includes('scheduler.amazonaws.com'),
-	);
+	const trustsScheduler = (role: { Properties?: { AssumeRolePolicyDocument?: { Statement?: unknown[] } } }) =>
+		(role.Properties?.AssumeRolePolicyDocument?.Statement ?? []).some(
+			(s) => (s as { Principal?: { Service?: unknown } }).Principal?.Service === 'scheduler.amazonaws.com',
+		);
+	const roleId = Object.keys(roles).find((k) => trustsScheduler(roles[k]));
 	assert.ok(roleId, 'a scheduler role exists');
 	const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter((p) =>
 		JSON.stringify(p.Properties?.Roles ?? []).includes(roleId),
