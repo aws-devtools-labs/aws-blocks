@@ -4,13 +4,13 @@ Design document for AsyncJob. For usage, examples, and best practices, see [READ
 
 **Package:** `@aws-blocks/bb-async-job`
 **Type:** Primitive (new infrastructure)
-**AWS Services:** Amazon SQS + shared Lambda
+**AWS Services:** Amazon SQS with either AWS Lambda or Amazon ECS on AWS Fargate
 
 ## Overview
 
 AsyncJob provides background job processing: submit a payload, get a job ID back, and a handler processes it asynchronously with automatic retries and dead-letter handling. It targets fire-and-forget work offloaded from the request path — sending emails, processing uploads, generating reports, fan-out tasks.
 
-**Key distinction from CronJob:** AsyncJob is the programmable runtime primitive — it exposes `submit()` and `submitBatch()`, and work is triggered when application code enqueues a payload. CronJob is a pure infrastructure declaration with no runtime methods, triggered by an EventBridge schedule. Both target the shared Lambda.
+**Key distinction from CronJob:** AsyncJob is the programmable runtime primitive — it exposes `submit()` and `submitBatch()`, and work is triggered when application code enqueues a payload. CronJob is a pure infrastructure declaration with no runtime methods, triggered by an EventBridge schedule. AsyncJob supports Lambda or container compute; CronJob currently requires Lambda compute. Each uses its resolved compute, not necessarily the same function.
 
 ## Architecture
 
@@ -18,9 +18,10 @@ AsyncJob provides background job processing: submit a payload, get a job ID back
 Application code
     └── submit(payload) / submitBatch(payloads)
          └── SQS queue (one per AsyncJob instance)
-              └── SqsEventSource → shared Lambda
-                   └── routes record by queue name → registered handler
-                        └── handler(payload, context)
+              ├── Lambda: SqsEventSource → resolved compute's function
+              │    └── routes record by queue name → handler(payload, context)
+              └── Container: owner-matched SQS poller → worker thread per delivery
+                   └── routes by job fullId → handler(payload, context)
 
 Status (only when trackStatus: true)
     └── nested DistributedTable (partition key jobId, TTL expiresAt)
@@ -46,25 +47,25 @@ Local Mock
 
 ### D-AJ-1a: Visibility timeout covers the batching window as well as the handler
 
-**Decision:** The main queue's visibility timeout is `900 + maxBatchingWindowSeconds` seconds, not a flat 900 s.
+**Decision:** The main queue's configured visibility timeout is `900 + maxBatchingWindowSeconds` seconds, not a flat 900 s. This setting is sized for the Lambda event-source path; the container poller overrides per-message visibility (D-AJ-3).
 
-**Rationale:** A message becomes invisible when the poller *receives* it, which happens before the batching window elapses and before the handler is invoked. Worst-case time-to-completion for a message is therefore `maxBatchingWindowSeconds + handler runtime`, and the handler runtime is bounded by the shared Lambda's 900 s timeout. A flat 900 s timeout lets SQS make a message visible again while its invocation is still running (905 s worst case at the default 5 s window, and up to 1200 s at the 300 s maximum), redelivering work that was never lost. Sizing the timeout as window + Lambda timeout is the deterministic minimum: the longest a message can legitimately be in flight, since Lambda's platform timeout caps handler runtime regardless of `batchSize`. The Lambda timeout is imported from core (`SHARED_HANDLER_TIMEOUT_SECONDS`) rather than re-hardcoded, so the two cannot drift.
+**Rationale:** On Lambda, a message becomes invisible when the poller *receives* it, before the batching window elapses and before the handler is invoked. At the default 900 s function timeout, worst-case time-to-completion is `maxBatchingWindowSeconds + 900`: 905 s at the default 5 s window, and 1200 s at the 300 s maximum. A flat 900 s visibility timeout could therefore redeliver work that is still running. The queue uses core's `SHARED_HANDLER_TIMEOUT_SECONDS` constant, not the resolved function's configured timeout; selecting a shorter `maxTimeoutSeconds` does not shorten the queue setting. The batching window is not a container delivery delay.
 
-**Not AWS's recommended value.** AWS recommends `6 x functionTimeout + maxBatchingWindow`, where the 6x buffers *invoke-side throttling retries*: if the function is at its concurrency ceiling, the poller retries the invoke while the message stays invisible, and the message can go visible again before the handler has ever run. That is reachable here, because the target Lambda is shared with API and CronJob traffic (D-AJ-2). We take the 1x minimum deliberately: at the 900 s shared timeout, 6x would be a 5400–5700 s visibility timeout, so a genuinely stuck message would take ~1.5 h per attempt to become visible again and ~4.5 h to reach the DLQ at the default `maxRetries` of 3 — trading a rare duplicate delivery for an operationally useless retry loop. The residual exposure is redundant work, not loss: delivery is at-least-once and handlers must be idempotent regardless (see below), and `receiveCount` in the handler context lets a handler detect a redelivery. Consumers that would rather pay the latency can raise the ceiling by keeping handler runtimes well under 900 s.
+**Not AWS's recommended value.** AWS recommends `6 x functionTimeout + maxBatchingWindow` for Lambda consumers, where the 6x buffers *invoke-side throttling retries*: if the function is at its concurrency ceiling, the poller retries the invoke while the message stays invisible, and the message can go visible again before the handler has ever run. This can also happen when the resolved function shares API or CronJob traffic (D-AJ-2). At the default 900 s function timeout, 6x would be a 5400–5700 s visibility timeout, delaying retries and DLQ redrive substantially. The current setting trades that latency for exposure to duplicate work under throttling; delivery is at-least-once and handlers must be idempotent regardless (see below). It is not a guarantee against redelivery, nor does it set a container worker's timeout.
 
 **Handler contract:** at-least-once delivery still applies — this removes a redelivery the block itself would have caused, it does not make handlers exempt from being idempotent. A whole-invocation failure (Lambda timeout or OOM) redelivers every message in the batch, including records whose handler already completed; see the README's batching notes.
 
-### D-AJ-2: Shared Lambda target (not a dedicated per-job Lambda)
+### D-AJ-2: Resolved compute target (Lambda or container)
 
-**Decision:** The queue's `SqsEventSource` targets the shared API Lambda — the same function used by API handlers and CronJob — rather than a dedicated function per job.
+**Decision:** An explicit `options.compute` is resolved before wiring the queue; otherwise the job inherits its scope's compute. A Lambda compute receives a native `SqsEventSource` on its function. A container compute consumes through an owner-matched runtime poller, with no Lambda event source. Any other compute fails synth with `UnsupportedComputeException` rather than leaving a queue with no supported consumer.
 
-**Rationale:** One Lambda handles all routes, async jobs, and cron jobs, so handlers can compose other Building Blocks (KVStore, FileBucket, etc.) with permissions already granted, and there are no per-job cold starts or idle cost. The trade-off is shared timeout (900 s) and memory across all job types.
+**Rationale:** The default serverless compute keeps simple apps on one Lambda without creating a dedicated function per job. Explicit compute selection lets a job use another Lambda or a container for long-running or high-memory work. Jobs sharing a compute share its resources; assigning a compute does not create a separate machine for every job. Container concurrency is bounded per job per instance, and a configured `timeoutSeconds` is enforced by terminating the delivery's worker thread.
 
-### D-AJ-3: Visibility timeout pinned to the Lambda timeout
+### D-AJ-3: Container visibility heartbeat and delivery timeout
 
-**Decision:** The main queue's visibility timeout is set to 900 seconds — equal to the shared Lambda's maximum timeout.
+**Decision:** The container poller receives messages with a 120 s visibility timeout, overriding the queue default. While a worker runs, a heartbeat every 30 s sets the message's remaining visibility to 60 s. A successful worker causes deletion; a failure, crash, or configured delivery timeout leaves the message for SQS retry and eventual DLQ redrive.
 
-**Rationale:** SQS requires the visibility timeout to be at least as long as the consumer's processing time; otherwise a still-running message becomes visible again and is processed twice. Pinning it to the Lambda's 900 s ceiling guarantees a message is never redelivered while its handler is still running.
+**Rationale:** A container job can outlive Lambda's 15-minute ceiling, so a fixed Lambda-sized visibility timeout cannot cover its whole run. Heartbeats extend visibility while work continues without requiring a long retry delay when a task dies. Extensions are best-effort (failures are logged), so at-least-once delivery and idempotency still apply. Visibility is distinct from the job's `timeoutSeconds`: that option limits execution by terminating the worker, not by relying on SQS visibility to stop code.
 
 ### D-AJ-4: Client-side validation before enqueue
 
@@ -84,11 +85,11 @@ Two distinct failure kinds feed `.failed[]`. An *entry-level* failure (SQS accep
 
 **Status writes are best-effort, not part of the contract.** On full success the `queued` fan-out (`trackStatus: true`) runs *after* every message is enqueued and is wrapped so a failure there (e.g. DynamoDB throttling on a large batch) is logged, not thrown — otherwise a bookkeeping error would make the caller treat a fully-successful enqueue as a failure and re-submit, double-enqueuing everything. The handler backfills a `queued` record when it first sees a job, so the record is not lost. On the partial-failure (throw) path no status is written at all; the same backfill covers the enqueued jobs. The mock runtime submits one message at a time and never partially fails, so the transport/abort paths are an AWS-only concern.
 
-### D-AJ-5: Event routing via queue name
+### D-AJ-5: Lambda queue-name routing and container ownership
 
-**Decision:** In AWS, the handler is registered with `registerLambdaEventHandler(EventSourceMapping.SQS, queueName, ...)`. The shared Lambda routes an incoming SQS record to the matching AsyncJob by the queue name parsed from the queue URL. The queue URL is injected via the `BLOCKS_QUEUE_URL_{FULLID}` environment variable. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
+**Decision:** On Lambda, the handler is registered with `registerLambdaEventHandler(EventSourceMapping.SQS, queueName, ...)`. The resolved function routes an incoming SQS record by the queue name parsed from the queue URL; its CDK constructor claims the same key so duplicate registrations on one compute fail synth. On containers, the parent starts a poller only when the job's `BLOCKS_HANDLER_OWNER_{FULLID}` matches the running `BLOCKS_COMPUTE_ID`. Each delivery runs in a fresh worker, which resolves the job by `fullId` and never starts another poller. The queue URL and owner are registered with `registerConfig()`; config keys use `sanitizeConfigKey(fullId)`.
 
-**Rationale:** Routing by queue name keeps dispatch consistent with the rest of the framework (CronJob routes by `source` + `jobName`) and needs no extra infrastructure. When the env var is absent (e.g. during codegen, not a real Lambda invocation), handler registration is skipped so synthesis does not fail.
+**Rationale:** Lambda queue-name routing reuses the framework's existing event dispatch. Container owner matching prevents a different compute running the same backend image from draining the job's queue. Multiple instances of the owning compute can still consume it. When the queue URL is absent (e.g. during codegen), the runtime registers neither a Lambda handler nor a container poller.
 
 ### D-AJ-6: Browser stub is a no-op
 
@@ -130,17 +131,18 @@ Creates the following resources per AsyncJob instance:
 
 1. **SQS Dead-Letter Queue** — name `{fullId}-dlq` (truncated to 80 chars), 14-day retention, `SQS_MANAGED` encryption, `enforceSSL`.
 2. **SQS Main Queue** — name `{fullId}` (truncated to 80 chars), visibility timeout `900 + maxBatchingWindowSeconds` s (see D-AJ-1a), redrive to the DLQ with `maxReceiveCount = maxRetries`, `SQS_MANAGED` encryption, `enforceSSL`.
-3. **Event Source Mapping** — `SqsEventSource(queue, { batchSize, reportBatchItemFailures: true, maxBatchingWindow })` wired to the shared handler. `batchSize` comes from `options.batchSize` (default 10) and `maxBatchingWindow` from `options.maxBatchingWindowSeconds` (default 5 s, range 0–300). Partial-batch reporting is **always on and not configurable**, because it is required for any `batchSize > 1`. Without `ReportBatchItemFailures` in the mapping's `FunctionResponseTypes`, a single failing record makes SQS treat the entire batch as handled and delete every message in it — silent data loss. The runtime handler always returns `{ batchItemFailures }` to match. Both options are range-checked in the constructor and rejected at synth time with `InvalidOptionException`: `batchSize` must be 1–10 with no batching window, or 1–10000 once `maxBatchingWindowSeconds > 0`. Those are the limits AWS itself enforces when it creates the mapping, so the check only moves the failure from mid-deployment to synth.
+3. **Event Source Mapping (Lambda only)** — `SqsEventSource(queue, { batchSize, reportBatchItemFailures: true, maxBatchingWindow })` wired to the resolved function. `batchSize` comes from `options.batchSize` (default 10) and `maxBatchingWindow` from `options.maxBatchingWindowSeconds` (default 5 s, range 0–300). Partial-batch reporting is **always on and not configurable**, because it is required for any `batchSize > 1`. The runtime handler returns `{ batchItemFailures }` so individual failed records are retried without redelivering successful ones. Both options are range-checked on the Lambda path and rejected at synth time with `InvalidOptionException`: `batchSize` must be 1–10 with no batching window, or 1–10000 once `maxBatchingWindowSeconds > 0`. The container path creates no mapping and does not use these options to batch delivery.
 4. **Status table** (only when `trackStatus: true`) — a nested `DistributedTable` at child id `status`, partition key `jobId`, TTL attribute `expiresAt`. Provisioned with the same child id and options as the runtime entry points so the table the runtime resolves is the one CDK created.
 
-**IAM grants to handler:** `grantSendMessages` on the main queue (so handlers can enqueue further work).
-**Environment variables injected:** `BLOCKS_QUEUE_URL_{FULLID}` (uppercased `fullId`, non-alphanumerics replaced with `_`) → the main queue URL, registered via `registerConfig`.
+**IAM grants:** `grantSendMessages` on the main queue; container jobs also grant queue consumption to the execution role, covering receive, delete, and visibility changes.
+**Runtime config:** `BLOCKS_QUEUE_URL_{FULLID}` → queue URL and `BLOCKS_HANDLER_OWNER_{FULLID}` → owning compute's `fullId`, registered via `registerConfig`. `{FULLID}` uses `sanitizeConfigKey(fullId)`. Container jobs with explicit options also register `BLOCKS_HANDLER_TIMEOUT_{FULLID}` (seconds) and `BLOCKS_HANDLER_CONCURRENCY_{FULLID}` (`max(1, ceil(maxConcurrencyPerCPU × vcpu))`). Without the latter, the poller defaults to five in-flight deliveries per job per instance.
 
 No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. AsyncJob owns the queue lifecycle.
 
 ## AWS Runtime
 
-- Reads the queue URL from `BLOCKS_QUEUE_URL_{FULLID}`; registers the SQS handler only when the URL is present.
+- Reads the queue URL from `BLOCKS_QUEUE_URL_{FULLID}`; with a URL present, registers Lambda dispatch or the container ownership/worker path described in D-AJ-5.
+- On containers, the parent polls SQS, dispatches each delivery to a worker thread, extends visibility while it runs, and deletes only on success (D-AJ-3). On Lambda, the native event-source mapping performs delivery and uses the handler's partial-batch response.
 - `submit()` sends a single `SendMessageCommand`; returns `{ jobId: MessageId }`.
 - `submitBatch()` packs the payloads into as many `SendMessageBatchCommand` requests as SQS's per-request limits require — at most 10 entries and at most 256 KB of aggregate body per request — issuing one command per chunk (see D-AJ-4a). Each entry's `Id` is the payload's original index, so successful entries map back to `jobIds` by index and failed entries populate `failed`. If any entry in any chunk fails, it throws `BatchSubmitFailedException` carrying `failed` and `jobIds` (real MessageIds for enqueued entries, `null` at failed indexes) for partial-result handling; a multi-chunk submit is not atomic, so earlier chunks may already be on the queue (see D-AJ-4a).
 - Each delivered record is parsed into `{ payload, context }` where `context = { jobId: messageId, receiveCount: ApproximateReceiveCount, sentAt: SentTimestamp }`.
@@ -162,7 +164,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | In-process queue (not SQS) | Jobs run in the dev server process; nothing persists across restarts | No mitigation — local queue is for development flow. Sandbox testing exercises real SQS |
-| Handler runs in-process (not isolated) | Shared memory, no cold start, no per-job timeout enforcement | No mitigation — the shared Lambda in AWS is also not isolated per-job |
+| Handler runs in-process (not isolated) | Shared memory, no cold start, no container worker-thread isolation or delivery timeout enforcement | A Lambda invocation can share a batch; container deliveries use separate workers. Exercise container isolation and termination in a sandbox |
 | No real visibility timeout | Retries are immediate rather than after a timeout window | No mitigation — timing differences don't affect at-least-once + retry correctness |
 | `submitBatch()` never returns partial failures | The mock enqueues each payload locally, so `failed` is always empty and `BatchSubmitFailed` is never thrown | AWS surfaces per-entry failures; design handlers and callers to handle the `failed` array and `BatchSubmitFailedException` |
 | Status records never expire locally | The mock `DistributedTable` has no TTL sweeper, so status records persist in `.bb-data/` until it is cleared, whereas DynamoDB deletes them ~24 hours after the last transition | No mitigation needed — local records are small and `.bb-data/` is disposable. Do not rely on a record being *absent* after 24 hours in either runtime; DynamoDB TTL deletion is asynchronous and best-effort |
@@ -181,7 +183,7 @@ AsyncJob and CronJob are complementary primitives:
 | **Delivery guarantee** | At-least-once (SQS) | At-least-once (EventBridge) |
 | **Retry mechanism** | SQS redrive + DLQ | Lambda async invoke retry |
 | **Payload** | Dynamic per `.submit()` call | Static `input` set at deploy time |
-| **Lambda target** | Shared Lambda (same as CronJob) | Shared Lambda (same as AsyncJob) |
+| **Compute target** | Resolved Lambda or container compute | Resolved Lambda compute only |
 
 Common pattern: a CronJob triggers periodic work that uses an AsyncJob for fan-out:
 

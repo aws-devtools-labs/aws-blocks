@@ -93,7 +93,7 @@ export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
 				 *
 				 * Assigning a container-backed compute moves delivery from a native SQS
 				 * event source to an owner-matched poller the container self-starts; the
-				 * per-handler wall-clock limit comes from the compute's `timeoutSeconds`. In
+				 * per-handler wall-clock limit comes from this job's `timeoutSeconds`. In
 				 * local dev, compute assignment is transparent — the handler runs in-process.
 				 */
 				compute: ComputeProvider<'container'>;
