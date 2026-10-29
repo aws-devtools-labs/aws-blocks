@@ -65,11 +65,12 @@ const MAX_BATCH_PAYLOADS = 10_000;
  * **Best practices:**
  * - Keep payloads small (< 256 KB) — store large data in FileBucket/KVStore and pass a reference
  * - Design handlers to be idempotent — jobs may be delivered more than once
- * - Set `visibilityTimeout` to at least 2x the expected handler duration
+ * - Use `timeoutSeconds` to bound container deliveries; SQS visibility controls redelivery, not code termination
  *
  * **Scaling (AWS):** SQS standard queues support nearly unlimited throughput.
- * By default a dedicated Lambda function processes jobs with automatic
- * concurrency scaling. Assign a container `Compute` (via the `compute` option)
+ * By default the resolved Lambda compute processes jobs with automatic
+ * concurrency scaling; no dedicated Lambda is created per job. Assign a container
+ * `Compute` (via the `compute` option)
  * to run the handler on Fargate instead — for long-running or high-memory jobs —
  * where a self-started poller drains the queue and the service autoscales on
  * backlog depth.
@@ -188,7 +189,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	 *
 	 * The handler runs asynchronously — this method returns immediately with a job ID.
 	 * In local dev, the handler executes via `setTimeout`. In AWS, the payload is
-	 * sent to SQS and a dedicated Lambda processes it.
+	 * sent to SQS and processed on the job's resolved Lambda or container compute.
 	 *
 	 * @param payload - The job data passed to the handler.
 	 * @param options - Optional. `delaySeconds` defers processing (0–900s).
