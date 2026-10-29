@@ -37,8 +37,8 @@
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
-    "aws-cdk": "^2.1145.0",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk": "^2.1146.1",
+    "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1"
   }
 }
