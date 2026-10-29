@@ -13,6 +13,7 @@ export interface AuthAction {
     label: string;
     method?: 'GET' | 'POST';
     name: string;
+    unavailable?: string;
     url?: string;
 }
 

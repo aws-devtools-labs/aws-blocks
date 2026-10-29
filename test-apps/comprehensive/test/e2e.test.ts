@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type {
   api as apiType,
+  authSocialApi as authSocialApiType,
   isolatedApi as isolatedApiType,
   strictStatusApi as strictStatusApiType,
 } from 'aws-blocks';
@@ -52,6 +53,7 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { authSocialLocalTests } from './auth-social-local.test.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -61,6 +63,7 @@ let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
 let strictStatusApi: typeof strictStatusApiType;
+let authSocialApi: typeof authSocialApiType;
 let authStateApis: AuthStateApis;
 let appModule: typeof import('aws-blocks');
 let protectApis: ProtectApis;
@@ -159,6 +162,7 @@ test.before(async () => {
   api = module.api;
   isolatedApi = module.isolatedApi;
   strictStatusApi = module.strictStatusApi;
+  authSocialApi = module.authSocialApi;
   authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
   protectApis = { api: module.api, protectedApi: module.protectedApi };
   authTotpApis = { authCMfaApi: module.authCMfaApi, authApi: module.authApi, api: module.api };
@@ -250,6 +254,9 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 
 // Before any suite signs into `auth`: the signed-out call must stay signed out.
 httpErrorStatusTests(() => ({ api, strictStatusApi }));
+
+// Local only: the `auth-social` block exists only in `npm run dev`.
+if (ENV === 'local') authSocialLocalTests(() => authSocialApi);
 
 // The full (no-argument) purge of delivered verification codes. It runs here,
 // before the background suites below start, because once they overlap a full

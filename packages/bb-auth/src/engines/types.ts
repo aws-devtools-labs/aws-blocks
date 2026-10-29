@@ -569,6 +569,15 @@ export type FederatedIdentity =
  */
 export interface FederationEngine {
 	/**
+	 * Set when this provider cannot sign anyone in in this runtime (a hosted-UI
+	 * provider in `npm run dev`, a stub IdP on a deployment that is not a
+	 * sandbox): a short, user-facing reason. The signed-out state then marks
+	 * the `signIn:<id>` action unavailable with it, and the sign-in route
+	 * answers a browser navigation with an explanatory HTML page.
+	 */
+	readonly unavailable?: { readonly hint: string; readonly message: string };
+
+	/**
 	 * Build the authorize URL (the IdP's, or Cognito managed login's) and set
 	 * whatever pending-auth state the callback needs (PKCE verifier, nonce,
 	 * `state`) as a cookie on `context.response`. The `GET

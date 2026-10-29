@@ -72,6 +72,7 @@ import { AuthErrors } from './errors.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import type { FederationRouteHost } from './federation-routes.js';
 import { assertKnownAuthOptions } from './option-validation.js';
+import { providerDisplayName } from './provider-names.js';
 import {
 	handlePreSignUpTrigger,
 	passwordSignUpCandidate,
@@ -169,17 +170,6 @@ const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
 /** The per-factor settings `updateMfaPreference` accepts. */
 const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED', 'NOT_PREFERRED'];
 
-/** Brand-cased provider names for default labels. */
-const KNOWN_PROVIDER_NAMES: Record<string, string> = {
-	google: 'Google',
-	apple: 'Apple',
-	facebook: 'Facebook',
-	amazon: 'Amazon',
-	github: 'GitHub',
-	okta: 'Okta',
-	auth0: 'Auth0',
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers (exported for tests and for the CDK layer to share the rules)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,8 +182,7 @@ const KNOWN_PROVIDER_NAMES: Record<string, string> = {
  */
 export function resolveProviders(options: AuthOptions): ResolvedProvider[] {
 	const out: ResolvedProvider[] = [];
-	const label = (id: string, explicit?: string) =>
-		explicit ?? `Sign in with ${KNOWN_PROVIDER_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1)}`;
+	const label = (id: string, explicit?: string) => explicit ?? `Sign in with ${providerDisplayName(id)}`;
 	for (const [id, config] of Object.entries(options.socialProviders ?? {})) {
 		if (config === undefined) continue;
 		out.push({ id, family: 'social', transport: 'hosted-ui', label: label(id, config.label), config });
@@ -2281,10 +2270,11 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private signedOutState(error?: string, errorName?: string): AuthState<never> {
 		const callbackPath = this.config.redirects?.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		const base = `${callbackPath.slice(0, callbackPath.lastIndexOf('/'))}/signin`;
-		const providers: ProviderAction[] = [...this.providers.values()].map(({ provider }) => ({
+		const providers: ProviderAction[] = [...this.providers.values()].map(({ provider, engine }) => ({
 			id: provider.id,
 			label: provider.label,
 			url: `${base}/${encodeURIComponent(provider.id)}`,
+			...(engine.unavailable ? { unavailable: engine.unavailable.hint } : {}),
 		}));
 		return signedOut({
 			passwordEnabled: this.passwordEnabled,

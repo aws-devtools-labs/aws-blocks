@@ -74,6 +74,7 @@ import { join } from 'node:path';
 import type { BlocksContext } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { type JWK, jwtVerify, SignJWT } from 'jose';
+import { escapeHtml } from '../federation-routes.js';
 import type { StubIdpSettings, StubUser } from '../types.js';
 import { appBaseUrl, pkceChallenge } from './federation-direct.js';
 import { type StubIdpHandlers, stubIssuerPath } from './stub-idp-routes.js';
@@ -508,15 +509,6 @@ function redirectWithError(ctx: BlocksContext, req: AuthorizeRequest, error: str
 	target.searchParams.set('error_description', description);
 	if (req.state) target.searchParams.set('state', req.state);
 	redirect(ctx, target.toString());
-}
-
-function escapeHtml(value: string): string {
-	return value
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;');
 }
 
 /** The server-rendered account picker. Its form re-submits the authorize parameters. */

@@ -2807,6 +2807,32 @@ export const strictStatusApi = new ApiNamespace(scope, 'strictStatus', (context)
   },
 }), { httpErrorStatus: true });
 
+// ── Social sign-in in local dev ────────────────────────────────────────────
+//
+// A Google provider whose client secret is a `Secret` (Secrets Manager). In
+// `npm run dev` Cognito managed login does not exist, so `getAuthState()` marks
+// `signIn:google` unavailable (with a hint) and the sign-in route answers a
+// browser with an explanatory page. Local only: a deployed social provider
+// needs a globally unique Cognito domain and a real client secret, which this
+// app's sandbox and production e2e runs do not set up, so on a deployment the
+// block and its export are absent (like `testSupport`).
+const localDev = getDeploymentType() === 'local';
+const authSocial = localDev
+  ? new Auth(scope, 'auth-social', {
+      socialProviders: {
+        google: {
+          clientId: 'e2e-placeholder.apps.googleusercontent.com',
+          clientSecret: new Secret(scope, 'auth-social-google-client-secret'),
+        },
+      },
+      redirects: {
+        callbackPath: '/aws-blocks/auth/social/callback',
+        signOutPath: '/aws-blocks/auth/social/signout',
+      },
+    })
+  : undefined;
+export const authSocialApi = authSocial?.createApi();
+
 // ── e2e test support (only when `e2eBuild`) ────────────────────────────────
 
 // The secret guarding `testSupport`: a random value made fresh for each e2e run

@@ -22,6 +22,7 @@
 
 import { ApiError } from '@aws-blocks/core';
 import { AuthErrors } from '../errors.js';
+import { providerDisplayName } from '../provider-names.js';
 import type { FederationEngine, ResolvedProvider } from './types.js';
 
 /** Why the provider is unavailable here. */
@@ -39,7 +40,8 @@ export function unavailableMessage(provider: ResolvedProvider, reason: Unavailab
 		case 'hosted-ui-local':
 			return (
 				`Sign-in provider '${provider.id}' is ${what}, which is unavailable locally (npm run dev): managed login ` +
-				'needs a deployed Cognito user pool. Use a direct provider (an oidcProviders entry without ' +
+				'needs a deployed Cognito user pool. This is expected, not a configuration error: the provider works ' +
+				'after deploy (npm run sandbox). Use a direct provider (an oidcProviders entry without ' +
 				"federateVia: 'cognito') or the stub IdP (stubIdp()) for local sign-in, or deploy a sandbox to test this provider."
 			);
 		case 'stub-deployed':
@@ -53,13 +55,28 @@ export function unavailableMessage(provider: ResolvedProvider, reason: Unavailab
 	}
 }
 
+/**
+ * The short hint the `Authenticator` shows next to the disabled sign-in button
+ * (`AuthAction.unavailable`). Exported for tests.
+ */
+export function unavailableHint(provider: ResolvedProvider, reason: UnavailableReason): string {
+	switch (reason) {
+		case 'hosted-ui-local':
+			return `${providerDisplayName(provider.id)} sign-in works after deploy (npm run sandbox), or use stubIdp() locally.`;
+		case 'stub-deployed':
+			return `${providerDisplayName(provider.id)} sign-in uses the stub IdP, which runs only in local development and sandboxes.`;
+	}
+}
+
 /** @internal */
 export function unavailableFederationEngine(provider: ResolvedProvider, reason: UnavailableReason): FederationEngine {
+	const message = unavailableMessage(provider, reason);
+	// The name stays `ProviderMisconfiguredException`: callers match on it, and
+	// the message says what is actually going on.
 	const fail = (): Promise<never> =>
-		Promise.reject(
-			new ApiError(unavailableMessage(provider, reason), 501, { name: AuthErrors.ProviderMisconfigured }),
-		);
+		Promise.reject(new ApiError(message, 501, { name: AuthErrors.ProviderMisconfigured }));
 	return {
+		unavailable: { hint: unavailableHint(provider, reason), message },
 		buildSignInUrl: fail,
 		completeSignIn: fail,
 		exchangeCode: fail,

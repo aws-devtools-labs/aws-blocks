@@ -190,6 +190,18 @@ export interface AuthAction {
 	 * (e.g. server-rendered fallback for non-browser environments).
 	 */
 	capability?: 'webauthn-get' | 'webauthn-create';
+	/**
+	 * Set when the action cannot be used in this environment, with a short,
+	 * user-facing reason — e.g. a "Sign in with Google" action in `npm run dev`,
+	 * where Cognito managed login does not exist: `'Google sign-in works after
+	 * deploy (npm run sandbox), or use stubIdp() locally.'`.
+	 *
+	 * The `Authenticator` renders the action's button disabled, with this text
+	 * as a hint next to it. Other renderers should do the same, or skip the
+	 * action; submitting it anyway reaches an error that says the same thing.
+	 * Absent when the action is usable.
+	 */
+	unavailable?: string;
 }
 
 /**
