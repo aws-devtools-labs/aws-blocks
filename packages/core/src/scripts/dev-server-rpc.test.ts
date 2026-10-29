@@ -435,6 +435,49 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     ]);
     assert.strictEqual((await two.json() as { result?: unknown }).result, 'ok');
   });
+  it('answers a 4xx ApiError with its HTTP status only on an httpErrorStatus namespace', async () => {
+    const port = await getAvailablePort();
+    tempDir = join(tmpdir(), `dev-rpc-status-test-${process.pid}-${Date.now()}`);
+    mkdirSync(tempDir, { recursive: true });
+    const errorsModule = join(__dirname, '..', 'errors.js').replace(/\\/g, '/');
+    const apiModule = join(__dirname, '..', 'api.js').replace(/\\/g, '/');
+    writeFileSync(join(tempDir, 'backend.ts'), `
+import { ApiError } from '${errorsModule}';
+import { ApiNamespace } from '${apiModule}';
+const methods = () => ({
+  unauthorized: async () => { throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' }); },
+  forbidden: async () => { throw new ApiError('Forbidden', 403, { name: 'Forbidden' }); },
+  unavailable: async () => { throw new ApiError('Try later', 503); },
+  ok: async () => 'ok',
+});
+// One handler function per namespace: ApiNamespace tags the function it is given.
+export const strictApi = new ApiNamespace({ id: 'app' }, 'strictApi', () => methods(), { httpErrorStatus: true });
+export const testApi = new ApiNamespace({ id: 'app' }, 'testApi', () => methods());
+`);
+    startDevProcess(port);
+    const call = async (method: string) => {
+      const response = await fetchWhenReady(`http://127.0.0.1:${port}/aws-blocks/api`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),
+      });
+      return { status: response.status, body: await response.text() };
+    };
+
+    const strict401 = await call('strictApi.unauthorized');
+    const default401 = await call('testApi.unauthorized');
+    assert.strictEqual(strict401.status, 401);
+    assert.strictEqual(default401.status, 200);
+    assert.strictEqual(strict401.body, default401.body, 'the JSON-RPC error body is the same either way');
+    assert.strictEqual(JSON.parse(strict401.body).error.code, 401);
+
+    assert.strictEqual((await call('strictApi.forbidden')).status, 403);
+    assert.strictEqual((await call('testApi.forbidden')).status, 200);
+    // 5xx and success responses are unchanged by the option.
+    assert.strictEqual((await call('strictApi.unavailable')).status, 200);
+    assert.strictEqual((await call('strictApi.ok')).status, 200);
+  });
+
   it('dispatches only to the methods an API defines — never inherited members or exported blocks', async () => {
     const port = await getAvailablePort();
     tempDir = join(tmpdir(), `dev-rpc-dispatch-test-${process.pid}-${Date.now()}`);

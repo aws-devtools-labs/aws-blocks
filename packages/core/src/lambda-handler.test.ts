@@ -2295,3 +2295,82 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
   });
 });
+
+// ── ApiNamespace `httpErrorStatus` ──────────────────────────────────────────
+//
+// Opt-in: a 4xx `ApiError` is answered with its HTTP status; the JSON-RPC body
+// is the same either way. Off (the default), every RPC response stays a 200.
+
+function statusBackend(options?: { httpErrorStatus?: boolean }) {
+  const thrown: { current: unknown } = { current: undefined };
+  const api = new ApiNamespace(
+    { id: 'app' },
+    'api',
+    () => ({
+      async echo() {
+        throw thrown.current;
+      },
+    }),
+    options,
+  );
+  return { backend: { api }, thrown };
+}
+
+describe('createLambdaHandler — ApiNamespace httpErrorStatus', () => {
+  it('default: a 401 ApiError is an HTTP 200 carrying the error in the body', async () => {
+    const { backend, thrown } = statusBackend();
+    thrown.current = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+    const result = await invoke(backend, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcError(result).status, 401);
+  });
+
+  for (const status of [400, 401, 403, 404, 409, 429]) {
+    it(`on: a ${status} ApiError is answered with HTTP ${status}, same body`, async () => {
+      const on = statusBackend({ httpErrorStatus: true });
+      const off = statusBackend();
+      on.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      off.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      const result = await invoke(on.backend, makeEvent());
+      const baseline = await invoke(off.backend, makeEvent());
+      assert.strictEqual(result.statusCode, status);
+      assert.strictEqual(result.body, baseline.body, 'the JSON-RPC body is unchanged');
+      const err = decodeRpcError(result);
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.name, 'SomeError');
+    });
+  }
+
+  it('on: a 5xx ApiError, an unbranded throw and a branded BB error stay HTTP 200', async () => {
+    for (const error of [new ApiError('boom', 503), new Error('raw driver text'), blocksError('KVStore.Conflict', 'x')]) {
+      const { backend, thrown } = statusBackend({ httpErrorStatus: true });
+      thrown.current = error;
+      const result = await invoke(backend, makeEvent());
+      assert.strictEqual(result.statusCode, 200, String(error));
+    }
+  });
+
+  it('on: the clearing Set-Cookie still travels with a 401', async () => {
+    const api = new ApiNamespace(
+      { id: 'app' },
+      'api',
+      (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+        },
+      }),
+      { httpErrorStatus: true },
+    );
+    const result = await invoke({ api }, makeV2Event());
+    assert.strictEqual(result.statusCode, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+  });
+
+  it('on: a successful call is unaffected', async () => {
+    const api = new ApiNamespace({ id: 'app' }, 'api', () => ({ async echo(v: string) { return v; } }), { httpErrorStatus: true });
+    const result = await invoke({ api }, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcResponse(JSON.parse(result.body)), 'hello');
+  });
+});

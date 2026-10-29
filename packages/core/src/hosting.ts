@@ -57,6 +57,7 @@ import {
   wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 import { writeFrameworkSink } from './telemetry/framework-sink.js';
 
 // ─── Public types ────────────────────────────────────────────────
@@ -1098,6 +1099,14 @@ export class Hosting extends Construct {
       props.api.claimApiFrontDoor?.(publicUrl);
     }
 
+    // A CloudFront distribution's custom error responses apply to every path,
+    // the proxied API included: with an `httpErrorStatus` namespace, a 403/404
+    // from the API would come back as the error page (HTML) instead of its
+    // JSON-RPC body. Warn at synth; CloudFront's behavior is left as it is.
+    if (props.api && publicDistribution) {
+      warnHttpErrorStatusShadowed(this, publicDistribution, props.api);
+    }
+
     // ── 7a. Inject Blocks env vars into compute functions ───────────
     // Lambda@Edge functions (edge-runtime routes) do NOT support environment
     // variables — they surface in computeFunctions as EdgeFunction/IVersion
@@ -1510,6 +1519,38 @@ export class Hosting extends Construct {
   private ownerRootIdFor(api: BlocksStackApi): string {
     return isBlocksBackendRoot(api) ? api.node.path : getBlocksRoot(this).node.path;
   }
+}
+
+/**
+ * Warn when `distribution` has custom error responses for 4xx codes and the
+ * backend it fronts has namespaces created with `httpErrorStatus: true`:
+ * CloudFront applies error responses distribution-wide, so such a namespace's
+ * 403 / 404 (whichever codes are mapped) reaches the browser as the error page
+ * instead of the JSON-RPC body, and the typed client cannot read it.
+ */
+function warnHttpErrorStatusShadowed(scope: Construct, distribution: Distribution, api: object): void {
+  const exports: unknown = Reflect.get(api, HTTP_ERROR_STATUS_EXPORTS);
+  if (!Array.isArray(exports) || exports.length === 0) return;
+  const cfn = distribution.node.defaultChild;
+  if (!(cfn instanceof cdk.aws_cloudfront.CfnDistribution)) return;
+  // Resolve only the error responses (fixed at construction), never the whole
+  // config: resolving would cache lazies, such as the behaviors, before they are final.
+  const config: unknown = cfn.distributionConfig;
+  const raw: unknown = config && typeof config === 'object' ? Reflect.get(config, 'customErrorResponses') : undefined;
+  const responses: unknown = raw === undefined ? undefined : cdk.Stack.of(distribution).resolve(raw);
+  const codes = (Array.isArray(responses) ? responses : [])
+    .map((r: unknown) => (r && typeof r === 'object' ? Reflect.get(r, 'errorCode') : undefined))
+    .filter((c): c is number => typeof c === 'number' && c >= 400 && c <= 499);
+  if (codes.length === 0) return;
+  const list = [...new Set(codes)].sort().join(', ');
+  cdk.Annotations.of(scope).addWarningV2(
+    '@aws-blocks/hosting:HttpErrorStatusErrorPages',
+    `API namespace${exports.length > 1 ? 's' : ''} ${exports.map((e) => `'${e}'`).join(', ')} ` +
+      `use${exports.length > 1 ? '' : 's'} \`httpErrorStatus: true\`, but this CloudFront distribution maps HTTP ${list} to an error page, ` +
+      'and CloudFront applies that to the proxied API too (`/aws-blocks/*`): such a response reaches the client as the HTML page ' +
+      'instead of its JSON-RPC error, which the typed client cannot read. Remove the 4xx error pages (`errorPages.notFound`, a ' +
+      "build's own 404 page), or turn `httpErrorStatus` off for these namespaces.",
+  );
 }
 
 /**

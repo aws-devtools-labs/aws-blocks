@@ -35,6 +35,7 @@ import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, Hosting, type HostingProps } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 
 // ================================================================
 // Hosting construct tests
@@ -1831,6 +1832,32 @@ describe('Hosting', () => {
       const has404 = errorResponses.some((r: any) => r.ErrorCode === 404);
       assert.ok(has404, 'Should configure 404 error response');
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('warns when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+      createSpaBuildOutput(tmpDir);
+      const notFoundPath = path.join(tmpDir, '404.html');
+      fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
+      const warningsFor = (exports: string[] | undefined, errorPages: boolean) => {
+        const app = new App();
+        const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
+        // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
+        const api: BlocksStackApi = { ...MOCK_API };
+        if (exports) Reflect.set(api, HTTP_ERROR_STATUS_EXPORTS, exports);
+        new Hosting(stack, 'Hosting', { root: tmpDir, api, ...(errorPages ? { errorPages: { notFound: notFoundPath } } : {}) });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
+      };
+
+      const shadowed = warningsFor(['api'], true);
+      assert.strictEqual(shadowed.length, 1);
+      const text = JSON.stringify(shadowed[0].entry.data);
+      assert.match(text, /'api'/);
+      assert.match(text, /404/);
+      assert.match(text, /aws-blocks/);
+
+      assert.strictEqual(warningsFor([], true).length, 0, 'no httpErrorStatus namespace: no warning');
+      assert.strictEqual(warningsFor(undefined, true).length, 0, 'a plain { apiUrl } backend: no warning');
+      assert.strictEqual(warningsFor(['api'], false).length, 0, 'no 4xx error page: no warning');
     });
 
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {

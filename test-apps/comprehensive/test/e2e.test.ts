@@ -7,7 +7,11 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'node:child_process'
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
+import type {
+  api as apiType,
+  isolatedApi as isolatedApiType,
+  strictStatusApi as strictStatusApiType,
+} from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
 import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
@@ -47,6 +51,7 @@ import { metricsTests } from './metrics.test.js';
 import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
+import { httpErrorStatusTests } from './http-error-status.test.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -55,6 +60,7 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
+let strictStatusApi: typeof strictStatusApiType;
 let authStateApis: AuthStateApis;
 let appModule: typeof import('aws-blocks');
 let protectApis: ProtectApis;
@@ -152,6 +158,7 @@ test.before(async () => {
   appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
+  strictStatusApi = module.strictStatusApi;
   authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
   protectApis = { api: module.api, protectedApi: module.protectedApi };
   authTotpApis = { authCMfaApi: module.authCMfaApi, authApi: module.authApi, api: module.api };
@@ -240,6 +247,9 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
     global.fetch = originalFetch;
   }
 });
+
+// Before any suite signs into `auth`: the signed-out call must stay signed out.
+httpErrorStatusTests(() => ({ api, strictStatusApi }));
 
 // The full (no-argument) purge of delivered verification codes. It runs here,
 // before the background suites below start, because once they overlap a full

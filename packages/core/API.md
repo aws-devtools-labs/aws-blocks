@@ -41,6 +41,7 @@ export interface ApiNamespaceOptions {
             readonly type: 'serverless';
         };
     };
+    httpErrorStatus?: boolean;
 }
 
 // @public
