@@ -30,6 +30,7 @@
     "docs",
     "src",
     "README.md",
+    "TROUBLESHOOTING.md",
     "VPC.md",
     "VPC-DESIGN.md",
     "LICENSE"
@@ -76,7 +77,7 @@
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
     "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js dist/brand-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
+    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js dist/brand-coverage.test.js dist/default-compute-telemetry.test.js dist/file-bucket-exports.test.js dist/readme-links.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.7.0",
