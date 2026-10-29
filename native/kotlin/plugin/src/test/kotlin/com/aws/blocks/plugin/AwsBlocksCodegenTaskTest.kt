@@ -48,6 +48,20 @@ private const val BOUND_SPEC = """
 }
 """
 
+private const val UNDEFINED_KIND = """
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [ { "name": "api.connectDevice", "params": [], "result": { "name": "R",
+    "schema": { "x-blocks-transferable": "example-iot/device-link" } } } ],
+  "x-blocks-native-packages": { "schemaVersion": 1, "packages": { "example-iot-native": { "platforms": {
+    "android": { "package": { "group": "g", "artifact": "a", "kotlinPackage": "com.example.blocks.iot" } } } } } },
+  "x-blocks-native-bindings": { "schemaVersion": 1, "bindings": [ { "id": "typo", "kind": "transferrable",
+    "tag": "example-iot/device-link", "package": "example-iot-native", "export": "deviceLink",
+    "abi": "blocks-transferable-v1", "genericArity": 0 } ] }
+}
+"""
+
 private const val EMPTY_SPEC = """
 {
   "openrpc": "1.3.2",
@@ -108,6 +122,15 @@ class AwsBlocksCodegenTaskTest : FunSpec({
 
         run.generatedApi() shouldContain "import com.example.blocks.iot.DeviceLink"
         run.generatedApi() shouldContain "): DeviceLink {"
+    }
+
+    test("a binding of an undefined kind still generates through the task") {
+        val run = StaleOutput(UNDEFINED_KIND)
+
+        run.task.generate()
+
+        run.generatedApi() shouldContain "): UnknownTransferable {"
+        run.generatedApi() shouldNotContain "import com.example.blocks.iot.DeviceLink"
     }
 
     test("an excluded package identity reaches the generator and keeps the fallback") {
