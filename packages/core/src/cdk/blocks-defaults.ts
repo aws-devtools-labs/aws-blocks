@@ -291,6 +291,16 @@ export interface BlocksAppIdentity {
 	 * characters, CDK's limit for a bootstrap qualifier, so the id is also the
 	 * app's qualifier: one bootstrap per app, and no two apps share one.
 	 *
+	 * Some ids are reserved, because the app's `<id>-…` / `<id>/…` names would
+	 * include names other apps, AWS Blocks, CDK or AWS share: `cdk` (every app's
+	 * CDK bootstrap, `cdk-<qualifier>-…`, and CDK's `/cdk/…` parameters), `blocks`,
+	 * `secrets` and `config` (Hosting's `secret()` / `config()` values under
+	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and
+	 * stacks), the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`,
+	 * `me`, `mx`, `sa`, `us` (CDK names CloudFront Functions `<region>…`), and any
+	 * id starting with `aws` or `ssm` (names AWS reserves). Synth,
+	 * `blocks-iam-policies` and `blocks-iam-check` reject them, saying why.
+	 *
 	 * Set it from the platform's pipeline (e.g. `process.env.APP_ID`), not from a
 	 * value the app's code chooses, and have the pipeline confirm it with
 	 * `blocks-iam-check --app <id>`.

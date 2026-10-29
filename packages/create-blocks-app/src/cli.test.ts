@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
+import { appIdProblem, RESERVED_APP_ID_PREFIXES, RESERVED_APP_IDS, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -166,6 +166,34 @@ describe('create-blocks-app CLI argument parsing', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it('--template platform with a reserved APP_ID treats it as invalid and says why', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-reserved-'));
+    const target = join(tmpDir, 'my-app');
+    try {
+      const result = run([target, '--template', 'platform', '--skip-install', '-y'], undefined, { APP_ID: 'cdk' });
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /APP_ID "cdk" is reserved/);
+      const cdkJson = JSON.parse(readFileSync(join(target, 'cdk.json'), 'utf-8'));
+      assert.strictEqual(cdkJson.context?.['@aws-cdk/core:bootstrapQualifier'], undefined);
+      assert.notStrictEqual(JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8')).stackId, 'cdk');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('the reserved app ids match @aws-blocks/core\'s', () => {
+    const core = readFileSync(join(__dirname, '../../core/src/cdk/app-isolation-rules.ts'), 'utf-8');
+    const keys = (name: string) => {
+      const start = core.indexOf(`export const ${name}`);
+      const block = core.slice(start, core.indexOf('\n};', start));
+      return [...block.matchAll(/^\t([a-z0-9]+):/gm)].map((m) => m[1]).sort();
+    };
+    assert.deepStrictEqual([...RESERVED_APP_IDS].sort(), keys('RESERVED_APP_IDS'));
+    assert.deepStrictEqual([...RESERVED_APP_ID_PREFIXES].sort(), keys('RESERVED_APP_ID_PREFIXES'));
+    assert.match(appIdProblem('awsapp') ?? '', /starts with "aws"/);
+    assert.strictEqual(appIdProblem('orders'), undefined);
   });
 
   it('a template without AGENTS.template.md gets only the shared AGENTS.md', () => {

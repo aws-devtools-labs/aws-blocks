@@ -35,6 +35,7 @@
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { appIdProblem } from '../cdk/app-isolation-rules.js';
 import {
 	callsExecuteApi,
 	EXECUTION_POLICY_SPLIT_CHARS,
@@ -85,6 +86,12 @@ for (let i = 0; i < args.length; i++) {
 	else if (arg === '--help' || arg === '-h') usage();
 	else if (arg.startsWith('-')) usage(`unknown option ${arg}.`);
 	else assembly = arg;
+}
+
+if (options.appId !== undefined) {
+	// Before writing anything: a reserved id's `<id>-…` names cover other apps' resources.
+	const problem = appIdProblem(options.appId);
+	if (problem) usage(`--app: ${problem}`);
 }
 
 const write = (file: string, doc: PolicyDocument) => {

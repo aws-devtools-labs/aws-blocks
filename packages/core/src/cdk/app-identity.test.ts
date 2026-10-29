@@ -189,6 +189,16 @@ describe('defaults.app — validation and violations', () => {
 		});
 	}
 
+	for (const reserved of ['cdk', 'blocks', 'aws', 'awsapp', 'ssm']) {
+		test(`rejects the reserved app id ${JSON.stringify(reserved)}, saying why`, async () => {
+			const app = new cdk.App({ context: QUALIFIER });
+			await assert.rejects(
+				makeStack(app, `${reserved}-x`, appDefaults({ app: { id: reserved } })),
+				/Invalid defaults\.app\.id: .*reserved/,
+			);
+		});
+	}
+
 	test('a well-behaved app has no violations, and the report names the app', async () => {
 		const dir = outdir();
 		const app = new cdk.App({ outdir: dir, context: QUALIFIER });

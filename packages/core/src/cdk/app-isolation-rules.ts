@@ -33,6 +33,97 @@ export const APP_TAG_KEY = 'app';
  */
 export const APP_ID_PATTERN = /^[a-z][a-z0-9]{0,9}$/;
 
+/**
+ * App ids that match {@link APP_ID_PATTERN} but can't be used, with why. The
+ * platform's policies give an app every name `<id>`, `<id>-…` or `<id>/…` (in
+ * the boundary, `${aws:PrincipalTag/app}`, `${APP}-*`, `${APP}/*`; in the
+ * execution policy and deploy guard, the same patterns with the id spelled
+ * out). These ids turn such a pattern into a namespace other apps, AWS Blocks,
+ * CDK or AWS share, so they would give the app access to resources it doesn't
+ * own. Matching is case-sensitive and ids are lowercase, so only lowercase names
+ * count (`CDKToolkit-…` stacks are safe).
+ */
+export const RESERVED_APP_IDS: Readonly<Record<string, string>> = {
+	// `${APP}-*` / `${APP}/*` would match every app's CDK bootstrap: the asset
+	// buckets `cdk-<qualifier>-assets-…`, the roles `cdk-<qualifier>-…-role-…`, the
+	// parameters `/cdk-bootstrap/<qualifier>/…`, and CDK's own `/cdk/exports/…` and
+	// `/cdk/EdgeFunctionArn/…` parameters.
+	cdk: "CDK's namespace: every app's bootstrap (`cdk-<qualifier>-…` buckets and roles, `/cdk-bootstrap/…`) and CDK's `/cdk/…` parameters",
+	// `/blocks/${APP}/*` and `blocks/${APP}/*` are Hosting's per-app values; `${APP}/*`
+	// with `blocks` would match all of them.
+	blocks: "AWS Blocks' namespace: every app's Hosting `secret()` / `config()` values (`blocks/<id>/…`)",
+	// Hosting's values without a `stackId` live under `/blocks/secrets/…` and
+	// `/blocks/config/…`, which `blocks/${APP}/*` would match for these ids.
+	secrets: "Hosting's shared `secret()` namespace for apps without a `stackId` (`blocks/secrets/…`)",
+	config:
+		"Hosting's shared `config()` namespace for apps without a `stackId` (`/blocks/config/…`), and AWS Config's default bucket (`config-bucket-<account>`)",
+	// AWS Amplify names its stacks and the resources in them `amplify-<app>-<branch>-…`.
+	amplify: "AWS Amplify's namespace (`amplify-…` stacks, roles, functions and buckets)",
+	// The CloudFormation console uploads templates to `cf-templates-<hash>-<region>`.
+	cf: "the CloudFormation console's template buckets (`cf-templates-…`)",
+	// The SageMaker SDK's default bucket is `sagemaker-<region>-<account>`.
+	sagemaker: "SageMaker's default buckets (`sagemaker-<region>-<account>`)",
+	// CDK names a CloudFront Function `<region><construct id>` (`us-east-1MyStack…`)
+	// when no name is given: `function/${id}-*` would match every such function in
+	// the region group's regions, including an app's own from before it set `defaults.app`.
+	af: 'a region prefix: CDK names CloudFront Functions `<region>…` (`af-south-1…`)',
+	ap: 'a region prefix: CDK names CloudFront Functions `<region>…` (`ap-southeast-2…`)',
+	ca: 'a region prefix: CDK names CloudFront Functions `<region>…` (`ca-central-1…`)',
+	cn: 'a region prefix: CDK names CloudFront Functions `<region>…` (`cn-north-1…`)',
+	eu: 'a region prefix: CDK names CloudFront Functions `<region>…` (`eu-west-1…`)',
+	eusc: 'a region prefix: CDK names CloudFront Functions `<region>…` (`eusc-de-east-1…`)',
+	il: 'a region prefix: CDK names CloudFront Functions `<region>…` (`il-central-1…`)',
+	me: 'a region prefix: CDK names CloudFront Functions `<region>…` (`me-south-1…`)',
+	mx: 'a region prefix: CDK names CloudFront Functions `<region>…` (`mx-central-1…`)',
+	sa: 'a region prefix: CDK names CloudFront Functions `<region>…` (`sa-east-1…`)',
+	us: 'a region prefix: CDK names CloudFront Functions `<region>…` (`us-east-1…`)',
+};
+
+/**
+ * Prefixes no app id may start with, with why. A prefix rather than an exact id,
+ * because AWS reserves the prefix itself.
+ */
+export const RESERVED_APP_ID_PREFIXES: Readonly<Record<string, string>> = {
+	// `aws-*` and `aws/*` names belong to AWS and its services: `aws-cloudtrail-logs-…`,
+	// `aws-athena-query-results-…` and `aws-sam-cli-managed-…` buckets and stacks,
+	// `aws-controltower-…` functions, roles, topics, rules and log groups, the
+	// `aws-reserved/…` and `aws-service-role/…` role paths, the public
+	// `/aws/service/…` parameters, and Elastic Beanstalk's `awseb-…` stacks.
+	aws: 'AWS reserves names starting with "aws" (`aws-…` buckets, stacks and roles, `/aws/…` parameters, `awseb-…` stacks)',
+	// SSM rejects parameter names that start with `aws` or `ssm` (case-insensitive),
+	// so the app couldn't create its own parameters.
+	ssm: 'Systems Manager rejects parameter names that start with "ssm", so the app couldn\'t create its own parameters',
+};
+
+/**
+ * Why `id` can't be an app id, or `undefined` when it can: the one check every
+ * place that takes an app id uses (`defaults.app.id`, `blocks-iam-policies --app`,
+ * `blocks-iam-check --app` and the ids in IAM reports).
+ */
+export function appIdProblem(id: unknown): string | undefined {
+	if (typeof id !== 'string' || !APP_ID_PATTERN.test(id)) {
+		return (
+			`${JSON.stringify(id)} isn't an app id. An app id is 1–10 lowercase letters and digits, starting with a ` +
+			'letter (e.g. "orders" or "app42"). No hyphens: the id is the name prefix ("<id>-…") that keeps one app ' +
+			"away from another app's resources. At most 10 characters: the id is also the app's CDK bootstrap " +
+			'qualifier, which CDK limits to 10.'
+		);
+	}
+	const reserved = Object.hasOwn(RESERVED_APP_IDS, id) ? RESERVED_APP_IDS[id] : undefined;
+	if (reserved) {
+		return `"${id}" is reserved: the app's "${id}-…" / "${id}/…" names would include ${reserved}. Choose another id.`;
+	}
+	for (const [prefix, why] of Object.entries(RESERVED_APP_ID_PREFIXES)) {
+		if (id.startsWith(prefix)) return `"${id}" starts with the reserved prefix "${prefix}": ${why}. Choose another id.`;
+	}
+	return undefined;
+}
+
+/** Whether `id` is a usable app id (see {@link appIdProblem}). */
+export function isValidAppId(id: unknown): id is string {
+	return appIdProblem(id) === undefined;
+}
+
 /** What a violation is about. */
 export type AppViolationRule =
 	| 'no-permissions-boundary'
@@ -52,7 +143,8 @@ export type AppViolationRule =
 	| 'template-transform'
 	| 'layer-outside-app'
 	| 'api-outside-app'
-	| 'app-id-mismatch';
+	| 'app-id-mismatch'
+	| 'invalid-app-id';
 
 /** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
 export interface AppViolation {

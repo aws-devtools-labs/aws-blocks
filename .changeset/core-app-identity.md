@@ -19,7 +19,11 @@ one AWS account through one pipeline. All of it is opt-in: without
   CloudFront Functions and KeyValueStores it creates. `Hosting` and the separate
   `us-east-1` stacks it adds are tagged too. The id is 1–10 lowercase letters
   and digits, starting with a letter; it is also the app's CDK bootstrap
-  qualifier. Keep `.blocks/config.json`'s `stackId` equal to the id, so
+  qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
+  would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
+  `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
+  `eu`, and any id starting with `aws` or `ssm`); synth, both CLIs and the
+  platform template reject them, saying why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
   Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
   own.
 - **IAM report:** with `defaults.app` set, `cdk.out/<stack>.blocks-iam.json`

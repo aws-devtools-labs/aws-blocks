@@ -632,7 +632,21 @@ export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
 });
 ```
 
-- **The id** is 1–10 lowercase letters and digits, starting with a letter. No hyphen, so one app's prefix (`appa-`) never matches another app's names (`appab-…`). At most 10 characters because the id is also the app's CDK bootstrap qualifier (CDK's limit is 10): every app has its own bootstrap, and no two apps can share one.
+- **The id** is 1–10 lowercase letters and digits, starting with a letter. No hyphen, so one app's prefix (`appa-`) never matches another app's names (`appab-…`). At most 10 characters because the id is also the app's CDK bootstrap qualifier (CDK's limit is 10): every app has its own bootstrap, and no two apps can share one. **Some ids are reserved**, because the app's `<id>-…` / `<id>/…` names, which the platform's policies give the app, would include names other apps, AWS Blocks, CDK or AWS share:
+
+  | Reserved | Why |
+  |---|---|
+  | `cdk` | every app's CDK bootstrap (`cdk-<qualifier>-assets-…` buckets, `cdk-<qualifier>-…-role-…` roles, `/cdk-bootstrap/<qualifier>/…`) and CDK's `/cdk/exports/…` and `/cdk/EdgeFunctionArn/…` parameters |
+  | `blocks` | every app's Hosting `secret()` / `config()` values (`blocks/<id>/…`) |
+  | `secrets`, `config` | Hosting's values for apps without a `stackId` (`blocks/secrets/…`, `/blocks/config/…`); `config` also AWS Config's default bucket (`config-bucket-<account>`) |
+  | `amplify` | AWS Amplify's stacks and the resources in them (`amplify-…`) |
+  | `cf` | the CloudFormation console's template buckets (`cf-templates-…`) |
+  | `sagemaker` | SageMaker's default buckets (`sagemaker-<region>-<account>`) |
+  | `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`, `me`, `mx`, `sa`, `us` | region prefixes: CDK names a CloudFront Function `<region><construct id>` (`us-east-1MyStack…`), so `function/us-*` would match every such function |
+  | any id starting with `aws` | names AWS reserves (`aws-…` buckets, stacks, roles and log groups, `/aws/…` parameters, Elastic Beanstalk's `awseb-…` stacks) |
+  | any id starting with `ssm` | Systems Manager rejects parameter names that start with `ssm`, so the app couldn't create its own |
+
+  Synth (`defaults.app`), `blocks-iam-policies --app`, `blocks-iam-check --app` (and the ids in the IAM reports it reads) and `create-blocks-app --template platform` reject them, saying why.
 - **Names.** Every Building Block derives its resource names (tables, queues, buckets, parameters, schedules, user pools) from its `fullId`, which starts with the stack's id, and CloudFormation-generated names (functions, roles, topics, alarms, managed policies) start with the stack name. So with the stack named `<id>` or `<id>-…`, every name starts with `<id>-`. Developers don't name anything themselves. AWS Blocks also names the Lambda layers and the CloudFront Functions and KeyValueStores it creates (`<id>-<region>-…`; CDK's default names don't put a `-` after the id), unless the app chose a name itself.
 - **Hosting `secret()` and `config()`.** Their values are named `blocks/<stackId>/secrets/…` (Secrets Manager) and `/blocks/<stackId>/config/…` (SSM), where `stackId` comes from `.blocks/config.json`. Under `defaults.app`, set `stackId` to the app id (`create-blocks-app --template platform` does when `APP_ID` is set): the boundary allows `blocks/<id>/…` by name, so the values `npm run secret` / `npm run config` create untagged still work, and the check treats any other `blocks/…` name as outside the app, with a hint to fix `stackId`.
 - **Tags.** `app=<id>` goes on every resource CloudFormation creates for the app and every IAM role AWS Blocks creates, including the CDK custom-resource provider roles that `Tags.of()` doesn't reach, at a priority above the default `Tags.of(...).add()`. It also goes on `Hosting` and on the separate stacks Hosting adds (the `us-east-1` CloudFront alarm stack `<id>-CfMonitoring-…` and the Lambda@Edge stack `<id>-edge`), as a stack tag too, which CloudFormation propagates to what a tag aspect can't reach. An app can still raise its own priority or remove the tag; the execution role (part 4) rejects any role not tagged `<id>`. SecureString parameters that AWS Blocks' secret initializer creates at deploy time carry only the `aws-blocks-stack` tag; SSM is scoped by name, so that's no gap.
@@ -685,3 +699,4 @@ npx blocks-iam-check cdk.out --app "$APP_ID"   # exit 0: clean · 1: violations 
 - **Transforms.** A template with a `Transform` (a macro, `AWS::Include`, `AWS::Serverless`) or an `Fn::Transform` fails the check: CloudFormation expands it at deploy time, after the check ran.
 - **Account quotas are shared.** Each app adds roles and a bootstrap stack; at thousands of apps, spread them across several accounts.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.
+

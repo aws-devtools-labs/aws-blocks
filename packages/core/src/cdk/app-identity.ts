@@ -14,8 +14,8 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
 import {
-	APP_ID_PATTERN,
 	type AppViolation,
+	appIdProblem,
 	checkApiChild,
 	checkResourcePolicy,
 	checkRole,
@@ -42,20 +42,15 @@ const APP_TAG_PRIORITY = 1000;
  * `undefined` when `defaults.app` is unset. **The single resolution point** —
  * nothing else reads `defaults.app`.
  *
- * @throws Error when `defaults.app.id` isn't a valid app id.
+ * @throws Error when `defaults.app.id` isn't a valid app id, or is reserved (see
+ *   `RESERVED_APP_IDS` / `RESERVED_APP_ID_PREFIXES` in `app-isolation-rules.ts`).
  */
 export function resolveAppIdentity(scope: Construct): BlocksAppIdentity | undefined {
 	const root = findBackendRoot(scope);
 	const app = (root as { defaults?: BlocksDefaults } | undefined)?.defaults?.app;
 	if (app === undefined) return undefined;
-	if (!app || typeof app.id !== 'string' || !APP_ID_PATTERN.test(app.id)) {
-		throw new Error(
-			`Invalid defaults.app.id: ${JSON.stringify(app?.id)}. An app id is 1–10 lowercase letters and digits, ` +
-				'starting with a letter (e.g. "orders" or "app42"). No hyphens: the id is the name prefix ' +
-				'("<id>-…") that keeps one app away from another app\'s resources. At most 10 characters: the id is ' +
-				'also the app\'s CDK bootstrap qualifier, which CDK limits to 10.',
-		);
-	}
+	const problem = appIdProblem(app?.id);
+	if (problem || !app) throw new Error(`Invalid defaults.app.id: ${problem}`);
 	return app;
 }
 

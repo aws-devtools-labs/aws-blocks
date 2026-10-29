@@ -127,18 +127,45 @@ async function copySharedResources(targetDir: string): Promise<void> {
 const APP_ID = /^[a-z][a-z0-9]{0,9}$/;
 
 /**
+ * App ids that are id-shaped but reserved, because the app's `<id>-…` / `<id>/…`
+ * names would include names it doesn't own. Mirrors `RESERVED_APP_IDS` in
+ * `@aws-blocks/core` (`src/cdk/app-isolation-rules.ts`, which has the reason for
+ * each); this package doesn't depend on core, and a test keeps the two in sync.
+ */
+export const RESERVED_APP_IDS: readonly string[] = [
+  'cdk', 'blocks', 'secrets', 'config', 'amplify', 'cf', 'sagemaker',
+  'af', 'ap', 'ca', 'cn', 'eu', 'eusc', 'il', 'me', 'mx', 'sa', 'us',
+];
+
+/** Prefixes no app id may start with (mirrors core's `RESERVED_APP_ID_PREFIXES`). */
+export const RESERVED_APP_ID_PREFIXES: readonly string[] = ['aws', 'ssm'];
+
+/** Why `id` can't be an app id, or `undefined` when it can (the same rules as core's `appIdProblem`). */
+export function appIdProblem(id: string): string | undefined {
+  if (!APP_ID.test(id)) return `"${id}" isn't an app id: use 1–10 lowercase letters and digits, starting with a letter.`;
+  if (RESERVED_APP_IDS.includes(id)) {
+    return `"${id}" is reserved: its "${id}-…" / "${id}/…" names would include names AWS Blocks, CDK or AWS share between apps (e.g. CDK's "cdk-<qualifier>-…" bootstrap or Hosting's "/blocks/…" values). Choose another id.`;
+  }
+  const prefix = RESERVED_APP_ID_PREFIXES.find((p) => id.startsWith(p));
+  if (prefix) return `"${id}" starts with "${prefix}", a prefix AWS reserves for its own names. Choose another id.`;
+  return undefined;
+}
+
+/**
  * For the platform template: when `APP_ID` is set, write the app's bootstrap
  * qualifier and toolkit stack name into cdk.json; otherwise say how to.
  *
  * @returns the app id when `APP_ID` is a valid one: the caller uses it as the
  *   app's `stackId` (`.blocks/config.json`), so Hosting's `secret()` / `config()`
- *   values live under `blocks/<id>/`, the app's own on a shared platform.
+ *   values live under `blocks/<id>/`, the app's own on a shared platform. A
+ *   reserved `APP_ID` (see {@link appIdProblem}) is treated as invalid.
  */
 async function pinPlatformBootstrap(targetDir: string): Promise<string | undefined> {
   const appId = process.env.APP_ID;
-  if (!appId || !APP_ID.test(appId)) {
+  const problem = appId ? appIdProblem(appId) : undefined;
+  if (!appId || problem) {
     console.log(
-      '\nPlatform app: set APP_ID (1–10 lowercase letters and digits) and re-run, or add ' +
+      `\nPlatform app: ${problem ? `APP_ID ${problem} ` : ''}set APP_ID (1–10 lowercase letters and digits, not a reserved id) and re-run, or add ` +
         '"@aws-cdk/core:bootstrapQualifier": "<id>" to cdk.json\'s context and "toolkitStackName": "CDKToolkit-<id>", ' +
         'and set "stackId" in .blocks/config.json to "<id>".',
     );

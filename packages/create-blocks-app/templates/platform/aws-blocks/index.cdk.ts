@@ -13,7 +13,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const appId = process.env.APP_ID;
 if (!appId) {
   throw new Error(
-    'APP_ID is not set. The platform pipeline sets it to this app\'s id (1–10 lowercase letters and digits). ' +
+    'APP_ID is not set. The platform pipeline sets it to this app\'s id (1–10 lowercase letters and digits, not a reserved id). ' +
       'For a sandbox, export APP_ID=<your app id> first.',
   );
 }
