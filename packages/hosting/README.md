@@ -720,7 +720,7 @@ payload format 2.0 event and can't stream, so the server is built for it: the
 Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
 `aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
 pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
-Adapter server, run buffered) unless the app sets a preset and the stack's
+Adapter server, run buffered) when the app sets no preset and the stack's
 region is pinned to one with a Lambda Web Adapter layer
 (`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
 `@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
@@ -731,8 +731,8 @@ built as a regional function) gets its own route to that function. A
 Lambda@Edge compute behind any door other than CloudFront fails synth
 (`EdgeRouteNeedsCloudFrontDoorError`), since only CloudFront invokes it.
 
-**No image function.** With `skipImageOptimization` (set by core `Hosting` in
-preview mode) no image function is built, and the HTTP API routes the framework
+**No image function.** With `imageOptimization: false` on core `Hosting`
+(which `HostingPresets.preview` sets) no image function is built, and the HTTP API routes the framework
 image endpoints (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to
 the asset proxy, which serves the source image unoptimized. A remote source is
 redirected (302) to itself only when its host is in the manifest's image
