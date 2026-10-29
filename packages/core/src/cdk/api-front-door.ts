@@ -12,9 +12,9 @@
  * (CloudFront → API Gateway → Lambda).
  *
  * It is a single catch-all default behavior forwarding to the shared gateway
- * origin: every API path already resolves to that one gateway, so there is no
- * per-path fan-out. Per-path routing to distinct origins becomes load-bearing
- * only once a compute-assignment surface exists to send a namespace elsewhere.
+ * origin, which fans namespaces out to their computes itself — plus, for each
+ * namespace on a container compute, an exact-path behavior straight to the
+ * container's load balancer through a VPC origin (see `addDirectApiBehaviors`).
  *
  * The decision is deferred to synth rather than made in `create()`, because
  * `Hosting` is typically constructed *after* `BlocksStack.create()` resolves and
