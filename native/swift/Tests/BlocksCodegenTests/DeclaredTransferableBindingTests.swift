@@ -546,8 +546,14 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         let output = try generate(from: spec)
         XCTAssertTrue(output.models.contains("CodegenError"), "got:\n\(output.models)")
         XCTAssertFalse(
+            output.models.contains("BlocksRuntime.CodegenError"),
+            "without a declared module the runtime stays unqualified, got:\n\(output.models)"
+        )
+        // This generator imports BlocksRuntime into Models.swift whenever the file names a runtime type
+        // (`ModelsRuntimeImportTests`): imports are per file, so a model that throws CodegenError needs it.
+        XCTAssertTrue(
             output.models.contains("import BlocksRuntime"),
-            "an unqualified models file must not gain the import, got:\n\(output.models)"
+            "Models.swift must import the runtime type it names, got:\n\(output.models)"
         )
     }
 
