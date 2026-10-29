@@ -202,21 +202,55 @@ function display(file: string): string {
 	return rel && !rel.startsWith('..') ? rel : file;
 }
 
+/**
+ * The synth-failure message for a guarded change or a pool removal.
+ *
+ * The baseline advances at every passing synth, not at deploy, so what it
+ * records may never have reached AWS (a synth that was never deployed, or a
+ * deploy that failed). Layer 1 cannot know which holds — a plain `cdk deploy`
+ * and a `cdk synth` look the same from inside the synth — so it refuses
+ * either way and names both cases:
+ *
+ * - A change to one of the four properties: the violations first, so the
+ *   reader sees what is wrong before any command; then the never-deployed
+ *   re-baseline (a wrong one is backed by layer 2, which still refuses the
+ *   change against a deployed pool); then the revert advice.
+ * - A pool removal leads with the danger and how to check the deployed
+ *   stack, and only then the never-deployed re-baseline: nothing at deploy
+ *   time refuses a removal (layer 2 is removed with the pool), so a wrong
+ *   re-baseline deletes the pool and every user in it.
+ */
 function rejection(fullId: string, file: string, violations: Violation[]): string {
-	const removal = violations.some((v) => v.property === 'poolRemoved');
+	const headline = `Auth '${fullId}': this change cannot be deployed to the existing user pool.`;
+	const listed = violations.flatMap((v) => [`  • ${v.change}`, `    ${v.why}`]);
+	const rebaseline = `${REBASELINE_ENV}=${fullId} <your synth/deploy command>`;
+	if (violations.some((v) => v.property === 'poolRemoved')) {
+		return [
+			headline,
+			'This removes the user pool. If it was ever deployed, the next deploy deletes it and every user in it, and ' +
+				'nothing at deploy time stops that. Check your deployed stack first (e.g. `aws cloudformation ' +
+				'describe-stack-resources --stack-name <your stack>`, or the CloudFormation console) for an ' +
+				`\`AWS::Cognito::UserPool\` (named '${fullId}' in Cognito).`,
+			`If it was never deployed, re-baseline: ${rebaseline}, then commit the file. The baseline advances when you ` +
+				'synthesize, not when you deploy, so it can record a pool that never reached AWS.',
+			...listed,
+			'',
+			'If the pool was deployed — Remedy: keep a pool-backed sign-in method (email + password, a social or SAML ' +
+				"provider, or an OIDC provider with `federateVia: 'cognito'`), and keep owning the pool rather than wrapping " +
+				'one via `userPool`.',
+			`Baseline: ${display(file)}.`,
+			`If removing the pool is deliberate, re-baseline: ${rebaseline}, then commit the file.`,
+		].join('\n');
+	}
 	return [
-		`Auth '${fullId}': this change cannot be deployed to the existing user pool.`,
-		...violations.flatMap((v) => [`  • ${v.change}`, `    ${v.why}`]),
+		headline,
+		...listed,
 		'',
-		removal
-			? 'Remedy: keep a pool-backed sign-in method (email + password, a social or SAML provider, or an OIDC provider with ' +
-				"`federateVia: 'cognito'`), and keep owning the pool rather than wrapping one via `userPool`."
-			: `Remedy: ${REMEDY}`,
+		`If this was never deployed, re-baseline: ${rebaseline}, then commit the file. The baseline advances when ` +
+			'you synthesize, not when you deploy, so it can record a change that never reached AWS. (Re-baselining does ' +
+			'not make Cognito accept a change to a deployed pool; the deploy-time guard still refuses it.)',
+		`If it was deployed — Remedy: ${REMEDY}`,
 		`Baseline: ${display(file)}.`,
-		removal
-			? `If removing the pool is deliberate, re-baseline: ${REBASELINE_ENV}=${fullId} <your synth/deploy command>, then commit the file.`
-			: `If the baseline records a change that was never deployed, re-baseline: ${REBASELINE_ENV}=${fullId} <your synth/deploy ` +
-				'command>, then commit the file. (Re-baselining does not make Cognito accept the change; the deploy-time guard still refuses it.)',
 	].join('\n');
 }
 
