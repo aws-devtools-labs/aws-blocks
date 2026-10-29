@@ -22,8 +22,7 @@ export type ClusterType = 'dsql';
 
 // @public
 export class Database extends Scope {
-    constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-    constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
+    constructor(scope: ScopeParent, id: string, options?: DatabaseOptions);
     // (undocumented)
     readonly cluster: ClusterRef;
     // (undocumented)

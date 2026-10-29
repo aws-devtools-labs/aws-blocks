@@ -16,8 +16,6 @@ import type {
 	ClusterType,
 	DatabaseClusterOptions,
 	DatabaseOptions,
-	DsqlDatabaseOptions,
-	OwnedDatabaseOptions,
 	QueryOptions,
 	Transaction,
 	TransactionOptions,
@@ -57,8 +55,11 @@ export class Database extends Scope {
 	/** @internal Logger for internal operations. Defaults to error level. */
 	protected log: ChildLogger;
 
-	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
+	/**
+	 * Without `cluster`, the block owns an Aurora DSQL cluster and `removalPolicy`
+	 * applies to it. With `cluster`, the block runs in its own schema on that shared
+	 * `DatabaseCluster`, whose own options then apply.
+	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });

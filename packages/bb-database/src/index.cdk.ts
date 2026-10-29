@@ -8,14 +8,7 @@ import { configError } from './errors.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
-import type {
-	ClusterRef,
-	ClusterType,
-	DatabaseClusterOptions,
-	DatabaseOptions,
-	DsqlDatabaseOptions,
-	OwnedDatabaseOptions,
-} from './types.js';
+import type { ClusterRef, ClusterType, DatabaseClusterOptions, DatabaseOptions } from './types.js';
 
 // DSQL is reached over its public endpoint, so an app in a VPC needs egress.
 const VPC_REQUIREMENTS = { requiresEgress: true };
@@ -62,8 +55,11 @@ export class Database extends BuildingBlockScope {
 	readonly schemaName: string;
 	private readonly migrationsPath: string | undefined;
 
-	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
+	/**
+	 * Without `cluster`, the block owns an Aurora DSQL cluster and `removalPolicy`
+	 * applies to it. With `cluster`, the block runs in its own schema on that shared
+	 * `DatabaseCluster`, whose own options then apply.
+	 */
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
 		const resolved = registerDatabase(id, this.fullId, options);
@@ -76,9 +72,8 @@ export class Database extends BuildingBlockScope {
 		if (migrations) lintMigrationFiles(migrations);
 
 		let infra: ClusterInfra;
-		if (!resolved.shared) {
-			const owned = options as OwnedDatabaseOptions;
-			infra = clusterInfra(this, { type: 'dsql', removalPolicy: owned.removalPolicy });
+		if (!options.cluster) {
+			infra = clusterInfra(this, { type: 'dsql', removalPolicy: options.removalPolicy });
 		} else if (resolved.shared instanceof DatabaseCluster) {
 			infra = resolved.shared.infra;
 		} else {

@@ -138,7 +138,7 @@ The `DatabaseCluster` is the only thing that provisions: one DSQL cluster, one p
 
 Your `Database` runs on Aurora DSQL, so write its migrations in DSQL, as AWS documents it: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). The block never changes the SQL you wrote; what is in the file is what runs on the cluster. It checks every statement with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) on your machine and at synth, runs one DDL statement per transaction, waits for the job that each `ASYNC` statement starts, and resumes a failed file at the failed step.
 
-Each block has one directory of `.sql` files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Files run in name order, once each:
+Each block has one directory of `.sql` files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Block ids are unique per app because they name this directory and, on a shared cluster, the block's schema. Files run in name order, once each:
 
 ```
 aws-blocks/migrations/
@@ -259,7 +259,7 @@ Per cluster, whether a block owns it or a `DatabaseCluster` declares it:
 - **One Aurora DSQL cluster** (`AWS::DSQL::Cluster`). No VPC, no secret, no security group, no proxy; IAM token authentication over the public endpoint. Deletion protection follows the stack `defaults`.
 - **Two migration Lambdas** built from one bundle (`onEvent` and `isComplete`), one log group, and a custom-resource provider that polls DSQL jobs every 30 seconds for up to two hours.
 - **IAM:** the app's execution role gets `dsql:DbConnect` on the cluster; the migration Lambdas get `dsql:DbConnectAdmin`.
-- **Config:** `BLOCKS_{clusterId}_ENDPOINT` and `BLOCKS_{clusterId}_REGION`, injected through the config bucket.
+- **Config:** `BLOCKS_{CLUSTER_ID}_ENDPOINT` and `BLOCKS_{CLUSTER_ID}_REGION` (the cluster's full id upper-cased), injected through the config bucket.
 
 Per block: one S3 asset with its migration files and one CloudFormation custom resource that applies them. The migration Lambda also creates a per-cluster database role for the app, maps it to the execution role with `AWS IAM GRANT`, and grants it `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the block's tables, `SELECT` on its views, and `USAGE` on its sequences. DDL needs the admin token, which only the migration Lambdas hold.
 
