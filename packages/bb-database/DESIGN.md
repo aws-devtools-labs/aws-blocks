@@ -1,10 +1,10 @@
 # Database: design
 
-Status: implemented, preview (`distributed` clusters). Usage is documented in [README.md](./README.md).
+Status: implemented, preview (`dsql` clusters). Usage is documented in [README.md](./README.md).
 
 ## Abstract
 
-`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` either owns an Aurora DSQL cluster or attaches to a shared `DatabaseCluster` of type `distributed` (Aurora DSQL). The query interface is the same in both cases. One set of ordinary PostgreSQL migration files serves the cluster through a rewriting step that produces a plan DSQL accepts and that resumes at a failed step. The principal trade-off is that a block is bound to its cluster for its lifetime: changing clusters requires a new block and a data copy, and a deploy-time check enforces this without a production override. A second cluster type, `provisioned` (Aurora Serverless v2, all of PostgreSQL), is designed and not yet shipped; this document notes where the code keeps room for it.
+`@aws-blocks/bb-database` models a SQL database as a schema on a cluster. A `Database` either owns an Aurora DSQL cluster or attaches to a shared `DatabaseCluster` of type `dsql` (Aurora DSQL). The query interface is the same in both cases. One set of ordinary PostgreSQL migration files serves the cluster through a rewriting step that produces a plan DSQL accepts and that resumes at a failed step. The principal trade-off is that a block is bound to its cluster for its lifetime: changing clusters requires a new block and a data copy, and a deploy-time check enforces this without a production override. A second cluster type, `provisioned` (Aurora Serverless v2, all of PostgreSQL), is designed and not yet shipped; this document notes where the code keeps room for it.
 
 ## 1. Introduction
 
@@ -22,7 +22,7 @@ AWS Blocks previously offered SQL through two packages, `bb-data` (Aurora) and `
 ### 1.3 Out of scope
 
 - **In-place cluster migration.** Moving data between clusters is a copy whose timing depends on the application. The README documents the procedure; the package does not automate it.
-- **Emulation of DSQL limits.** A `distributed` cluster keeps optimistic concurrency and its per-transaction limits. The package reports these early rather than hiding them.
+- **Emulation of DSQL limits.** A `dsql` cluster keeps optimistic concurrency and its per-transaction limits. The package reports these early rather than hiding them.
 - **Replacement of `bb-data` and `bb-distributed-data`.** Both remain supported, and the umbrella package's `Database` export still refers to `bb-data`.
 
 ## 2. Data model
@@ -37,7 +37,7 @@ A block that owns its cluster uses the `public` schema. A block on a shared clus
 
 ## 3. Type system
 
-`Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'distributed'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
+`Database` and `DatabaseCluster` are not generic. `ClusterType` has one member, and `type: 'dsql'` is required on `DatabaseCluster` so that a second cluster type, which a later pull request adds, is an additive union change rather than a new call shape. Every entry point resolves the `cluster` option into a plain descriptor, `db.cluster = { kind, id }`, through one shared function in `cluster-ref.ts`. The two `Database` constructor overloads (owned, shared) exist so that an option that belongs to the other shape, such as `removalPolicy` next to `cluster`, is a compile error; `types.test.ts` asserts the option rules with `@ts-expect-error`.
 
 A query's row type can come from a value instead of a type argument: `query()` and `queryOne()`, on the block and on a transaction, accept `{ schema }`, a [Standard Schema](https://standardschema.dev) whose output type becomes the result type and which every row is validated against (`result-schema.ts`). The block depends only on the specification's types, so the schema library is the application's choice. A row that fails raises `ResultValidationFailed`, naming the row and the first issue's path; the row's values stay on the server. This is the first step of the typed-tables track and leaves the type argument form in place.
 
@@ -65,7 +65,7 @@ Three checks stay in the block because they need more than one statement, exist 
 
 ### 5.2 Plan construction
 
-Each block has one directory of ordinary PostgreSQL migration files. `buildMigrationPlan` converts them into an ordered list of steps for a `distributed` cluster, applying these rewrites:
+Each block has one directory of ordinary PostgreSQL migration files. `buildMigrationPlan` converts them into an ordered list of steps for a `dsql` cluster, applying these rewrites:
 
 - `SERIAL`, `BIGSERIAL` and `SMALLSERIAL`, and identity columns on `smallint` or `integer`, become `BIGINT GENERATED … AS IDENTITY (CACHE 65536)`; an identity column or `CREATE SEQUENCE` without a cache gets `CACHE 65536`, and a sequence typed smaller than `bigint` becomes `bigint`;
 - `CREATE INDEX` becomes `CREATE INDEX ASYNC` followed by a wait on the index job;

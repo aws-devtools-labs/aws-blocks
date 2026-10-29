@@ -21,7 +21,7 @@ import type {
 	ClusterType,
 	DatabaseClusterOptions,
 	DatabaseOptions,
-	DistributedDatabaseOptions,
+	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
 	Transaction,
@@ -65,7 +65,7 @@ export class Database extends Scope {
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });

@@ -20,14 +20,14 @@ declare const DatabaseCluster: typeof DatabaseClusterType;
 declare const scope: Scope;
 
 function typeChecks(): void {
-	// 1. Default: the block owns a distributed cluster. The classes are not generic.
+	// 1. Default: the block owns a DSQL cluster. The classes are not generic.
 	const owned = new Database(scope, 'db');
 	type _Owned = Expect<Equal<typeof owned, DatabaseType>>;
 	const ownedWithOptions = new Database(scope, 'db2', { migrationsPath: './x', removalPolicy: 'destroy' });
 	type _OwnedOpts = Expect<Equal<typeof ownedWithOptions, DatabaseType>>;
 
 	// 2. A shared cluster. `type` is required so a second category is an additive change.
-	const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+	const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 	type _Shared = Expect<Equal<typeof shared, DatabaseClusterType>>;
 	const onShared = new Database(scope, 'orders', { cluster: shared, schemaName: 'orders_v2' });
 	type _OnShared = Expect<Equal<typeof onShared, DatabaseType>>;
@@ -35,27 +35,27 @@ function typeChecks(): void {
 	// query / queryOne / execute / transaction on every kind; the descriptor carries the kind.
 	void onShared.query;
 	void owned.transaction;
-	type _Ref = Expect<Equal<typeof onShared.cluster.kind, 'distributed'>>;
+	type _Ref = Expect<Equal<typeof onShared.cluster.kind, 'dsql'>>;
 	type _RefId = Expect<Equal<typeof onShared.cluster.id, string>>;
 
 	// Cluster options are narrowed by `type`.
-	// @ts-expect-error: capacity options do not belong to a distributed cluster
-	new DatabaseCluster(scope, 'c1', { type: 'distributed', minCapacity: 1 });
-	// @ts-expect-error: snapshot is not a distributed removal policy
-	new DatabaseCluster(scope, 'c2', { type: 'distributed', removalPolicy: 'snapshot' });
-	// @ts-expect-error: service names are not categories
-	new DatabaseCluster(scope, 'c3', { type: 'dsql' });
+	// @ts-expect-error: capacity options do not belong to a DSQL cluster
+	new DatabaseCluster(scope, 'c1', { type: 'dsql', minCapacity: 1 });
+	// @ts-expect-error: snapshot is not a DSQL removal policy
+	new DatabaseCluster(scope, 'c2', { type: 'dsql', removalPolicy: 'snapshot' });
+	// @ts-expect-error: the retired category name is not a cluster kind
+	new DatabaseCluster(scope, 'c3', { type: 'distributed' });
 	// @ts-expect-error: type is required
 	new DatabaseCluster(scope, 'c4', {});
 	// @ts-expect-error: provisioned is not available yet
 	new DatabaseCluster(scope, 'c5', { type: 'provisioned' });
-	new DatabaseCluster(scope, 'c6', { type: 'distributed', removalPolicy: 'retain' });
+	new DatabaseCluster(scope, 'c6', { type: 'dsql', removalPolicy: 'retain' });
 
 	// Block options.
 	// @ts-expect-error: removalPolicy lives on the cluster once `cluster` is set
 	new Database(scope, 'b1', { cluster: shared, removalPolicy: 'destroy' });
 	// @ts-expect-error: a cluster must be a DatabaseCluster
-	new Database(scope, 'b2', { cluster: { kind: 'distributed' } });
+	new Database(scope, 'b2', { cluster: { kind: 'dsql' } });
 	// @ts-expect-error: no RLS surface in this release
 	void owned.withRLS;
 

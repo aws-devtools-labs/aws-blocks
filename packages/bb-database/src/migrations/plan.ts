@@ -3,7 +3,7 @@
 
 /**
  * The migration rewriter: turns ordinary PostgreSQL migration files into a
- * plan the target cluster accepts. On a `distributed` cluster it rewrites what
+ * plan the target cluster accepts. On a `dsql` cluster it rewrites what
  * DSQL needs rewritten (identity columns and sequences to `bigint` with a
  * cache, `CREATE INDEX` to `ASYNC` plus a job wait, `ADD CONSTRAINT` to
  * `NOT VALID` plus an asynchronous validation, one DDL statement per
@@ -369,11 +369,13 @@ export function buildMigrationPlan(migrations: Record<string, string>, options: 
 		files.push({ file, steps, foreignKeys });
 	}
 	if (errors.length > 0) {
-		const err = new Error(`Migration validation failed for a 'distributed' cluster:\n  ${errors.join('\n  ')}`);
+		const err = new Error(
+			`Migration validation failed for Aurora DSQL (cluster kind 'dsql'):\n  ${errors.join('\n  ')}`,
+		);
 		err.name = MIGRATION_VALIDATION_ERROR_NAME;
 		throw brandBlocksError(err);
 	}
-	return { target: 'distributed', files };
+	return { target: 'dsql', files };
 }
 
 /** Render a plan the way `bb-database migrate --explain` prints it. */

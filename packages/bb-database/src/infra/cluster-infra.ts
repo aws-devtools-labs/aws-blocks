@@ -102,7 +102,7 @@ export class ClusterInfra {
 	readonly type: ClusterType;
 	/** Config entries the runtime reads (`BLOCKS_{id}_*` → token). */
 	readonly configEntries: Record<string, string>;
-	/** The PostgreSQL role the app connects as on a `distributed` cluster. */
+	/** The PostgreSQL role the app connects as on a `dsql` cluster. */
 	readonly dbRole: string;
 	/** CloudFormation logical id of the cluster resource (a token until synth); recorded in the binding record. */
 	readonly clusterLogicalId: string;

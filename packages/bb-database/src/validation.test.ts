@@ -12,7 +12,7 @@ import { describe, test } from 'node:test';
 import { dsqlLintBinary, isDsqlLintAvailable, lintSql } from './dsql-lint.js';
 import { findStatementIssues, TransactionTracker, validateStatement } from './validation.js';
 
-/** SQL a `distributed` cluster cannot run, and the dsql-lint rule that says so. */
+/** SQL a `dsql` cluster cannot run, and the dsql-lint rule that says so. */
 const REJECTED: [sql: string, rule: string][] = [
 	['CREATE TRIGGER t_audit AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION audit()', 'unsupported_create_trigger'],
 	['CREATE FUNCTION f() RETURNS void AS $$ BEGIN END $$ LANGUAGE plpgsql', 'unsupported_create_function_non_sql'],

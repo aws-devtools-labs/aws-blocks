@@ -6,7 +6,7 @@ import { join } from 'node:path';
  * Local development entry point (`npm run dev`, tests).
  *
  * Every cluster is a PGlite (WASM PostgreSQL) on disk under `.bb-data/`, one
- * instance per cluster with one schema per block. A `distributed` cluster runs
+ * instance per cluster with one schema per block. A `dsql` cluster runs
  * every statement through dsql-lint first, so unsupported SQL fails here, not
  * in production.
  */
@@ -30,7 +30,7 @@ import type {
 	ClusterType,
 	DatabaseClusterOptions,
 	DatabaseOptions,
-	DistributedDatabaseOptions,
+	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
 	Transaction,
@@ -43,13 +43,13 @@ assertNotMockInDeployedEnv('bb-database');
 
 /**
  * A cluster several `Database` blocks share, each in its own schema. Pick a
- * category, not a service: `distributed` is Aurora DSQL. Part of the
+ * engine: `dsql` is Aurora DSQL. Part of the
  * `Database` block, not a block on its own.
  *
  * Locally it is one PGlite under `.bb-data/{fullId}/`.
  *
  * @example
- * const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+ * const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
  * const users  = new Database(scope, 'users',  { cluster: shared });
  * const orders = new Database(scope, 'orders', { cluster: shared });
  */
@@ -76,7 +76,7 @@ export class DatabaseCluster extends Scope {
  * cluster; pass a {@link DatabaseCluster} to share one.
  *
  * Locally this is PGlite under `.bb-data/`, with dsql-lint and the DSQL
- * transaction limits applied when the cluster is `distributed`. Migrations in
+ * transaction limits applied when the cluster is `dsql`. Migrations in
  * `./aws-blocks/migrations/{id}` run on first use. `simulateConflict(db)` from
  * `@aws-blocks/bb-database/testing` makes the next commit fail with
  * `SerializationFailure` so retry logic can be tested without a deployed cluster.
@@ -100,10 +100,10 @@ export class Database extends Scope {
 	/** @internal Logger for internal operations. Defaults to error level. */
 	protected log: ChildLogger;
 
-	/** The block owns a `distributed` cluster. */
+	/** The block owns a `dsql` cluster. */
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	/** The block runs on a shared `distributed` cluster. */
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+	/** The block runs on a shared `dsql` cluster. */
+	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options.logger ?? new Logger(this, 'logger', { level: 'error' });
@@ -203,7 +203,7 @@ export class Database extends Scope {
 	 * Execute a statement that modifies data and return the affected row count.
 	 *
 	 * @throws {DatabaseErrors.UniqueConstraintViolation} On a duplicate key (HTTP 409)
-	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When one statement changes more than 3,000 rows on a `distributed` cluster
+	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When one statement changes more than 3,000 rows on a `dsql` cluster
 	 * @example
 	 * const { rowCount } = await db.execute(sql`INSERT INTO users (email) VALUES (${email})`);
 	 */
@@ -222,7 +222,7 @@ export class Database extends Scope {
 	 *
 	 * @throws {DatabaseErrors.TransactionFailed} If `fn` throws an error that is not an `ApiError`, a Blocks error or a database error, or the commit fails
 	 * @throws {DatabaseErrors.SerializationFailure} On an unretried conflict (HTTP 409, retriable)
-	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When the transaction changes more than 3,000 rows or 10 MiB on a `distributed` cluster
+	 * @throws {DatabaseErrors.TransactionRowLimitExceeded} When the transaction changes more than 3,000 rows or 10 MiB on a `dsql` cluster
 	 * @example
 	 * await db.transaction(async (tx) => {
 	 *   const row = await tx.queryOne<{ balance: number }>(sql`SELECT balance FROM accounts WHERE id = ${id} FOR UPDATE`);

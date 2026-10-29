@@ -23,12 +23,12 @@ import { Database, DatabaseCluster, sql } from '@aws-blocks/bb-database';
 const shop = new Database(scope, 'shop');
 
 // 2. Several blocks on one cluster. Each gets its own schema.
-const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 const audit = new Database(scope, 'audit', { cluster: shared });
 const search = new Database(scope, 'search', { cluster: shared });
 ```
 
-Create tables in a migration file, not in a handler. On a `distributed` cluster the app's database role can only read and write rows, so `CREATE TABLE` at runtime fails, locally and on AWS. Put it in `aws-blocks/migrations/shop/001_init.sql` (see [Migrations](#migrations)):
+Create tables in a migration file, not in a handler. On a `dsql` cluster the app's database role can only read and write rows, so `CREATE TABLE` at runtime fails, locally and on AWS. Put it in `aws-blocks/migrations/shop/001_init.sql` (see [Migrations](#migrations)):
 
 ```sql
 CREATE TABLE customers (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL);
@@ -62,7 +62,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ```ts
 const db = new Database(scope, id, options?);
-const cluster = new DatabaseCluster(scope, id, { type: 'distributed', removalPolicy? });
+const cluster = new DatabaseCluster(scope, id, { type: 'dsql', removalPolicy? });
 ```
 
 | Method | Returns | Description |
@@ -108,14 +108,14 @@ Cluster options:
 
 | Option | Type | Description |
 |---|---|---|
-| `type` | `'distributed'` | Required. Aurora DSQL. The value is required so that the planned `provisioned` category adds a value without changing this line. |
+| `type` | `'dsql'` | Required. Aurora DSQL. The value is required so that the planned `provisioned` kind adds a value without changing this line. |
 | `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when the stack is destroyed. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Most apps never set this. |
 
 Block options:
 
 | Option | Type | Description |
 |---|---|---|
-| `cluster` | `DatabaseCluster` | The cluster to run on. Omit it and the block owns a `distributed` cluster. |
+| `cluster` | `DatabaseCluster` | The cluster to run on. Omit it and the block owns a `dsql` cluster. |
 | `migrationsPath` | `string` | Directory of `.sql` files, relative to the project root. Defaults to `./aws-blocks/migrations/{id}`; the default may be missing, an explicit path must exist. |
 | `schemaName` | `string` | The PostgreSQL schema for this block's tables. `public` when the block owns its cluster, otherwise the block id. Two blocks on one cluster cannot share a schema. |
 | `removalPolicy` | `'retain' \| 'destroy'` | Only when `cluster` is omitted. With a shared cluster, set it on the `DatabaseCluster`. |
@@ -126,7 +126,7 @@ Block options:
 ## Sharing a cluster
 
 ```ts
-const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 const audit = new Database(scope, 'audit', { cluster: shared });
 const search = new Database(scope, 'search', { cluster: shared });
 ```
@@ -152,7 +152,7 @@ aws-blocks/migrations/
 
 ### What the rewriter changes
 
-Write PostgreSQL; the block turns each file into steps a `distributed` cluster accepts.
+Your `Database` runs on Aurora DSQL. Write DSQL as AWS documents it, or plain PostgreSQL: the block accepts the PostgreSQL spellings below and turns each file into the steps DSQL runs.
 
 | You write | What runs on DSQL |
 |---|---|
@@ -175,7 +175,7 @@ The output also lists every foreign key and its referential action, so a switch 
 After the rewrite, the statements are checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint), the linter the Aurora DSQL team maintains. What DSQL cannot run fails at `npm run dev` and at synth, before any deploy: `CREATE TRIGGER`, `CREATE EXTENSION`, `CREATE POLICY`, `TRUNCATE`, array columns, `ADD COLUMN … DEFAULT`, `SET NOT NULL` or `TYPE` on an existing column, `ADD CONSTRAINT … UNIQUE (…)`, and so on. The error names the file, the rule, dsql-lint's suggestion, and the DSQL documentation page:
 
 ```
-Migration validation failed for a 'distributed' cluster:
+Migration validation failed for Aurora DSQL (cluster kind 'dsql'):
   001_init.sql: array_type: Column `tags` uses an array type, which is not supported in DSQL. Use a join table for relational data, or store as JSON text. Checked against https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
 ```
 
@@ -242,7 +242,7 @@ try {
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `distributed` cluster adds DSQL's checks locally. Every statement a handler issues goes through `dsql-lint` first (once per distinct statement), so unsupported SQL fails on your machine instead of in production; DDL outside a migration is refused because the deployed app role can only run DML; and a transaction that changes more than 3,000 rows (cascades included) or 10 MiB fails and rolls back, as it does on DSQL.
+A `dsql` cluster adds DSQL's checks locally. Every statement a handler issues goes through `dsql-lint` first (once per distinct statement), so unsupported SQL fails on your machine instead of in production; DDL outside a migration is refused because the deployed app role can only run DML; and a transaction that changes more than 3,000 rows (cascades included) or 10 MiB fails and rolls back, as it does on DSQL.
 
 | | Owned default | `DatabaseCluster` |
 |---|---|---|
@@ -257,7 +257,7 @@ PGlite has one session, so local work on a cluster runs one statement or transac
 A `Database` is bound to one cluster, by id and type, and keeps it for life. The dev server enforces the rule with a marker file at `.bb-data/{fullId}/binding.json` and refuses to start a block whose code disagrees with it:
 
 ```
-Deploy stopped: Database 'app-shop' is bound to its default cluster (distributed) and cannot move to 'app-shared' (distributed).
+Deploy stopped: Database 'app-shop' is bound to its default cluster (dsql) and cannot move to 'app-shared' (dsql).
 A Database keeps its cluster for life. To change clusters: add a new Database on 'app-shared', copy the data, switch your handlers, then remove 'shop'.
 ```
 
@@ -266,7 +266,7 @@ Delete `.bb-data` to reset it. A production deploy guard that stops a deploy mov
 **To move a block's data:**
 
 1. Add a new `Database` with a new id on the target cluster, give it the same migrations, and deploy.
-2. Copy each table from the old block's schema into the new one. On the same cluster, run `INSERT INTO new_schema.t SELECT * FROM old_schema.t`. Across clusters, export with `\copy old_schema.t TO 't.csv' CSV` and load with `\copy new_schema.t FROM 't.csv' CSV`. A `distributed` target accepts at most 3,000 rows per transaction, so load large tables in chunks of that size. Load parents before children, and end with a row-count check: an import that ignores constraint errors leaves orphans behind.
+2. Copy each table from the old block's schema into the new one. On the same cluster, run `INSERT INTO new_schema.t SELECT * FROM old_schema.t`. Across clusters, export with `\copy old_schema.t TO 't.csv' CSV` and load with `\copy new_schema.t FROM 't.csv' CSV`. A `dsql` target accepts at most 3,000 rows per transaction, so load large tables in chunks of that size. Load parents before children, and end with a row-count check: an import that ignores constraint errors leaves orphans behind.
 3. Check row counts on both sides.
 4. Switch your handlers to the new block and deploy.
 5. Remove the old block and deploy. Its data stays until you drop the schema or the cluster.

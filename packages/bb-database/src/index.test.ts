@@ -37,12 +37,12 @@ after(async () => {
 	await _closeAllPgliteClusters();
 });
 
-describe('Database (owned distributed cluster)', () => {
+describe('Database (owned DSQL cluster)', () => {
 	test('query / queryOne / execute round-trip and queryOne returns null when absent', async () => {
 		const db = new Database(app(), 'db');
-		assert.deepStrictEqual(db.cluster, { kind: 'distributed', id: 'default' });
+		assert.deepStrictEqual(db.cluster, { kind: 'dsql', id: 'default' });
 		assert.strictEqual(db.schemaName, 'public');
-		// DDL at runtime is refused on a distributed cluster (parity with the deployed grant)…
+		// DDL at runtime is refused on a DSQL cluster (parity with the deployed grant)…
 		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT PRIMARY KEY)`), /DDL statements .* not allowed/);
 		// …so the schema comes from a migration.
 		await withMigrations(db, { '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);' });
@@ -348,7 +348,7 @@ describe('Database (owned distributed cluster)', () => {
 		);
 	});
 
-	test('a migration a distributed cluster cannot run fails at startup, naming the file', async () => {
+	test('a migration a DSQL cluster cannot run fails at startup, naming the file', async () => {
 		const db = new Database(app(), 'db');
 		await assert.rejects(
 			withMigrations(db, {
@@ -359,13 +359,13 @@ describe('Database (owned distributed cluster)', () => {
 	});
 });
 
-describe('DatabaseCluster (shared distributed)', () => {
+describe('DatabaseCluster (shared DSQL)', () => {
 	test('two blocks on one cluster each get their own schema and do not see each other', async () => {
 		const scope = app();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 		const users = new Database(scope, 'users', { cluster: shared });
 		const orders = new Database(scope, 'orders', { cluster: shared });
-		assert.deepStrictEqual(users.cluster, { kind: 'distributed', id: shared.fullId });
+		assert.deepStrictEqual(users.cluster, { kind: 'dsql', id: shared.fullId });
 		assert.strictEqual(users.schemaName, 'users');
 		assert.strictEqual(orders.schemaName, 'orders');
 		// The same table name in each schema.
@@ -391,16 +391,16 @@ describe('DatabaseCluster (shared distributed)', () => {
 		assert.ok(!existsSync(join(DATA_DIR, users.fullId, 'pglite')));
 	});
 
-	test('a shared distributed cluster keeps the DSQL checks', async () => {
+	test('a shared DSQL cluster keeps the DSQL checks', async () => {
 		const scope = app();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 		const db = new Database(scope, 'db', { cluster: shared });
 		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT)`), /DDL statements .* not allowed/);
 	});
 
 	test('two blocks with the same schemaName on one cluster is an error', () => {
 		const scope = app();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 		new Database(scope, 'users', { cluster: shared, schemaName: 'public' });
 		assert.throws(
 			() => new Database(scope, 'orders', { cluster: shared, schemaName: 'public' }),
@@ -415,7 +415,7 @@ describe('block identity', () => {
 	test('Database registers as an official block; DatabaseCluster is part of it, not a block', () => {
 		Scope._resetRegistry();
 		const scope = app();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 		const db = new Database(scope, 'db', { cluster: shared });
 		assert.strictEqual(db.bbName, 'Database');
 		assert.strictEqual(shared.bbName, undefined);
@@ -439,9 +439,9 @@ describe('construction-time rules', () => {
 	});
 
 	test('DatabaseCluster short ids are unique per app', () => {
-		new DatabaseCluster(new Scope('shop'), 'main', { type: 'distributed' });
+		new DatabaseCluster(new Scope('shop'), 'main', { type: 'dsql' });
 		assert.throws(
-			() => new DatabaseCluster(new Scope('admin'), 'main', { type: 'distributed' }),
+			() => new DatabaseCluster(new Scope('admin'), 'main', { type: 'dsql' }),
 			/DatabaseCluster id 'main' is used twice/,
 		);
 	});
@@ -451,11 +451,11 @@ describe('construction-time rules', () => {
 		new Database(scope, 'orders');
 		assert.ok(existsSync(join(DATA_DIR, `${scope.id}-orders`, 'binding.json')));
 		_resetDatabaseRegistry();
-		const shared = new DatabaseCluster(scope, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
 		assert.throws(
 			() => new Database(scope, 'orders', { cluster: shared }),
 			new RegExp(
-				`Deploy stopped: Database '${scope.id}-orders' is bound to its default cluster \\(distributed\\) and cannot move to '${scope.id}-shared' \\(distributed\\)`,
+				`Deploy stopped: Database '${scope.id}-orders' is bound to its default cluster \\(dsql\\) and cannot move to '${scope.id}-shared' \\(dsql\\)`,
 			),
 		);
 	});

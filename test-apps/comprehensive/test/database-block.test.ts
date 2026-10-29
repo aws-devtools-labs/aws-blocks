@@ -13,8 +13,8 @@ import type { api as apiType } from 'aws-blocks';
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 type Info = Awaited<ReturnType<typeof apiType.dbxInfo>>;
-type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], 'distributed'>>;
-type _DbxaKind = Expect<Equal<Info['dbxa']['cluster']['kind'], 'distributed'>>;
+type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], 'dsql'>>;
+type _DbxaKind = Expect<Equal<Info['dbxa']['cluster']['kind'], 'dsql'>>;
 // A result schema, not a type argument, is what types these two: the inferred
 // type must be the schema's output, and `id` must be a number on both environments.
 type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
@@ -24,11 +24,11 @@ type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 
 export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
-    test('descriptors: dbx owns its distributed cluster, dbxa/dbxb share one', async () => {
+    test('descriptors: dbx owns its DSQL cluster, dbxa/dbxb share one', async () => {
       const info = await getApi().dbxInfo();
-      assert.deepStrictEqual(info.dbx.cluster, { kind: 'distributed', id: 'default' });
+      assert.deepStrictEqual(info.dbx.cluster, { kind: 'dsql', id: 'default' });
       assert.strictEqual(info.dbx.schemaName, 'public');
-      assert.strictEqual(info.dbxa.cluster.kind, 'distributed');
+      assert.strictEqual(info.dbxa.cluster.kind, 'dsql');
       assert.notStrictEqual(info.dbxa.cluster.id, 'default');
       assert.strictEqual(info.dbxa.cluster.id, info.dbxb.cluster.id);
       assert.strictEqual(info.dbxa.schemaName, 'dbxa');
@@ -127,7 +127,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       }
     });
 
-    test('dbx - DDL and TRUNCATE are refused on a distributed cluster', async () => {
+    test('dbx - DDL and TRUNCATE are refused on a DSQL cluster', async () => {
       const api = getApi();
       const ddl = await api.dbxRejectDdl();
       assert.ok(

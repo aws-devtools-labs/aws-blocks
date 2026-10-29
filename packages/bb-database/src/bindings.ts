@@ -20,7 +20,7 @@ export interface BindingChange {
 	to: DatabaseBinding;
 }
 
-/** Describe a cluster for the stop message: `its default cluster (distributed)` or `'app-main' (distributed)`. */
+/** Describe a cluster for the stop message: `its default cluster (dsql)` or `'app-main' (dsql)`. */
 export function describeCluster(binding: DatabaseBinding): string {
 	if (binding.cluster === DEFAULT_CLUSTER_ID) return `its default cluster (${binding.type})`;
 	return `'${binding.cluster}' (${binding.type})`;

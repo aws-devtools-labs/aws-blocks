@@ -395,7 +395,7 @@ const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), 
 // `dbxa` and `dbxb` share one distributed cluster, each in its own schema.
 // Both migrations create a table named `items`; dbxb's adds a foreign key, a
 // check constraint, an index and a view, all rewritten for DSQL.
-const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'distributed', removalPolicy: 'destroy' });
+const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
 const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
 const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 

@@ -5,7 +5,7 @@
  * CDK infrastructure entry point (`cdk synth --conditions=cdk`).
  *
  * A `DatabaseCluster` provisions an Aurora DSQL cluster plus its migration
- * Lambdas. A `Database` either owns a `distributed` cluster or attaches to a
+ * Lambdas. A `Database` either owns a `dsql` cluster or attaches to a
  * shared one, adding the CustomResource that creates its schema and runs its
  * migrations at deploy time. Both record their binding in stack metadata for
  * the deploy guard.
@@ -23,7 +23,7 @@ import type {
 	ClusterType,
 	DatabaseClusterOptions,
 	DatabaseOptions,
-	DistributedDatabaseOptions,
+	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 } from './types.js';
 
@@ -38,7 +38,7 @@ function projectRootOf(scope: BuildingBlockScope): string {
 
 /**
  * The cluster a `Database` runs on, when several blocks share one. Provisions
- * Aurora DSQL (`type: 'distributed'`) plus the migration Lambdas its blocks use.
+ * Aurora DSQL (`type: 'dsql'`) plus the migration Lambdas its blocks use.
  *
  * Part of the `Database` block, not a block itself. It extends
  * `BuildingBlockScope` only because that is how a construct declares its VPC
@@ -67,7 +67,7 @@ export class DatabaseCluster extends BuildingBlockScope {
 }
 
 /**
- * SQL database on PostgreSQL, infrastructure build. Owns a `distributed` cluster
+ * SQL database on PostgreSQL, infrastructure build. Owns a `dsql` cluster
  * when `cluster` is omitted; otherwise attaches to the given cluster.
  */
 export class Database extends BuildingBlockScope {
@@ -76,7 +76,7 @@ export class Database extends BuildingBlockScope {
 	private readonly migrationsPath: string | undefined;
 
 	constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-	constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+	constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
 	constructor(scope: ScopeParent, id: string, options: DatabaseOptions = {}) {
 		// A shared cluster declared its own requirements; an owned one needs egress to DSQL.
 		super(id, { parent: scope, vpc: options.cluster ? {} : VPC_REQUIREMENTS });
@@ -95,8 +95,8 @@ export class Database extends BuildingBlockScope {
 			const infra = new ClusterInfra({
 				owner: this,
 				fullId: this.fullId,
-				type: 'distributed',
-				options: { type: 'distributed', removalPolicy: owned.removalPolicy },
+				type: 'dsql',
+				options: { type: 'dsql', removalPolicy: owned.removalPolicy },
 				defaults: this.defaults,
 			});
 			for (const [key, value] of Object.entries(infra.configEntries)) registerConfig(this, key, value);

@@ -34,10 +34,10 @@ export const DEFAULT_MAX_RETRIES = 3;
  */
 export const AUTOCOMMIT_CONFLICT_BACKOFF_MS: readonly number[] = [50, 100, 200];
 
-/** Maximum rows mutated per transaction on a `distributed` (Aurora DSQL) cluster. */
+/** Maximum rows mutated per transaction on a `dsql` (Aurora DSQL) cluster. */
 export const TRANSACTION_ROW_LIMIT = 3000;
 
-/** Maximum bytes of data modified per transaction on a `distributed` (Aurora DSQL) cluster. */
+/** Maximum bytes of data modified per transaction on a `dsql` (Aurora DSQL) cluster. */
 export const TRANSACTION_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
 
 /** Reserved cluster id for a `Database` that owns its cluster. */
@@ -45,7 +45,6 @@ export const DEFAULT_CLUSTER_ID = 'default';
 
 /** Schema a `Database` that owns its cluster uses. */
 export const DEFAULT_SCHEMA = 'public';
-
 
 /** Name of the per-block binding marker written by the dev server. */
 export const BINDING_MARKER_FILE = 'binding.json';
@@ -55,7 +54,7 @@ export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 
 /**
  * Sequence cache the rewriter gives identity columns and sequences on a
- * `distributed` cluster. DSQL accepts `CACHE 1` or `CACHE >= 65536`; the large
+ * `dsql` cluster. DSQL accepts `CACHE 1` or `CACHE >= 65536`; the large
  * cache avoids a coordination round per value, at the cost of strict ordering.
  */
 export const DSQL_IDENTITY_CACHE = 65536;

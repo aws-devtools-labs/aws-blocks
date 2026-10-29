@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Aurora DSQL compatibility checks for a `distributed` cluster, and the mirror
+ * Aurora DSQL compatibility checks for a `dsql` cluster, and the mirror
  * of DSQL's per-transaction limits the local mock enforces.
  *
  * Statement compatibility is decided by AWS's `dsql-lint` (see `dsql-lint.ts`),
@@ -97,7 +97,7 @@ function grantsOnPublic(schemas: string): boolean {
 	});
 }
 
-/** The dsql-lint findings for SQL a `distributed` cluster would be asked to run. */
+/** The dsql-lint findings for SQL a `dsql` cluster would be asked to run. */
 export function findStatementIssues(sql: string): ValidationIssue[] {
 	const issues = lintSql(sql).map(toIssue);
 	// dsql-lint and PGlite both accept this, but DSQL rejects it at runtime:
@@ -115,7 +115,7 @@ export function findStatementIssues(sql: string): ValidationIssue[] {
 	return issues;
 }
 
-/** Validate a SQL statement for `distributed` compatibility. Throws a branded `DsqlValidationError`. */
+/** Validate a SQL statement for `dsql` compatibility. Throws a branded `DsqlValidationError`. */
 export function validateStatement(sql: string): void {
 	const issues = findStatementIssues(sql);
 	if (issues.length === 0) return;
@@ -138,7 +138,7 @@ export function transactionLimitError(detail: string): Error {
 }
 
 /**
- * Mirror of the DSQL per-transaction limits for the local `distributed` mock:
+ * Mirror of the DSQL per-transaction limits for the local `dsql` mock:
  * one DDL statement, no DDL and DML together, 3,000 changed rows (cascades
  * included), and 10 MiB of data.
  */

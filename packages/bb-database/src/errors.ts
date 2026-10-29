@@ -23,13 +23,13 @@ export const DatabaseErrors = {
 } as const;
 
 /**
- * Raised by the local mock when DDL runs on a `distributed` app connection.
+ * Raised by the local mock when DDL runs on a `dsql` app connection.
  * Deployed DSQL raises SQLSTATE 42501 instead (→ `QueryFailed`), so this name
  * is not on the public {@link DatabaseErrors}.
  */
 export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
 
-/** Error name raised when a statement or migration uses a feature a `distributed` cluster lacks. */
+/** Error name raised when a statement or migration uses a feature a `dsql` cluster lacks. */
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
 /** Serialization failure (an OCC conflict). SQLSTATE class 40, transaction rollback. */

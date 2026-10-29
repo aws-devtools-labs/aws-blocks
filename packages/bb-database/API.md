@@ -18,12 +18,12 @@ export interface ClusterRef {
 }
 
 // @public
-export type ClusterType = 'distributed';
+export type ClusterType = 'dsql';
 
 // @public
 export class Database extends Scope {
     constructor(scope: ScopeParent, id: string, options?: OwnedDatabaseOptions);
-    constructor(scope: ScopeParent, id: string, options: DistributedDatabaseOptions);
+    constructor(scope: ScopeParent, id: string, options: DsqlDatabaseOptions);
     // (undocumented)
     readonly cluster: ClusterRef;
     // (undocumented)
@@ -62,7 +62,7 @@ export interface DatabaseClusterLike {
 }
 
 // @public
-export type DatabaseClusterOptions = DistributedClusterOptions;
+export type DatabaseClusterOptions = DsqlClusterOptions;
 
 // @public
 export const DatabaseErrors: {
@@ -76,17 +76,17 @@ export const DatabaseErrors: {
 };
 
 // @public
-export type DatabaseOptions = OwnedDatabaseOptions | DistributedDatabaseOptions;
+export type DatabaseOptions = OwnedDatabaseOptions | DsqlDatabaseOptions;
 
 // @public
-export interface DistributedClusterOptions {
+export interface DsqlClusterOptions {
     removalPolicy?: 'retain' | 'destroy';
     // (undocumented)
-    type: 'distributed';
+    type: 'dsql';
 }
 
 // @public
-export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
+export interface DsqlDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)
     cluster: DatabaseClusterLike;
 }

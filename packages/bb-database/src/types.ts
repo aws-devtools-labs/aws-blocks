@@ -11,16 +11,16 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 /**
  * The categories of cluster a {@link DatabaseCluster} can provision.
  *
- * - `distributed`: Aurora DSQL. Scales to zero, no VPC, optimistic concurrency.
+ * - `dsql`: Aurora DSQL. Scales to zero, no VPC, optimistic concurrency.
  *   Runs most of PostgreSQL, including foreign keys, views, sequences, identity
  *   columns and JSONB. It lacks triggers, PL/pgSQL, extensions and Row Level
  *   Security, and limits a transaction to 3,000 changed rows and 10 MiB.
  *
  * A second category, `provisioned` (Aurora Serverless v2, all of PostgreSQL in
- * a VPC), is planned and not yet available. The value names what you choose
- * between, not the AWS product underneath.
+ * a VPC), is planned and not yet available. The value names the engine, so
+ * every stop and limit can say which database it comes from.
  */
-export type ClusterType = 'distributed';
+export type ClusterType = 'dsql';
 
 /**
  * The structural shape of a `DatabaseCluster<T>` as a `Database` constructor
@@ -49,9 +49,9 @@ export interface ClusterRef {
 	readonly id: string;
 }
 
-/** Options for a `distributed` (Aurora DSQL) cluster. */
-export interface DistributedClusterOptions {
-	type: 'distributed';
+/** Options for a `dsql` (Aurora DSQL) cluster. */
+export interface DsqlClusterOptions {
+	type: 'dsql';
 	/**
 	 * CloudFormation removal policy for the cluster. When omitted the stack-wide
 	 * defaults apply: production clusters retain with deletion protection on,
@@ -61,7 +61,7 @@ export interface DistributedClusterOptions {
 }
 
 /** Constructor options for a `DatabaseCluster`, narrowed by `type`. */
-export type DatabaseClusterOptions = DistributedClusterOptions;
+export type DatabaseClusterOptions = DsqlClusterOptions;
 
 /** Options every `Database` block accepts, whichever cluster it runs on. */
 export interface DatabaseBlockOptions {
@@ -81,7 +81,7 @@ export interface DatabaseBlockOptions {
 	logger?: ChildLogger;
 }
 
-/** Options for a `Database` that owns its cluster (no `cluster`). The owned cluster is `distributed`. */
+/** Options for a `Database` that owns its cluster (no `cluster`). The owned cluster is `dsql`. */
 export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
 	cluster?: undefined;
 	/**
@@ -91,13 +91,13 @@ export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
 	removalPolicy?: 'retain' | 'destroy';
 }
 
-/** Options for a `Database` on a shared `distributed` cluster. */
-export interface DistributedDatabaseOptions extends DatabaseBlockOptions {
+/** Options for a `Database` on a shared `dsql` cluster. */
+export interface DsqlDatabaseOptions extends DatabaseBlockOptions {
 	cluster: DatabaseClusterLike;
 }
 
 /** Every options shape a `Database` constructor accepts. */
-export type DatabaseOptions = OwnedDatabaseOptions | DistributedDatabaseOptions;
+export type DatabaseOptions = OwnedDatabaseOptions | DsqlDatabaseOptions;
 
 /**
  * Options for `query()` and `queryOne()`, on a `Database` and on the `tx` a

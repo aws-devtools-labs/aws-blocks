@@ -64,7 +64,7 @@ function escapeString(value: string): string {
 }
 
 /**
- * Provision the app's DML-only role on a `distributed` cluster and grant it the
+ * Provision the app's DML-only role on a `dsql` cluster and grant it the
  * block's schema. Idempotent; runs on every deploy so new tables get grants.
  */
 export async function provisionAppRole(
@@ -179,8 +179,7 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 			await withRetry(() => ensureMigrationTables(engine, schemaName));
 			console.log('[bb-database] This block has no migrations; schema ensured');
 		}
-		if (!props.dbRole || !props.appRoleArn)
-			throw new Error('dbRole and appRoleArn are required on a distributed cluster');
+		if (!props.dbRole || !props.appRoleArn) throw new Error('dbRole and appRoleArn are required on a DSQL cluster');
 		await withRetry(() => provisionAppRole(engine, props.dbRole as string, props.appRoleArn as string, schemaName));
 		return true;
 	} finally {

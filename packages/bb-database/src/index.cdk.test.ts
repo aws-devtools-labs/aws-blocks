@@ -73,7 +73,7 @@ describe('Database (CDK)', () => {
 		assert.strictEqual(migrations.length, 1);
 		assert.strictEqual(migrations[0].Properties.schemaName, 'public');
 		assert.strictEqual(migrations[0].Properties.migrationsHash, 'no-migrations');
-		assert.deepStrictEqual(db.cluster, { kind: 'distributed', id: 'default' });
+		assert.deepStrictEqual(db.cluster, { kind: 'dsql', id: 'default' });
 	});
 
 	test('production defaults retain the cluster with deletion protection; removalPolicy overrides the policy', () => {
@@ -97,9 +97,9 @@ describe('Database (CDK)', () => {
 		assert.match(policies, /dsql:DbConnectAdmin/);
 	});
 
-	test('blocks on a shared distributed cluster share one DSQL cluster and one pair of migration Lambdas, with chained per-block resources', () => {
+	test('blocks on a shared DSQL cluster share one cluster resource and one pair of migration Lambdas, with chained per-block resources', () => {
 		const { stack, parent } = setup();
-		const shared = new DatabaseCluster(parent, 'shared', { type: 'distributed', removalPolicy: 'retain' });
+		const shared = new DatabaseCluster(parent, 'shared', { type: 'dsql', removalPolicy: 'retain' });
 		const a = new Database(parent, 'a', { cluster: shared });
 		const b = new Database(parent, 'b', { cluster: shared });
 		const template = Template.fromStack(stack);
@@ -141,7 +141,7 @@ describe('Database (CDK)', () => {
 
 	test('every function that assumes the execution role waits for the block migrations; the migration Lambdas do not', () => {
 		const { stack, parent } = setup();
-		const shared = new DatabaseCluster(parent, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(parent, 'shared', { type: 'dsql' });
 		new Database(parent, 'a', { cluster: shared });
 		new Database(parent, 'b', { cluster: shared });
 		new Database(parent, 'own');
@@ -203,7 +203,7 @@ describe('Database (CDK)', () => {
 		const { parent } = setup();
 		new Database(parent, 'orders');
 		assert.throws(() => new Database(new Scope('other'), 'orders'), /Database id 'orders' is used twice/);
-		const shared = new DatabaseCluster(parent, 'shared', { type: 'distributed' });
+		const shared = new DatabaseCluster(parent, 'shared', { type: 'dsql' });
 		new Database(parent, 'x', { cluster: shared, schemaName: 'public' });
 		assert.throws(
 			() => new Database(parent, 'y', { cluster: shared, schemaName: 'public' }),

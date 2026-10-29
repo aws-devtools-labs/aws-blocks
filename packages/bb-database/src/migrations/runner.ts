@@ -126,7 +126,7 @@ async function jobStatus(engine: DatabaseEngine, jobId: string): Promise<{ statu
  * DSQL job is still running, the job it stopped at.
  *
  * Consecutive transactional steps share one transaction; a non-transactional
- * step (DDL on a `distributed` cluster, a job wait, a constraint validation)
+ * step (DDL on a `dsql` cluster, a job wait, a constraint validation)
  * runs on its own. Progress is recorded after every unit of work so a failure
  * resumes where it stopped.
  */

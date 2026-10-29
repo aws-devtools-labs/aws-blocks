@@ -16,7 +16,7 @@ export function isDatabaseClusterLike(value: unknown): value is DatabaseClusterL
 		value !== null &&
 		'type' in value &&
 		'fullId' in value &&
-		(value as { type: unknown }).type === 'distributed'
+		(value as { type: unknown }).type === 'dsql'
 	);
 }
 
@@ -45,7 +45,7 @@ export function resolveCluster(
 	const explicitSchema = options?.schemaName;
 	if (cluster === undefined || cluster === null) {
 		return {
-			ref: { kind: 'distributed', id: DEFAULT_CLUSTER_ID },
+			ref: { kind: 'dsql', id: DEFAULT_CLUSTER_ID },
 			schemaName: explicitSchema ?? DEFAULT_SCHEMA,
 			owned: true,
 		};
