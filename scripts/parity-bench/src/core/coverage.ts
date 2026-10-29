@@ -8,7 +8,7 @@
  */
 
 import type { ParityRecord } from './types.js';
-import { cell } from './report.js';
+import { cell, type Finding } from './report.js';
 
 /** One AWS API operation a block can send, with the error types the SDK declares for it. */
 export interface AwsOperation {
@@ -37,12 +37,22 @@ export interface BlockSurface {
 	operations: Record<string, AwsOperation>;
 }
 
+/**
+ * How well a method is proven to behave the same locally and deployed: `full` = compared and
+ * never different, `partial` = compared with at least one difference, `none` = never compared.
+ */
+export type MethodRating = 'full' | 'partial' | 'none';
+
 export interface MethodCoverage {
 	name: string;
 	operations: string[];
 	calledByApp: boolean;
 	/** Ids of the parity cases that called the method. */
 	cases: string[];
+	/** Local-vs-deployed comparisons that reached this method, from the differ's findings. */
+	same: number;
+	differ: number;
+	rating: MethodRating;
 }
 
 export interface BlockCoverage {
@@ -60,6 +70,40 @@ export interface ExercisedEvidence {
 	casesByMethod: ReadonlyMap<string, readonly string[]>;
 	/** Error names per block, from deployed probe and slider records only (local errors are the mock's). */
 	deployedErrorsByBlock: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** Same/differ counts per block method, attributed from the differ's findings. */
+export type Comparisons = ReadonlyMap<string, { readonly same: number; readonly differ: number }>;
+
+/**
+ * Attribute each finding to the block methods it exercised. A probe or slider finding counts
+ * for the methods its case called (from the recordings); a recorded e2e call counts for the
+ * block methods its app API method calls (`api.kvPut` → `KVStore.put`). Unmatched and noisy
+ * findings were not compared, so they count for nothing; HTTP exchanges aren't attributed.
+ */
+export function attributeFindings(
+	findings: readonly Finding[],
+	apiMethods: ReadonlyMap<string, readonly string[]>,
+	casesByMethod: ReadonlyMap<string, readonly string[]>,
+): Comparisons {
+	const methodsOfCase = new Map<string, string[]>();
+	for (const [method, cases] of casesByMethod) {
+		for (const c of cases) methodsOfCase.set(c, [...(methodsOfCase.get(c) ?? []), method]);
+	}
+	const out = new Map<string, { same: number; differ: number }>();
+	for (const f of findings) {
+		if (f.verdict === 'unmatched' || f.verdict === 'noisy') continue;
+		let methods: readonly string[] = [];
+		if (f.kind === 'probe' || f.kind === 'sweep') methods = methodsOfCase.get(f.key.slice(f.kind.length + 1)) ?? [];
+		else if (f.kind === 'call') methods = apiMethods.get((f.key.split(' | ').pop() ?? '').split(' ')[0]) ?? [];
+		for (const m of methods) {
+			const c = out.get(m) ?? { same: 0, differ: 0 };
+			if (f.verdict === 'same') c.same++;
+			else c.differ++;
+			out.set(m, c);
+		}
+	}
+	return out;
 }
 
 /** Collect the evidence from recordings (any mix of environments). */
@@ -90,18 +134,26 @@ export function computeCoverage(
 	surfaces: readonly BlockSurface[],
 	appCalls: ReadonlySet<string>,
 	evidence: ExercisedEvidence,
+	comparisons: Comparisons = new Map(),
 ): BlockCoverage[] {
 	return surfaces.map((s) => {
 		const errorTypes = [...new Set(Object.values(s.operations).flatMap((op) => op.errors))].sort();
 		const seen = evidence.deployedErrorsByBlock.get(s.block) ?? new Set<string>();
 		return {
 			block: s.block,
-			methods: s.methods.map((m) => ({
-				name: m.name,
-				operations: m.operations,
-				calledByApp: appCalls.has(m.name),
-				cases: [...(evidence.casesByMethod.get(m.name) ?? [])],
-			})),
+			methods: s.methods.map((m) => {
+				const { same, differ } = comparisons.get(m.name) ?? { same: 0, differ: 0 };
+				const rating: MethodRating = same + differ === 0 ? 'none' : differ === 0 ? 'full' : 'partial';
+				return {
+					name: m.name,
+					operations: m.operations,
+					calledByApp: appCalls.has(m.name),
+					cases: [...(evidence.casesByMethod.get(m.name) ?? [])],
+					same,
+					differ,
+					rating,
+				};
+			}),
 			operations: Object.keys(s.operations).sort(),
 			errorTypes,
 			errorsSeen: errorTypes.filter((e) => seen.has(e)),
@@ -116,18 +168,48 @@ function share(n: number, total: number): string {
 	return `${n} (${pct > 0 && pct < 1 ? '<1' : Math.round(pct)}%)`;
 }
 
-export function renderCoverageMarkdown(rows: readonly BlockCoverage[], meta: { repo: string; app: string; recordings: readonly string[] }): string {
+export function renderCoverageMarkdown(
+	rows: readonly BlockCoverage[],
+	meta: { repo: string; app: string; recordings: readonly string[]; findings?: string },
+): string {
 	const sum = (f: (r: BlockCoverage) => number) => rows.reduce((n, r) => n + f(r), 0);
 	const inApp = (r: BlockCoverage) => r.methods.filter((m) => m.calledByApp).length;
 	const inCases = (r: BlockCoverage) => r.methods.filter((m) => m.cases.length).length;
 	const lines: string[] = [
 		'# Functional coverage — per Building Block',
 		'',
-		`repo: \`${meta.repo}\` · app: \`${meta.app}\` · recordings: ${meta.recordings.length ? meta.recordings.map((r) => `\`${r}\``).join(', ') : 'none (edge-case columns are empty)'}`,
+		`repo: \`${meta.repo}\` · app: \`${meta.app}\` · recordings: ${meta.recordings.length ? meta.recordings.map((r) => `\`${r}\``).join(', ') : 'none (edge-case columns are empty)'} · findings: ${meta.findings ? `\`${meta.findings}\`` : 'none (method fidelity not measured)'}`,
 		'',
+	];
+	if (meta.findings) {
+		const rated = (r: BlockCoverage, rating: MethodRating) => r.methods.filter((m) => m.rating === rating).length;
+		lines.push(
+			'## Method fidelity',
+			'',
+			'| Block | Public methods | Full | Partial | None | Method fidelity |',
+			'|---|---|---|---|---|---|',
+		);
+		for (const r of rows) {
+			const n = r.methods.length;
+			if (!n) continue;
+			lines.push(`| ${r.block} | ${n} | ${rated(r, 'full')} | ${rated(r, 'partial')} | ${rated(r, 'none')} | ${share(rated(r, 'full'), n)} |`);
+		}
+		const total = sum((r) => r.methods.length);
+		const full = sum((r) => rated(r, 'full'));
+		lines.push(
+			`| **All blocks** | **${total}** | **${full}** | **${sum((r) => rated(r, 'partial'))}** | **${sum((r) => rated(r, 'none'))}** | **${share(full, total)}** |`,
+			'',
+			'From the recorded e2e calls; edge cases stay out of it. **Full**: compared locally and deployed, and never different. **Partial**: compared, with at least one difference. **None**: never compared.',
+			'**Method fidelity** = Full ÷ public methods, so methods nothing compares count against the block.',
+			'',
+			'## Coverage',
+			'',
+		);
+	}
+	lines.push(
 		'| Block | Public methods | Called by the e2e app | Hit by edge cases | AWS operations | AWS error types | Hit on AWS |',
 		'|---|---|---|---|---|---|---|',
-	];
+	);
 	for (const r of rows) {
 		const n = r.methods.length;
 		lines.push(
@@ -159,10 +241,10 @@ export function renderCoverageMarkdown(rows: readonly BlockCoverage[], meta: { r
 	lines.push('## Methods', '');
 	for (const r of rows) {
 		if (!r.methods.length) continue;
-		lines.push(`### ${r.block}`, '', '| Method | e2e app | Edge cases | AWS operations |', '|---|---|---|---|');
+		lines.push(`### ${r.block}`, '', '| Method | Fidelity | Same / differ | e2e app | Edge cases | AWS operations |', '|---|---|---|---|---|---|');
 		for (const m of r.methods) {
 			lines.push(
-				`| \`${m.name}\` | ${m.calledByApp ? '✓' : '—'} | ${m.cases.length || '—'} | ${cell(m.operations.join(', ') || '—')} |`,
+				`| \`${m.name}\` | ${m.rating} | ${m.same + m.differ ? `${m.same} / ${m.differ}` : '—'} | ${m.calledByApp ? '✓' : '—'} | ${m.cases.length || '—'} | ${cell(m.operations.join(', ') || '—')} |`,
 			);
 		}
 		lines.push('');

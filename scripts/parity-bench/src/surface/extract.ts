@@ -279,6 +279,27 @@ export function backendSources(dir: string): string[] {
 	return out.sort();
 }
 
+/** Resolves a call site to the block method it targets (`KVStore.put`), if any. */
+function blockCallResolver(
+	checker: ts.TypeChecker,
+	surfaces: readonly BlockSurface[],
+	packagesDir: string,
+): (call: ts.CallExpression) => string | undefined {
+	const known = new Set(surfaces.flatMap((s) => s.methods.map((m) => m.name)));
+	const bbNameOfBlock = new Map(surfaces.map((s) => [s.block, s.bbName]));
+	return (call) => {
+		if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
+		const symbol = resolveAlias(checker, checker.getSymbolAtLocation(call.expression.name));
+		for (const decl of symbol?.declarations ?? []) {
+			const rel = relative(packagesDir, decl.getSourceFile().fileName);
+			if (rel.startsWith('..')) continue;
+			const key = `${bbNameOfBlock.get(rel.split(sep)[0])}.${call.expression.name.text}`;
+			if (known.has(key)) return key;
+		}
+		return undefined;
+	};
+}
+
 /**
  * The block methods an app's backend calls: call sites in `files` whose target method is
  * declared by a block package, keyed like the surface (`KVStore.put`). Call sites outside
@@ -286,28 +307,97 @@ export function backendSources(dir: string): string[] {
  */
 export function extractAppCalls(files: readonly string[], surfaces: readonly BlockSurface[], packagesDir: string): Set<string> {
 	const program = ts.createProgram([...files], COMPILER_OPTIONS);
-	const checker = program.getTypeChecker();
+	const resolve = blockCallResolver(program.getTypeChecker(), surfaces, packagesDir);
 	const roots = new Set(files);
-	const known = new Set(surfaces.flatMap((s) => s.methods.map((m) => m.name)));
-	const bbNameOfBlock = new Map(surfaces.map((s) => [s.block, s.bbName]));
 	const calls = new Set<string>();
 	for (const sf of program.getSourceFiles()) {
 		if (!roots.has(sf.fileName)) continue;
 		const visit = (n: ts.Node): void => {
-			if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
-				const symbol = resolveAlias(checker, checker.getSymbolAtLocation(n.expression.name));
-				for (const decl of symbol?.declarations ?? []) {
-					const rel = relative(packagesDir, decl.getSourceFile().fileName);
-					const bbName = bbNameOfBlock.get(rel.split(sep)[0]);
-					const key = bbName && `${bbName}.${n.expression.name.text}`;
-					if (key && !rel.startsWith('..') && known.has(key)) calls.add(key);
+			const key = ts.isCallExpression(n) ? resolve(n) : undefined;
+			if (key) calls.add(key);
+			ts.forEachChild(n, visit);
+		};
+		visit(sf);
+	}
+	return calls;
+}
+
+/** The object literal an `ApiNamespace` factory returns, if it returns one directly. */
+function factoryObject(factory: ts.Expression | undefined): ts.ObjectLiteralExpression | undefined {
+	if (!factory || !(ts.isArrowFunction(factory) || ts.isFunctionExpression(factory))) return undefined;
+	let body: ts.Node = factory.body;
+	if (ts.isBlock(body)) {
+		const ret = body.statements.find(ts.isReturnStatement);
+		if (!ret?.expression) return undefined;
+		body = ret.expression;
+	}
+	while (ts.isParenthesizedExpression(body)) body = body.expression;
+	return ts.isObjectLiteralExpression(body) ? body : undefined;
+}
+
+/**
+ * Which block methods each app API method calls: `api.kvPut` → `['KVStore.put']`. Reads every
+ * `new ApiNamespace(scope, '<id>', () => ({ … }))` in `files` and follows calls into the app's
+ * own functions. Keys match what the block-API recorder writes (`<namespace id>.<method>`).
+ * Namespaces a block builds for the app (`auth.createApi()`) aren't object literals and are skipped.
+ */
+export function extractApiMethods(
+	files: readonly string[],
+	surfaces: readonly BlockSurface[],
+	packagesDir: string,
+): Map<string, string[]> {
+	const program = ts.createProgram([...files], COMPILER_OPTIONS);
+	const checker = program.getTypeChecker();
+	const resolve = blockCallResolver(checker, surfaces, packagesDir);
+	const roots = new Set(files);
+	const inApp = (decl: ts.Declaration) => roots.has(decl.getSourceFile().fileName);
+
+	const reachableBlockMethods = (start: ts.Node): string[] => {
+		const found = new Set<string>();
+		const visited = new Set<ts.Node>();
+		const walk = (node: ts.Node): void => {
+			if (visited.has(node)) return;
+			visited.add(node);
+			const visit = (n: ts.Node): void => {
+				if (ts.isCallExpression(n)) {
+					const key = resolve(n);
+					if (key) found.add(key);
+					const symbol = resolveAlias(checker, checker.getSymbolAtLocation(n.expression));
+					for (const decl of symbol?.declarations ?? []) {
+						const body = inApp(decl) ? bodyOf(decl) : undefined;
+						if (body) walk(body);
+					}
+				}
+				ts.forEachChild(n, visit);
+			};
+			visit(node);
+		};
+		walk(start);
+		return [...found].sort();
+	};
+
+	const methods = new Map<string, string[]>();
+	for (const sf of program.getSourceFiles()) {
+		if (!roots.has(sf.fileName)) continue;
+		const visit = (n: ts.Node): void => {
+			if (ts.isNewExpression(n) && n.expression.getText() === 'ApiNamespace') {
+				const id = n.arguments?.[1];
+				const object = factoryObject(n.arguments?.[2]);
+				if (id && ts.isStringLiteralLike(id) && object) {
+					for (const prop of object.properties) {
+						const name = prop.name && (ts.isIdentifier(prop.name) || ts.isStringLiteralLike(prop.name)) ? prop.name.text : undefined;
+						let body: ts.Node | undefined;
+						if (ts.isMethodDeclaration(prop)) body = prop.body;
+						else if (ts.isPropertyAssignment(prop) && (ts.isArrowFunction(prop.initializer) || ts.isFunctionExpression(prop.initializer))) body = prop.initializer.body;
+						if (name && body) methods.set(`${id.text}.${name}`, reachableBlockMethods(body));
+					}
 				}
 			}
 			ts.forEachChild(n, visit);
 		};
 		visit(sf);
 	}
-	return calls;
+	return methods;
 }
 
 /** The repository root: the nearest ancestor of `from` with a `packages/` directory. */

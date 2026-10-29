@@ -93,10 +93,12 @@ nothing is declared by hand:
 | **Hit by edge cases** | Methods a parity case called, from the `methods` field of the recordings. The packs wrap the blocks they create with `trackBlock`, and `runCase` counts only the calls made in `act` |
 | **AWS operations** | `new XCommand(…)` from `@aws-sdk/*` reachable from a method, following calls into the package's own code (lib-dynamodb commands map to the DynamoDB operation they send) |
 | **AWS error types** / **Hit on AWS** | The `@throws` tags of those commands in the SDK, and how many of them a **deployed** case raised |
+| **Method fidelity** | With `--findings` (the differ's `findings.json`): each method rated **Full** (compared locally and deployed, never different), **Partial** (at least one difference) or **None** (never compared), from the recorded e2e calls that reached it; e2e calls map to block methods through the app's `ApiNamespace` methods. Fidelity = Full ÷ public methods, so untested methods count against the block |
 
 ```bash
 cd test-apps/comprehensive
 npm run parity:local       # recordings with methods (optional; without them the edge-case columns are empty)
+npm run parity:report      # findings.json, for method fidelity
 npm run parity:coverage    # → .parity/coverage/coverage.md + coverage.json
 ```
 

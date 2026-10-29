@@ -7,9 +7,16 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type BlockSurface, computeCoverage, exercisedEvidence, renderCoverageMarkdown } from '../src/core/coverage.js';
+import {
+	attributeFindings,
+	type BlockSurface,
+	computeCoverage,
+	exercisedEvidence,
+	renderCoverageMarkdown,
+} from '../src/core/coverage.js';
+import type { Finding } from '../src/core/report.js';
 import type { ParityRecord } from '../src/core/types.js';
-import { blockNameOf, extractSurfaces, findRepoRoot } from '../src/surface/extract.js';
+import { blockNameOf, extractApiMethods, extractSurfaces, findRepoRoot } from '../src/surface/extract.js';
 
 const SURFACE: BlockSurface = {
 	block: 'bb-kv-store',
@@ -87,4 +94,53 @@ test('the extractor reads bb-kv-store: methods, the DynamoDB operations behind t
 		],
 	);
 	assert.ok(surface.operations['dynamodb:PutItem'].errors.includes('ConditionalCheckFailedException'));
+});
+
+const call = (method: string, verdict: Finding['verdict']): Finding => ({
+	block: 'bb-kv-store',
+	key: `main | KVStore > CRUD | ${method}`,
+	kind: 'call',
+	verdict,
+});
+
+test('method fidelity rates each method from the e2e calls that reached it', () => {
+	const apiMethods = new Map([
+		['api.kvGet', ['KVStore.get']],
+		['api.kvPut', ['KVStore.put']],
+	]);
+	const comparisons = attributeFindings(
+		[
+			call('api.kvPut', 'same'),
+			call('api.kvPut #2', 'same'),
+			call('api.kvGet', 'same'),
+			call('api.kvGet #2', 'differs-value'),
+			// Not compared: must not turn a method Partial or Full.
+			call('api.kvGet #3', 'unmatched'),
+		],
+		apiMethods,
+		new Map(),
+	);
+	const [row] = computeCoverage([SURFACE], new Set(), exercisedEvidence([]), comparisons);
+	assert.deepStrictEqual(
+		row.methods.map((m) => [m.name, m.rating, m.same, m.differ]),
+		[
+			['KVStore.get', 'partial', 1, 1],
+			['KVStore.put', 'full', 2, 0],
+			['KVStore.scan', 'none', 0, 0],
+		],
+	);
+	const md = renderCoverageMarkdown([row], { repo: '.', app: '.', recordings: [], findings: 'findings.json' });
+	assert.match(md, /\| bb-kv-store \| 3 \| 1 \| 1 \| 1 \| 1 \(33%\) \|/);
+});
+
+test('extractApiMethods maps each app API method to the block methods it calls, through helpers', () => {
+	const repo = findRepoRoot(fileURLToPath(new URL('.', import.meta.url)));
+	const [surface] = extractSurfaces([join(repo, 'packages', 'bb-kv-store')]);
+	const fixture = fileURLToPath(new URL('./fixtures/api-app.ts', import.meta.url));
+	const methods = extractApiMethods([fixture], [surface], join(repo, 'packages'));
+	assert.deepStrictEqual(Object.fromEntries(methods), {
+		'api.save': ['KVStore.put'],
+		'api.load': ['KVStore.get'],
+		'api.ping': [],
+	});
 });
