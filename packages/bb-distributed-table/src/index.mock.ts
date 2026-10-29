@@ -7,6 +7,8 @@ import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { File } from 'node:buffer';
+import { createCopier } from 'fast-copy';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
@@ -46,6 +48,32 @@ import { DistributedTableErrors, DistributedTableMessages, blocksError, conditio
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const MAX_ITEM_BYTES = 400 * 1024;
+
+const snapshotItem = createCopier({
+	methods: {
+		blob: value => new Blob([value], { type: value.type }),
+		dataView: value => new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength),
+		object: (value, state) => {
+			// File needs native internal slots; other objects (including NumberValue) retain their prototype.
+			const isFile = value instanceof File;
+			const snapshot = isFile
+				? new File([value], value.name, { type: value.type, lastModified: value.lastModified })
+				: Object.create(state.prototype);
+			state.cache.set(value, snapshot);
+			// Do not copy Node's private File handle symbols. Materialize getters and avoid __proto__ setters.
+			const keys = isFile ? Object.keys(value) : Reflect.ownKeys(value);
+			for (const key of keys) {
+				if (Object.prototype.propertyIsEnumerable.call(value, key)) {
+					Object.defineProperty(snapshot, key, {
+						value: state.copier(Reflect.get(value, key), state),
+						enumerable: true, configurable: true, writable: true,
+					});
+				}
+			}
+			return snapshot;
+		},
+	},
+});
 
 async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<void> {
 	const result = schema['~standard'].validate(value);
@@ -163,7 +191,9 @@ export class DistributedTable<
 	 * {@link applyReadValidation}.
 	 */
 	private reconcileRead(item: T | null): Promise<T | null> {
-		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
+		// Validators may return or mutate their input, so detach before validation.
+		const snapshot = item === null ? null : snapshotItem(item);
+		return applyReadValidation(this.readValidation, this.schema, snapshot, this.log, { table: this.fullId });
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
@@ -188,7 +218,7 @@ export class DistributedTable<
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-		this.data.set(keyStr, item);
+		this.data.set(keyStr, snapshotItem(item));
 		this.flushToDisk();
 	}
 
@@ -325,15 +355,17 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async putBatch(items: T[]): Promise<void> {
+		const snapshots: [string, T][] = [];
 		for (const item of items) {
 			await validateSchema(this.schema, item);
 			const serialized = JSON.stringify(item);
 			if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 				throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
 			}
+			snapshots.push([this.serializeKey(item as any), snapshotItem(item)]);
 		}
-		for (const item of items) {
-			this.data.set(this.serializeKey(item as any), item);
+		for (const [key, snapshot] of snapshots) {
+			this.data.set(key, snapshot);
 		}
 		this.flushToDisk();
 	}
@@ -427,4 +459,3 @@ export class DistributedTable<
 import type { PartitionKeyCondition, SortKeyCondition as SKC, KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-

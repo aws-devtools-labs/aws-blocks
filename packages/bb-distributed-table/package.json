@@ -51,7 +51,8 @@
     "@aws-sdk/client-dynamodb": "^3.1156.0",
     "@aws-sdk/lib-dynamodb": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0",
-    "defu": "^6.1.7"
+    "defu": "^6.1.7",
+    "fast-copy": "^4.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
