@@ -614,12 +614,17 @@ class KotlinCodeGenerator(
         val names = propertyNames(record.fields)
         val extrasProperty = NamingUtils.claim(OpenRecordSerializerGenerator.EXTRAS_PROPERTY, names.toMutableSet())
         val (openRecordSerializer, openRecordFields) = OpenRecordSerializerGenerator.nestedTypeNames(names)
+        val tupleSerializer = TupleSerializerGenerator.serializerName(names)
         val classBuilder = TypeSpec
             .classBuilder(name)
             .addModifiers(KModifier.DATA)
             .addAnnotation(
-                if (isOpenRecord) OpenRecordSerializerGenerator.serializableAnnotation(name, openRecordSerializer)
-                else AnnotationSpec.builder(ClassNames.serializable).build(),
+                when {
+                    isOpenRecord -> OpenRecordSerializerGenerator.serializableAnnotation(name, openRecordSerializer)
+                    // A tuple is a JSON array on the wire (TupleSerializerGenerator).
+                    record.positional -> TupleSerializerGenerator.serializableAnnotation(name, tupleSerializer)
+                    else -> AnnotationSpec.builder(ClassNames.serializable).build()
+                },
             )
 
         val kdoc = buildDataClassKdoc(record.description, record.fields, names)
@@ -708,6 +713,16 @@ class KotlinCodeGenerator(
                     fieldsClassName = openRecordFields,
                 ),
             )
+        }
+
+        if (record.positional && !isOpenRecord) {
+            val elements = record.fields.mapIndexed { i, field ->
+                names[i] to UnionSerializerGenerator.ValueCoding(
+                    primaryConstructor.parameters[i].type,
+                    containerTransferableSerializer(field.type, index, serializerRegistry, serializerContext),
+                )
+            }
+            classBuilder.addType(TupleSerializerGenerator.generate(name, tupleSerializer, elements))
         }
 
         val initBlock = generateInitValidation(record.fields, names)

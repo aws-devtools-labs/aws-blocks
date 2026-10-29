@@ -11,6 +11,7 @@
 		235C7C4E73A9AC37214D5CEA /* AuthBasicE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F0A7C4D0E33E51B0798136 /* AuthBasicE2ETests.swift */; };
 		F37A0B1C2D3E4F5061728394 /* AuthSignUpAttributesE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37A0B1C2D3E4F5061728395 /* AuthSignUpAttributesE2ETests.swift */; };
 		F46A0B1C2D3E4F5061728394 /* RpcWireE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46A0B1C2D3E4F5061728395 /* RpcWireE2ETests.swift */; };
+		A7E3C1D20F4B5A6978123401 /* RestTupleParamsE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E3C1D20F4B5A6978123402 /* RestTupleParamsE2ETests.swift */; };
 		31C5BEC70119ECC34B2E2D99 /* TodosE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B69791B70A6163227431F7 /* TodosE2ETests.swift */; };
 		34D3947719AF513E552BD1F6 /* BlocksE2ETestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99AB77F9447010FD8A9ACA9F /* BlocksE2ETestApp.swift */; };
 		3FEFB85FE4E90D15C83CBFA9 /* API.swift in Sources */ = {isa = PBXBuildFile; fileRef = D561139DABA28FEDAF568E15 /* API.swift */; };
@@ -51,6 +52,7 @@
 		E8F0A7C4D0E33E51B0798136 /* AuthBasicE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthBasicE2ETests.swift; sourceTree = "<group>"; };
 		F37A0B1C2D3E4F5061728395 /* AuthSignUpAttributesE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSignUpAttributesE2ETests.swift; sourceTree = "<group>"; };
 		F46A0B1C2D3E4F5061728395 /* RpcWireE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RpcWireE2ETests.swift; sourceTree = "<group>"; };
+		A7E3C1D20F4B5A6978123402 /* RestTupleParamsE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestTupleParamsE2ETests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +123,7 @@
 				BD33B1EAEE3CEBC44D8106F0 /* FileBucketE2ETests.swift */,
 				89307EAD3C61F551202784ED /* KVStoreE2ETests.swift */,
 				F46A0B1C2D3E4F5061728395 /* RpcWireE2ETests.swift */,
+				A7E3C1D20F4B5A6978123402 /* RestTupleParamsE2ETests.swift */,
 				97704AFE559AE1FDE9FAD999 /* RealtimeE2ETests.swift */,
 				41B69791B70A6163227431F7 /* TodosE2ETests.swift */,
 			);
@@ -232,6 +235,7 @@
 				CEB42EFA8999A81896AAA191 /* FileBucketE2ETests.swift in Sources */,
 				EE3CFF82F7124406C8036F42 /* KVStoreE2ETests.swift in Sources */,
 				F46A0B1C2D3E4F5061728394 /* RpcWireE2ETests.swift in Sources */,
+				A7E3C1D20F4B5A6978123401 /* RestTupleParamsE2ETests.swift in Sources */,
 				18B6A17549C89BEE982F3C36 /* Models.swift in Sources */,
 				B33C8779C87F387CF13A9666 /* RealtimeE2ETests.swift in Sources */,
 				31C5BEC70119ECC34B2E2D99 /* TodosE2ETests.swift in Sources */,

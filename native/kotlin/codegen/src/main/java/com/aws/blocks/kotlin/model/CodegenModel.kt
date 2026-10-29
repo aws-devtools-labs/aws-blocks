@@ -29,12 +29,16 @@ sealed interface ResolvedType {
     /** A type whose Kotlin representation is determined by its JSON Schema `format` keyword. */
     data class FormattedType(val format: FormatKind, val constraints: Constraints = Constraints.EMPTY) : ResolvedType
 
-    /** Named record type with resolved fields. */
+    /**
+     * Named record type with resolved fields. A [positional] record is a tuple: a JSON array of its
+     * fields' values, in order (see [com.aws.blocks.kotlin.model.TypeRef.InlineObject.positional]).
+     */
     data class Record(
         val name: String,
         val fields: List<ResolvedField>,
         val description: String? = null,
         val additionalPropertiesType: ResolvedType? = null,
+        val positional: Boolean = false,
     ) : ResolvedType
 
     /** Enum type with string literal values. */

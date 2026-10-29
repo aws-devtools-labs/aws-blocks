@@ -402,6 +402,7 @@ export async function generateSpec(
 			// type always, its parameters unless Zod describes them.
 			for (const warning of [
 				...(inputJsonSchema ? [] : (tsInfo?.params ?? []).flatMap((p) => p.warnings ?? [])),
+				...(inputJsonSchema ? [] : (tsInfo?.paramWarnings ?? [])),
 				...(tsInfo?.returnWarnings ?? []),
 			]) {
 				if (!printedWarnings.has(warning)) {
@@ -564,7 +565,7 @@ export async function generateSpec(
 	return doc;
 }
 
-/** Every schema directly nested in `schema` (properties, items, oneOf, additionalProperties, type args). */
+/** Every schema directly nested in `schema` (properties, items, prefixItems, oneOf, additionalProperties, type args). */
 function childSchemas(schema: JsonSchema): JsonSchema[] {
 	const children: JsonSchema[] = [];
 	if (schema.properties && typeof schema.properties === 'object') {
@@ -572,6 +573,7 @@ function childSchemas(schema: JsonSchema): JsonSchema[] {
 	}
 	if (Array.isArray(schema.items)) children.push(...(schema.items as JsonSchema[]));
 	else if (schema.items && typeof schema.items === 'object') children.push(schema.items as JsonSchema);
+	if (Array.isArray(schema.prefixItems)) children.push(...schema.prefixItems);
 	if (Array.isArray(schema.oneOf)) children.push(...(schema.oneOf as JsonSchema[]));
 	if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
 		children.push(schema.additionalProperties as JsonSchema);
@@ -862,6 +864,11 @@ function hoistSchema(
 		}
 	}
 
+	// Walk a tuple's positional items
+	if (Array.isArray(schema.prefixItems)) {
+		schema = { ...schema, prefixItems: schema.prefixItems.map((i) => hoistNamedSchemas(i, componentSchemas, skipTitle)) };
+	}
+
 	// Walk oneOf
 	if (Array.isArray(schema.oneOf)) {
 		schema = { ...schema, oneOf: schema.oneOf.map((s: JsonSchema) => hoistNamedSchemas(s, componentSchemas, skipTitle)) };
@@ -940,6 +947,9 @@ function regroupSchema(schema: JsonSchema): JsonSchema {
 		} else {
 			schema = { ...schema, items: regroupSharedDiscriminator(schema.items as JsonSchema) };
 		}
+	}
+	if (Array.isArray(schema.prefixItems)) {
+		schema = { ...schema, prefixItems: schema.prefixItems.map((s) => regroupSharedDiscriminator(s)) };
 	}
 	if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
 		schema = { ...schema, additionalProperties: regroupSharedDiscriminator(schema.additionalProperties as JsonSchema) };

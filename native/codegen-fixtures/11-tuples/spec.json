@@ -30,6 +30,87 @@
           ]
         }
       }
+    },
+    {
+      "name": "api.queryRange",
+      "params": [
+        {
+          "name": "range",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "prefixItems": [{ "type": "number" }, { "type": "number" }],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "oneOf": [{ "type": "integer" }, { "type": "null" }] }],
+            "minItems": 1,
+            "maxItems": 2
+          }
+        }
+      ],
+      "result": {
+        "name": "QueryRangeResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "where": {
+              "type": "object",
+              "properties": {
+                "between": {
+                  "type": "array",
+                  "prefixItems": [{ "type": "string" }, { "type": "string" }],
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "required": ["between"]
+            },
+            "pairs": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [{ "type": "string" }, { "type": "integer" }],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "required": ["where", "pairs"]
+        }
+      }
+    },
+    {
+      "name": "api.getShortTuples",
+      "params": [
+        {
+          "name": "one",
+          "required": true,
+          "schema": { "type": "array", "prefixItems": [{ "type": "string" }], "minItems": 1, "maxItems": 1 }
+        }
+      ],
+      "result": {
+        "name": "GetShortTuplesResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "one": { "type": "array", "prefixItems": [{ "type": "number" }], "minItems": 1, "maxItems": 1 },
+            "short": {
+              "type": "array",
+              "prefixItems": [{ "type": "string" }, { "oneOf": [{ "type": "integer" }, { "type": "null" }] }],
+              "minItems": 1,
+              "maxItems": 2
+            }
+          },
+          "required": ["one", "short"]
+        }
+      }
     }
   ]
 }

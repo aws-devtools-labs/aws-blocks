@@ -36,8 +36,9 @@ extension XCTestCase {
     }
 
     /// Builds `Models.swift` + `API.swift` as module `Generated` against this run's BlocksRuntime, then
-    /// type-checks `consumer` as a separate module importing it.
-    func typecheckConsumer(models: String, api: String, consumer: String) throws {
+    /// type-checks `consumer` as a separate module importing it. `moduleFlags` go to the generated module's
+    /// compile (e.g. `-warnings-as-errors`, as an app that treats warnings as errors builds it).
+    func typecheckConsumer(models: String, api: String, consumer: String, moduleFlags: [String] = []) throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/xcrun") else {
             throw XCTSkip("xcrun is not available")
         }
@@ -54,11 +55,13 @@ extension XCTestCase {
         try api.write(to: apiFile, atomically: true, encoding: .utf8)
         try consumer.write(to: consumerFile, atomically: true, encoding: .utf8)
 
-        let module = try swiftc([
+        var moduleArguments: [String] = [
             "-emit-module", "-module-name", "Generated", "-parse-as-library",
-            "-I", runtimeDir.path, "-emit-module-path", dir.appendingPathComponent("Generated.swiftmodule").path,
-            modelsFile.path, apiFile.path
-        ])
+            "-I", runtimeDir.path, "-emit-module-path", dir.appendingPathComponent("Generated.swiftmodule").path
+        ]
+        moduleArguments += moduleFlags
+        moduleArguments += [modelsFile.path, apiFile.path]
+        let module = try swiftc(moduleArguments)
         XCTAssertEqual(module.status, 0, "The generated module didn't compile:\n\(module.output)")
         guard module.status == 0 else { return }
 

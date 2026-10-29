@@ -278,6 +278,7 @@ class CodegenModelBuilder {
                     fields = typeRef.fields.map { resolveField(it, collector) },
                     description = null,
                     additionalPropertiesType = resolvedAddProps,
+                    positional = typeRef.positional,
                 )
             }
             // Carries the schema's additionalProperties type, as its definition does, so a walk over
@@ -287,7 +288,17 @@ class CodegenModelBuilder {
                 fields = typeRef.resolved.fields.map { resolveField(it, collector) },
                 description = typeRef.description,
                 additionalPropertiesType = typeRef.resolved.additionalProperties?.let { resolveType(it, collector) },
+                positional = typeRef.resolved.positional,
             )
+            // A reference back to the component schema being declared: its named type, which the
+            // enclosing SchemaRef registers (a Kotlin class may hold itself). A schema that declares no
+            // named type (a recursive union or array) can't be spelled, so its value is unknown there.
+            is TypeRef.RecursiveSchemaRef ->
+                if (collector.declaresSchemaType(typeRef.schemaName)) {
+                    ResolvedType.TypeReference(collector.schemaTypeName(typeRef.schemaName))
+                } else {
+                    ResolvedType.Primitive(PrimitiveKind.UNKNOWN)
+                }
             is TypeRef.UnionLiteral -> {
                 val name = collector.nameForTypeRef(typeRef) ?: ""
                 ResolvedType.Enum(name = name, values = typeRef.values)
@@ -373,6 +384,15 @@ class CodegenModelBuilder {
         val variantNames = variantNames(union.members)
         val variants = nonNullMembers.mapIndexed { index, member ->
             val variantName = variantNames[index]
+            // A tuple arm is a JSON array, not an object: like a nested union, it has no type of its
+            // own here, so it keeps its value as a `JsonElement`.
+            if (member is TypeRef.InlineObject && member.positional) {
+                return@mapIndexed UnionVariant(
+                    name = variantName,
+                    fields = emptyList(),
+                    valueType = ResolvedType.Primitive(PrimitiveKind.UNKNOWN),
+                )
+            }
             when (member) {
                 is TypeRef.InlineObject -> {
                     val discField = findDiscriminatorField(member)
@@ -505,7 +525,7 @@ class CodegenModelBuilder {
         val taken = mutableSetOf<String>()
         return members.filterNot { it is TypeRef.Primitive && it.tsType == "void" }.mapIndexed { index, member ->
             val discField = when (member) {
-                is TypeRef.InlineObject -> findDiscriminatorField(member)
+                is TypeRef.InlineObject -> if (member.positional) null else findDiscriminatorField(member)
                 is TypeRef.ObjectWithOneOf -> findDiscriminatorFieldInObjectWithOneOf(member)
                 is TypeRef.SchemaRef -> findDiscriminatorField(member.resolved)
                 else -> null
@@ -534,7 +554,7 @@ class CodegenModelBuilder {
         var discriminatorFieldName: String? = null
 
         for (member in members) {
-            if (member !is TypeRef.InlineObject) return null
+            if (member !is TypeRef.InlineObject || member.positional) return null
             val disc = findDiscriminatorField(member) ?: return null
             val discValue = (disc.type as TypeRef.UnionLiteral).values.first()
             val variantName = variantNameFromDiscriminator(disc.name, discValue)
@@ -563,7 +583,8 @@ class CodegenModelBuilder {
             if (member is TypeRef.Primitive || member is TypeRef.Nullable) continue
 
             val disc = when (member) {
-                is TypeRef.InlineObject -> findDiscriminatorField(member)
+                // A tuple arm is an array: its elements are never a discriminator.
+                is TypeRef.InlineObject -> if (member.positional) return null else findDiscriminatorField(member)
                 is TypeRef.ObjectWithOneOf -> findDiscriminatorFieldInObjectWithOneOf(member)
                 is TypeRef.SchemaRef -> findDiscriminatorField(member.resolved)
                 else -> return null
@@ -666,6 +687,9 @@ class CodegenModelBuilder {
         /** The Kotlin class name of the component schema [schemaName] (see [schemaTypeNames]). */
         fun schemaTypeName(schemaName: String): String =
             schemaTypeNames[schemaName] ?: NamingUtils.memberName(schemaName)
+
+        /** Whether the component schema [schemaName] declares a named type: an object schema reached by a `${'$'}ref`. */
+        fun declaresSchemaType(schemaName: String): Boolean = schemaSources.containsKey("schema:$schemaName")
 
         /** The scope of the types declared under a component schema's type at [path] (`Holder.Payload`). */
         private fun schemaScope(path: String): Pair<String, String?> = "schema:$path" to null
@@ -939,6 +963,8 @@ class CodegenModelBuilder {
                     val members = typeRef.members.filterNot { it is TypeRef.Primitive && it.tsType == "void" }
                     val variantNames = variantNames(typeRef.members)
                     for ((memberIndex, member) in members.withIndex()) {
+                        // A tuple arm is a `JsonElement` value (see resolveUnion): no type to declare.
+                        if (member is TypeRef.InlineObject && member.positional) continue
                         if (member is TypeRef.InlineObject) {
                             val discriminator = findDiscriminatorField(member)
                             val variantNodeId = if (thisNodeId != null) "${id}:variant:${variantNames[memberIndex]}" else null
@@ -975,6 +1001,9 @@ class CodegenModelBuilder {
                 }
 
                 is TypeRef.Primitive -> { /* no type definition to register */ }
+
+                // The schema it names is being collected by the SchemaRef that encloses it.
+                is TypeRef.RecursiveSchemaRef -> { /* no type definition to register */ }
 
                 is TypeRef.MapType -> {
                     collect(typeRef.valueType, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId, key = key)
@@ -1030,7 +1059,13 @@ class CodegenModelBuilder {
                 val resolvedAddProps = src.source.resolved.additionalProperties?.let { resolveType(it, this) }
                 definitions[key] = TypeDefinition(
                     name = src.name,
-                    type = ResolvedType.Record(name = src.name, fields = resolvedFields, description = src.source.description, additionalPropertiesType = resolvedAddProps),
+                    type = ResolvedType.Record(
+                        name = src.name,
+                        fields = resolvedFields,
+                        description = src.source.description,
+                        additionalPropertiesType = resolvedAddProps,
+                        positional = src.source.resolved.positional,
+                    ),
                     shortName = src.suffix,
                     parentSchema = src.parentSchemaName,
                 )
@@ -1042,7 +1077,13 @@ class CodegenModelBuilder {
                 if (src.parentSchemaName != null) {
                     definitions[key] = TypeDefinition(
                         name = src.name,
-                        type = ResolvedType.Record(name = src.name, fields = resolvedFields, description = null, additionalPropertiesType = resolvedAddProps),
+                        type = ResolvedType.Record(
+                            name = src.name,
+                            fields = resolvedFields,
+                            description = null,
+                            additionalPropertiesType = resolvedAddProps,
+                            positional = src.source.positional,
+                        ),
                         shortName = src.suffix,
                         parentSchema = src.parentSchemaName,
                     )
@@ -1052,6 +1093,7 @@ class CodegenModelBuilder {
                         fields = resolvedFields,
                         description = null,
                         additionalPropertiesType = resolvedAddProps,
+                        positional = src.source.positional,
                     )
                 }
             }
@@ -1115,7 +1157,7 @@ class CodegenModelBuilder {
             is TypeRef.Union -> typeRef.copy(members = typeRef.members.map(::shapeOf))
             is TypeRef.Transferable -> typeRef.copy(typeArgs = typeRef.typeArgs.map(::shapeOf))
             is TypeRef.ObjectWithOneOf -> typeRef.copy(fields = typeRef.fields.map(::shapeOf), oneOf = typeRef.oneOf.map(::shapeOf))
-            is TypeRef.Primitive, is TypeRef.UnionLiteral -> typeRef
+            is TypeRef.Primitive, is TypeRef.UnionLiteral, is TypeRef.RecursiveSchemaRef -> typeRef
         }
 
         private fun shapeOf(field: Field): Field = field.copy(type = shapeOf(field.type), description = null)

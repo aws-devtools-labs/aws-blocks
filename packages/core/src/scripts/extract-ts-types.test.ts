@@ -1577,3 +1577,223 @@ describe('extractMethodTypes — warnings of a named type reused from the cache'
 		}
 	});
 });
+
+describe('extractMethodTypes — tuples', () => {
+	function tupleTypes(source: string) {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `${API_NS_MOCK}\n${source}`,
+		});
+		try {
+			return extractMethodTypes(join(dir, 'index.ts'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	// OpenRPC 1.3.2 schemas are JSON Schema draft-07, where `items: false` allows no elements at all: a
+	// fixed tuple is closed by `maxItems` instead.
+	it('describes a fixed tuple positionally (prefixItems), not as an object with "0", "1" and length', () => {
+		const types = tupleTypes(`
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async coords(range: [number, number]): Promise<[number, number, string]> { return [0, 0, '']; },
+			}));
+		`);
+		const method = types.get('api.coords');
+		assert.ok(method);
+		assert.deepStrictEqual(method.params[0]?.schema, {
+			type: 'array',
+			prefixItems: [{ type: 'number' }, { type: 'number' }],
+			minItems: 2,
+			maxItems: 2,
+		});
+		assert.deepStrictEqual(method.returnType, {
+			type: 'array',
+			prefixItems: [{ type: 'number' }, { type: 'number' }, { type: 'string' }],
+			minItems: 3,
+			maxItems: 3,
+		});
+	});
+
+	it('describes a readonly tuple, named members and a tuple nested in an object the same way', () => {
+		const types = tupleTypes(`
+			interface Where { between?: [start: string, end: string] }
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async query(where: Where, pair: readonly [string, boolean]): Promise<void> {},
+			}));
+		`);
+		const method = types.get('api.query');
+		assert.ok(method);
+		const between: JsonSchema = {
+			type: 'array',
+			prefixItems: [{ type: 'string' }, { type: 'string' }],
+			minItems: 2,
+			maxItems: 2,
+		};
+		// An optional property is `T | null`, as every optional property is.
+		assert.deepStrictEqual(method.params[0]?.schema.properties?.between, { oneOf: [between, { type: 'null' }] });
+		assert.deepStrictEqual(method.params[1]?.schema, {
+			type: 'array',
+			prefixItems: [{ type: 'string' }, { type: 'boolean' }],
+			minItems: 2,
+			maxItems: 2,
+		});
+	});
+
+	it('counts optional elements in maxItems only, and describes them as nullable', () => {
+		const types = tupleTypes(`
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async page(cursor: [string, number?]): Promise<void> {},
+			}));
+		`);
+		assert.deepStrictEqual(types.get('api.page')?.params[0]?.schema, {
+			type: 'array',
+			prefixItems: [{ type: 'string' }, { oneOf: [{ type: 'number' }, { type: 'null' }] }],
+			minItems: 1,
+			maxItems: 2,
+		});
+	});
+
+	it('describes a tuple with a rest element as an array of its element types', () => {
+		const types = tupleTypes(`
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async log(entry: [string, ...number[]], tags: [...string[], string], none: []): Promise<void> {},
+			}));
+		`);
+		const params = types.get('api.log')?.params;
+		assert.deepStrictEqual(params?.[0]?.schema, {
+			type: 'array',
+			items: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+			minItems: 1,
+		});
+		assert.deepStrictEqual(params?.[1]?.schema, { type: 'array', items: { type: 'string' }, minItems: 1 });
+		assert.deepStrictEqual(params?.[2]?.schema, { type: 'array', items: { type: 'unknown' }, maxItems: 0 });
+	});
+
+	it('keeps a named type in a tuple, so it is hoisted like any other use', () => {
+		const types = tupleTypes(`
+			interface Point { x: number; y: number }
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async segment(): Promise<[Point, Point]> { return [{ x: 0, y: 0 }, { x: 1, y: 1 }]; },
+			}));
+		`);
+		const result = types.get('api.segment')?.returnType;
+		assert.strictEqual(result?.prefixItems?.length, 2);
+		assert.strictEqual(result?.prefixItems?.[0]?.title, 'Point');
+	});
+});
+
+// The server calls a method with its params spread (`method(...params)`), so a rest parameter typed as a
+// tuple takes one positional param per element. Described as one param holding the tuple, a native client
+// sent `[[1, "s"]]` and the method's `args` was `[[1, "s"]]`.
+describe('extractMethodTypes — a rest parameter typed as a tuple', () => {
+	function typesOf(files: Record<string, string>) {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			...files,
+		});
+		try {
+			return extractMethodTypes(join(dir, 'index.ts'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+	const brief = (params: { name: string; required: boolean; schema: JsonSchema }[] | undefined) =>
+		params?.map(({ name, required, schema }) => ({ name, required, schema }));
+
+	it('takes one positional param per element, named by the tuple labels, optional where the element is', () => {
+		const types = typesOf({
+			'index.ts': `${API_NS_MOCK}
+				interface PutOptions { overwrite: boolean }
+				declare function put(key: string, value: number, options?: PutOptions): Promise<void>;
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async labeled(...args: [id: string, count?: number]): Promise<void> {},
+					async unlabeled(...args: [number, string]): Promise<void> {},
+					async forwarded(...args: Parameters<typeof put>): Promise<void> { await put(...args); },
+					async after(prefix: string, ...rest: [n: number]): Promise<void> {},
+				}));
+			`,
+		});
+		assert.deepStrictEqual(brief(types.get('api.labeled')?.params), [
+			{ name: 'id', required: true, schema: { type: 'string' } },
+			{ name: 'count', required: false, schema: { oneOf: [{ type: 'number' }, { type: 'null' }] } },
+		]);
+		assert.deepStrictEqual(brief(types.get('api.unlabeled')?.params), [
+			{ name: 'arg0', required: true, schema: { type: 'number' } },
+			{ name: 'arg1', required: true, schema: { type: 'string' } },
+		]);
+		const forwarded = brief(types.get('api.forwarded')?.params);
+		assert.deepStrictEqual(forwarded?.map((p) => [p.name, p.required]), [['key', true], ['value', true], ['options', false]]);
+		assert.strictEqual(forwarded?.[2]?.schema.oneOf?.[0]?.title, 'PutOptions');
+		assert.deepStrictEqual(brief(types.get('api.after')?.params), [
+			{ name: 'prefix', required: true, schema: { type: 'string' } },
+			{ name: 'n', required: true, schema: { type: 'number' } },
+		]);
+	});
+
+	it('keeps the fixed elements of a tuple with a rest element, with a warning naming the method', () => {
+		const types = typesOf({
+			'index.ts': `${API_NS_MOCK}
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async log(...args: [level: string, ...messages: string[]]): Promise<void> {},
+				}));
+			`,
+		});
+		const log = types.get('api.log');
+		assert.deepStrictEqual(brief(log?.params), [{ name: 'level', required: true, schema: { type: 'string' } }]);
+		assert.match(log?.paramWarnings?.join('\n') ?? '', /log\(\.\.\.args\).*variable number/);
+	});
+
+	it('renames an element named like an earlier parameter', () => {
+		const types = typesOf({
+			'index.ts': `${API_NS_MOCK}
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async pick(id: string, ...rest: [id: number, id: boolean]): Promise<void> {},
+				}));
+			`,
+		});
+		assert.deepStrictEqual(
+			types.get('api.pick')?.params.map((p) => [p.name, p.schema.type]),
+			[['id', 'string'], ['id_2', 'number'], ['id_3', 'boolean']],
+		);
+	});
+
+	it('keeps a rest parameter typed as a plain array as one parameter, with a warning naming the method', () => {
+		const types = typesOf({
+			'index.ts': `${API_NS_MOCK}
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async tag(name: string, ...labels: string[]): Promise<void> {},
+				}));
+			`,
+		});
+		const tag = types.get('api.tag');
+		assert.deepStrictEqual(brief(tag?.params), [
+			{ name: 'name', required: true, schema: { type: 'string' } },
+			{ name: 'labels', required: true, schema: { type: 'array', items: { type: 'string' } } },
+		]);
+		assert.match(tag?.paramWarnings?.join('\n') ?? '', /tag\(\.\.\.labels\).*nested array/);
+	});
+
+	it('spreads a rest tuple on a namespace a helper returns, too', () => {
+		const types = typesOf({
+			'helper.ts': `${API_NS_MOCK}
+				export function makeApi() {
+					return new ApiNamespace(null, 'helper', () => ({
+						async move(...args: [from: string, to: string]): Promise<void> {},
+					}));
+				}
+			`,
+			'index.ts': `import { makeApi } from './helper.js';
+				export const helperApi = makeApi();
+			`,
+		});
+		assert.deepStrictEqual(brief(types.get('helperApi.move')?.params), [
+			{ name: 'from', required: true, schema: { type: 'string' } },
+			{ name: 'to', required: true, schema: { type: 'string' } },
+		]);
+	});
+});
