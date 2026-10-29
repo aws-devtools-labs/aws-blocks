@@ -12,28 +12,23 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import kotlinx.coroutines.test.runTest
-import kotlinx.datetime.Clock
 import kotlin.test.Test
 
 class TodosE2ETest {
 
     private val api = createApi()
-    private val suffix = Clock.System.now().toEpochMilliseconds().toString()
-    private val username = "todouser_$suffix"
-    private val password = "pass1234"
 
     @Test
     fun authGateRejectsUnauthenticated() = runTest {
         BlocksClient.clearCookies()
 
-        shouldThrow<ApiException> { api.listTodos() }
-        shouldThrow<ApiException> { api.createTodo("should-fail") }
+        shouldThrow<ApiException> { api.listTodos() }.name shouldBe AuthErrorNames.NotAuthenticated
+        shouldThrow<ApiException> { api.createTodo("should-fail") }.name shouldBe AuthErrorNames.NotAuthenticated
     }
 
     @Test
     fun createAndGetTodo() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
 
         val t = api.createTodo("first todo", 1.0)
         t.todoId.shouldNotBeBlank()
@@ -48,8 +43,7 @@ class TodosE2ETest {
 
     @Test
     fun listTodos() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
 
         api.createTodo("todo 1", 1.0)
         api.createTodo("todo 2", 3.0)
@@ -61,8 +55,7 @@ class TodosE2ETest {
 
     @Test
     fun listTodosSortedByPriority() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
 
         api.createTodo("low", 1.0)
         api.createTodo("high", 3.0)
@@ -75,8 +68,7 @@ class TodosE2ETest {
 
     @Test
     fun updateTodo() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
 
         val t = api.createTodo("to update", 2.0)
         val r = api.updateTodo(t.todoId, Api.UpdateTodo.Updates(completed = true, title = "updated"))
@@ -90,8 +82,7 @@ class TodosE2ETest {
 
     @Test
     fun deleteTodo() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
 
         val t = api.createTodo("to delete", 2.0)
         val r = api.deleteTodo(t.todoId)
@@ -103,11 +94,10 @@ class TodosE2ETest {
 
     @Test
     fun isolationAfterSignOut() = runTest {
-        api.basicSignUp(username, password)
-        api.basicSignIn(username, password)
+        api.signInTestUser("todo")
         api.createTodo("some todo", 1.0)
         api.basicSignOut()
 
-        shouldThrow<ApiException> { api.listTodos() }
+        shouldThrow<ApiException> { api.listTodos() }.name shouldBe AuthErrorNames.NotAuthenticated
     }
 }

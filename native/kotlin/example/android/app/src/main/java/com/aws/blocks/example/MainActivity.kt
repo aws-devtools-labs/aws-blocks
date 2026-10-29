@@ -41,6 +41,7 @@ import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import blocks.testapp.Servers
 import blocks.testapp.Todo
 import blocks.testapp.api
 import blocks.testapp.authApi
@@ -62,6 +63,15 @@ class MainViewModel : ViewModel() {
     val blocks = Blocks().also(::addCloseable)
 }
 
+/** Provider ids from the backend's `oidcProviders` (`../typescript/aws-blocks/index.ts`). */
+private val providers = listOf("google")
+
+/**
+ * Where the backend relays the sign-in result. It must match `oidc { relayTo }` in
+ * `app/build.gradle.kts` and the backend's `redirects.allowedRelayOrigins`.
+ */
+private const val RELAY_TO = "blocks.testapp://oidcRedirect"
+
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
@@ -79,7 +89,7 @@ class MainActivity : ComponentActivity() {
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        OidcAuth(auth = auth)
+                        OidcAuth(auth = auth, blocks = viewModel.blocks)
                         Spacer(modifier = Modifier.height(16.dp))
                         CursorTracker(api = api)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -98,8 +108,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun OidcAuth(auth: AuthApi) {
-    var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
+fun OidcAuth(auth: AuthApi, blocks: Blocks) {
+    // The `Auth` block serves its sign-in routes at fixed paths, so the client is built locally.
+    // It keeps the signed-in user in memory, so it is remembered for the composition's lifetime.
+    val client = remember { OidcClient.forAuth(blocks.client(), providers, RELAY_TO) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // A client that has not signed in this launch reports no user, so the starting point comes
@@ -110,19 +122,6 @@ fun OidcAuth(auth: AuthApi) {
     LaunchedEffect(Unit) {
         // A failure here only means no session to restore, so the screen falls back to sign-in.
         runCatching { auth.getAuthState() }.onSuccess { restoredState = it }
-        oidcClient = runCatching { auth.getClient() }.getOrElse {
-            error = it.message
-            null
-        }
-    }
-
-    val client = oidcClient
-    if (client == null) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(text = "Auth", style = MaterialTheme.typography.headlineMedium)
-            Text(text = error ?: "Loading...")
-        }
-        return
     }
 
     val authState by client.authState.collectAsState()

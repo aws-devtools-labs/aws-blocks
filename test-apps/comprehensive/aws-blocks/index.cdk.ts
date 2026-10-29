@@ -57,6 +57,39 @@ if (process.env.E2E_FROM_EMAIL) {
   registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
 
+// Deployed e2e only — see "e2e test support" in `index.ts`. The flag
+// is read here at synth and registered as config (`registerConfig`, which
+// every compute loads into `process.env` before the backend module is
+// imported), so the deployed backend builds the same `testSupport` namespace
+// that synth did. The run's test-support secret travels the same way: the
+// harness (or the CI workflow) sets `BLOCKS_TEST_SUPPORT_SECRET` before synth,
+// and the deployed backend reads it from config. The harness already holds the
+// value, so it never reads it back from AWS.
+const testEnv = process.env.BLOCKS_TEST_ENV;
+if (testEnv === 'local') {
+  // `local` is the dev-server e2e build. Synthesized, it would grant the test
+  // support's Admin* IAM to a stack whose handler never registers the namespace.
+  throw new Error('BLOCKS_TEST_ENV=local is the local (dev server) e2e build; it is never synthesized or deployed');
+}
+if (testEnv === 'sandbox' || testEnv === 'production') {
+  registerConfig(blocksStack, 'BLOCKS_TEST_ENV', testEnv);
+  // `index.ts` already refused to load without it, so it is set here.
+  registerConfig(blocksStack, 'BLOCKS_TEST_SUPPORT_SECRET', process.env.BLOCKS_TEST_SUPPORT_SECRET);
+
+  // The `auth-gated` pool's native app client id, for the sandbox test that
+  // sends a `SignUp` straight to Cognito (as anyone holding the id could) and
+  // expects the `validateUser` PreSignUp trigger to reject it.
+  const gated = blocksStack.node.findAll().find((c) => c.node.id === 'auth-gated');
+  const gatedClient: unknown = gated ? Reflect.get(gated, 'userPoolClient') : undefined;
+  const gatedClientId: unknown =
+    typeof gatedClient === 'object' && gatedClient !== null ? Reflect.get(gatedClient, 'userPoolClientId') : undefined;
+  if (typeof gatedClientId !== 'string') {
+    throw new Error(`BLOCKS_TEST_ENV=${testEnv}, but index.ts declared no auth-gated Auth with a user pool client`);
+  }
+  new cdk.CfnOutput(blocksStack, 'GatedAuthClientId', { value: gatedClientId });
+  new cdk.CfnOutput(blocksStack, 'GatedAuthRegion', { value: blocksStack.region });
+}
+
 // Tag every taggable resource in the stack for easy identification and cleanup
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-test');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

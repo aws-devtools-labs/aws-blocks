@@ -3,10 +3,20 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
+import { AuthErrors } from '@aws-blocks/bb-auth';
 import { isBlocksError } from '@aws-blocks/core';
-import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
+
+// The `authC` / `authCMfa` instances were `AuthCognito`; they are now the
+// unified `Auth` block with the same ids. AuthCognito's error names were
+// already canonical, so the names below are unchanged.
+const NotAuthorized = AuthErrors.NotAuthorized;
+const NotAuthenticated = AuthErrors.NotAuthenticated;
+const UserAlreadyExists = AuthErrors.UserAlreadyExists;
+const InvalidPassword = AuthErrors.InvalidPassword;
+const ExpiredCode = AuthErrors.ExpiredCode;
+const CodeMismatch = AuthErrors.CodeMismatch;
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
@@ -59,7 +69,7 @@ async function createConfirmedUser(
 }
 
 export function authCognitoTests(getApi: () => typeof apiType) {
-	describe('AuthCognito', { skip: !isLocal && 'verification-code flow needs a mailbox; re-enable when the admin BB lands' }, () => {
+	describe('Auth (authC, formerly AuthCognito)', { skip: !isLocal && 'verification-code flow needs a mailbox; re-enable when the admin BB lands' }, () => {
 		// ── Sign-up ──────────────────────────────────────────────────────────
 
 		describe('signUp', () => {
@@ -84,7 +94,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignUp(username, 'Password1!', `${username}@example.com`);
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.UserAlreadyExists), `Expected ${AuthCognitoErrors.UserAlreadyExists}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.UserAlreadyExists), `Expected ${AuthErrors.UserAlreadyExists}, got ${e}`);
 				}
 			});
 
@@ -95,7 +105,14 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignUp(username, 'short', `${username}@example.com`);
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.InvalidPassword), `Expected ${AuthCognitoErrors.InvalidPassword}, got ${e}`);
+					assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+					// The message describes authC's own policy, the same locally and
+					// on AWS, never Cognito's text (L71).
+					assert.ok(e instanceof Error);
+					assert.strictEqual(
+						e.message,
+						'Password must be at least 8 characters and include an uppercase letter, a lowercase letter, a number and a symbol.',
+					);
 				}
 			});
 		});
@@ -115,7 +132,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'WrongPassword!1');
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
 				}
 			});
 
@@ -161,7 +178,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireAuth();
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthenticated), `Expected ${AuthCognitoErrors.NotAuthenticated}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthenticated), `Expected ${AuthErrors.NotAuthenticated}, got ${e}`);
 				}
 			});
 		});
@@ -192,7 +209,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCUpdatePassword('Wrong!1234', 'New!Password1');
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
 				}
 				await api.authCSignOut();
 			});
@@ -236,7 +253,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'Password1!');
 					assert.fail('Expected old password to be rejected');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
 				}
 
 				// New password works.
@@ -257,7 +274,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireRole('admins');
 					assert.fail('Expected NotAuthenticated');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthenticated), `Expected ${AuthCognitoErrors.NotAuthenticated}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthenticated), `Expected ${AuthErrors.NotAuthenticated}, got ${e}`);
 				}
 			});
 
@@ -274,7 +291,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireRole('admins');
 					assert.fail('Expected NotAuthorized');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
 				}
 				await api.authCSignOut();
 			});
@@ -297,6 +314,30 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				assert.ok(second, 'second code should exist');
 				assert.strictEqual(second!.username, username);
 				assert.notStrictEqual(second!.code, first!.code, 'resend should produce a different code');
+			});
+
+			// FX3 — the confirm / resend steps must not reveal that an account
+			// is already confirmed (`revealExistingUsers` is off by default).
+			test('an already-confirmed account: resend sends nothing, re-confirm is a wrong code', async () => {
+				const api = getApi();
+				const username = uniqueUser();
+				const signUpCode = await createConfirmedUser(api, username, 'Password1!', `${username}@example.com`);
+
+				assert.deepStrictEqual(await api.authCResendSignUpCode(username), { success: true });
+				const last = await api.authCGetLastCode(username);
+				assert.strictEqual(last?.code, signUpCode, 'no new sign-up code for a confirmed account');
+
+				const reconfirm = await api.authCConfirmSignUp(username, '000000').then(
+					() => assert.fail('re-confirming should fail'),
+					(e: unknown) => e,
+				);
+				const unknown = await api.authCConfirmSignUp(`${username}-nobody`, '000000').then(
+					() => assert.fail('confirming an unknown user should fail'),
+					(e: unknown) => e,
+				);
+				assert.ok(isBlocksError(reconfirm, CodeMismatch), `Expected ${CodeMismatch}, got ${reconfirm}`);
+				assert.ok(isBlocksError(unknown, CodeMismatch), `Expected ${CodeMismatch}, got ${unknown}`);
+				assert.strictEqual(String(reconfirm), String(unknown), 'confirmed and unknown users answer alike');
 			});
 		});
 
@@ -329,7 +370,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'Password1!');
 					assert.fail('Old password should no longer work');
 				} catch (e) {
-					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
 				}
 			});
 		});
@@ -380,8 +421,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					assert.fail('Expected ExpiredCode');
 				} catch (e) {
 					assert.ok(
-						isBlocksError(e, AuthCognitoErrors.ExpiredCode),
-						`Expected ${AuthCognitoErrors.ExpiredCode}, got ${e}`,
+						isBlocksError(e, AuthErrors.ExpiredCode),
+						`Expected ${AuthErrors.ExpiredCode}, got ${e}`,
 					);
 				}
 			});
@@ -410,12 +451,10 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'Password1!');
 					assert.fail('Expected sign-in to fail after deleteUser');
 				} catch (e) {
-					// Mock raises UserNotFound; a real Cognito pool raises
-					// NotAuthorized to avoid user enumeration. Accept either.
-					assert.ok(
-						isBlocksError(e, AuthCognitoErrors.UserNotFound) || isBlocksError(e, AuthCognitoErrors.NotAuthorized),
-						`Expected UserNotFound or NotAuthorized, got ${e}`,
-					);
+					// `Auth` answers an unknown user exactly like a wrong password on
+					// every runtime (no user enumeration), so this is NotAuthorized —
+					// AuthCognito's mock used to leak UserNotFound here.
+					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
 				}
 			});
 		});
@@ -495,6 +534,51 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				}
 				return username;
 			}
+
+			test("signIn's nextStep narrows to the TOTP pool's steps (exhaustive switch, no casts)", async () => {
+				const api = getApi();
+				const username = await signedInMfaUser(api);
+				await api.authCMfaSignOut();
+				const r = await api.authCMfaSignIn(username, 'Password1!');
+				assert.strictEqual(r.status, 'continueSignIn');
+				if (r.status !== 'continueSignIn') return;
+				// `mfa: { mode: 'optional', types: ['TOTP'] }`, no passkeys, the classic
+				// flow: these are the only steps the client has to handle. A step this
+				// pool cannot produce (SMS, email, WebAuthn, first factor) is a compile
+				// error as a case label, and the default branch proves the list is complete.
+				const step = r.nextStep;
+				let handled: string;
+				switch (step.name) {
+					case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
+						handled = `totp:${step.session.length > 0}`;
+						break;
+					case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP':
+						handled = `setup:${step.sharedSecret.length > 0}`;
+						break;
+					case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION':
+					case 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION':
+						handled = `select:${step.allowedMFATypes.join(',')}`;
+						break;
+					case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
+					case 'RESET_PASSWORD':
+					case 'CONFIRM_SIGN_UP':
+						handled = step.name;
+						break;
+					// @ts-expect-error — this pool lists only TOTP, so it never sends an SMS code.
+					case 'CONFIRM_SIGN_IN_WITH_SMS_CODE':
+						handled = 'sms';
+						break;
+					default: {
+						const exhaustive: never = step;
+						handled = String(exhaustive);
+					}
+				}
+				assert.strictEqual(handled, 'totp:true');
+				if (step.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
+				const final = await api.authCMfaConfirmSignIn(step.session, '123456');
+				assert.strictEqual(final.status, 'signedIn');
+				await api.authCMfaSignOut();
+			});
 
 			test('PREFERRED on TOTP enables it and sets preferred', async () => {
 				const api = getApi();
@@ -586,18 +670,22 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				await api.authCMfaSignOut();
 			});
 
-			// Phase E — verifyTOTPSetup with non-6-digit code throws CodeMismatch on mock.
-			test('verifyTOTPSetup with invalid code throws CodeMismatchException', async () => {
+			// Phase E — a bad code during TOTP *setup* is Cognito's
+			// EnableSoftwareTokenMFAException (VerifySoftwareToken's error), which
+			// the `Auth` mock now reproduces; AuthCognito's mock said
+			// CodeMismatchException, which only the post-enrolment sign-in
+			// challenge throws.
+			test('verifyTOTPSetup with invalid code throws EnableSoftwareTokenMFAException', async () => {
 				const api = getApi();
 				await signedInMfaUser(api, { enrollTotp: false });
 				await api.authCMfaSetUpTOTP();
 				try {
 					await api.authCMfaVerifyTOTPSetup('12345');
-					assert.fail('Expected CodeMismatchException');
+					assert.fail(`Expected ${AuthErrors.EnableSoftwareTokenMFA}`);
 				} catch (e) {
 					assert.ok(
-						isBlocksError(e, 'CodeMismatchException'),
-						`Expected CodeMismatchException, got ${e}`,
+						isBlocksError(e, AuthErrors.EnableSoftwareTokenMFA),
+						`Expected ${AuthErrors.EnableSoftwareTokenMFA}, got ${e}`,
 					);
 				}
 				await api.authCMfaSignOut();
@@ -618,8 +706,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				// Second sign-in now issues a TOTP challenge.
 				const r = await api.authCMfaSignIn(username, 'Password1!');
 				if (r.status === 'signedIn') throw new Error('expected TOTP challenge');
-				const step = r.nextStep as { session: string; name: string };
-				assert.strictEqual(step.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
+				const step = r.nextStep;
+				if (step.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') throw new Error(`expected a TOTP challenge, got ${step.name}`);
 				// Mock accepts any 6-digit code; real Cognito validates RFC-6238.
 				const final = await api.authCMfaConfirmSignIn(step.session, '123456');
 				assert.strictEqual(final.status, 'signedIn');
