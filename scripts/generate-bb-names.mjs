@@ -27,21 +27,14 @@ if (!vendorize || typeof vendorize !== 'object') {
 	process.exit(1);
 }
 
-// The vendorize map uses class export names (e.g. "AuthOIDC"), but telemetry
-// needs runtime `bbName` values (e.g. "AuthOidc"), which occasionally differ.
-// This mapping bridges the gap so both vendorize-map and telemetry tests pass.
-const BB_NAME_OVERRIDES = {
-	'AuthOIDC': 'AuthOidc',
-};
-
 // Keyed by BB name, while `vendorize-map.test.ts` keeps its own skip list keyed
 // by package name — an entry here for a package the umbrella depends on also
 // needs that package added to that test's skip list.
 const NON_VENDORIZED_BB_NAMES = ['LambdaCompute'];
 
-// Flatten all arrays, apply overrides, and deduplicate
+// Flatten all arrays and deduplicate
 const allNames = [...new Set([
-	...Object.values(vendorize).flat().map(name => BB_NAME_OVERRIDES[name] ?? name),
+	...Object.values(vendorize).flat(),
 	...NON_VENDORIZED_BB_NAMES,
 ])].sort();
 

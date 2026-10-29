@@ -36,7 +36,7 @@ There are three categories of return values. The first two are **client-safe**. 
 |----------|-----------|---------------|---------|
 | **Plain data** | Objects, arrays, primitives, `null` | `JSON.stringify()` natively | `{ id: string; name: string }` |
 | **Transferable** | Functional object with `toJSON()` | `toJSON()` produces a `__blocks` descriptor; client plugin hydrates | `RealtimeChannel` (see G15) |
-| **Server-only** | Building Block instances (extend `Scope`) | Not serializable &mdash; cannot cross the wire | `KVStore`, `AuthCognito` |
+| **Server-only** | Building Block instances (extend `Scope`) | Not serializable &mdash; cannot cross the wire | `KVStore`, `Auth` |
 
 **How customers tell at a glance:**
 
@@ -589,7 +589,7 @@ async function validateOrThrow<T>(schema: StandardSchemaV1<T>, value: unknown): 
 
 ### G17: BB-Produced ApiNamespaces Use `createApi()`
 
-Some Building Blocks produce a pre-wired `ApiNamespace` that the customer exports for client consumption. For example, auth BBs expose a state machine (sign-in, sign-up, sign-out) as an `ApiNamespace` so the frontend Authenticator component can interact with it. The convention for this pattern:
+Some Building Blocks produce a pre-wired `ApiNamespace` that the customer exports for client consumption. For example, the `Auth` BB exposes a state machine (sign-in, sign-up, sign-out) as an `ApiNamespace` so the frontend Authenticator component can interact with it. The convention for this pattern:
 
 1. **Method name:** `createApi()` &mdash; short, clear, and the return type (`ApiNamespace`) already communicates what it is.
 2. **Parameters:** None &mdash; the BB internally scopes the namespace (using `this` as the parent and a fixed id), so the customer doesn't need to supply scope or id.
@@ -597,7 +597,7 @@ Some Building Blocks produce a pre-wired `ApiNamespace` that the customer export
 
 ```typescript
 // Backend — customer exports the BB-produced namespace
-const auth = new AuthBasic(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
 // Frontend — imports and uses it like any other ApiNamespace
@@ -605,7 +605,7 @@ import { authApi } from 'aws-blocks';
 const state = await authApi.getAuthState();
 ```
 
-**When to use this pattern:** A BB needs to expose a set of client-callable methods that are intrinsic to the BB's functionality (not custom business logic). The BB owns the method implementations; the customer just decides where to mount them and what to name the export. Examples: auth BBs expose a sign-in/sign-up state machine; `DistributedTable` exposes a CRUD API with authorization hooks.
+**When to use this pattern:** A BB needs to expose a set of client-callable methods that are intrinsic to the BB's functionality (not custom business logic). The BB owns the method implementations; the customer just decides where to mount them and what to name the export. Examples: `Auth` exposes a sign-in/sign-up state machine; `DistributedTable` exposes a CRUD API with authorization hooks.
 
 **When NOT to use:** If the customer is writing the method bodies themselves, they should use `ApiNamespace` directly. `createApi()` is for BB-authored method sets.
 

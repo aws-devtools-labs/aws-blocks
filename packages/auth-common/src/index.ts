@@ -100,10 +100,10 @@ export interface BlocksAuth {
 	/**
 	 * Require an authenticated user who is a member of `role`.
 	 *
-	 * Optional for now: only auth BBs with role/group support implement it
-	 * (`Auth` does; the removed `AuthBasic` and `AuthOIDC` did not). It becomes a
-	 * required member once the unified `Auth` Building Block has replaced the
-	 * provider-specific auth BBs.
+	 * Required. Until the unified `Auth` Building Block replaced the
+	 * provider-specific auth BBs it was optional, because two of them (the
+	 * removed `AuthBasic` and `AuthOIDC`) had no roles; `Auth` implements it for
+	 * every configuration, so any `BlocksAuth` can now gate on a role.
 	 *
 	 * Implementations may narrow `role` to the roles they were configured with
 	 * (e.g. `Auth`'s declared `users.groups`) — see the note on method
@@ -117,7 +117,7 @@ export interface BlocksAuth {
 	 * @throws {ApiError} 403 with name `NotAuthorizedException` (`AuthErrors.NotAuthorized`)
 	 * if the user is not a member of `role`.
 	 */
-	requireRole?(context: BlocksContext, role: string): Promise<AuthUser>;
+	requireRole(context: BlocksContext, role: string): Promise<AuthUser>;
 }
 
 // ---------------------------------------------------------------------------

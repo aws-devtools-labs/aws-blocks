@@ -7,6 +7,7 @@ import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, relative, } from "node:path";
 import { execSync } from "node:child_process";
+import { localRegistryDir, resetLocalRegistry } from "./local-registry.ts";
 import { LocalPublisher } from "./publishers/local.ts";
 import type { PackageInfo, PackResult, Publisher } from "./publishers/types.ts";
 import { generateRegistryMetadata, parseExistingMetadata } from "./registry.ts";
@@ -426,7 +427,14 @@ if (bucket && cfDomain && cfDistId) {
 	publisher = new S3Publisher(bucket, cfDomain, cfDistId);
 	mode = "s3";
 } else {
-	publisher = new LocalPublisher(join(ROOT, "dist-registry"));
+	// The local registry is a scratch copy of the working tree, not a release
+	// record: start it empty on every run. Otherwise a tarball left by an earlier
+	// run trips the version-exists guard in publish() ("already exists with
+	// different content") as soon as code changes without a version bump.
+	const registryDir = localRegistryDir(ROOT);
+	await resetLocalRegistry(ROOT, registryDir);
+	console.log(`Cleared local registry ${relative(ROOT, registryDir)}/`);
+	publisher = new LocalPublisher(registryDir);
 	mode = "local";
 }
 
@@ -435,7 +443,7 @@ console.log(`AWS Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} 
 const manifest = await publish(publisher, distTag, canaryVersion);
 
 // Write manifest
-const manifestDir = mode === "s3" ? ROOT : join(ROOT, "dist-registry");
+const manifestDir = mode === "s3" ? ROOT : localRegistryDir(ROOT);
 await mkdir(manifestDir, { recursive: true });
 const manifestPath = join(manifestDir, "publish-manifest.json");
 await writeFile(manifestPath, JSON.stringify(manifest, null, 2));

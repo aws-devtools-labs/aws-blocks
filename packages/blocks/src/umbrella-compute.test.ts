@@ -434,6 +434,27 @@ describe('apiFrontDoor: cloudfront', () => {
 	});
 });
 
+describe('@aws-blocks/blocks/cdk public surface', () => {
+	// Framework-internal seams live on `@aws-blocks/core/cdk/internal`; the
+	// umbrella re-exports `@aws-blocks/core/cdk` wholesale, so this pins that
+	// none of them reach customers through it (`check:api` does not report the
+	// cdk entry).
+	test('does not re-export the baseline protocol or the deploy-time Lambda helpers', async () => {
+		const umbrella: Record<string, unknown> = await import('@aws-blocks/blocks/cdk');
+		assert.ok('BlocksStack' in umbrella, 'resolved the cdk entry');
+		for (const name of [
+			'BASELINE_FORMAT_VERSION',
+			'baselineDir',
+			'claimBaseline',
+			'hasOrphanedBaselines',
+			'readBaselineFormatVersion',
+			'deployTimeLambdaCode',
+			'deployTimeLambdaEntry',
+		]) {
+			assert.ok(!(name in umbrella), `${name} must not be on @aws-blocks/blocks/cdk`);
+		}
+	});
+});
 // A namespace given its own `Compute` through the public `compute` option, end
 // to end through the real Compute block and LambdaCompute.
 describe('ApiNamespace compute option', () => {

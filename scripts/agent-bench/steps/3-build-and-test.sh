@@ -32,7 +32,7 @@ CELL_TMP="$(mktemp -d "/tmp/bench-${TASK:-default}-XXXXXX")"
 # Test-only mock switch, inherited by both the dev server and Playwright. Tasks
 # whose grader needs a server-side test backdoor gate that surface on BLOCKS_MOCK
 # and return null otherwise, so it is inert in a real deployment. Example:
-# cognito-profile's api.getLastCode exposes the most-recently delivered OTP
+# cognito-profile's api.getLastCode exposes the most-recently delivered sign-up code
 # (the grader has no mailbox) only when this is set. (BLOCKS_* passes the agent env policy.)
 export BLOCKS_MOCK=true
 

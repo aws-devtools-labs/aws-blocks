@@ -133,21 +133,40 @@ A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, 
 
 Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
 
-## Signing In with OIDC
+## Signing In With `Auth`
+
+An AWS Blocks `Auth` block serves its OIDC sign-in routes at fixed paths, so the OIDC client is built from the server and the provider ids, with no backend call:
 
 ```kotlin
-val blocks = Blocks()
-val client = blocks.authApi.getClient()
-val user = client.signIn(AuthApi.GetClient.Provider.Google)
+import com.aws.blocks.kotlin.Blocks
+import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.signIn
+import com.example.myapp.generated.Servers
+
+val blocks = Blocks(Servers.local) // or Blocks() for the spec's default server
+val oidc = OidcClient.forAuth(
+    blocks.client(),
+    providers = listOf("google"), // the keys of the backend's oidcProviders
+    relayTo = "com.yourcompany.yourapp://auth/callback", // as in oidc { relayTo } above
+)
+
+val user = oidc.signIn("google") // opens the browser; oidc.authState follows along
+oidc.signOut()
 ```
+
+The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, not names a spec declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`, hence the `signIn` import (see [Typed OIDC Providers](#typed-oidc-providers)).
+
+Sign-in stores the backend's session cookie, which every generated API client sends, so methods the backend gates with `requireAuth` work after it. If the backend moves its routes with `redirects.callbackPath`, pass that path's directory as `basePath`.
+
+### JVM Landing Pages
 
 On the JVM target the system browser is left open on a loopback address once sign-in finishes,
 so the runtime serves a page there. By default that is a built-in styled page. An app can
 replace it per outcome, from a JVM source set:
 
 ```kotlin
-client.signIn(
-    provider = AuthApi.GetClient.Provider.Google,
+oidc.signIn(
+    provider = "google",
     options = OidcSignInOptions(
         OidcSignInPlatformOptions(
             // Send the browser to your own page, so the user ends on a real domain.
@@ -198,8 +217,9 @@ signal.
 
 ### Typed OIDC Providers
 
-`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. When the
-spec names an OIDC client's providers, the method's object gets a `Provider` enum that implements
+`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. A client
+from `forAuth` is an `OidcClient<AnyProvider>`, as above. When a method of the spec returns an OIDC
+client (`getClient()`) and the spec names that client's providers, the method's object gets a `Provider` enum that implements
 `OidcProvider`, whose constants carry the names the backend knows them by, and `getClient()`
 returns a client typed by it:
 

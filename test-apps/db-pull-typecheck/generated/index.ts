@@ -99,12 +99,19 @@ export const db = new Database(scope, 'db', {
 });
 
 /** Spread this into your ApiNamespace to add CRUD handlers. */
-export function supabaseCrud(context: any, auth?: { requireAuth: (ctx: any) => Promise<{ userId: string }> }) {
+export function supabaseCrud(
+  context: any,
+  auth?: { requireAuth: (ctx: any) => Promise<{ userId: string; claims?: Readonly<Record<string, unknown>> }> },
+) {
   return db.crud<TableMeta>({
     tables: Object.keys(tableMeta) as (keyof typeof tableMeta)[],
-    auth: () => {
+    auth: async () => {
       if (!auth) throw new Error('Auth not configured — pass auth to supabaseCrud(). See MIGRATION_GUIDE.md#auth');
-      return auth.requireAuth(context);
+      const user = await auth.requireAuth(context);
+      // RLS sees request.jwt.claims.sub = the provider's raw subject (claims.sub) when the
+      // user signed in through an OIDC provider directly, so policies keyed on the raw
+      // sub keep matching; otherwise it sees userId. See MIGRATION_GUIDE.md#auth.
+      return user.claims ? { userId: user.userId, claims: { ...user.claims } } : { userId: user.userId };
     },
   });
 }

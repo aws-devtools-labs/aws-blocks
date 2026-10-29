@@ -30,18 +30,50 @@ A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.
 
 ### Auth on the frontend
 
-An auth Building Block supplies the backend only. The frontend must let a user sign in.
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures every sign-in method: email + password (on by default), `socialProviders`, `oidcProviders` and `samlProviders`. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
+
+```ts
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  // Email sign-in, matched ignoring case — fixed once the user pool exists (see below).
+  users: { signInWith: ['email'], caseSensitive: false, groups: ['admins'] }, // groups: optional, for requireRole
+  // Local dev only: no email is sent, so log the codes. Ignored on AWS (Cognito emails them).
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
+export const authApi = auth.createApi();               // the state machine the sign-in UI drives
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async myNotes() {
+    const user = await auth.requireAuth(context);      // 401 NotAuthenticatedException if signed out
+    return user.userSub;                               // key per-user data on userSub
+  },
+  async adminReport() {
+    await auth.requireRole(context, 'admins');         // 403 NotAuthorizedException if not in the group
+  },
+}));
+```
+
+- **Gate every method that needs a user.** API methods are public by default: call `await auth.requireAuth(context)` (or `auth.requireRole(context, '<group>')`) at the top. `auth.getCurrentUser(context)` returns the user or `null` when you only want to branch.
+- **Pass options inline.** The block narrows its types to the literal options: `requireRole` accepts only declared `users.groups`, and methods your configuration doesn't enable are compile errors. Don't route the options through a variable typed `AuthOptions`.
+- **Sign-up always confirms the email address with a 6-digit code.** With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it — no second password entry — but the code is always required. Locally the code goes to `codeDelivery` and to `.bb-data/<scope id>-<auth id>/last-code.json` (e.g. `.bb-data/my-app-auth/last-code.json`); once deployed, Amazon Cognito emails it (its default sender is limited to 50 emails a day).
+- **The flow over `authApi`** (what the `Authenticator` does for you, and what tests call): `setAuthState({ action: 'signUp', username, password, email })` → state `confirmingSignUp`; `setAuthState({ action: 'confirmSignUp', username, code })`; `setAuthState({ action: 'autoSignIn', username })` → `signedIn`. Later: `{ action: 'signIn', username, password }` and `{ action: 'signOut' }`. This app's pool uses `users: { signInWith: ['email'], caseSensitive: false }`: the email *is* the username (omit `email`), it matches ignoring case, and `user.username` is an id Cognito generates — show `user.displayName` (on `AuthState.user` / `onAuthChange`, the email) and read the address server-side from `user.attributes.email`. (Without `signInWith`, the block's default is `['username', 'email']`: users choose a username, which must not look like an email address, and can also sign in with their email once it is confirmed.)
+- **`signInWith` and `caseSensitive` are permanent.** Cognito fixes both when the user pool is created; changing them later means a new pool and migrating every user, so the block refuses the change at synth. Decide before the first deploy that holds real users. The email + case-insensitive shape is also what Amplify's client libraries expect, so a frontend can later sign in with them against the same pool (see "Planning to use Amplify client libraries?" in `bb-auth/README.md`).
+- **Errors cross the wire by name.** Match them with `isBlocksError(e, 'NotAuthenticatedException')` (from `@aws-blocks/blocks/client` on the frontend) or `isAuthError(e, AuthErrors.NotAuthenticated)` on the backend.
+- **Decide `users.signInWith` and custom attributes before the first deploy** — Cognito can't change them on an existing user pool. The first synth writes a baseline under `aws-blocks/baselines/` (commit it); from then on synth refuses such a change. **Never change the block's id** (`'auth'`) or its scope after deploying: that creates a new, empty user pool and removes the old one along with its users.
+
+`Auth` supplies the backend only; the frontend must let a user sign in. On the frontend, mount the ready-made UI from `@aws-blocks/blocks/ui` — it renders sign-up, the code step and sign-in, and submits the automatic sign-in for you:
 
 - On the backend, call `await auth.requireAuth(context)` at the top of each protected method. It throws when the user is not signed in.
 - On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
   - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
   - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
   - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
-- `AuthBasic` without a `codeDelivery` config signs the user in at sign-up. It has no email confirmation step.
+- `codeDelivery` never skips the code step: every sign-up confirms its email with a code, with or without the hook. Locally the code is written to `.bb-data/<scope id>-<auth id>/last-code.json`, and passed to the hook too; the deployed app ignores the hook and Amazon Cognito emails the code.
 
 When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
 
-`Authenticator` emits stable testids. For `AuthBasic` and `AuthCognito` the fields are `authenticator-username` / `authenticator-password` and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; OIDC and federated actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
+`Authenticator` emits stable testids. The fields are `authenticator-username` / `authenticator-password` (on an email sign-in pool the username field is labelled Email and takes the address) and the actions `authenticator-action-signIn` / `authenticator-action-signUp` / `authenticator-submit`. `CUSTOMIZING-AUTH-UI.md` is the full contract; social, OIDC and SAML sign-in actions carry a provider suffix, e.g. `authenticator-action-signIn:google`.
 
 ### The deployed frontend finds the backend on its own
 

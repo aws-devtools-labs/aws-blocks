@@ -22,7 +22,6 @@
   "files": [
     "dist",
     "README.md",
-    "CUSTOMIZING-AUTH-UI.md",
     "DESIGN.md",
     "src",
     "LICENSE"
