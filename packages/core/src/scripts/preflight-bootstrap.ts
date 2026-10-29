@@ -86,7 +86,10 @@ export interface CdkBootstrapCheckOptions extends BootstrapTarget {
  * The printed command passes `--app=` so that `cdk bootstrap` does not synthesize
  * the app in `cdk.json` to find environments: the command names the environment.
  * Run in the project directory, CDK still reads the profile and the bootstrap
- * qualifier from `cdk.json`.
+ * qualifier from `cdk.json`. It also passes `--express`, which creates the
+ * `CDKToolkit` stack in CloudFormation Express mode: CloudFormation reports each
+ * resource complete without waiting for it to stabilize, so the create finishes
+ * sooner. CDK CLI versions before 2.1129.0 ignore the flag and bootstrap as usual.
  */
 export async function cdkBootstrapFailure({
 	command,
@@ -112,7 +115,7 @@ export async function cdkBootstrapFailure({
 		`CDK is not bootstrapped in Region ${regionArg} of account ${accountArg}, so \`npm run ${command}\` cannot deploy there ` +
 			`(SSM parameter ${parameterName} not found).`,
 		'  Bootstrap once per account and Region. From this project directory, run:',
-		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app=`,
+		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app= --express`,
 		'  This creates the CDKToolkit CloudFormation stack: the S3 bucket, ECR repository and IAM roles that CDK deploys with.',
 		...(qualifier === DEFAULT_BOOTSTRAP_QUALIFIER
 			? [

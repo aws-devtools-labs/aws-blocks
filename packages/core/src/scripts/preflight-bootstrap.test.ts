@@ -96,8 +96,9 @@ describe('CDK bootstrap check', () => {
 				],
 			]);
 			assert.match(message, /CDK is not bootstrapped in Region eu-south-2 of account 123456789012/);
-			// `--app=` keeps `cdk bootstrap` from synthesizing the Blocks app to find environments.
-			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app=$/m);
+			// `--app=` keeps `cdk bootstrap` from synthesizing the Blocks app to find environments;
+			// `--express` creates the bootstrap stack without waiting for each resource to stabilize.
+			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --express$/m);
 			assert.match(message, new RegExp(`Then re-run \`npm run ${command}\`\\.$`));
 			// The deployment target is printed before the deploy stops, so the user sees where it was going.
 			assert.match(log.join('\n'), /Deployment target: AWS profile starter, Region eu-south-2/);
@@ -164,7 +165,7 @@ describe('CDK bootstrap check', () => {
 	it('prints a placeholder instead of a Region that a shell could interpret', async () => {
 		await writeFile(join(directory, 'cdk.json'), JSON.stringify({ region: 'eu-west-1$(touch x)' }));
 		const message = await failure(reader(NOT_FOUND).read);
-		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app=$/m);
+		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app= --express$/m);
 		assert.doesNotMatch(message, /touch/);
 	});
 });
