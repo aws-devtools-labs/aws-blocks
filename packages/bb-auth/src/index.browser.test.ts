@@ -122,7 +122,15 @@ function importGraph(entry: string): Graph {
 	return graph;
 }
 
-const SERVER_FILES = ['index.mock.js', 'index.aws.js', 'index.cdk.js', 'auth-base.js'].map((f) =>
+// The `bb-auth users` CLI is server code too.
+const SERVER_FILES = [
+	'index.mock.js',
+	'index.aws.js',
+	'index.cdk.js',
+	'auth-base.js',
+	'local-pool-files.js',
+	join('users-cli', 'cli.js'),
+].map((f) =>
 	realpathSync(join(distDir, f)),
 );
 const FORBIDDEN_PACKAGES = /^(@aws-sdk\/|@smithy\/|aws-cdk-lib|constructs$|@aws-blocks\/core\/cdk)/;

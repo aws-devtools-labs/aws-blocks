@@ -140,13 +140,11 @@
       <code>403 NotAuthorizedException</code> out of the box — that's the wire-up working correctly.
     </p>
     <p style="color: var(--bb-color-text-muted, #555); font-size: 0.9em; margin: 5px 0;">
-      To see the success path, add your user to a group out-of-band — in production that
-      means the AWS Console (Cognito → User pools → Users → Add to group) or the CLI:
+      To see the success path, add your user to a group out-of-band with the <code>users</code>
+      command. Locally, stop the dev server first (<code>npm run dev:stop</code>) and start it again
+      afterwards; on a deployed stage, add <code>--stage sandbox</code> or <code>--stage prod --yes</code>:
     </p>
-    <pre style="background: var(--bb-color-surface-alt, #f5f5f5); color: var(--bb-color-text, #333); padding: 10px; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">aws cognito-idp admin-add-user-to-group \
-  --user-pool-id &lt;pool-id&gt; \
-  --username &lt;username&gt; \
-  --group-name editors</pre>
+    <pre style="background: var(--bb-color-surface-alt, #f5f5f5); color: var(--bb-color-text, #333); padding: 10px; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">npx @aws-blocks/bb-auth users add-to-group you@example.com editors</pre>
     <p style="color: var(--bb-color-text-muted, #555); font-size: 0.9em; margin: 5px 0;">
       <code>requireRole</code> reads the current membership, so the change applies on the next
       request. To manage groups from application code, enable the opt-in

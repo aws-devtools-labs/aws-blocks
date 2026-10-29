@@ -21,7 +21,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "bb-auth": "./dist/migrate/bin.js"
+    "bb-auth": "./dist/bin.js"
   },
   "files": [
     "dist",
@@ -69,6 +69,7 @@
     "@aws-sdk/client-cloudformation": "^3.1156.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
     "@aws-sdk/client-ssm": "^3.1156.0",
+    "@aws-sdk/client-sts": "^3.1156.0",
     "aws-jwt-verify": "^5.2.1",
     "jose": "^6.2.12"
   },

@@ -318,8 +318,8 @@ describe('bb-auth migrate — dry run and file handling', () => {
 	});
 });
 
-describe('bb-auth migrate — the published bin (dist/migrate/bin.js)', () => {
-	const bin = join(PACKAGE_DIR, 'dist', 'migrate', 'bin.js');
+describe('bb-auth migrate — the published bin (dist/bin.js)', () => {
+	const bin = join(PACKAGE_DIR, 'dist', 'bin.js');
 	const run = (args: string[], cwd: string) =>
 		spawnSync(process.execPath, [bin, ...args], { cwd, encoding: 'utf8', timeout: 60_000 });
 
@@ -327,7 +327,7 @@ describe('bb-auth migrate — the published bin (dist/migrate/bin.js)', () => {
 		const pkg: { bin?: Record<string, string>; files?: string[] } = JSON.parse(
 			readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'),
 		);
-		assert.strictEqual(pkg.bin?.['bb-auth'], './dist/migrate/bin.js');
+		assert.strictEqual(pkg.bin?.['bb-auth'], './dist/bin.js');
 		assert.ok(pkg.files?.includes('MIGRATION.md'));
 		assert.ok(pkg.files?.includes('dist'));
 		assert.ok(readFileSync(bin, 'utf8').startsWith('#!/usr/bin/env node'));
@@ -354,6 +354,26 @@ describe('bb-auth migrate — the published bin (dist/migrate/bin.js)', () => {
 			assert.strictEqual(second.status, 0, second.stderr);
 			assert.match(second.stdout, /changed 0/);
 			assert.deepStrictEqual(readTree(dir), after);
+		});
+	});
+
+	test('`migrate --dry-run <path>`: the path is a path, not a value of --dry-run', async () => {
+		await withCase('cognito-methods', async (dir) => {
+			const before = readTree(dir);
+			const r = run(['migrate', '--dry-run', '.'], dir);
+			assert.strictEqual(r.status, 0, r.stderr);
+			assert.match(r.stdout, /would change 1/);
+			assert.deepStrictEqual(readTree(dir), before);
+		});
+	});
+
+	test('`migrate --dry-run=<value>` is refused (exit 2) and writes nothing', async () => {
+		await withCase('cognito-methods', async (dir) => {
+			const before = readTree(dir);
+			const r = run(['migrate', '--dry-run=yes'], dir);
+			assert.strictEqual(r.status, 2);
+			assert.match(r.stderr, /--dry-run/);
+			assert.deepStrictEqual(readTree(dir), before);
 		});
 	});
 
