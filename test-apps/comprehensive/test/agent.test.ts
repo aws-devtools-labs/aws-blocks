@@ -9,7 +9,11 @@ import { AgentErrors } from '@aws-blocks/bb-agent';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
 import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
-import { codePoller } from './poll-for-code.js';
+// The agent per-user isolation test needs two distinct signed-in users; it does
+// not test sign-up itself. On a deployed stack they are provisioned through the
+// secret-gated `testSupport.provisionUser` (no mailbox needed), locally through
+// the code-confirmed sign-up.
+import { provisionConfirmedUser } from './test-support.js';
 
 /**
  * Build the Realtime transport wired to the canned agent's RPCs — the copy-paste
@@ -84,17 +88,6 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   }
   const { messages } = useCanned ? await api.cannedGetConversation(conversationId) : await api.agentGetConversation(conversationId);
   return messages;
-}
-
-/**
- * Sign up a user and confirm it with the verification code delivered for that
- * username. The agent per-user isolation test needs two distinct signed-in
- * users, so the code has to be matched to the right one.
- */
-async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
-  await api.authSignUp(username, password);
-  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
-  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {
@@ -397,9 +390,9 @@ export function agentTests(getApi: () => typeof apiType) {
       test('conversations are scoped to the authenticated user', async () => {
         const api = getApi();
 
-        // Sign up and sign in as user A
+        // Provision and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await signUpAndConfirm(api, userA, 'password123');
+        await provisionConfirmedUser(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -408,10 +401,10 @@ export function agentTests(getApi: () => typeof apiType) {
         const idsA = listA.conversations.map((c: any) => c.conversationId);
         assert.ok(idsA.includes(conversationId), 'user A should see their conversation');
 
-        // Sign out, sign up and sign in as user B
+        // Sign out, provision and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await signUpAndConfirm(api, userB, 'password123');
+        await provisionConfirmedUser(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation

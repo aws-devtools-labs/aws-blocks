@@ -22,6 +22,7 @@ The Blocks package handles infrastructure, backend logic, APIs, storage, authent
 
 ```bash
 npm run typecheck   # Check TypeScript types (run after code changes)
+npm test            # typecheck, then the local e2e tests (starts its own dev server on :3001)
 npm run dev         # Local dev (long-running - use background job)
 npm run sandbox     # Deploy to AWS sandbox
 npm run deploy      # Deploy to production

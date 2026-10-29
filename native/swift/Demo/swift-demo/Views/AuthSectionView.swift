@@ -116,6 +116,11 @@ struct AuthActionFormView: View {
         await appState.performAuthAction(input)
     }
 
+    /// The form value for `field`, falling back to its default (hidden fields carry one).
+    private func value(of field: AuthField) -> String {
+        fieldValues[field.name] ?? field.defaultValue ?? ""
+    }
+
     private func buildInput() -> AuthApi.SetAuthState.Input? {
         let username = fieldValues["username"] ?? ""
         let password = fieldValues["password"] ?? ""
@@ -126,11 +131,22 @@ struct AuthActionFormView: View {
         case "signIn":
             return .signIn(AuthApi.SetAuthState.SignIn(password: password, username: username))
         case "signUp":
-            return .signUp(AuthApi.SetAuthState.SignUp(password: password, username: username, attributes: [:]))
+            // Every field besides the credentials is a user attribute the backend asked for —
+            // `email` on the default pool, which Cognito needs to send the confirmation code.
+            var attributes: [String: String] = [:]
+            for field in action.fields where field.name != "username" && field.name != "password" {
+                attributes[field.name] = value(of: field)
+            }
+            return .signUp(AuthApi.SetAuthState.SignUp(password: password, username: username, attributes: attributes))
         case "confirmSignUp":
+            // The emailed code is enough: `Auth` signs the user in afterwards (see `autoSignIn`).
             return .confirmSignUp(
-                AuthApi.SetAuthState.ConfirmSignUp(code: code, password: password, username: username)
+                AuthApi.SetAuthState.ConfirmSignUp(code: code, password: nil, username: username)
             )
+        case "resendSignUpCode":
+            return .resendSignUpCode(AuthApi.SetAuthState.ResendSignUpCode(username: username))
+        case "autoSignIn":
+            return .autoSignIn(AuthApi.SetAuthState.AutoSignIn(username: username))
         case "signOut":
             return .signOut
         case "resetPassword":

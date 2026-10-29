@@ -210,8 +210,10 @@ jobs:
           retry_delete_failed() {
             local STACK="$1" FAILED_JSON RETAIN_IDS RETAIN_JSON OTHER
             # Logical ids CloudFormation flagged with a DELETE_FAILED resource status.
-            FAILED_JSON=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
-              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
+            # list-stack-resources (paginated by the CLI): describe-stack-resources returns
+            # only the first 100 resources, so a larger stack's blockers could be missed.
+            FAILED_JSON=$(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
               --output json 2>/dev/null || echo "[]")
             # Keep ONLY the allowlisted types (those with a reclaiming sweep) as retain
             # candidates; everything else is reported, not orphaned.
@@ -562,7 +564,7 @@ jobs:
           # the destructive gate collapsed to name-prefix + age. Matching by id closes
           # that: "orphan" now means genuinely stack-less.
           #
-          # FAIL-SAFE ON A DESCRIBE ERROR. DescribeStackResources is one call per
+          # FAIL-SAFE ON A DESCRIBE ERROR. ListStackResources is one call per
           # stack. This job runs precisely under quota/throttle pressure (that is why
           # it exists), so a throttled describe on a LIVE stack is likely, not
           # hypothetical — and if we treated an errored describe as "unowned", that
@@ -571,24 +573,35 @@ jobs:
           # describe errors, we record it and SKIP all REST-API deletes this run
           # (the summary still prints; the next scheduled run retries with a complete
           # ownership set). Correctness over throughput on a shared account.
-          LIVE_STACKS=$(aws cloudformation list-stacks \
-            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
-            --query "StackSummaries[].StackName" --output text 2>/dev/null | tr '\t' '\n' | sort -u || echo "")
-
           OWNED_IDS=""
           OWNERSHIP_INCOMPLETE=0
+          # Capture first, then sort: in a pipe the `aws` exit code is lost, and an
+          # empty live-stack list must not read as "no stack owns an API" (that made
+          # every live REST API deletable). A failed list skips the deletes this run,
+          # as the IAM sweep does.
+          if ! LIVE_RAW=$(aws cloudformation list-stacks \
+            --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE ROLLBACK_COMPLETE REVIEW_IN_PROGRESS CREATE_IN_PROGRESS UPDATE_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS ROLLBACK_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS IMPORT_COMPLETE IMPORT_IN_PROGRESS IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_COMPLETE \
+            --query "StackSummaries[].StackName" --output text 2>/dev/null); then
+            echo "  ⚠️ list-stacks failed — ownership set is incomplete this run"
+            OWNERSHIP_INCOMPLETE=1
+            LIVE_RAW=""
+          fi
+          LIVE_STACKS=$(echo "$LIVE_RAW" | tr '\t' '\n' | sort -u)
           for S in $LIVE_STACKS; do
             [ -z "$S" ] && continue
             # Capture stderr/exit separately so a throttled/errored describe on a live
             # stack is treated as "ownership unknown → do not delete this run", NOT as
             # "this stack owns no API".
-            if IDS=$(aws cloudformation describe-stack-resources --stack-name "$S" \
-              --query "StackResources[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
+            # list-stack-resources, paginated by the CLI: describe-stack-resources stops at
+            # 100 resources, so a larger live stack's RestApi would read as unowned (and be
+            # deleted).
+            if IDS=$(aws cloudformation list-stack-resources --stack-name "$S" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
               --output text 2>/dev/null); then
               IDS=$(echo "$IDS" | tr '\t' '\n')
               [ -n "$IDS" ] && OWNED_IDS="$OWNED_IDS"$'\n'"$IDS"
             else
-              echo "  ⚠️ describe-stack-resources failed for $S — ownership set is incomplete this run"
+              echo "  ⚠️ list-stack-resources failed for $S — ownership set is incomplete this run"
               OWNERSHIP_INCOMPLETE=1
             fi
           done
@@ -614,6 +627,10 @@ jobs:
           SKIPPED_UNMATCHED=0
           SKIPPED_OWNED=0
           DEFERRED=0
+          # Why each deferral happened, for the summary: an incomplete ownership set
+          # (every unowned API waits) or the 15-min budget (delete candidates only).
+          DEFERRED_OWNERSHIP=0
+          DEFERRED_BUDGET=0
 
           # Wall-clock budget for this step (mirrors the e2e step's DEADLINE). This
           # if: always() step runs THIRD in the job, after the e2e and Amplify steps
@@ -652,6 +669,7 @@ jobs:
             # id check so a KNOWN-owned API is still logged as owned, not deferred.)
             if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ]; then
               DEFERRED=$((DEFERRED + 1))
+              DEFERRED_OWNERSHIP=$((DEFERRED_OWNERSHIP + 1))
               continue
             fi
 
@@ -693,6 +711,7 @@ jobs:
             # summary below still runs.
             if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
               DEFERRED=$((DEFERRED + 1))
+              DEFERRED_BUDGET=$((DEFERRED_BUDGET + 1))
               continue
             fi
 
@@ -726,10 +745,16 @@ jobs:
           echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (non-test name): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- Deferred to next run (15-min budget reached): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$DEFERRED_OWNERSHIP" -gt 0 ]; then
+            echo "- Deferred to next run (ownership set incomplete, so no deletes this run): $DEFERRED_OWNERSHIP" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- Deferred to next run (15-min budget reached): $DEFERRED_BUDGET" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- REST APIs remaining: $TOTAL total, $EDGE EDGE (cap 120)" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$DEFERRED" -gt 0 ] 2>/dev/null; then
-            echo "::warning::REST-API sweep hit its 15-min budget with $DEFERRED candidate(s) left — remainder defers to the next scheduled run"
+          if [ "$DEFERRED_OWNERSHIP" -gt 0 ]; then
+            echo "::warning::REST-API sweep deleted nothing: a list-stacks or list-stack-resources call failed, so $DEFERRED_OWNERSHIP unowned API(s) defer to the next scheduled run"
+          fi
+          if [ "$DEFERRED_BUDGET" -gt 0 ]; then
+            echo "::warning::REST-API sweep hit its 15-min budget with $DEFERRED_BUDGET candidate(s) left — remainder defers to the next scheduled run"
           fi
           if [ "$EDGE" != "?" ] && [ "$EDGE" -ge 110 ] 2>/dev/null; then
             echo "::warning::$EDGE/120 EDGE REST APIs in use — approaching the hard quota"

@@ -299,7 +299,7 @@ export default function ApiTestPage() {
       <ProbeCard
         feature="api.authSignUp() + authGetLastCode() + authConfirmSignUp() + authSignIn()"
         description="Full auth flow: create disposable account, fetch the verification code, confirm, sign in. Cookie set as a result. Click Log out to end the session."
-        source="aws-blocks/index.ts → AuthBasic helpers"
+        source="aws-blocks/index.ts → Auth helpers"
         buttons={[
           {
             label: 'Run full auth flow',

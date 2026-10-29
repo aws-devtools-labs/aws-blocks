@@ -1,0 +1,89 @@
+{
+	"$comment": [
+		"DescribeStackEvents response shape (newest first): create, then a clean in-place update."
+	],
+	"StackEvents": [
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_COMPLETE-0008",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:11:10.000Z",
+			"ResourceStatus": "UPDATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_COMPLETE_CLEANUP_IN_PROGRESS-0007",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:11:00.000Z",
+			"ResourceStatus": "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "DefaultComputeHandlerF1C2C112-UPDATE_COMPLETE-0006",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "DefaultComputeHandlerF1C2C112",
+			"PhysicalResourceId": "defaultcomputehandlerf1c2c112",
+			"ResourceType": "AWS::Lambda::Function",
+			"Timestamp": "2026-10-03T10:10:40.000Z",
+			"ResourceStatus": "UPDATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-UPDATE_COMPLETE-0005",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "us-east-1_AbCdEf123",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:10:18.000Z",
+			"ResourceStatus": "UPDATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-UPDATE_IN_PROGRESS-0004",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "us-east-1_AbCdEf123",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:10:16.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_IN_PROGRESS-0003",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:10:00.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS",
+			"ResourceStatusReason": "User Initiated"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-CREATE_COMPLETE-0002",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:03:00.000Z",
+			"ResourceStatus": "CREATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-CREATE_IN_PROGRESS-0001",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:00:00.000Z",
+			"ResourceStatus": "CREATE_IN_PROGRESS",
+			"ResourceStatusReason": "User Initiated"
+		}
+	]
+}

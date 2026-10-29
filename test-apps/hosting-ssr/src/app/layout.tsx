@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { HydrationMarker } from './hydration-marker';
 
 export const metadata: Metadata = {
   title: 'Blocks Blog',
@@ -32,6 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </nav>
         </header>
         {children}
+        <HydrationMarker />
       </body>
     </html>
   );

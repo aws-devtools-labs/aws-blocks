@@ -52,8 +52,8 @@ final class HybridArmTests: XCTestCase {
         }
 
         // The confirmSignIn arm must carry an embedded union with eight
-        // challenge variants — the regrouped shape (fixture 18 is the
-        // `Auth` state machine).
+        // challenge variants — the regrouped shape (fixture 18 is the live
+        // `Auth` state machine; see codegen-fixtures/check-live-auth-fixtures.mjs).
         guard let confirmSignIn = variants.first(where: { $0.discriminatorValue == "confirmSignIn" }) else {
             XCTFail("Expected a confirmSignIn variant")
             return

@@ -5,12 +5,13 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import type { api as apiType } from 'aws-blocks';
+import { provisionConfirmedUser } from './test-support.js';
 
 /**
  * Multiple `Set-Cookie` values from one API method must all reach the client,
  * attributes intact. On an error response only cookie deletions do (a 401 that
  * clears a session cookie), and the error envelope is unchanged; a method that
- * sets a live cookie and then throws must not issue it.
+ * sets a live cookie (or signs a user in) and then throws must not issue it.
  *
  * On AWS the backend sits behind an API Gateway REST Lambda proxy, whose
  * single-value `headers` map collapses repeated headers — cookies must travel
@@ -109,6 +110,25 @@ export function responseCookieTests(getApi: () => typeof apiType) {
       const cleared = setCookies.find((c) => c.startsWith(`${name}=;`));
       assert.ok(cleared, `Expected the clearing Set-Cookie for ${name}, got: ${setCookies.join(' | ')}`);
       assert.match(cleared, /Max-Age=0/);
+    });
+
+    test('a method that signs a user in and then throws does NOT hand out a session cookie', { timeout: 15_000 }, async () => {
+      const username = `mc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      // `authSignInThenThrow` creates no account, so provision the user first.
+      await provisionConfirmedUser(getApi(), username, 'password123', 'auth-same-origin');
+
+      const resp = await fetch(getApiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'api.authSignInThenThrow', params: [username, 'password123'], id: 1 }),
+      });
+      const body = await resp.json();
+      assert.strictEqual(body.error?.code, 403, `Expected a 403 RPC error, got: ${JSON.stringify(body)}`);
+      assert.strictEqual(body.error?.data?.name, 'Forbidden');
+
+      const setCookies = resp.headers.getSetCookie?.() ?? [];
+      const session = setCookies.find((c) => c.startsWith('auth_') && c.includes('auth-same-origin'));
+      assert.strictEqual(session, undefined, `A failed call issued a session cookie: ${setCookies.join(' | ')}`);
     });
   });
 }
