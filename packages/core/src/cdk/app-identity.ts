@@ -72,7 +72,8 @@ export function applyAppIdentity(root: Construct): BlocksAppIdentity | undefined
 			'blocks:app:noPermissionsBoundary',
 			`defaults.app is set ("${app.id}") but defaults.permissionsBoundary isn't. On a shared account, the ` +
 				"boundary is what stops this app's roles from reaching another app's resources. Set " +
-				"defaults.permissionsBoundary to the platform's boundary policy (see `blocks-iam-policies`).",
+				"defaults.permissionsBoundary to the platform's boundary policy (see the core README section " +
+				'"Running many apps in one AWS account").',
 		);
 	}
 	return app;
