@@ -1,0 +1,187 @@
+{
+	"$comment": [
+		"DescribeStackEvents response shape (StackEvents, newest first), constructed for the parser tests:",
+		"an initial create, an EARLIER failed update (Lambda) that must not be blamed on the upgrade, then the upgrade",
+		"itself: UpdateUserPool rejects an AliasAttributes change, the IAM policy update is cancelled, the stack rolls back."
+	],
+	"StackEvents": [
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_ROLLBACK_COMPLETE-0017",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:11:40.000Z",
+			"ResourceStatus": "UPDATE_ROLLBACK_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS-0016",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:11:20.000Z",
+			"ResourceStatus": "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "BlocksRoleDefaultPolicyF2F3EE2E-UPDATE_COMPLETE-0015",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "BlocksRoleDefaultPolicyF2F3EE2E",
+			"PhysicalResourceId": "blocksroledefaultpolicyf2f3ee2e",
+			"ResourceType": "AWS::IAM::Policy",
+			"Timestamp": "2026-10-03T10:10:50.000Z",
+			"ResourceStatus": "UPDATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_ROLLBACK_IN_PROGRESS-0014",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:10:20.000Z",
+			"ResourceStatus": "UPDATE_ROLLBACK_IN_PROGRESS",
+			"ResourceStatusReason": "The following resource(s) failed to update: [upgradeauthpool556377DE]. "
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "BlocksRoleDefaultPolicyF2F3EE2E-UPDATE_FAILED-0013",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "BlocksRoleDefaultPolicyF2F3EE2E",
+			"PhysicalResourceId": "blocksroledefaultpolicyf2f3ee2e",
+			"ResourceType": "AWS::IAM::Policy",
+			"Timestamp": "2026-10-03T10:10:19.000Z",
+			"ResourceStatus": "UPDATE_FAILED",
+			"ResourceStatusReason": "Resource update cancelled"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-UPDATE_FAILED-0012",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "us-east-1_AbCdEf123",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:10:18.000Z",
+			"ResourceStatus": "UPDATE_FAILED",
+			"ResourceStatusReason": "Resource handler returned message: \"Updates are not allowed for property - AliasAttributes. (Service: CognitoIdentityProvider, Status Code: 400, Request ID: 6f2c1d0e-9b8a-4c7d-8e6f-5a4b3c2d1e0f)\" (RequestToken: 3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7, HandlerErrorCode: NotUpdatable)"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-UPDATE_IN_PROGRESS-0011",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "us-east-1_AbCdEf123",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:10:16.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "BlocksRoleDefaultPolicyF2F3EE2E-UPDATE_IN_PROGRESS-0010",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "BlocksRoleDefaultPolicyF2F3EE2E",
+			"PhysicalResourceId": "blocksroledefaultpolicyf2f3ee2e",
+			"ResourceType": "AWS::IAM::Policy",
+			"Timestamp": "2026-10-03T10:10:15.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_IN_PROGRESS-0009",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:10:00.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS",
+			"ResourceStatusReason": "User Initiated"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_ROLLBACK_COMPLETE-0008",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:06:30.000Z",
+			"ResourceStatus": "UPDATE_ROLLBACK_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_ROLLBACK_IN_PROGRESS-0007",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:05:31.000Z",
+			"ResourceStatus": "UPDATE_ROLLBACK_IN_PROGRESS",
+			"ResourceStatusReason": "The following resource(s) failed to update: [DefaultComputeHandlerF1C2C112]. "
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "DefaultComputeHandlerF1C2C112-UPDATE_FAILED-0006",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "DefaultComputeHandlerF1C2C112",
+			"PhysicalResourceId": "defaultcomputehandlerf1c2c112",
+			"ResourceType": "AWS::Lambda::Function",
+			"Timestamp": "2026-10-03T10:05:30.000Z",
+			"ResourceStatus": "UPDATE_FAILED",
+			"ResourceStatusReason": "Resource handler returned message: \"Code storage limit exceeded.\""
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-UPDATE_IN_PROGRESS-0005",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:05:00.000Z",
+			"ResourceStatus": "UPDATE_IN_PROGRESS",
+			"ResourceStatusReason": "User Initiated"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-CREATE_COMPLETE-0004",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:03:00.000Z",
+			"ResourceStatus": "CREATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-CREATE_COMPLETE-0003",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "us-east-1_AbCdEf123",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:00:25.000Z",
+			"ResourceStatus": "CREATE_COMPLETE"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "upgradeauthpool556377DE-CREATE_IN_PROGRESS-0002",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "upgradeauthpool556377DE",
+			"PhysicalResourceId": "upgradeauthpool556377de",
+			"ResourceType": "AWS::Cognito::UserPool",
+			"Timestamp": "2026-10-03T10:00:20.000Z",
+			"ResourceStatus": "CREATE_IN_PROGRESS"
+		},
+		{
+			"StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"EventId": "bb-test-upgrade-123-1-CREATE_IN_PROGRESS-0001",
+			"StackName": "bb-test-upgrade-123-1",
+			"LogicalResourceId": "bb-test-upgrade-123-1",
+			"PhysicalResourceId": "arn:aws:cloudformation:us-east-1:123456789012:stack/bb-test-upgrade-123-1/0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			"ResourceType": "AWS::CloudFormation::Stack",
+			"Timestamp": "2026-10-03T10:00:00.000Z",
+			"ResourceStatus": "CREATE_IN_PROGRESS",
+			"ResourceStatusReason": "User Initiated"
+		}
+	]
+}

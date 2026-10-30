@@ -1504,7 +1504,7 @@ function productionLifecycleSuites(): void {
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
-      assert.strictEqual(body.event.state, 'SUCCESS');
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
       assertDelivered(result.stderr, 'deploy SUCCESS');
 
       // Cleanup: destroy the production stack

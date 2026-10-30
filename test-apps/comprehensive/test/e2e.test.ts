@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import type { api as apiType, isolatedApi as isolatedApiType } from 'aws-blocks';
 import { ApiError } from '@aws-blocks/core';
 import { installCookieJar } from './cookie-jar.js';
+import { ensureTestSupportSecret, getTestSupport } from './test-support.js';
 import { codePoller } from './poll-for-code.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
@@ -18,11 +19,14 @@ import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
 import { responseCookieTests } from './response-cookies.test.js';
+import { testSupportGateTests } from './test-support-gate.test.js';
 import { corsPreflightTests } from './cors-preflight.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
-import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
+import { authAdminScanFilterTests, authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
+import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
+import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { cronJobTests } from './cron-job.test.js';
@@ -47,6 +51,7 @@ const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
+let authStateApis: AuthStateApis;
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -61,6 +66,9 @@ async function waitForServer(maxAttempts = 30) {
 
 // Setup - start server and import API after it's ready
 test.before(async () => {
+  // This run's test-support secret: kept if CI set it, otherwise generated now,
+  // before the dev server or the deploy starts, so both inherit the same value.
+  ensureTestSupportSecret();
   // Type check the backend
   console.log('🔍 Type checking backend...');
   try {
@@ -136,6 +144,7 @@ test.before(async () => {
   const module = await import('aws-blocks');
   api = module.api;
   isolatedApi = module.isolatedApi;
+  authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
   
   await waitForServer();
   console.log('✅ Server ready\n');
@@ -227,7 +236,7 @@ test('Sanity check - API calls use HTTP not direct imports', { timeout: 10_000 }
 // purge could delete a code one of them is waiting to read (basic-auth.test.ts
 // covers the per-user purge). Locally it also sweeps the records earlier runs
 // left in .bb-data/.
-test('AuthBasic - full purge clears every code record and leaves other keys alone', async () => {
+test('Auth - full purge clears every code record and leaves other keys alone', { skip: ENV !== 'local' && 'codeDelivery is mock-only; deployed Auth emails the code' }, async () => {
   const stamp = Date.now().toString(36);
   const username = `purge-probe-${stamp}`;
   const bystander = `kv-bystander-${stamp}`;
@@ -235,7 +244,8 @@ test('AuthBasic - full purge clears every code record and leaves other keys alon
   await api.authSignUp(username, 'password123');
   await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
 
-  const { deleted } = await api.authPurgeDeliveredCodes();
+  const { testSupport, secret } = await getTestSupport();
+  const { deleted } = await testSupport.authPurgeDeliveredCodes(secret);
   assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
 
   assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
@@ -245,16 +255,19 @@ test('AuthBasic - full purge clears every code record and leaves other keys alon
   await api.kvDelete(bystander);
 });
 
-// AuthOIDC tests (separate file). They run before the background suites start:
+// Auth OIDC tests, formerly AuthOIDC (separate file). They run before the background suites start:
 // the stub IdP keeps each refresh token in the memory of the Lambda instance
 // that served its /token call, which is never the instance serving
-// /extras/exchange (that one is busy waiting on the call). A later refresh only
+// the token exchange route (that one is busy waiting on the call). A later refresh only
 // succeeds if its own /token call lands on the issuing instance again. Serial
 // traffic happens to route it back there; the background suites' load breaks
 // that routing and the bearer refresh test fails. The stub IdP itself needs
 // self-contained refresh tokens to fix this: see
 // https://github.com/aws-devtools-labs/aws-blocks/issues/988.
 oidcAuthTests(() => api);
+
+// Auth createApi() narrowing: typed by the block options, refused at runtime (separate file)
+authApiNarrowingTests(() => authStateApis);
 
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
 // queues, Lambda and the model, so each runs in its own child process against
@@ -288,26 +301,33 @@ secretTests(() => api);
 // Realtime tests (separate file)
 realtimeTests(() => api);
 
-// AuthBasic tests (separate file)
+// Auth email + password tests, formerly AuthBasic (separate file)
 basicAuthTests(() => api);
 
-// AuthBasic cookie-attribute convergence tests (separate file)
+// Auth cookie-attribute convergence tests (separate file)
 authCookieAttrsTests(() => api);
-
-// CORS preflight allow-list tests (separate file)
-corsPreflightTests(() => api);
 
 // Multiple Set-Cookie values from one API method (separate file)
 responseCookieTests(() => api);
 
-// AuthCognito tests (separate file)
+// The e2e build's test-only support endpoints are secret-gated (separate file)
+testSupportGateTests();
+
+// CORS preflight allow-list tests (separate file)
+corsPreflightTests(() => api);
+
+// Auth (Cognito user pool) tests, formerly AuthCognito (separate file)
 authCognitoTests(() => api);
 
-// AuthCognito Sandbox tests (separate file)
+// Auth (Cognito user pool) sandbox tests (separate file)
 authCognitoSandboxTests(() => api);
 
-// AuthCognito admin-surface sandbox tests (separate file)
+// Auth admin-surface sandbox tests (separate file)
 authCognitoAdminTests(() => api);
+authAdminScanFilterTests();
+
+// Auth validateUser (Q10): one policy for every sign-up and sign-in
+authValidateUserTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);
@@ -337,7 +357,7 @@ rawRouteTests();
 consoleShortcutTests();
 
 // CLI client tests (separate file)
-cliClientTests();
+cliClientTests(() => api);
 
 // Tracer tests (separate file)
 tracerTests(() => api);

@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared sign-in-record poller for the AuthOIDC e2e suites.
+ * Shared sign-in-record poller for the OIDC (`Auth` with `oidcProviders`) e2e suites.
  *
  * `onSignIn` fires while the OIDC callback is being served, and the test reads
  * the record back over a later, separate request. Two ways to get that wrong:
  *
  * 1. Read once. The write can still be in flight, so the read returns null.
- * 2. Ask for "the last sign-in" with no key. Another user, or another AuthOIDC
+ * 2. Ask for "the last sign-in" with no key. Another user, or another OIDC
  *    instance's user, satisfies that instantly and the assertions run against
  *    the wrong record, which can pass by accident.
  *
@@ -25,7 +25,7 @@ export interface SignInRecord {
 	provider: string;
 }
 
-/** A backend `*GetLastSignInUser` method, scoped to one AuthOIDC instance. */
+/** A backend `*GetLastSignInUser` method, scoped to one OIDC `Auth` instance. */
 export type SignInReader = (userId: string) => Promise<SignInRecord | null>;
 
 export interface PollForSignInOptions {

@@ -2,9 +2,9 @@
 
 package com.aws.blocks.kotlin.e2e
 
-import blocks.e2e.oidcAuthApi
 import com.aws.blocks.kotlin.InternalBlocksApi
 import com.aws.blocks.kotlin.oidc.OidcAuthState
+import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
 import com.aws.blocks.kotlin.oidc.OidcSignInOptions
@@ -66,29 +66,62 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
     }
 }
 
+/**
+ * Native relay sign-in against the `auth-oidc` block: authorize-params, the IdP redirect chain,
+ * the relay to `nativebindings://auth`, the code exchange (which sets the session cookie) and
+ * sign-out. The client comes from the block's fixed routes ([OidcClient.forAuth]).
+ *
+ * Locally the IdP is `Auth`'s stub, which auto-approves. A deployed backend serves the stub only
+ * on a sandbox deployment (the native-bindings test app always deploys as one), so the
+ * suite runs there only with `RUN_OIDC=1`, which says the backend serves a headless IdP: that
+ * deployed stub, or a real, auto-approving IdP (`NATIVE_E2E_OIDC_ISSUER`; see
+ * `.github/workflows/native-sdk-e2e.yml`).
+ */
 class OidcE2ETest {
 
-    private val api = e2eBlocks().oidcAuthApi
+    private val api = createApi()
+
+    private fun oidcClient(): OidcClient =
+        OidcClient.forAuth(e2eBlocks().client(), listOf("google"), "nativebindings://auth")
+            .also { it.platformLauncher = RedirectFollowingLauncher() }
+
+    /** Whether the backend under test serves an IdP this suite can drive headlessly. */
+    private fun hasHeadlessIdp(): Boolean = isLocalEndpoint() || getEnv("RUN_OIDC") == "1"
 
     @Test
     fun signInReachesSignedIn() = runTest {
-        val client = api.getClient()
-        client.platformLauncher = RedirectFollowingLauncher()
+        if (!hasHeadlessIdp()) {
+            markSkipped(NEEDS_HEADLESS_IDP)
+            return@runTest
+        }
+        val client = oidcClient()
 
         val user = client.signIn("google")
 
         user.userId.shouldNotBeBlank()
         client.authState.value shouldBe OidcAuthState.SignedIn(user)
+        api.oidcRequireAuth().userId shouldBe user.userId
     }
 
     @Test
     fun signOutReachesSignedOut() = runTest {
-        val client = api.getClient()
-        client.platformLauncher = RedirectFollowingLauncher()
+        if (!hasHeadlessIdp()) {
+            markSkipped(NEEDS_HEADLESS_IDP)
+            return@runTest
+        }
+        val client = oidcClient()
         client.signIn("google")
 
         client.signOut()
 
         client.authState.value shouldBe OidcAuthState.SignedOut
+        api.oidcCheckAuth() shouldBe false
+    }
+
+    private companion object {
+        const val NEEDS_HEADLESS_IDP =
+            "Auth's stub IdP runs only locally and on sandbox deployments. Against a deployed " +
+                "backend this suite needs RUN_OIDC=1 and a headless IdP: that deployed stub, or a real, " +
+                "auto-approving one (NATIVE_E2E_OIDC_ISSUER; see .github/workflows/native-sdk-e2e.yml)"
     }
 }
