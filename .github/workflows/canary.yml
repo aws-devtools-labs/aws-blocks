@@ -22,7 +22,7 @@ on:
       # A template's e2e test is what the canary actually runs. The PR's own
       # E2E Templates lane (pr-checks.yml) already scaffolds and runs each
       # template's test:e2e, but the canary adds two things it lacks: it runs
-      # the scaffold's `npm run build`, which is the only PR lane that
+      # the scaffold's `npm run typecheck`, which is the only PR lane that
       # typechecks a template's tests, and it also runs on fork PRs, which
       # E2E Templates skips.
       - 'packages/create-blocks-app/templates/*/test/**'
