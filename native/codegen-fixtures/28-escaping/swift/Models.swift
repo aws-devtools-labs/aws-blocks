@@ -1,12 +1,13 @@
 import Foundation
+import BlocksRuntime
 
 
 public nonisolated enum Kind: String, Codable {
-    case cost$
-    case a$b
-    case x$$y
-    case b$c = "b-$c"
-    case d_$e
+    case cost_ = "cost$"
+    case a_b = "a$b"
+    case x__y = "x$$y"
+    case b_c = "b-$c"
+    case d__e = "d_$e"
 }
 
 public nonisolated struct Widget: Codable {

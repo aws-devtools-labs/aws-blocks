@@ -45,6 +45,16 @@ let reservedTypeNames: Set<String> = [
     "Any", "AnyObject", "Optional", "Array", "Dictionary", "Set"
 ]
 
+/// Names a type nested inside a component schema's struct must not take: within that struct
+/// they would shadow a type the generated code (or a sibling field) refers to by its bare name.
+let nestedShadowingTypeNames: Set<String> = [
+    "String", "Bool", "Int", "Double", "Void", "Self", "Protocol",
+    "UUID", "Date", "URL", "JSONValue",
+    "Codable", "Encoder", "Decoder", "CodingKey", "CodingKeys", "DecodingError", "EncodingError",
+    "DynamicKey", "OuterCodingKeys", "EmptyKey", "CodegenError",
+    "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient"
+]
+
 /// PascalCase string transformer. Splits on `-`, `.`, and `:` (always); preserves
 /// underscores so deliberately-namespaced names like `Fields_SignUp` survive.
 /// Each segment between underscores is independently PascalCased so
@@ -83,12 +93,25 @@ func pascalCase(_ input: String) -> String {
 /// Names a union variant from its discriminator field + value.
 /// Boolean discriminators (`isSignedIn: true`) become `IsSignedInTrue` / `IsSignedInFalse`
 /// to avoid collisions. String discriminators use the value directly.
+/// A value that can't start a type name (a number: `code: 1` → `Code1`, `1.5` → `Code1_5`) is prefixed the same way,
+/// and so is one that names a keyword type (`kind: "self"` → `KindSelf`; a type can't be named `Self` or `Any`).
 func variantNameFromDiscriminator(fieldName: String, value: String) -> String {
     if value == "true" || value == "false" {
-        return pascalCase(fieldName) + pascalCase(value)
+        return specTypeName(fieldName) + pascalCase(value)
     }
-    return pascalCase(value)
+    let name = pascalCase(value)
+    if keywordTypeNames.contains(name) {
+        return specTypeName(fieldName) + name
+    }
+    if let first = name.first, first.isLetter || first == "_", isValidSwiftIdentifier(name) {
+        return name
+    }
+    let spelled = String(value.map { $0.isLetter || $0.isNumber ? $0 : "_" })
+    return specTypeName(fieldName) + spelled
 }
+
+/// Keywords a type can't be named, though they're identifiers in form.
+let keywordTypeNames: Set<String> = ["Self", "Any"]
 
 func camelCase(_ input: String) -> String {
     let pascal = pascalCase(input)
@@ -164,6 +187,111 @@ func escapedSwiftName(_ name: String) -> String {
     return safe
 }
 
+/// The Swift property name of each field of a record, by wire name (escaped): each spec name, sanitized when it
+/// isn't an identifier and unique among its siblings (see `swiftIdentifiers`).
+func swiftPropertyNames(_ fields: [ResolvedField]) -> [String: String] {
+    let names = swiftIdentifiers(for: fields.map(\.name), candidate: swiftIdentifierCandidate)
+    return Dictionary(zip(fields.map(\.name), names), uniquingKeysWith: { first, _ in first })
+}
+
+/// The parameter name a generated memberwise init uses for `field`. It's the property name, except for a
+/// property named `self`: a parameter named `self` would shadow the instance, so the init takes it as
+/// `` `self` self_: T `` (label unchanged) and assigns `` self.`self` = self_ ``.
+func initArgumentName(_ field: ResolvedField, in fields: [ResolvedField]) -> String {
+    let names = swiftPropertyNames(fields)
+    let safe = names[field.name] ?? escapedSwiftName(field.name)
+    guard safe == "`self`" else { return safe }
+    let taken = Set(names.values)
+    var name = "self_"
+    while taken.contains(name) {
+        name += "_"
+    }
+    return name
+}
+
+// MARK: - Spec strings and names in generated code
+
+/// The contents of a Swift string literal spelling `text` exactly: `\`, `"`, line breaks, tabs and other
+/// control characters are escaped, so a spec string spliced into a literal (a wire key, a method name, a server
+/// URL, a validation message) neither breaks the literal nor interpolates. Text without them is unchanged.
+func swiftStringContent(_ text: String) -> String {
+    var out = ""
+    for scalar in text.unicodeScalars {
+        switch scalar {
+        case "\\": out += "\\\\"
+        case "\"": out += "\\\""
+        case "\n": out += "\\n"
+        case "\r": out += "\\r"
+        case "\t": out += "\\t"
+        case "\0": out += "\\0"
+        default:
+            if scalar.value < 0x20 || scalar.value == 0x7f {
+                out += "\\u{\(String(scalar.value, radix: 16))}"
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+    }
+    return out
+}
+
+/// A type name for a spec name (a property, parameter or operation): its PascalCase, sanitized when that isn't
+/// an identifier (`back\slash` → `Back_Slash`). A name that is one is unchanged.
+func specTypeName(_ name: String) -> String {
+    let pascal = pascalCase(name)
+    return isValidSwiftIdentifier(pascal) ? pascal : pascalCase(sanitizedSwiftName(pascal))
+}
+
+/// The names taken in one Swift scope. `claim` takes a name, or the first of `name_2`, `name_3`, … that's free.
+struct SwiftNameScope {
+    private(set) var taken: Set<String>
+
+    init(taken: Set<String> = []) {
+        self.taken = taken
+    }
+
+    func contains(_ name: String) -> Bool { taken.contains(name) }
+
+    /// `name` (unescaped), or the first `name_<n>` not taken; claimed. Spell it with `escapedSwiftName`.
+    mutating func claim(_ name: String) -> String {
+        var allocated = name
+        var suffix = 2
+        while taken.contains(allocated) {
+            allocated = "\(name)_\(suffix)"
+            suffix += 1
+        }
+        taken.insert(allocated)
+        return allocated
+    }
+}
+
+/// The Swift identifiers (escaped) for sibling spec names in one scope, in order. `candidate` is the identifier a
+/// name would take (by default the name, sanitized when it isn't an identifier). Names whose candidate is the spec
+/// name itself claim it first; every other one takes its candidate, or `_2`, `_3`, … when a sibling has it
+/// (`a_b` keeps `a_b`, `a.b` takes `a_b_2`). `taken` are names the scope already declares. With no collision
+/// each name is its candidate, escaped, as before.
+func swiftIdentifiers(
+    for specNames: [String], taken: Set<String> = [], candidate: (String) -> String = { name in
+        isValidSwiftIdentifier(name) ? name : sanitizedSwiftName(name)
+    }
+) -> [String] {
+    var scope = SwiftNameScope(taken: taken)
+    var allocated: [String?] = Array(repeating: nil, count: specNames.count)
+    let candidates = specNames.map(candidate)
+    for (index, name) in specNames.enumerated() where candidates[index] == name && !scope.contains(name) {
+        allocated[index] = scope.claim(name)
+    }
+    for index in specNames.indices where allocated[index] == nil {
+        allocated[index] = scope.claim(candidates[index])
+    }
+    return allocated.map { escapedSwiftName($0 ?? "") }
+}
+
+/// `name` without the backticks `escapedSwiftName` puts around a keyword.
+func unescapedSwiftName(_ name: String) -> String {
+    name.hasPrefix("`") && name.hasSuffix("`") && name.count > 2 ? String(name.dropFirst().dropLast()) : name
+}
+
 // MARK: - Entry-point names
 
 /// Members of the generated `Blocks`, plus names `blocks.<name>` cannot reach without backticks.
@@ -174,7 +302,7 @@ let blocksMemberNames: Set<String> = ["client", "server", "close", "self", "init
 let reservedNamespaceClassNames: Set<String> = [
     "Blocks", "Servers", "BlocksRuntime", "Foundation",
     "BlocksClient", "BlocksServer", "BlocksRequest", "RPCError", "CodegenError", "JSONValue",
-    "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient",
+    "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient", "OIDCProviderName",
     "Sendable", "CaseIterable", "URLSession",
     "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",
     "Codable", "Encodable", "Decoder", "Encoder", "CodingKey", "DecodingError", "JSONDecoder", "JSONSerialization",
@@ -184,16 +312,17 @@ let reservedNamespaceClassNames: Set<String> = [
 /// Names a spec model can't take: the entry point and servers the API file declares, and the module it qualifies with.
 let reservedModelNames: Set<String> = ["Blocks", "Servers", "BlocksRuntime"]
 
-/// Class name per namespace. A reserved or already claimed name gets an `Api` suffix;
-/// names that need no change claim first, so a rename never takes another's name.
-func namespaceClassNames(_ namespaces: [String]) -> [String: String] {
+/// Class name per namespace. A reserved or already claimed name gets an `Api` suffix; names that need no change
+/// claim first, so a rename never takes another's name. `taken` are names the API file already declares (the
+/// top-level model types), which a class steps aside for too.
+func namespaceClassNames(_ namespaces: [String], taken extra: Set<String> = []) -> [String: String] {
     var names: [String: String] = [:]
-    var taken = reservedNamespaceClassNames
-    for namespace in namespaces where taken.insert(pascalCase(namespace)).inserted {
-        names[namespace] = pascalCase(namespace)
+    var taken = reservedNamespaceClassNames.union(extra)
+    for namespace in namespaces where taken.insert(specTypeName(namespace)).inserted {
+        names[namespace] = specTypeName(namespace)
     }
     for namespace in namespaces where names[namespace] == nil {
-        var name = pascalCase(namespace) + "Api"
+        var name = specTypeName(namespace) + "Api"
         while !taken.insert(name).inserted {
             name += "Api"
         }
@@ -228,9 +357,4 @@ func namespaceAccessorNames(_ namespaces: [String]) -> [String: String] {
         taken.insert(name)
     }
     return names
-}
-
-/// `Servers` property for a server; keywords such as `default` are backticked.
-func serverPropertyName(_ server: String) -> String {
-    escapedSwiftName(camelCase(server))
 }

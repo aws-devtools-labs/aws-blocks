@@ -26,12 +26,56 @@ public final nonisolated class AuthApi: Sendable {
         public struct SignIn: Codable {
             public let password: String
             public let username: String
+
+            public init(password: String, username: String) {
+                self.password = password
+                self.username = username
+            }
         }
 
         public struct SignUp: Codable {
             public let password: String
             public let username: String
             public let attributes: [String: String]
+
+            public init(password: String, username: String, attributes: [String: String] = [:]) {
+                self.password = password
+                self.username = username
+                self.attributes = attributes
+            }
+
+            private struct DynamicKey: CodingKey {
+                var stringValue: String
+                var intValue: Int? { nil }
+                init?(stringValue: String) { self.stringValue = stringValue }
+                init?(intValue: Int) { return nil }
+            }
+
+            private static let fixedFieldNames: Set<String> = [
+                "password",
+                "username",
+                "action",
+            ]
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: DynamicKey.self)
+                try c.encode(self.password, forKey: DynamicKey(stringValue: "password")!)
+                try c.encode(self.username, forKey: DynamicKey(stringValue: "username")!)
+                for (k, v) in self.attributes where !Self.fixedFieldNames.contains(k) {
+                    try c.encode(v, forKey: DynamicKey(stringValue: k)!)
+                }
+            }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: DynamicKey.self)
+                self.password = try c.decode(String.self, forKey: DynamicKey(stringValue: "password")!)
+                self.username = try c.decode(String.self, forKey: DynamicKey(stringValue: "username")!)
+                var extras: [String: String] = [:]
+                for key in c.allKeys where !Self.fixedFieldNames.contains(key.stringValue) {
+                    extras[key.stringValue] = try c.decode(String.self, forKey: key)
+                }
+                self.attributes = extras
+            }
         }
 
         public struct ConfirmSignUp: Codable {
@@ -51,24 +95,48 @@ public final nonisolated class AuthApi: Sendable {
                 try c.encodeIfPresent(self.password, forKey: .password)
                 try c.encode(self.username, forKey: .username)
             }
+
+            public init(code: String, password: String? = nil, username: String) {
+                self.code = code
+                self.password = password
+                self.username = username
+            }
         }
 
         public struct ResendSignUpCode: Codable {
             public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ResetPassword: Codable {
             public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ConfirmResetPassword: Codable {
             public let code: String
             public let newPassword: String
             public let username: String
+
+            public init(code: String, newPassword: String, username: String) {
+                self.code = code
+                self.newPassword = newPassword
+                self.username = username
+            }
         }
 
         public struct AutoSignIn: Codable {
             public let username: String
+
+            public init(username: String) {
+                self.username = username
+            }
         }
 
         public struct ConfirmSignIn: Codable {
@@ -77,31 +145,60 @@ public final nonisolated class AuthApi: Sendable {
 
             public struct Code: Codable {
                 public let code: String
+
+                public init(code: String) {
+                    self.code = code
+                }
             }
 
             public struct MfaType: Codable {
                 public let mfaType: String
+
+                public init(mfaType: String) {
+                    self.mfaType = mfaType
+                }
             }
 
             public struct NewPassword: Codable {
                 public let newPassword: String
+
+                public init(newPassword: String) {
+                    self.newPassword = newPassword
+                }
             }
 
             public struct TotpSetup: Codable {
                 public let code: String
                 public let sharedSecret: String
+
+                public init(code: String, sharedSecret: String) {
+                    self.code = code
+                    self.sharedSecret = sharedSecret
+                }
             }
 
             public struct Email: Codable {
                 public let email: String
+
+                public init(email: String) {
+                    self.email = email
+                }
             }
 
             public struct Password: Codable {
                 public let password: String
+
+                public init(password: String) {
+                    self.password = password
+                }
             }
 
             public struct FirstFactor: Codable {
                 public let firstFactor: String
+
+                public init(firstFactor: String) {
+                    self.firstFactor = firstFactor
+                }
             }
 
             public enum ConfirmSignInChallenge: Codable {

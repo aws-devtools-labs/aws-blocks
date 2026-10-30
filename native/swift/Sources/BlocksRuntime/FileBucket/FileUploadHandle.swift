@@ -35,16 +35,37 @@ public final class FileUploadHandle: Sendable {
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url", "contentType": "image/jpeg" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileUploadHandle {
-        let (url, contentType) = try parts(of: json)
-        return FileUploadHandle(url: url, contentType: contentType)
-    }
-
-    /// The presigned URL and content type a descriptor carries.
-    static func parts(of json: [String: Any]) throws -> (url: String, contentType: String?) {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        return (url, json["contentType"] as? String)
+        let contentType = json["contentType"] as? String
+        return FileUploadHandle(url: url, contentType: contentType)
+    }
+
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+        case contentType
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/upload", "url": …, "contentType"?: … }` descriptor,
+    /// so a generated model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/upload")
+        self.init(
+            url: try container.decode(String.self, forKey: .url),
+            contentType: try container.decodeIfPresent(String.self, forKey: .contentType)
+        )
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/upload", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
+        try container.encodeIfPresent(contentType, forKey: .contentType)
     }
 
     /// Returns the presigned upload URL.
@@ -122,17 +143,4 @@ public final class FileUploadHandle: Sendable {
     }
 }
 
-// MARK: - Codable
-
-extension FileUploadHandle: Codable {
-    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
-    public convenience init(from decoder: Decoder) throws {
-        let (url, contentType) = try Self.parts(of: TransferableCoding.descriptor(from: decoder))
-        self.init(url: url, contentType: contentType)
-    }
-
-    /// Always throws: transferables are read-only.
-    public func encode(to encoder: Encoder) throws {
-        throw TransferableCoding.readOnlyError(self, encoder)
-    }
-}
+extension FileUploadHandle: Codable {}

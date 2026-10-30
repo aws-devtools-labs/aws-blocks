@@ -34,6 +34,11 @@ public final nonisolated class Api: Sendable {
         public struct Input: Codable {
             public let priority: Int
             public let title: String
+
+            public init(priority: Int, title: String) {
+                self.priority = priority
+                self.title = title
+            }
         }
     }
 }

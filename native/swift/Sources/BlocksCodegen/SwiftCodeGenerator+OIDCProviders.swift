@@ -25,22 +25,30 @@ extension SwiftCodeGenerator {
     func emitOIDCProviderEnum(_ operation: Operation, namespace: String, indent: String, lines: inout [String]) {
         guard let provider = oidcProviderEnum(operation) else { return }
         lines.append("")
-        lines.append("\(indent)/// The providers `\(fullMethodName(operation, namespace: namespace))` signs in with.")
+        // A doc comment is one line: a method name's line breaks are written escaped, as in the method's own doc.
+        let docName = fullMethodName(operation, namespace: namespace)
+            .replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\r", with: "\\r")
+        lines.append("\(indent)/// The providers `\(docName)` signs in with.")
         let conformances = "String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName"
-        emitDeclaration(provider.name, line: "\(indent)public enum \(provider.name): \(conformances) {", lines: &lines)
+        // `nonisolated`, like `Servers`: in an app module with MainActor default isolation, a main-actor provider
+        // type would make `OIDCClient<Provider>`'s nonisolated `Codable` conformance unusable.
+        emitDeclaration(
+            provider.name, line: "\(indent)public nonisolated enum \(provider.name): \(conformances) {", lines: &lines
+        )
         for (caseName, value) in providerCases(provider.values) {
             let unescaped = caseName.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
             lines.append(unescaped == value
                 ? "\(indent)    case \(caseName)"
-                : "\(indent)    case \(caseName) = \(swiftStringLiteral(value))")
+                : "\(indent)    case \(caseName) = \"\(swiftStringContent(value))\"")
         }
         lines.append("\(indent)}")
     }
 
     /// Names the enum when it isn't `Provider`, since the operation already declares or uses a type by that name.
-    func oidcProviderRenameWarning(_ operation: Operation, namespace: String, className: String) -> String? {
+    /// `enumName` is the operation's enum, which holds the provider enum.
+    func oidcProviderRenameWarning(_ operation: Operation, namespace: String, className: String, enumName: String) -> String? {
         guard let provider = oidcProviderEnum(operation), provider.name != "Provider" else { return nil }
-        let providerType = "\(className).\(pascalCase(operation.name)).\(provider.name)"
+        let providerType = "\(className).\(enumName).\(provider.name)"
         return "swift: \(fullMethodName(operation, namespace: namespace)) names its providers \(providerType),"
             + " since its operation already declares or uses a type named Provider."
     }
