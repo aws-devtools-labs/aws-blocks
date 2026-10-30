@@ -42,10 +42,7 @@ export function normalizeClassName(raw: string): string {
 }
 
 /** Validate an npm scope (the part after `@`, before `/`). */
-export function validateScope(
-	scope: string,
-	label = '--scope',
-): { ok: true } | { ok: false; reason: string } {
+export function validateScope(scope: string, label = '--scope'): { ok: true } | { ok: false; reason: string } {
 	if (!/^[a-z0-9][a-z0-9._-]*$/.test(scope)) {
 		return {
 			ok: false,
@@ -915,11 +912,11 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	printNextSteps(mode, names);
+	printNextSteps(mode, names, relative(cwd, targetDir) || '.');
 	return 0;
 }
 
-function printNextSteps(mode: Mode, names: DerivedNames): void {
+function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
 		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
@@ -932,7 +929,7 @@ function printNextSteps(mode: Mode, names: DerivedNames): void {
 		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
 		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
-		console.log(`  1. cd ${names.folder} && npm run build && npm test`);
+		console.log(`  1. cd ${targetRel} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);
 	}
 }
