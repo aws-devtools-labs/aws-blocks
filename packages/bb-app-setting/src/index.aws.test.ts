@@ -3,9 +3,9 @@
 
 import assert from 'node:assert';
 import { describe, test, mock } from 'node:test';
-import { SSMClient } from '@aws-sdk/client-ssm';
-import { Scope } from '@aws-blocks/core';
-import { AppSetting } from './index.aws.js';
+import { ParameterNotFound, SSMClient } from '@aws-sdk/client-ssm';
+import { isBlocksError, isWireSafeError, Scope } from '@aws-blocks/core';
+import { AppSetting, AppSettingErrors } from './index.aws.js';
 
 const TEST_CMK = 'arn:aws:kms:us-east-1:111122223333:key/abcd1234-5678-90ab-cdef-1234567890ab';
 
@@ -54,6 +54,37 @@ describe('AWS runtime put() KMS key', () => {
 			assert.strictEqual(inputs[0].KeyId, undefined);
 		} finally {
 			restore();
+		}
+	});
+});
+
+describe('AWS runtime get() missing parameter', () => {
+	test('maps the SDK ParameterNotFound to a branded AppSettingErrors.ParameterNotFound', async () => {
+		const m = mock.method(SSMClient.prototype, 'send', async () => {
+			throw new ParameterNotFound({ message: 'not found', $metadata: {} });
+		});
+		try {
+			const setting = new AppSetting<string>(new Scope('app'), 'gone', { value: 'init' });
+			await assert.rejects(setting.get(), (e: unknown) => {
+				assert.ok(isBlocksError(e, AppSettingErrors.ParameterNotFound), `got ${(e as Error).name}`);
+				assert.ok(isWireSafeError(e));
+				return true;
+			});
+		} finally {
+			m.mock.restore();
+		}
+	});
+
+	test('rethrows other SDK errors unchanged', async () => {
+		const original = Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+		const m = mock.method(SSMClient.prototype, 'send', async () => {
+			throw original;
+		});
+		try {
+			const setting = new AppSetting<string>(new Scope('app'), 'denied', { value: 'init' });
+			await assert.rejects(setting.get(), (e: unknown) => e === original);
+		} finally {
+			m.mock.restore();
 		}
 	});
 });
