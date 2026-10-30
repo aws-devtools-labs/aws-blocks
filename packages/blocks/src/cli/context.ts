@@ -77,8 +77,8 @@ export function isCi(env: NodeJS.ProcessEnv): boolean {
 	return Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0';
 }
 
-/** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`. */
-export const REGION_PATTERN = /^[a-z]{2}(-[a-z]+)+-\d+$/;
+/** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`, `eusc-de-east-1`. */
+export const REGION_PATTERN = /^[a-z]{2,}(-[a-z]+)+-\d+$/;
 
 /**
  * The project root: the nearest directory at or above `start` that holds both a
@@ -159,14 +159,20 @@ export class Context {
 
 		if (this.globals.profile) this.env.AWS_PROFILE = this.globals.profile;
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
-		// Help and --version never use it, so a stray AWS_REGION does not hide them.
+		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
+		// so a stray one does not stop local commands. Help and --version never use it.
 		if (parsed.command && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(
 					`option --region must be an AWS Region code such as us-east-1, not ${JSON.stringify(this.globals.region)}.`,
 				);
 			}
-			if (this.globals.region === undefined && this.env.AWS_REGION && !REGION_PATTERN.test(this.env.AWS_REGION)) {
+			if (
+				parsed.command.aws &&
+				this.globals.region === undefined &&
+				this.env.AWS_REGION &&
+				!REGION_PATTERN.test(this.env.AWS_REGION)
+			) {
 				throw new UsageError(
 					`AWS_REGION must be an AWS Region code such as us-east-1, not ${JSON.stringify(this.env.AWS_REGION)}.`,
 					{ hint: 'export AWS_REGION=us-east-1, or pass --region <region>' },

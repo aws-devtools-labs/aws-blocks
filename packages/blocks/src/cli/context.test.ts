@@ -133,12 +133,13 @@ describe('run environment', () => {
 		assert.strictEqual(shellQuote('/a"b%c', 'linux'), `'/a"b%c'`);
 	});
 
-	it('accepts only an AWS Region code in --region and AWS_REGION (exit 2)', async () => {
+	it('accepts only an AWS Region code in --region, and in AWS_REGION for a command that uses AWS (exit 2)', async () => {
 		const cwd = fixtureApp();
-		for (const region of ['us-east-1', 'eu-central-2', 'us-gov-west-1', 'cn-north-1', 'ap-southeast-4']) {
+		const good = ['us-east-1', 'eu-central-2', 'us-gov-west-1', 'cn-north-1', 'ap-southeast-4', 'eusc-de-east-1'];
+		for (const region of good) {
 			const run = await runCli(['--region', region, 'dev'], { cwd });
 			assert.strictEqual(run.code, 0, `${region}: ${run.stderr}`);
-			const env = await runCli(['dev'], { cwd, env: { AWS_REGION: region } });
+			const env = await runCli(['deploy'], { cwd, env: { AWS_REGION: region } });
 			assert.strictEqual(env.code, 0, `${region}: ${env.stderr}`);
 		}
 		for (const region of ['us-east-1; rm -rf ~', 'US-EAST-1', 'useast1', 'us-east', '../x', 'us-east-1\n']) {
@@ -146,16 +147,18 @@ describe('run environment', () => {
 			assert.strictEqual(flag.code, 2, JSON.stringify(region));
 			assert.match(flag.stderr, /option --region must be an AWS Region code/);
 			assert.strictEqual(flag.spawned.length, 0);
-			const env = await runCli(['dev'], { cwd, env: { AWS_REGION: region } });
+			const env = await runCli(['deploy'], { cwd, env: { AWS_REGION: region } });
 			assert.strictEqual(env.code, 2, JSON.stringify(region));
 			assert.match(env.stderr, /AWS_REGION must be an AWS Region code/);
+			assert.strictEqual(env.spawned.length, 0);
 		}
-		// --region replaces a bad AWS_REGION, and help never needs a Region.
+		// A local command ignores a stray AWS_REGION; --region replaces it; help never needs a Region.
+		assert.strictEqual((await runCli(['dev'], { cwd, env: { AWS_REGION: 'bad' } })).code, 0);
 		assert.strictEqual(
-			(await runCli(['--region', 'us-west-2', 'dev'], { cwd, env: { AWS_REGION: 'bad' } })).code,
+			(await runCli(['--region', 'us-west-2', 'deploy'], { cwd, env: { AWS_REGION: 'bad' } })).code,
 			0,
 		);
-		assert.strictEqual((await runCli(['dev', '--help'], { cwd, env: { AWS_REGION: 'bad' } })).code, 0);
+		assert.strictEqual((await runCli(['deploy', '--help'], { cwd, env: { AWS_REGION: 'bad' } })).code, 0);
 	});
 });
 
