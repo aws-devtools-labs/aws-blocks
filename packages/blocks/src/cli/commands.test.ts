@@ -237,6 +237,22 @@ describe('lifecycle commands', () => {
 		const failed = await runCli(['vendorize', 'x'], { cwd, onSpawn: () => ({ code: 7 }) });
 		assert.match(failed.stderr, /^Error: blocks vendorize failed \(exit code 7\)\.\n {2}project: /);
 	});
+
+	it('turns a SIGHUP into a SIGTERM only for the watch runners: dev and sandbox', async () => {
+		const cwd = fixtureApp();
+		for (const [argv, terminate] of [
+			[['dev'], true],
+			[['sandbox'], true],
+			[['sandbox', 'deploy'], false],
+			[['sandbox', 'destroy'], false],
+			[['deploy'], false],
+			[['destroy', '--yes'], false],
+		] as const) {
+			const run = await runCli([...argv], { cwd, env: AWS_ENV });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.strictEqual(run.spawned[0].terminateOnHangup ?? false, terminate, argv.join(' '));
+		}
+	});
 });
 
 describe('help for passthrough subcommands', () => {

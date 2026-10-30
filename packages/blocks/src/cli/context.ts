@@ -27,6 +27,13 @@ export interface SpawnSpec {
 	env: NodeJS.ProcessEnv;
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
+	/**
+	 * Forward a SIGHUP to the child as SIGTERM, which `tsx` passes on to the runner
+	 * (it does not pass on SIGHUP): for the watch runners, `blocks dev` and
+	 * `blocks sandbox`. Otherwise the CLI ignores SIGHUP and does not forward it,
+	 * so a hangup never ends a deploy or destroy, which core defers it for.
+	 */
+	terminateOnHangup?: boolean;
 }
 
 export interface ChildResult {
@@ -255,10 +262,9 @@ export interface SpawnChildOptions {
  * one SIGINT. It never forwards one sooner, and never a second: on a second
  * SIGINT, `tsx watch` SIGKILLs the dev server before it cleans up.
  *
- * SIGTERM is forwarded, and SIGHUP is forwarded as SIGTERM, which `tsx`
- * passes on to the runner (it does not pass on SIGHUP). Core's deploy
- * coalesces the duplicate SIGTERM that a process-group signal and this
- * forward produce, and treats the first one as a warning, as it does a hangup.
+ * SIGTERM is forwarded. Core's deploy coalesces the duplicate SIGTERM that a
+ * process-group signal and this forward produce, and treats the first one as a
+ * warning. SIGHUP follows {@link SpawnSpec.terminateOnHangup}.
  */
 export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 	const graceMs = options.sigintGraceMs ?? SIGINT_GRACE_MS;
@@ -278,14 +284,16 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			const onTerm = () => {
 				child.kill('SIGTERM');
 			};
+			// Ignored unless the spec asks for SIGTERM; the listener keeps a hangup from ending the CLI.
+			const onHangup = spec.terminateOnHangup ? onTerm : () => {};
 			process.on('SIGINT', onInterrupt);
 			process.on('SIGTERM', onTerm);
-			process.on('SIGHUP', onTerm);
+			process.on('SIGHUP', onHangup);
 			const cleanup = () => {
 				clearTimeout(escalation);
 				process.off('SIGINT', onInterrupt);
 				process.off('SIGTERM', onTerm);
-				process.off('SIGHUP', onTerm);
+				process.off('SIGHUP', onHangup);
 			};
 			child.on('error', (error) => {
 				cleanup();
