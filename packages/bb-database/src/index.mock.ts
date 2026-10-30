@@ -102,6 +102,9 @@ export class Database extends Scope {
 
 		const dataDir = getMockDataDir(this);
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
+		// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
+		// (a cache hit) in case a file changed after startup.
+		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath));
 
 		const buildEngine = async (): Promise<DatabaseEngine> => {
 			let inner: DatabaseEngine;
