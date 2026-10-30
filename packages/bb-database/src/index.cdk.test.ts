@@ -10,6 +10,7 @@ import { type BlocksDefaults, BlocksPresets, DEFAULT_NODE_RUNTIME, Scope } from 
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
+import { BINDINGS_METADATA_KEY } from './constants.js';
 import { _resetDatabaseRegistry } from './core/construction.js';
 import { Database, DatabaseCluster } from './index.cdk.js';
 
@@ -50,7 +51,7 @@ const functionsByHandler = (template: Template, handler: string): Resources =>
 beforeEach(() => _resetDatabaseRegistry());
 
 describe('Database (CDK)', () => {
-	test('an owned block provisions a DSQL cluster and one migration resource', () => {
+	test('an owned block provisions a DSQL cluster, one migration resource, and records its binding with the cluster resource id', () => {
 		const { stack, parent } = setup();
 		const db = new Database(parent, 'db');
 		const template = Template.fromStack(stack);
@@ -66,6 +67,11 @@ describe('Database (CDK)', () => {
 		assert.strictEqual(migrations.length, 1);
 		assert.strictEqual(migrations[0].Properties.schemaName, 'public');
 		assert.strictEqual(migrations[0].Properties.migrationsHash, 'no-migrations');
+		const [clusterId] = Object.keys(template.findResources('AWS::DSQL::Cluster'));
+		assert.deepStrictEqual(template.toJSON().Metadata[BINDINGS_METADATA_KEY], {
+			databases: { [db.fullId]: { cluster: 'default', type: 'dsql', resource: clusterId } },
+			clusters: {},
+		});
 		assert.deepStrictEqual(db.cluster, { kind: 'dsql', id: 'default' });
 	});
 
@@ -117,6 +123,14 @@ describe('Database (CDK)', () => {
 		template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
 			dbRole: Match.stringLikeRegexp('^blocks_app_'),
 			appRoleArn: Match.anyValue(),
+		});
+		const [clusterId] = Object.keys(template.findResources('AWS::DSQL::Cluster'));
+		assert.deepStrictEqual(template.toJSON().Metadata[BINDINGS_METADATA_KEY], {
+			databases: {
+				[a.fullId]: { cluster: shared.fullId, type: 'dsql' },
+				[b.fullId]: { cluster: shared.fullId, type: 'dsql' },
+			},
+			clusters: { [shared.fullId]: { type: 'dsql', resource: clusterId } },
 		});
 	});
 

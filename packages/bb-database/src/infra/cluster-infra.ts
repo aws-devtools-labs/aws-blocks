@@ -78,6 +78,8 @@ class FunctionsWaitForMigrations implements cdk.IAspect {
 export class ClusterInfra {
 	readonly configEntries: Record<string, string>;
 	readonly dbRole: string;
+	/** Logical id of the cluster resource, a token until synth; the binding record resolves it. */
+	readonly clusterLogicalId: string;
 
 	private readonly appRole: iam.IRole;
 	private readonly clusterResource: cdk.CfnResource;
@@ -105,6 +107,7 @@ export class ClusterInfra {
 			removalPolicy === cdk.RemovalPolicy.SNAPSHOT ? cdk.RemovalPolicy.RETAIN : removalPolicy,
 		);
 		this.clusterResource = cluster;
+		this.clusterLogicalId = cluster.logicalId;
 		const endpoint = cluster.getAtt('Endpoint').toString();
 		const clusterArn = `arn:aws:dsql:${stack.region}:${stack.account}:cluster/${cluster.ref}`;
 		this.configEntries = {

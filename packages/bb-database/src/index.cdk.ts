@@ -5,10 +5,11 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import { registerDatabase, registerUniqueId } from './core/construction.js';
 import { configError } from './errors.js';
+import { recordClusterBinding, recordDatabaseBinding } from './infra/bindings-metadata.js';
 import { ClusterInfra } from './infra/cluster-infra.js';
 import { lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath } from './migrations/runner.js';
-import type { ClusterRef, ClusterType, DatabaseClusterOptions, DatabaseOptions } from './types.js';
+import type { ClusterRef, ClusterType, DatabaseBinding, DatabaseClusterOptions, DatabaseOptions } from './types.js';
 
 // DSQL is reached over its public endpoint, so an app in a VPC needs egress.
 const VPC_REQUIREMENTS = { requiresEgress: true };
@@ -43,6 +44,7 @@ export class DatabaseCluster extends BuildingBlockScope {
 		this.type = options.type;
 		registerUniqueId('DatabaseCluster', id, this.fullId);
 		this.infra = clusterInfra(this, options);
+		recordClusterBinding(this, this.fullId, { type: options.type, resource: this.infra.clusterLogicalId });
 	}
 }
 
@@ -72,13 +74,16 @@ export class Database extends BuildingBlockScope {
 		if (migrations) lintMigrationFiles(migrations);
 
 		let infra: ClusterInfra;
+		const binding: DatabaseBinding = { cluster: resolved.ref.id, type: resolved.ref.kind };
 		if (!options.cluster) {
 			infra = clusterInfra(this, { type: 'dsql', removalPolicy: options.removalPolicy });
+			binding.resource = infra.clusterLogicalId;
 		} else if (resolved.shared instanceof DatabaseCluster) {
 			infra = resolved.shared.infra;
 		} else {
 			throw configError(`Database '${this.fullId}': 'cluster' must be a DatabaseCluster.`);
 		}
+		recordDatabaseBinding(this, this.fullId, binding);
 		infra.attach({ scope: this, fullId: this.fullId, schemaName: this.schemaName, migrations });
 	}
 

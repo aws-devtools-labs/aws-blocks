@@ -24,6 +24,11 @@ export const DEFAULT_CLUSTER_ID = 'default';
 
 export const DEFAULT_SCHEMA = 'public';
 
+// Written by the cdk entry at synth and read back from the deployed template by the deploy guard.
+export const BINDINGS_METADATA_KEY = 'aws-blocks:bindings';
+
+export const BINDING_MARKER_FILE = 'binding.json';
+
 export const DEFAULT_MIGRATIONS_ROOT = './aws-blocks/migrations';
 
 const DB_ROLE_PREFIX = 'blocks_app_';
