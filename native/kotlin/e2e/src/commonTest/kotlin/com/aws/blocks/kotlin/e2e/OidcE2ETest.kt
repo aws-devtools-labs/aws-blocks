@@ -9,6 +9,7 @@ import com.aws.blocks.kotlin.oidc.OidcPlatformLauncher
 import com.aws.blocks.kotlin.oidc.OidcRedirectSession
 import com.aws.blocks.kotlin.oidc.OidcSignInOptions
 import com.aws.blocks.kotlin.oidc.OidcSignInOutcome
+import com.aws.blocks.kotlin.oidc.signIn
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.ktor.client.HttpClient
