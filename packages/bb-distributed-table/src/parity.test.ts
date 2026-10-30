@@ -8,6 +8,8 @@ import { DistributedTable, DistributedTableErrors } from './index.mock.js';
 import { DistributedTable as AwsDistributedTable } from './index.aws.js';
 import { isBlocksError } from '@aws-blocks/core';
 import { z } from 'zod';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import type { DistributedTableOptions } from './types.js';
 
 beforeEach(() => {
 	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
@@ -40,6 +42,29 @@ function awsTableWithFakeClient<T>(
 	const table = new AwsDistributedTable<T>(testScope(), id, options);
 	(table as any).docClient = { send: (command: any) => send(command) };
 	return table;
+}
+
+/**
+ * Build an AWS-runtime DistributedTable that keeps its real DocumentClient, so
+ * lib-dynamodb marshalling runs, but short-circuits every request at the
+ * `build` step (after serialization, before signing and sending). Returns the
+ * table plus the marshalled (AttributeValue-form) input of each command sent.
+ */
+function awsTableCapturingMarshalledInput<T>(id: string, options: DistributedTableOptions<T>) {
+	// Endpoint resolution in the serialize step needs a region; nothing is sent.
+	process.env.AWS_REGION ??= 'us-east-1';
+	const table = new AwsDistributedTable<T>(testScope(), id, options);
+	const sent: Record<string, unknown>[] = [];
+	// `docClient` is private; the test reaches it only to install the capture middleware.
+	const { docClient } = table as unknown as { docClient: DynamoDBDocumentClient };
+	docClient.middlewareStack.add(
+		() => async (args: { input: object }) => {
+			sent.push({ ...args.input });
+			return { output: { $metadata: {} }, response: {} };
+		},
+		{ step: 'build', name: 'captureMarshalledInput' },
+	);
+	return { table, sent };
 }
 
 describe('AWS getBatch retries UnprocessedKeys returned by BatchGetItem until all keys resolve', () => {
@@ -835,5 +860,82 @@ describe('readValidation behaves identically on the mock and the AWS runtime', (
 			async () => ({ Item: legacyWithExtra }),
 		);
 		assert.deepStrictEqual(await table.get({ orderId: 'o1' }), preserved);
+	});
+});
+
+describe('undefined values nested in an item are stored the same way on the mock and AWS', () => {
+	// `note` is optional inside a map and `tags` allows missing list entries; a
+	// read returns `null` for a list entry that was written as `undefined`.
+	const schema = z.object({
+		id: z.string(),
+		meta: z.object({ note: z.string().optional(), k: z.number() }),
+		tags: z.array(z.number().nullish()),
+	});
+	const options = { schema, key: { partitionKey: 'id' } } as const;
+	const item = { id: 'a', meta: { note: undefined, k: 1 }, tags: [1, undefined, 3] };
+	const stored = { id: 'a', meta: { k: 1 }, tags: [1, null, 3] };
+	const marshalled = {
+		id: { S: 'a' },
+		meta: { M: { k: { N: '1' } } },
+		tags: { L: [{ N: '1' }, { NULL: true }, { N: '3' }] },
+	};
+
+	test('AWS put drops undefined map properties and writes undefined list entries as NULL', async () => {
+		const { table, sent } = awsTableCapturingMarshalledInput('undef-aws-put', options);
+		await table.put(item);
+		assert.deepStrictEqual(sent[0].Item, marshalled);
+		assert.deepStrictEqual(item.tags, [1, undefined, 3], 'the caller\'s item must not be mutated');
+	});
+
+	test('AWS putBatch normalizes undefined values the same way', async () => {
+		const { table, sent } = awsTableCapturingMarshalledInput('undef-aws-batch', options);
+		await table.putBatch([item]);
+		assert.deepStrictEqual(sent[0].RequestItems, { [table.fullId]: [{ PutRequest: { Item: marshalled } }] });
+	});
+
+	test('AWS ifFieldEquals marshals a nested-undefined condition value like the stored item', async () => {
+		const { table, sent } = awsTableCapturingMarshalledInput('undef-aws-cond', options);
+		await table.put(item, { ifFieldEquals: { meta: { note: undefined, k: 1 } } });
+		assert.deepStrictEqual(sent[0].ExpressionAttributeValues, { ':val0': marshalled.meta });
+	});
+
+	test('mock put round-trips to the same values, before and after a reload from disk', async () => {
+		const scope = testScope();
+		const table = new DistributedTable(scope, 'undef-mock', options);
+		await table.put(item);
+		assert.deepStrictEqual(await table.get({ id: 'a' }), stored);
+		const reloaded = new DistributedTable(scope, 'undef-mock', options);
+		assert.deepStrictEqual(await reloaded.get({ id: 'a' }), stored);
+	});
+
+	test('mock putBatch round-trips to the same values', async () => {
+		const table = new DistributedTable(testScope(), 'undef-mock-batch', options);
+		await table.putBatch([item]);
+		assert.deepStrictEqual(await table.get({ id: 'a' }), stored);
+	});
+
+	test('mock ifFieldEquals with a nested undefined matches the stored item', async () => {
+		const table = new DistributedTable(testScope(), 'undef-mock-cond', options);
+		await table.put(item);
+		await table.put({ ...item, tags: [] }, { ifFieldEquals: { meta: { note: undefined, k: 1 } } });
+		assert.deepStrictEqual((await table.get({ id: 'a' }))?.tags, []);
+	});
+});
+
+describe('mock index queries are sparse like DynamoDB GSIs', () => {
+	const schema = z.object({ id: z.string(), status: z.string().optional(), shippedAt: z.number().optional() });
+	const options = {
+		schema,
+		key: { partitionKey: 'id' },
+		indexes: { byShipped: { partitionKey: 'status', sortKey: 'shippedAt' } },
+	} as const;
+
+	test('an item without the index sort-key attribute is not returned by an index query', async () => {
+		const table = new DistributedTable(testScope(), 'sparse-gsi', options);
+		await table.put({ id: 'a', status: 'open', shippedAt: 5 });
+		await table.put({ id: 'b', status: 'open' });
+		await table.put({ id: 'c', shippedAt: 7 });
+		const rows = await collect(table.query({ index: 'byShipped', where: { status: { equals: 'open' } } }));
+		assert.deepStrictEqual(rows.map(r => r.id), ['a']);
 	});
 });

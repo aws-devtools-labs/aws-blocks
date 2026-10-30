@@ -47,7 +47,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, normalizeUndefinedValues, remapItemTooLarge, applyReadValidation } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -118,7 +118,9 @@ export class DistributedTable<
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
 		await this.validateItem(item);
-		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: item };
+		// Store `undefined` nested in maps/lists the way the mock does (dropped /
+		// `null`) instead of letting the DocumentClient reject it.
+		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: normalizeUndefinedValues(item) };
 
 		if (options?.ifNotExists) {
 			command.ConditionExpression = 'attribute_not_exists(#pk)';
@@ -276,7 +278,7 @@ export class DistributedTable<
 		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
 			await this.retryUnprocessed(
 				'putBatch',
-				chunk.map(item => ({ PutRequest: { Item: item as any } })),
+				chunk.map(item => ({ PutRequest: { Item: normalizeUndefinedValues(item) as any } })),
 				async requests => {
 					try {
 						const resp = await this.docClient.send(new BatchWriteCommand({
@@ -398,7 +400,7 @@ export class DistributedTable<
 		entries.forEach(([field, value], i) => {
 			conditions.push(`#field${i} = :val${i}`);
 			names[`#field${i}`] = field;
-			values[`:val${i}`] = value;
+			values[`:val${i}`] = normalizeUndefinedValues(value);
 		});
 		command.ConditionExpression = conditions.join(' AND ');
 		command.ExpressionAttributeNames = names;
