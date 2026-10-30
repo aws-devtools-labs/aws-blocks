@@ -156,10 +156,19 @@ test.after(async (t) => {
   if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
     const destroyScript = ENV === 'sandbox' ? 'test/sandbox-destroy.ts' : 'test/production-destroy.ts';
     console.log(`\n🗑️  Destroying ${ENV} stack...`);
-    execFileSync('npx', ['tsx', destroyScript, backendPath], {
-      cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
-    });
-    console.log(`✅ ${ENV} stack destroyed`);
+    try {
+      execFileSync('npx', ['tsx', destroyScript, backendPath], {
+        cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
+      });
+      console.log(`✅ ${ENV} stack destroyed`);
+    } catch (e) {
+      // Fail the run. This file runs directly (not under `node --test`), where
+      // a throwing after() hook is reported but the process still exits 0, so a
+      // broken destroy would pass CI. No rethrow: the cleanup below must still
+      // run so the process can exit.
+      console.error(`\n❌ Destroying the ${ENV} stack failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exitCode = 1;
+    }
   }
 
   // Close the realtime client middleware's pooled WebSocket(s) so the event
