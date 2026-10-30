@@ -112,6 +112,8 @@ export function isCdkFailureLine(line: string): boolean {
   return (
     /ROLLBACK|_FAILED\b/.test(line) ||
     /\b(error|failed|failure|exception)\b/i.test(line) ||
+    // Compound JS error names (`SyntaxError`, `TypeError`, `ValidationException`), e.g. a synth crash.
+    /\b[A-Z]\w*(Error|Exception)\b/.test(line) ||
     /^\s*❌/.test(line)
   );
 }
@@ -369,13 +371,15 @@ async function runCurated(
   streams: CuratedStreams,
 ): Promise<void> {
   let ok = false;
+  let child: ChildProcess | undefined;
   try {
-    const child = spawnCommand(command, args, { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
-    const ended = [relayLines(child.stdout, streams.stdout), relayLines(child.stderr, streams.stderr)];
+    const spawned = spawnCommand(command, args, { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
+    child = spawned;
+    const ended = [relayLines(spawned.stdout, streams.stdout), relayLines(spawned.stderr, streams.stderr)];
     const { code, signal } = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {
-        child.once('error', reject);
-        child.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
+        spawned.once('error', reject);
+        spawned.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
       },
     );
     // Bounded drain, as in runStreaming: a grandchild holding a pipe open must
@@ -386,6 +390,9 @@ async function runCurated(
     if (typeof code === 'number' && code !== 0) throw new Error(`${command} ${args.join(' ')} exited with code ${code}`);
     ok = true;
   } finally {
+    // A descendant still holding the pipes must not keep this process alive.
+    child?.stdout?.destroy();
+    child?.stderr?.destroy();
     streams.close(ok);
   }
 }
@@ -413,6 +420,15 @@ const LAMBDA_PLATFORM_LINE = /\[(START|END|REPORT|INIT_START)\s+RequestId:/;
 /** `cdk watch` progress lines worth showing at `normal` (besides failures): change detection, hotswaps, outcomes. */
 const WATCH_PROGRESS_LINE = /Detected change|hotswap|Deployment time|^\s*✅/i;
 
+/** CDK's own markers for the start of a watch deploy cycle. */
+const WATCH_CYCLE_START_LINE = /Detected change|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
+
+/** A watch deploy cycle that succeeded. */
+const WATCH_CYCLE_DONE_LINE = /^\s*✅|✨\s+(Deployment|Total) time:/;
+
+/** Default quiet period after a failure line before a cycle with no outcome counts as failed. */
+const WATCH_FAILURE_IDLE_MS = 3000;
+
 export interface CdkWatchOutputOptions {
   /** Default: {@link resolveLogLevel} at attach time. */
   level?: BlocksLogLevel;
@@ -422,6 +438,8 @@ export interface CdkWatchOutputOptions {
   stopping?: () => boolean;
   /** Default {@link DEFAULT_RETAINED_LINES}. */
   retainLines?: number;
+  /** Default {@link WATCH_FAILURE_IDLE_MS}. */
+  failureIdleMs?: number;
 }
 
 /**
@@ -436,6 +454,11 @@ export interface CdkWatchOutputOptions {
  * When a watch deploy fails (a `❌` line) or `cdk watch` itself exits non-zero,
  * the retained lines since the last failure are printed to stderr, so a failed
  * hotswap is diagnosable without re-running with a higher level.
+ *
+ * A cycle that dies during synth prints no `❌`: CDK swallows the error and
+ * keeps watching. So a cycle that logged a failure line and no success marker
+ * also counts as failed once the next cycle starts or output goes quiet for
+ * `failureIdleMs`.
  */
 export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutputOptions = {}): void {
   const level = options.level ?? resolveLogLevel();
@@ -454,7 +477,19 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
 
   const stderr = options.stderr ?? process.stderr;
   const ring = createOutputRing(options.retainLines);
+  const failureIdleMs = options.failureIdleMs ?? WATCH_FAILURE_IDLE_MS;
+  // Whether a deploy cycle is running, and whether it has logged a failure line.
+  let inCycle = true;
+  let cycleFailed = false;
+  let idleTimer: NodeJS.Timeout | undefined;
+  const clearIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+  };
   const dump = (): void => {
+    clearIdle();
+    cycleFailed = false;
+    inCycle = false;
     const text = formatRetainedOutput(ring, 'cdk watch', level);
     if (text) stderr.write(text);
     ring.clear();
@@ -464,12 +499,31 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
     const assembler = createLineAssembler();
     const handle = (line: string): void => {
       if (line.trim() === '' || LAMBDA_PLATFORM_LINE.test(line) || NOISE_LINE.test(line)) return;
+      if (WATCH_CYCLE_START_LINE.test(line)) {
+        if (cycleFailed) dump();
+        inCycle = true;
+      }
       ring.push(line);
       if (level === 'normal' && (WATCH_PROGRESS_LINE.test(line) || isCdkFailureLine(line))) {
         if (from === 'stderr') console.error(`[CDK Watch] ${line.trim()}`);
         else (progressToStderr() ? console.error : console.log)(`[CDK Watch] ${line.trim()}`);
       }
-      if (/^\s*❌/.test(line)) dump();
+      if (/^\s*❌/.test(line)) {
+        dump();
+        return;
+      }
+      if (WATCH_CYCLE_DONE_LINE.test(line)) {
+        clearIdle();
+        cycleFailed = false;
+        inCycle = false;
+      } else if (inCycle && isCdkFailureLine(line)) {
+        cycleFailed = true;
+      }
+      if (cycleFailed) {
+        clearIdle();
+        idleTimer = setTimeout(dump, failureIdleMs);
+        idleTimer.unref();
+      }
     };
     stream.setEncoding('utf-8');
     stream.on('data', (chunk: string) => {
@@ -482,6 +536,7 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
   relay(child.stdout, 'stdout');
   relay(child.stderr, 'stderr');
   child.once('exit', (code) => {
+    clearIdle();
     if (options.stopping?.() || code === 0) return;
     dump();
   });
