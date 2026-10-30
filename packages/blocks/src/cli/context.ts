@@ -7,7 +7,7 @@
  * the interactive/CI decision and the injectable process seams.
  */
 
-import { spawn as spawnProcess } from 'node:child_process';
+import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -196,45 +196,89 @@ export class Context {
 }
 
 /**
+ * True when this process is in the foreground process group of its controlling
+ * terminal, so a Ctrl-C there reached every process of the group. Windows
+ * delivers Ctrl-C to every process on the console. When it cannot tell, true.
+ */
+export function inTerminalForeground(): boolean {
+	if (process.platform === 'win32') return true;
+	try {
+		if (process.platform === 'linux') {
+			// After "(comm) ": state ppid pgrp session tty_nr tpgid.
+			const stat = readFileSync('/proc/self/stat', 'utf-8');
+			const [, , pgrp, , tty, tpgid] = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+			return tty !== '0' && tpgid === pgrp;
+		}
+		const [tpgid, pgid] = execFileSync('ps', ['-o', 'tpgid=,pgid=', '-p', String(process.pid)], {
+			encoding: 'utf-8',
+		})
+			.trim()
+			.split(/\s+/);
+		return Number(tpgid) > 0 && tpgid === pgid;
+	} catch {
+		return true;
+	}
+}
+
+export interface SpawnChildOptions {
+	/**
+	 * Whether a SIGINT the CLI received reached the child too: a Ctrl-C in the
+	 * terminal does. Default: {@link inTerminalForeground}.
+	 */
+	sigintReachedChild?: () => boolean;
+}
+
+/**
  * Run a child process to completion with the CLI's stdio.
  *
- * The child shares the terminal's process group, so a Ctrl-C reaches it
- * directly; the CLI waits for it to exit and then exits 130. SIGTERM and SIGHUP
- * sent to the CLI are forwarded, so stopping the CLI stops the child.
+ * The child shares the CLI's process group, so a Ctrl-C in the terminal
+ * reaches it directly; the CLI waits for it to exit and then exits 130. A
+ * SIGINT sent to the CLI's PID alone (a supervisor, an IDE, `kill -INT`) is
+ * forwarded, so it stops the child too. It is not forwarded after a Ctrl-C: a
+ * second SIGINT makes `tsx watch` SIGKILL the dev server before it cleans up.
+ *
+ * SIGTERM is forwarded, and SIGHUP is forwarded as SIGTERM, which `tsx`
+ * passes on to the runner (it does not pass on SIGHUP). Core's deploy
+ * coalesces the duplicate SIGTERM that a process-group signal and this
+ * forward produce, and treats the first one as a warning, as it does a hangup.
  */
-export const spawnChild: SpawnFn = (spec) =>
-	new Promise((resolvePromise, reject) => {
-		const child = spawnProcess(spec.command, spec.args, {
-			cwd: spec.cwd,
-			env: spec.env,
-			stdio: ['inherit', spec.stdoutToStderr ? 2 : 'inherit', 'inherit'],
+export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
+	const sigintReachedChild = options.sigintReachedChild ?? inTerminalForeground;
+	return (spec) =>
+		new Promise((resolvePromise, reject) => {
+			const child = spawnProcess(spec.command, spec.args, {
+				cwd: spec.cwd,
+				env: spec.env,
+				stdio: ['inherit', spec.stdoutToStderr ? 2 : 'inherit', 'inherit'],
+			});
+			let interrupted = false;
+			const onInterrupt = () => {
+				interrupted = true;
+				if (!sigintReachedChild()) child.kill('SIGINT');
+			};
+			const onTerm = () => {
+				child.kill('SIGTERM');
+			};
+			process.on('SIGINT', onInterrupt);
+			process.on('SIGTERM', onTerm);
+			process.on('SIGHUP', onTerm);
+			const cleanup = () => {
+				process.off('SIGINT', onInterrupt);
+				process.off('SIGTERM', onTerm);
+				process.off('SIGHUP', onTerm);
+			};
+			child.on('error', (error) => {
+				cleanup();
+				reject(error);
+			});
+			child.on('exit', (code, signal) => {
+				cleanup();
+				resolvePromise({ code, signal, interrupted });
+			});
 		});
-		let interrupted = false;
-		const onInterrupt = () => {
-			interrupted = true;
-		};
-		const forward = (signal: NodeJS.Signals) => () => {
-			child.kill(signal);
-		};
-		const onTerm = forward('SIGTERM');
-		const onHup = forward('SIGHUP');
-		process.on('SIGINT', onInterrupt);
-		process.on('SIGTERM', onTerm);
-		process.on('SIGHUP', onHup);
-		const cleanup = () => {
-			process.off('SIGINT', onInterrupt);
-			process.off('SIGTERM', onTerm);
-			process.off('SIGHUP', onHup);
-		};
-		child.on('error', (error) => {
-			cleanup();
-			reject(error);
-		});
-		child.on('exit', (code, signal) => {
-			cleanup();
-			resolvePromise({ code, signal, interrupted });
-		});
-	});
+}
+
+export const spawnChild: SpawnFn = createSpawnChild();
 
 /** Ask on stderr and read one line from stdin. */
 export function promptLine(question: string): Promise<string> {

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { describe, it } from 'node:test';
 import { resolveDevConfig } from './config.js';
-import { findProjectRoot, isCi, logLevelFor } from './context.js';
+import { createSpawnChild, findProjectRoot, isCi, logLevelFor } from './context.js';
 import { CliError } from './errors.js';
 import { parseArgv } from './parse.js';
 import { shellQuote } from './runners/launch.js';
@@ -131,6 +132,56 @@ describe('run environment', () => {
 			0,
 		);
 		assert.strictEqual((await runCli(['dev', '--help'], { cwd, env: { AWS_REGION: 'bad' } })).code, 0);
+	});
+});
+
+describe('signals sent to the CLI while a child runs', () => {
+	/**
+	 * Start a fake child that records the first signal it receives in a file and
+	 * exits; then deliver `signals` to the CLI's listeners, in order.
+	 */
+	async function deliver(signals: NodeJS.Signals[], sigintReachedChild: boolean) {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-signals-'));
+		const log = join(dir, 'signals.log');
+		const ready = join(dir, 'ready');
+		const script = `
+const { writeFileSync } = require('node:fs');
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+	process.on(signal, () => {
+		writeFileSync(${JSON.stringify(log)}, signal);
+		process.exit(0);
+	});
+}
+writeFileSync(${JSON.stringify(ready)}, '');
+setInterval(() => {}, 1000);
+`;
+		const spawn = createSpawnChild({ sigintReachedChild: () => sigintReachedChild });
+		const running = spawn({ command: process.execPath, args: ['-e', script], cwd: dir, env: process.env });
+		// A real child process: poll for the file it writes once its handlers are installed.
+		while (!existsSync(ready)) await sleep(10);
+		for (const signal of signals) process.emit(signal);
+		const result = await running;
+		return { result, received: readFileSync(log, 'utf-8') };
+	}
+
+	it('forwards a SIGINT sent to the CLI alone, and still reports the interruption', async () => {
+		const { result, received } = await deliver(['SIGINT'], false);
+		assert.strictEqual(received, 'SIGINT');
+		assert.strictEqual(result.interrupted, true);
+	});
+
+	it('does not repeat a Ctrl-C that already reached the child', async () => {
+		// The SIGTERM after it stops the child; had the SIGINT been forwarded, the child would record it first.
+		const { result, received } = await deliver(['SIGINT', 'SIGTERM'], true);
+		assert.strictEqual(received, 'SIGTERM');
+		assert.strictEqual(result.interrupted, true);
+	});
+
+	it('forwards SIGTERM, and SIGHUP as SIGTERM, which tsx passes on', async () => {
+		assert.strictEqual((await deliver(['SIGTERM'], false)).received, 'SIGTERM');
+		const hangup = await deliver(['SIGHUP'], false);
+		assert.strictEqual(hangup.received, 'SIGTERM');
+		assert.strictEqual(hangup.result.interrupted, false);
 	});
 });
 
