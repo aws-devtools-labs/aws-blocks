@@ -19,7 +19,15 @@ import { commandHelp, rootHelp } from './help.js';
 import { suggest } from './parse.js';
 import { ALIASES, COMMANDS, type CommandInput, type CommandSpec, findCommand } from './registry.js';
 import { LAST_DEPLOY_FILE, readDeployTarget } from './runners/deploy-target.js';
-import { DEV_OPTIONS_ENV, type RunnerName, resolveTsxCli, runnerPath, shellQuote } from './runners/launch.js';
+import {
+	DEV_OPTIONS_ENV,
+	type RunnerName,
+	resolveTsxCli,
+	resolveTsxLoader,
+	runnerPath,
+	shellQuote,
+	TSX_IMPORT_ENV,
+} from './runners/launch.js';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -98,7 +106,10 @@ interface RunnerRun {
 	where?: string[];
 }
 
-/** Run a lifecycle runner under the app's `tsx`, from the project root. */
+/**
+ * Run a lifecycle runner under the app's `tsx`, from the project root. The
+ * runner's client generation (core's deploy and sandbox) loads the same `tsx`.
+ */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = ctx.requireRoot();
 	const options = run.options === undefined ? [] : [JSON.stringify(run.options)];
@@ -107,7 +118,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		command: process.execPath,
 		args: [resolveTsxCli(root), ...(run.tsxArgs ?? []), runnerPath(run.runner), ...options, ...(run.args ?? [])],
 		cwd: root,
-		env: run.env,
+		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
 	});
 }

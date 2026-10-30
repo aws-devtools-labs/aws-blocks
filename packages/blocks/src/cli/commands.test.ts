@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import type { SpawnSpec } from './context.js';
-import { DEV_OPTIONS_ENV, type RunnerName, runnerPath } from './runners/launch.js';
+import { DEV_OPTIONS_ENV, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 const IDENTITY: AwsIdentity = {
@@ -181,6 +181,10 @@ describe('lifecycle commands', () => {
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
+		// Core's client generation in the runner loads the tsx the runner runs under, by URL.
+		const loader = spec.env[TSX_IMPORT_ENV] ?? '';
+		assert.match(loader, /^file:.*[\\/]tsx[\\/]dist[\\/]loader\.mjs$/);
+		assert.strictEqual(join(fileURLToPath(loader), '..', 'cli.mjs'), spec.args[0]);
 		// package.json "blocks.dev" without a frontendCommand keeps auto-detection on.
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
 			backendPath: join(root, 'aws-blocks', 'index.ts'),

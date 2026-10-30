@@ -14,15 +14,20 @@
  *
  * `tsx` resolves from the app first, so the app's own version runs as it did
  * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
+ * The runners pass the same `tsx` loader to core's client-generation worker
+ * through `BLOCKS_TSX_IMPORT`, so an app without its own `tsx` works there too.
  */
 
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CliError } from '../errors.js';
 
 /** The environment variable that carries the dev server runner's options. */
 export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
+
+/** The environment variable that names the `tsx` loader for core's client-generation worker. */
+export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
 
 export type RunnerName = 'dev-server' | 'sandbox' | 'sandbox-destroy' | 'deploy' | 'destroy' | 'generate-spec';
 
@@ -31,16 +36,26 @@ export function runnerPath(name: RunnerName): string {
 	return fileURLToPath(new URL(`./${name}.js`, import.meta.url));
 }
 
-/** The `tsx` CLI entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
-export function resolveTsxCli(root: string): string {
+/** The absolute path of a `tsx` entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+function resolveTsx(root: string, entry: 'tsx' | 'tsx/cli'): string {
 	for (const from of [join(root, 'package.json'), fileURLToPath(import.meta.url)]) {
 		try {
-			return createRequire(from).resolve('tsx/cli');
+			return createRequire(from).resolve(entry);
 		} catch {
 			// Not installed there; try the next location.
 		}
 	}
 	throw new CliError('cannot find tsx, which runs the app TypeScript.', { hint: 'npm install -D tsx' });
+}
+
+/** The `tsx` CLI entry: the app's own, else the one `@aws-blocks/blocks` depends on. */
+export function resolveTsxCli(root: string): string {
+	return resolveTsx(root, 'tsx/cli');
+}
+
+/** The file URL of the `tsx` loader (`node --import <url>`), from the same install as {@link resolveTsxCli}. */
+export function resolveTsxLoader(root: string): string {
+	return pathToFileURL(resolveTsx(root, 'tsx')).href;
 }
 
 /**
