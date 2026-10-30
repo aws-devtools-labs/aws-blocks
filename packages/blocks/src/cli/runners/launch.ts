@@ -4,13 +4,16 @@
 /**
  * How the CLI starts the lifecycle runners.
  *
- * Each lifecycle command runs a small runner in a child process under `tsx`,
- * the same runtime as the `aws-blocks/scripts/*.ts` wrappers that the npm
- * scripts ran (`tsx watch` for `dev`, `tsx --conditions=cdk` for
- * `sandbox destroy`). The runner calls one core function with options that the
- * CLI resolved. A runner reads its options as JSON from `process.argv[2]`; the
- * dev server runner reads them from `BLOCKS_DEV_OPTIONS`, because the sandbox
- * starts it from a shell command string.
+ * Each lifecycle command runs a small runner in a child process with `tsx`,
+ * the runtime of the `aws-blocks/scripts/*.ts` wrappers that the npm scripts
+ * ran. The dev server runs under `tsx watch`, which restarts it on a change.
+ * The other runners run as `node --import <tsx loader>` (with `--conditions=cdk`
+ * for `sandbox destroy`), with no `tsx` process between the CLI and the runner:
+ * the `tsx` CLI does not handle SIGHUP, so a closed terminal would end it and
+ * the CLI would report a failure while the runner went on. The runner calls one
+ * core function with options that the CLI resolved. A runner reads its options
+ * as JSON from `process.argv[2]`; the dev server runner reads them from
+ * `BLOCKS_DEV_OPTIONS`, because the sandbox starts it from a shell command string.
  *
  * `tsx` resolves from the app first, so the app's own version runs as it did
  * from the npm scripts, then from `@aws-blocks/blocks`, which depends on it.
@@ -56,6 +59,23 @@ export function resolveTsxCli(root: string): string {
 /** The file URL of the `tsx` loader (`node --import <url>`), from the same install as {@link resolveTsxCli}. */
 export function resolveTsxLoader(root: string): string {
 	return pathToFileURL(resolveTsx(root, 'tsx')).href;
+}
+
+export interface RunnerLaunch {
+	/** Run under `tsx watch`, for the dev server. */
+	watch?: boolean;
+	/** A `--conditions` value for Node, for example `cdk`. */
+	conditions?: string;
+	/** Arguments after the runner script. */
+	args?: string[];
+}
+
+/** The `node` arguments that run the runner `script` in the app at `root`; see the module doc. */
+export function runnerArgs(root: string, script: string, launch: RunnerLaunch = {}): string[] {
+	const node = launch.conditions === undefined ? [] : [`--conditions=${launch.conditions}`];
+	const tail = [script, ...(launch.args ?? [])];
+	if (launch.watch) return [resolveTsxCli(root), 'watch', ...node, ...tail];
+	return [...node, '--import', resolveTsxLoader(root), ...tail];
 }
 
 /**

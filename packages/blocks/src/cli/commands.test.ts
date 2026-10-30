@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type SpawnSpec, stageEnv } from './context.js';
+import type { LastDeploy } from './runners/last-deploy.js';
 import { DEV_OPTIONS_ENV, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -184,10 +185,11 @@ describe('lifecycle commands', () => {
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
-		// Core's client generation in the runner loads the tsx the runner runs under, by URL.
+		// The runner and core's client generation in it load the same tsx, by URL; the dev command uses its CLI.
 		const loader = spec.env[TSX_IMPORT_ENV] ?? '';
 		assert.match(loader, /^file:.*[\\/]tsx[\\/]dist[\\/]loader\.mjs$/);
-		assert.strictEqual(join(fileURLToPath(loader), '..', 'cli.mjs'), spec.args[0]);
+		assert.deepStrictEqual(spec.args.slice(0, 3), ['--import', loader, runnerPath('sandbox')]);
+		assert.ok(options.devCommand.includes(join(fileURLToPath(loader), '..', 'cli.mjs')), options.devCommand);
 		// package.json "blocks.dev" without a frontendCommand keeps auto-detection on.
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
 			backendPath: join(root, 'aws-blocks', 'index.ts'),
@@ -202,7 +204,12 @@ describe('lifecycle commands', () => {
 		const run = await runCli(['sandbox', 'destroy'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
-		assert.ok(spec.args.includes('--conditions=cdk'));
+		assert.deepStrictEqual(spec.args.slice(0, 4), [
+			'--conditions=cdk',
+			'--import',
+			spec.env[TSX_IMPORT_ENV],
+			runnerPath('sandbox-destroy'),
+		]);
 		assert.deepStrictEqual(runnerOptions(spec, 'sandbox-destroy'), {
 			backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 		});
@@ -251,6 +258,23 @@ describe('lifecycle commands', () => {
 			const run = await runCli([...argv], { cwd, env: AWS_ENV });
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.strictEqual(run.spawned[0].terminateOnHangup ?? false, terminate, argv.join(' '));
+		}
+	});
+
+	it('runs every runner but the dev server with the tsx loader, with no tsx process in between', async () => {
+		const cwd = fixtureApp();
+		for (const [argv, runner] of [
+			[['sandbox', 'deploy'], 'sandbox'],
+			[['deploy'], 'deploy'],
+			[['destroy', '--yes'], 'destroy'],
+			[['generate', 'spec'], 'generate-spec'],
+		] as const) {
+			const run = await runCli([...argv], { cwd, env: AWS_ENV });
+			assert.strictEqual(run.code, 0, run.stderr);
+			const [spec] = run.spawned;
+			assert.strictEqual(spec.command, process.execPath);
+			assert.deepStrictEqual(spec.args.slice(0, 3), ['--import', spec.env[TSX_IMPORT_ENV], runnerPath(runner)]);
+			assert.ok(!spec.args.some((arg) => /tsx[\\/]dist[\\/]cli\.mjs$/.test(arg)), argv.join(' '));
 		}
 	});
 });
@@ -619,39 +643,54 @@ describe('JSON output', () => {
 		assert.match(run.stderr, /Try: blocks whoami --region <region>/);
 	});
 
-	it('prints the deploy result from .blocks-sandbox after the run, with the target the runner recorded', async () => {
+	/** Write `.blocks-sandbox/last-deploy.json`, as the deploy runners do. */
+	const writeLastDeploy = (root: string, file: Partial<Record<'production' | 'sandbox', LastDeploy>>) => {
+		mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+		writeFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), JSON.stringify(file));
+	};
+	const prodUrl = 'https://prod.execute-api.us-east-1.amazonaws.com/';
+	const sandboxUrl = 'https://sandbox.execute-api.us-east-1.amazonaws.com/';
+	const PROD: LastDeploy = {
+		stack: 'demo-prod',
+		apiUrl: prodUrl,
+		url: 'https://d111.cloudfront.net',
+		account: '210987654321',
+		region: 'eu-west-3',
+		credentials: 'AWS profile prod',
+	};
+	const SANDBOX: LastDeploy = {
+		stack: 'demo-jdoe-abc123',
+		apiUrl: sandboxUrl,
+		url: null,
+		account: '123456789012',
+		region: 'us-east-1',
+		credentials: 'AWS profile dev',
+	};
+
+	it('prints the result the runner recorded, even after another deploy rewrote outputs.json', async () => {
 		const root = fixtureApp();
 		const lookups: string[] = [];
+		const core = {
+			readAwsIdentity: async () => {
+				lookups.push('readAwsIdentity');
+				return IDENTITY;
+			},
+		};
 		const run = await runCli(['deploy', '--output', 'json'], {
 			cwd: root,
 			env: AWS_ENV,
-			core: {
-				readAwsIdentity: async () => {
-					lookups.push('readAwsIdentity');
-					return IDENTITY;
-				},
-			},
+			core,
 			onSpawn: () => {
-				mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-				// A dev server started during the deploy rewrote the shared config.json.
+				writeLastDeploy(root, { production: PROD });
+				// After the runner recorded, a sandbox deploy rewrote outputs.json with its own stack
+				// only, as CDK does, and a dev server rewrote the shared config.json.
+				writeFileSync(
+					join(root, '.blocks-sandbox', 'outputs.json'),
+					JSON.stringify({ 'demo-jdoe-abc123': { ApiUrl: sandboxUrl } }),
+				);
 				writeFileSync(
 					join(root, '.blocks-sandbox', 'config.json'),
 					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
-				);
-				writeFileSync(
-					join(root, '.blocks-sandbox', 'outputs.json'),
-					JSON.stringify({
-						'demo-prod-monitoring': { AlarmTopic: 'arn:topic' },
-						'demo-prod': {
-							ApiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/',
-							HostingHostingUrl1A2B3C4D: 'https://d111.cloudfront.net',
-						},
-					}),
-				);
-				// The runner deployed with the stage credentials from .env.production.
-				writeFileSync(
-					join(root, '.blocks-sandbox', 'last-deploy.json'),
-					JSON.stringify({ account: '210987654321', region: 'eu-west-3', credentials: 'AWS profile prod' }),
 				);
 				return { code: 0 };
 			},
@@ -659,52 +698,63 @@ describe('JSON output', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.strictEqual(run.spawned[0].stdoutToStderr, true);
 		assert.deepStrictEqual(JSON.parse(run.stdout), {
-			apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/',
+			apiUrl: prodUrl,
 			url: 'https://d111.cloudfront.net',
 			stack: 'demo-prod',
 			account: '210987654321',
 			region: 'eu-west-3',
 		});
-		assert.deepStrictEqual(lookups, [], 'the CLI never asks AWS with its own environment');
-	});
-
-	it('takes the result from the stack the command deployed, not another stack in outputs.json', async () => {
-		const root = fixtureApp();
-		const sandboxUrl = 'https://sandbox.execute-api.us-east-1.amazonaws.com/';
-		const prodUrl = 'https://prod.execute-api.us-east-1.amazonaws.com/';
-		/** A deploy that writes outputs.json with both stacks, in this order; a first sandbox deploy creates its id. */
-		const writeOutputs = (order: string[]) => () => {
-			mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-			writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
-			const stacks: Record<string, Record<string, string>> = {
-				'demo-jdoe-abc123': { ApiUrl: sandboxUrl },
-				'demo-prod': { ApiUrl: prodUrl },
-			};
-			writeFileSync(
-				join(root, '.blocks-sandbox', 'outputs.json'),
-				JSON.stringify(Object.fromEntries(order.map((name) => [name, stacks[name]]))),
-			);
-			return { code: 0 };
-		};
-		// A sandbox deployed while the production deploy waited for liveness, and wrote its entry first.
-		const deploy = await runCli(['deploy', '--output', 'json'], {
-			cwd: root,
-			env: AWS_ENV,
-			onSpawn: writeOutputs(['demo-jdoe-abc123', 'demo-prod']),
-		});
-		assert.strictEqual(deploy.code, 0, deploy.stderr);
-		assert.deepStrictEqual(
-			{ apiUrl: JSON.parse(deploy.stdout).apiUrl, stack: JSON.parse(deploy.stdout).stack },
-			{ apiUrl: prodUrl, stack: 'demo-prod' },
-		);
-		rmSync(join(root, '.blocks-sandbox'), { recursive: true });
+		// The other direction: a production deploy rewrote outputs.json after the sandbox runner recorded.
 		const sandbox = await runCli(['sandbox', 'deploy', '--query', 'apiUrl'], {
 			cwd: root,
 			env: AWS_ENV,
-			onSpawn: writeOutputs(['demo-prod', 'demo-jdoe-abc123']),
+			core,
+			onSpawn: () => {
+				writeLastDeploy(root, { production: PROD, sandbox: SANDBOX });
+				writeFileSync(
+					join(root, '.blocks-sandbox', 'outputs.json'),
+					JSON.stringify({ 'demo-prod': { ApiUrl: prodUrl } }),
+				);
+				return { code: 0 };
+			},
 		});
 		assert.strictEqual(sandbox.code, 0, sandbox.stderr);
 		assert.strictEqual(sandbox.stdout, `${sandboxUrl}\n`);
+		assert.deepStrictEqual(lookups, [], 'the CLI never asks AWS with its own environment');
+	});
+
+	it('exits 1 with an error, not null fields, when the runner recorded no result', async () => {
+		const root = fixtureApp();
+		for (const [argv, operation] of [
+			[['deploy', '--query', 'apiUrl'], 'blocks deploy'],
+			[['sandbox', 'deploy', '--output', 'json'], 'blocks sandbox deploy'],
+		] as const) {
+			// The other stage's entry is there; this stage's runner exited 0 and recorded nothing.
+			const run = await runCli([...argv], {
+				cwd: root,
+				env: AWS_ENV,
+				onSpawn: () => {
+					writeLastDeploy(root, operation === 'blocks deploy' ? { sandbox: SANDBOX } : { production: PROD });
+					writeFileSync(
+						join(root, '.blocks-sandbox', 'outputs.json'),
+						JSON.stringify({
+							'demo-prod': { ApiUrl: prodUrl },
+							'demo-jdoe-abc123': { ApiUrl: sandboxUrl },
+						}),
+					);
+					return { code: 0 };
+				},
+			});
+			assert.strictEqual(run.code, 1, argv.join(' '));
+			assert.strictEqual(run.stdout, '', argv.join(' '));
+			assert.match(
+				run.stderr,
+				new RegExp(
+					`^Error: ${operation} finished, but recorded no result in \\.blocks-sandbox[\\\\/]last-deploy\\.json`,
+					'm',
+				),
+			);
+		}
 	});
 
 	it('prints no result after an interrupted or failed deploy, even with old result files', async () => {
@@ -715,10 +765,8 @@ describe('JSON output', () => {
 			join(root, '.blocks-sandbox', 'outputs.json'),
 			JSON.stringify({ 'demo-prod': { ApiUrl: 'https://old/' } }),
 		);
-		writeFileSync(
-			join(root, '.blocks-sandbox', 'last-deploy.json'),
-			JSON.stringify({ account: '1', region: 'us-east-1' }),
-		);
+		writeLastDeploy(root, { production: PROD, sandbox: SANDBOX });
+		const lastDeploy = () => JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), 'utf-8'));
 		const lookups: string[] = [];
 		const core = {
 			readAwsIdentity: async () => {
@@ -739,9 +787,11 @@ describe('JSON output', () => {
 			const run = await runCli([...argv], { cwd: root, env: AWS_ENV, core, onSpawn: () => result });
 			assert.strictEqual(run.code, code, argv.join(' '));
 			assert.strictEqual(run.stdout, '', argv.join(' '));
+			// A deploy removes its own stage's stale entry first, and keeps the other's.
+			if (argv[0] === 'deploy') assert.deepStrictEqual(lastDeploy(), { sandbox: SANDBOX });
 		}
 		assert.deepStrictEqual(lookups, []);
-		assert.ok(!existsSync(join(root, '.blocks-sandbox', 'last-deploy.json')), 'a stale target is removed first');
+		assert.deepStrictEqual(lastDeploy(), {});
 	});
 
 	it('prints a --query field raw, for $(...) capture', async () => {
@@ -751,11 +801,7 @@ describe('JSON output', () => {
 			env: AWS_ENV,
 			core: { readAwsIdentity: async () => IDENTITY },
 			onSpawn: () => {
-				mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-				writeFileSync(
-					join(root, '.blocks-sandbox', 'outputs.json'),
-					JSON.stringify({ 'demo-prod': { ApiUrl: 'https://api.example/' } }),
-				);
+				writeLastDeploy(root, { production: { ...PROD, apiUrl: 'https://api.example/' } });
 				return { code: 0 };
 			},
 		});
@@ -812,5 +858,82 @@ describe('JSON output', () => {
 		assert.strictEqual(result.status, 0, result.stderr);
 		assert.deepStrictEqual(JSON.parse(result.stdout), { code: 0, signal: null, interrupted: false });
 		assert.match(result.stderr, /child says hi/);
+	});
+});
+
+describe('the deploy runners record the result', () => {
+	const prodUrl = 'https://prod.execute-api.us-east-1.amazonaws.com/';
+	const sandboxUrl = 'https://sandbox.execute-api.us-east-1.amazonaws.com/';
+
+	/**
+	 * Run a compiled runner in a fresh process with core's deploy steps replaced:
+	 * each writes outputs.json as `cdk deploy` does. The production deploy reports
+	 * its outputs through `onDeployed`, then, during its liveness wait, a sandbox
+	 * deploy of the same app rewrites outputs.json with only its own stack.
+	 */
+	function runRunner(root: string, runner: RunnerName, options: unknown): void {
+		const coreUrl = import.meta.resolve('@aws-blocks/core/scripts');
+		const fixture = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mock } from 'node:test';
+
+const outputs = (stacks) => {
+  mkdirSync('.blocks-sandbox', { recursive: true });
+  writeFileSync('.blocks-sandbox/outputs.json', JSON.stringify(stacks));
+};
+// Imports are dynamic: mock.module applies only to modules imported after it.
+const real = await import(${JSON.stringify(coreUrl)});
+mock.module(${JSON.stringify(coreUrl)}, {
+  namedExports: {
+    ...real,
+    deploy: async (options) => {
+      const prod = { ApiUrl: ${JSON.stringify(prodUrl)}, HostingHostingUrl1A2B3C4D: 'https://d111.cloudfront.net' };
+      outputs({ 'demo-prod-monitoring': { AlarmTopic: 'arn:topic' }, 'demo-prod': prod });
+      options.onDeployed({ stack: 'demo-prod', apiUrl: prod.ApiUrl, hostingUrl: prod.HostingHostingUrl1A2B3C4D });
+      outputs({ 'demo-jdoe-abc123': { ApiUrl: ${JSON.stringify(sandboxUrl)} } });
+    },
+    startSandbox: async () => {
+      outputs({ 'demo-jdoe-abc123': { ApiUrl: ${JSON.stringify(sandboxUrl)} } });
+      return ${JSON.stringify(sandboxUrl)};
+    },
+    readAwsIdentity: async () => ({ account: '210987654321', region: 'eu-west-3', credentials: 'AWS profile prod' }),
+  },
+});
+process.argv[2] = ${JSON.stringify(JSON.stringify(options))};
+await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
+`;
+		const result = spawnSync(
+			process.execPath,
+			['--experimental-test-module-mocks', '--input-type=module', '-e', fixture],
+			{ cwd: root, encoding: 'utf-8', env: { PATH: process.env.PATH, HOME: root }, timeout: 15_000 },
+		);
+		assert.strictEqual(result.status, 0, result.stderr);
+	}
+
+	const lastDeploy = (root: string) =>
+		JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), 'utf-8')) as Record<
+			string,
+			LastDeploy
+		>;
+	const target = { account: '210987654321', region: 'eu-west-3', credentials: 'AWS profile prod' };
+
+	it('blocks deploy: the outputs core read before its wait, not the outputs.json rewritten during it', () => {
+		const root = fixtureApp();
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
+		assert.deepStrictEqual(lastDeploy(root), {
+			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
+		});
+	});
+
+	it('blocks sandbox deploy: its own stack, next to the production entry', () => {
+		const root = fixtureApp();
+		mkdirSync(join(root, '.blocks-sandbox'));
+		writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
+		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+		assert.deepStrictEqual(lastDeploy(root), {
+			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
+			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
+		});
 	});
 });

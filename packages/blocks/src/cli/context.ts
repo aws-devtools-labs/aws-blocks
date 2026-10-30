@@ -28,10 +28,13 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
-	 * Forward a SIGHUP to the child as SIGTERM, which `tsx` passes on to the runner
-	 * (it does not pass on SIGHUP): for the watch runners, `blocks dev` and
-	 * `blocks sandbox`. Otherwise the CLI ignores SIGHUP and does not forward it,
-	 * so a hangup never ends a deploy or destroy, which core defers it for.
+	 * Forward a SIGHUP to the child as SIGTERM, on which it cleans up (`tsx watch`,
+	 * the dev server's parent, passes on SIGTERM but not SIGHUP): for the watch
+	 * commands, `blocks dev` and `blocks sandbox`. Otherwise the CLI ignores
+	 * SIGHUP, does not forward it, and waits for the child. Core's production
+	 * deploy defers SIGHUP and runs to its end, so after a closed terminal the CLI
+	 * still reports its result; a runner that does not defer it ends with the
+	 * hangup, and the CLI reports that.
 	 */
 	terminateOnHangup?: boolean;
 }

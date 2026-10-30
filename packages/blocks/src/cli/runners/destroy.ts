@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** Runs under `tsx`, started by `blocks destroy` after the confirmation. */
+/** Runs with the `tsx` loader, started by `blocks destroy` after the confirmation. */
 
 import { type DestroyOptions, destroy } from '@aws-blocks/core/scripts';
 
