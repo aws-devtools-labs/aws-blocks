@@ -152,6 +152,15 @@ export interface DevServerOptions {
  * no secrets, typegen is unavailable, or it is disabled). The watcher is `unref`'d
  * so it can never block the dev server's shutdown.
  */
+/**
+ * Options for the dev session's typegen watcher. Regeneration notices are
+ * `log.detail`: hidden once output is curated and routed by `BLOCKS_LOG_STREAM`;
+ * unchanged (`console.log`) with neither variable set. Exported for tests.
+ */
+export function typegenWatchOptions(): { unref: true; log: (msg: string) => void } {
+  return { unref: true, log: (msg) => log.detail(msg) };
+}
+
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
     const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
@@ -160,7 +169,7 @@ async function startTypegenWatch(): Promise<(() => void) | undefined> {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
     }
     log.detail('🔑 Type-safe secret()/config() keys — watching for changes...');
-    return await watchHostingValues({ unref: true });
+    return await watchHostingValues(typegenWatchOptions());
   } catch (error) {
     // Never break the dev server over typegen (e.g. `typescript` not installed).
     log.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
