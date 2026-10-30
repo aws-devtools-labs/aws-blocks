@@ -102,6 +102,42 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   },
 });
 
+// ── Container compute — an API namespace on the worker's tasks ────────────
+
+// Served by the `worker` container (the same tasks that run `container-job`),
+// through the front door: the gateway's VPC link on the `apigateway` leg, a
+// CloudFront VPC origin on the `cloudfront` leg — both to the container's
+// internal load balancer.
+export const containerApi = new ApiNamespace(
+  scope,
+  'containerApi',
+  (context) => ({
+    /** Which compute served the call, and the URL it saw. */
+    async whereAmI() {
+      return {
+        computeId: process.env.BLOCKS_COMPUTE_ID ?? null,
+        functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+        url: context.request.url.href,
+      };
+    },
+    async setCookies() {
+      context.response.headers.append('Set-Cookie', 'container-a=1; Path=/; Secure; HttpOnly; SameSite=Lax');
+      context.response.headers.append('Set-Cookie', 'container-b=2; Path=/; Secure; HttpOnly; SameSite=Lax');
+      return { ok: true };
+    },
+    async echoCookie() {
+      return { cookie: context.request.headers.get('cookie') };
+    },
+    /** Hold the request open — past the gateway's 29 s cap, within CloudFront's 60 s. */
+    async sleep(ms: number) {
+      const bounded = Math.min(Math.max(ms, 0), 50_000);
+      await new Promise((resolve) => setTimeout(resolve, bounded));
+      return { sleptMs: bounded };
+    },
+  }),
+  { compute: worker },
+);
+
 // ── Serverless compute — an API namespace on its own function ─────────────
 
 /** Which function served the call — what the API-namespace scenario asserts on. */

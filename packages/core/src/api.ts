@@ -126,7 +126,8 @@ export interface ApiNamespaceOptions {
    * call to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a
    * native client released before per-namespace paths — still runs on the
    * default compute. API calls stay capped at ~29 seconds by
-   * the gateway whatever the compute's `maxTimeoutSeconds`; run longer work in an
+   * the gateway whatever the compute's `maxTimeoutSeconds` (except a container
+   * namespace that CloudFront reaches directly, below); run longer work in an
    * `AsyncJob`. One compute can host several namespaces (and `AsyncJob`s). In
    * local dev every namespace still runs in the one dev server process.
    *
@@ -143,7 +144,10 @@ export interface ApiNamespaceOptions {
    * The compute keeps at least one task running (`scaling.minInstances: 0` fails
    * synth). Moving a namespace that already serves traffic onto a container: during
    * that deploy, its calls can get 503s until the new tasks are healthy.
-   * `RawRoute`s always run on the default compute.
+   * On the `apiFrontDoor: 'cloudfront'` tier, the CloudFront distribution that
+   * fronts the API (the managed one, or `Hosting`'s default CloudFront door) routes
+   * the namespace's path straight to that load balancer instead, so a call can run
+   * up to 60 seconds. `RawRoute`s always run on the default compute.
    *
    * Typed structurally — anything whose `resolve()` yields a compute, which is
    * what a `Compute` block is — so this entry carries no CDK types.

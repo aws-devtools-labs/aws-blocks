@@ -9,6 +9,7 @@ import { API_NAMESPACE_COMPUTE, API_NAMESPACE_EXPLICIT_COMPUTE } from '../api.js
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
+import type { ApiDirectRoute } from './api-direct-routes.js';
 import { addLoadBalancerMethod } from './api-vpc-link.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
@@ -80,6 +81,12 @@ export interface SharedGatewayProps {
 export interface SharedGateway {
 	/** The shared REST API that fronts every compute: a function, or a container's load balancer. */
 	readonly restApi: apigateway.RestApi;
+	/**
+	 * The namespace paths served by a load-balanced compute (a container), which a
+	 * CloudFront front door routes straight to the compute's load balancer
+	 * instead of through this gateway (see `addDirectApiBehaviors`).
+	 */
+	readonly directRoutes: readonly ApiDirectRoute[];
 	/** The RPC endpoint URL (`{gateway}/{stage}/aws-blocks/api`). */
 	readonly apiUrl: string;
 }
@@ -212,6 +219,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	restApi.root.addProxy({ defaultIntegration, anyMethod: true });
 
 	// Fan out: route each non-default compute's namespaces to its own ingress.
+	const directRoutes: ApiDirectRoute[] = [];
 	for (const [compute, exportNames] of namespaceRoutes) {
 		const ingress = compute.apiIngress();
 		if (!ingress) {
@@ -232,12 +240,14 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 			// through the backend's VPC link. The integration URI carries the path,
 			// so each namespace gets its own.
 			for (const name of exportNames) {
+				const path = `${BLOCKS_RPC_PREFIX}/${name}`;
 				addLoadBalancerMethod(
 					apiResource.addResource(name),
 					ingress,
-					`${BLOCKS_RPC_PREFIX}/${name}`,
+					path,
 					cdk.Duration.seconds(API_GATEWAY_INTEGRATION_TIMEOUT_SECONDS),
 				);
+				directRoutes.push({ path, ingress });
 			}
 			continue;
 		}
@@ -258,7 +268,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 	// `restApi.url` is `https://{id}.execute-api.{region}.amazonaws.com/{stage}/`.
 	const apiUrl = `${restApi.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 
-	return { restApi, apiUrl };
+	return { restApi, apiUrl, directRoutes };
 }
 
 /**

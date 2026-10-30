@@ -92,7 +92,8 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   client released before per-namespace paths — still runs on the default
   compute.
 - **The gateway's limits still apply.** An API call is capped at ~29 seconds
-  whatever the compute's `maxTimeoutSeconds`; run longer work in an `AsyncJob`.
+  whatever the compute's `maxTimeoutSeconds` (except a container namespace that
+  CloudFront reaches directly, below); run longer work in an `AsyncJob`.
 - **It's placement, not isolation.** Every compute runs the same backend bundle
   under the app's one execution role, so a separate compute is not a security
   boundary.
@@ -112,8 +113,12 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 
   The gateway reaches the tasks through an internal Application Load Balancer
   the compute provisions in the app's VPC (with a VPC link), so the same
-  ~29-second cap applies. One load balancer (and one listener) is shared by
-  every container in the backend that hosts a namespace.
+  ~29-second cap applies. On the `apiFrontDoor: 'cloudfront'` tier, the
+  CloudFront distribution that fronts the API (the managed one, or `Hosting`'s
+  default CloudFront door) routes the namespace's path straight to that load
+  balancer instead (a VPC origin), so a call can run up to 60 seconds. One load
+  balancer (and one listener) is shared by every container in the backend that
+  hosts a namespace.
 
   - It needs at least one running task: `scaling.minInstances: 0` fails synth.
   - Without a `scaling.strategy`, a container that also runs an `AsyncJob`
@@ -123,6 +128,11 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
     to start, because the route switches before they're healthy.
   - The load balancer allows 100 namespaces by default (synth warns past that;
     the quota can be raised), and an export name can be at most 112 characters.
+
+  Through CloudFront, `ctx.request.url` in a container namespace is the
+  CloudFront (or custom-domain) URL, while a namespace on a Lambda compute
+  reports the gateway's `execute-api` URL, since CloudFront reaches it through
+  the gateway.
 - **Everything else stays on the default compute:** namespaces without a
   `compute`, `RawRoute`s, and the auth routes.
 
