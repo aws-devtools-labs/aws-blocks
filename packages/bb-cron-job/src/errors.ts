@@ -18,7 +18,7 @@ export const CronJobErrors = {
 	InvalidTimezone: 'InvalidTimezoneExpression',
 	/**
 	 * Thrown at synth time when the resolved compute (the job's own, or its scope's)
-	 * is not serverless, or belongs to another backend.
+	 * is not a Lambda or container compute, or belongs to another backend.
 	 */
 	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;

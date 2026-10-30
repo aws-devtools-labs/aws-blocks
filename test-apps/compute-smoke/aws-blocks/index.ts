@@ -20,6 +20,10 @@
  * - CronJob on its own compute: `tick-own` passes `compute` (the reports
  *   compute). With the scope's CronJob on a third function, the two jobs also
  *   show that the shared scheduler role may invoke every job's target.
+ * - Container `CronJob`: a `rate(1 minute)` CronJob on the container compute;
+ *   its ticks must run on the container.
+ * - Scale from zero: an AsyncJob on a container compute with `minInstances: 0`
+ *   must still complete — autoscaling has to start a task for it.
  *
  * The front door is the suite's variant axis: each CI leg deploys this same app
  * with one `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
@@ -106,6 +110,47 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
       // burn CPU — no await, no signal check
     }
     await jobResults.put(`container-timeout:${payload.key}`, 'completed-should-not-happen');
+  },
+});
+
+// A CronJob on the container compute. Each tick is delivered to the container
+// (through the CronJob's internal AsyncJob queue) and records where it ran, so
+// the test can assert the tick reached the container. `rate(1 minute)` is the
+// shortest schedule, so a tick lands within a couple of minutes of deploy.
+new CronJob(scope, 'container-cron', {
+  schedule: 'rate(1 minute)',
+  compute: worker,
+  timeoutSeconds: 1800,
+  input: { marker: 'from-container-cron' },
+  handler: async (event) => {
+    await jobResults.put(
+      'container-cron:last',
+      JSON.stringify({
+        marker: event.input.marker,
+        jobName: event.jobName,
+        scheduledTime: event.scheduledTime,
+        runtime: process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
+      }),
+    );
+  },
+});
+
+// A container compute that scales to zero between jobs (`minInstances: 0`).
+// Nothing is running when the test submits a job, so the job only completes if
+// autoscaling starts a task for it.
+const idleWorker = new Compute(scope, 'idle-worker', {
+  type: 'container',
+  size: { vcpu: 0.25, memory: 512 },
+  scaling: { minInstances: 0, maxInstances: 2 },
+});
+
+const scaleFromZeroJob = new AsyncJob(scope, 'scale-from-zero-job', {
+  compute: idleWorker,
+  handler: async (payload: { key: string }) => {
+    await jobResults.put(
+      `scale-from-zero:${payload.key}`,
+      process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
+    );
   },
 });
 
@@ -222,6 +267,21 @@ export const api = new ApiNamespace(scope, 'api', (_context) => ({
   async containerTimeoutJobGetResult(key: string) {
     const raw = await jobResults.get(`container-timeout:${key}`);
     return raw ? { value: raw } : null;
+  },
+
+  async containerCronGetLast() {
+    const raw = await jobResults.get('container-cron:last');
+    return raw ? JSON.parse(raw) : null;
+  },
+
+  async scaleFromZeroJobSubmit(key: string) {
+    const { jobId } = await scaleFromZeroJob.submit({ key });
+    return { jobId };
+  },
+
+  async scaleFromZeroJobGetResult(key: string) {
+    const raw = await jobResults.get(`scale-from-zero:${key}`);
+    return raw ? { runtime: raw } : null;
   },
 
   /** Where the `placed` scope's CronJob last ran, or null before its first run. */

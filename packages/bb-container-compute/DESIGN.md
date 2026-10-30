@@ -59,7 +59,32 @@ wires Application Auto Scaling from `scaling`:
   assigned here calls at synth. Autoscaling is wired at `finalize()` precisely so
   every owned queue is known first.
 - Omitted `strategy` → inferred: queue-depth when the compute drains queues, else
-  CPU. `maxInstances ≤ 1` wires no policy.
+  CPU. `maxInstances ≤ 1` wires no policy, unless `minInstances` is 0.
+
+### Scaling to zero (`minInstances: 0`)
+
+With `minInstances: 0` the service deploys with `DesiredCount: 0` and can scale
+in to zero tasks, where nothing polls the owned queues. The queue-depth policy
+can't wake it: [step adjustments](https://docs.aws.amazon.com/autoscaling/application/userguide/step-scaling-policy-overview.html)
+are relative to the current task count, and a backlog under `backlogPerInstance`
+falls in the `change: 0` step, so 0 tasks stay 0 tasks and the message is never
+read.
+
+So a min-0 compute that drains queues gets one more step policy,
+`WakeOnWaitingMessages`: an alarm on the sum of `ApproximateNumberOfMessagesVisible`
+(waiting, not in flight) across its queues adds one task when the sum is 1 or
+more. While a task with free capacity is running it receives messages within
+seconds, so Visible stays at 0 and the policy is idle; when every task is busy
+it also adds capacity up to `maxInstances`. Scale-in is left to the queue-depth
+policy, which counts in-flight messages and so never removes the last task from
+under a running job. Computes with `minInstances ≥ 1` synthesize exactly the
+policies they did before.
+
+Waking takes minutes, not seconds: SQS publishes queue metrics to CloudWatch
+once a minute, the alarm evaluates a one-minute period, and the new task then
+starts and fetches the app code. A queue idle for more than six hours also
+[stops publishing metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/monitoring-using-cloudwatch.html)
+until it receives a message.
 
 ## Runtime (worker isolation)
 

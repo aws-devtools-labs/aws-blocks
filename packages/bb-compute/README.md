@@ -53,10 +53,10 @@ new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async 
   both are child constructs of it.
 - **Nearest wins.** A block's own `compute` option, then the nearest scope that
   sets `compute`, then the app's default compute.
-- **A container scope** places its `AsyncJob`s on the container. An
-  `ApiNamespace` or `CronJob` under it fails synth with an error naming the
-  compute, because they run only on a `serverless` compute for now: give them
-  their own serverless `compute`, or create them outside that scope. Setting an
+- **A container scope** places its `AsyncJob`s and `CronJob`s on the container.
+  An `ApiNamespace` under it fails synth with an error naming the compute,
+  because it runs only on a `serverless` compute for now: give it its own
+  serverless `compute`, or create it outside that scope. Setting an
   `AsyncJob`'s `maxConcurrencyPerCPU` still needs the container passed as the
   job's own `compute`, so the option is typed for it.
 - **`Realtime` and `RawRoute` stay on the default compute**, inside such a scope
@@ -90,7 +90,9 @@ type is a compile error.
 - `scaling?` — `{ minInstances, maxInstances, strategy? }`. Wires real
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
-  otherwise).
+  otherwise). Set `minInstances: 0` to scale to zero tasks between jobs; a
+  waiting job or CronJob tick then starts a task, which takes a few minutes. See
+  [DESIGN.md](../bb-container-compute/DESIGN.md#scaling-to-zero-mininstances-0).
 - `image?` — the container image to run (public or ECR URI), used **verbatim**
   (pulled by ECS at task start). Blocks builds **no** image and deploying needs
   **no local Docker**: your application code is shipped separately as an S3 asset
