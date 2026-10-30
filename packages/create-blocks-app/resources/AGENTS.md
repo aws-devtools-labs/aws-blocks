@@ -180,8 +180,18 @@ Before deploying, both commands print `Deployment target: <credentials>, Region 
 
 On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
 
-`npm run sandbox:deploy` also prints `BLOCKS_DEPLOYED api=<backend>`, but it is not the last output: the typed client (`aws-blocks/client.js`) is generated after it. For `sandbox:deploy`, wait for the process to exit with code 0 rather than for the line.
+`npm run sandbox:deploy` prints `BLOCKS_DEPLOYED api=<backend>` too. The typed client (`aws-blocks/client.js`) is generated before the deploy and `.blocks-sandbox/config.json` is written before the line, so once you see it the app is ready to run against the sandbox. To get the API URL alone in a script, run `npx --no -- blocks sandbox deploy --query apiUrl`.
 
 If you will immediately self-test the frontend, add `npm run deploy -- --wait-live`: it holds the `BLOCKS_DEPLOYED` line until the new build is actually being served through CloudFront, so a request issued right after the signal returns the new asset rather than a stale cached bundle. Without it, the signal fires as soon as the deploy process exits, which can be a few seconds before the edge finishes serving the new build. Tune the budget with `--wait-live-timeout=<seconds>` (default 180); if it can't confirm within the budget it says so and exits non-zero instead of printing the signal.
 
 **Stack naming.** The deploy scripts name stacks from `stackId` in `.blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `aws-blocks/index.cdk.ts`.
+
+## Blocks CLI
+
+Every `npm run …` script above is a thin alias of the `blocks` command from `@aws-blocks/blocks` (for example `"deploy": "blocks deploy"`), so prefer the npm scripts: `npm run deploy` runs `blocks deploy`, and `npm run dev -- --port 4000` passes flags through. When you need the command directly, run `npx --no -- blocks <command>`. Always keep `--no`: it uses the app's installed CLI and never downloads a package, and `blocks` on the npm registry is an unrelated package.
+
+- `npx --no -- blocks --help` lists every command; `npx --no -- blocks help <command>` (for example `npx --no -- blocks help sandbox destroy`) shows one command's flags and examples.
+- `--output json` prints one JSON document on stdout and keeps progress on stderr; `--query <field>` prints one field raw, for example `npx --no -- blocks deploy --query apiUrl` or `npx --no -- blocks whoami --query stacks.production`.
+- `npm run destroy` asks for confirmation in a terminal. Without one (CI, an agent's shell) it refuses with exit code 2 unless you pass `--yes`: `npm run destroy -- --yes`. Ask the user before you delete their production stack.
+- Exit codes: `0` success, `1` the operation failed, `2` usage error (unknown command or flag, or a confirmation the run could not give), `130` interrupted.
+- Dev server settings live in `package.json` under `"blocks": { "dev": { "port", "frontendCommand", "frontendPort" } }`; flags such as `npm run dev -- --port 4000` override them.

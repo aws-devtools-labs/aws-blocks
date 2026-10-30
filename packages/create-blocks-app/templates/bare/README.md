@@ -27,12 +27,21 @@ Open http://localhost:3000 after `npm run dev`.
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Local dev with mock storage |
+| `npm run dev:stop` | Stop the local dev server this app started |
 | `npm run test:e2e` | Test API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types (`-- --check` in CI) |
+
+Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
+The dev server settings (port, frontend command) are in `package.json` under `"blocks": { "dev": … }`.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Stack naming
 
