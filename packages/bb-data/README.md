@@ -240,7 +240,10 @@ try {
     // General query failure (syntax error, missing table, etc.)
   }
   if (isBlocksError(e, DatabaseErrors.TransactionFailed)) {
-    // Transaction could not commit
+    // The transaction could not begin or commit, or the transaction() callback
+    // threw a plain Error. An ApiError (or another Building Block's error) thrown
+    // by the callback is re-thrown unchanged after the rollback instead, so a
+    // 409 you throw to abort the transaction still reaches the client as a 409.
   }
   if (isBlocksError(e, DatabaseErrors.SerializationFailure)) {
     // Serializable-isolation conflict with a concurrent transaction — serialized

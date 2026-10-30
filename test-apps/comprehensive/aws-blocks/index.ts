@@ -1841,6 +1841,30 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
   },
 
+  // An ApiError the app throws to abort a transaction must reach the client
+  // with its own status and name (after the rollback), not as a 500
+  // TransactionFailed. The debit runs first so the e2e also proves the rollback.
+  async dbTransferOrConflict(fromId: string, toId: string, amount: number) {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`UPDATE test_items SET value = value - ${amount} WHERE id = ${fromId}`);
+      const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM test_items WHERE id = ${fromId}`);
+      if (!sender || sender.value < 0) {
+        throw new ApiError('Insufficient balance', 409, { name: 'InsufficientBalanceException' });
+      }
+      await tx.execute(sql`UPDATE test_items SET value = value + ${amount} WHERE id = ${toId}`);
+    });
+    return { success: true };
+  },
+
+  // Same contract on the withRLS() transaction path.
+  async dbRlsTransactionConflict() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.transaction(async (tx) => {
+      await tx.queryOne(sql`SELECT current_user AS r`);
+      throw new ApiError('Already reserved', 409, { name: 'AlreadyReservedException' });
+    });
+  },
+
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
   // Runs a balance transfer entirely through Kysely's `.transaction()`. If the
   // adapter does not drive a real engine transaction, the debit and credit do not

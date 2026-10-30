@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { isWireSafeError } from '@aws-blocks/core';
 import { DatabaseBase } from '@aws-blocks/data-common';
 import type { DatabaseEngine, TransactionHandle, Transaction, SqlQuery } from '@aws-blocks/data-common';
 import { unwrapQuery } from '@aws-blocks/data-common';
@@ -10,6 +11,24 @@ import { setRLSContext, type RLSContext } from './rls.js';
 /** Read a diagnostic field (e.g. pg `code`/`severity`) off an unknown caught value. */
 function readErrorField(err: unknown, key: string): unknown {
   return typeof err === 'object' && err !== null && key in err ? Reflect.get(err, key) : undefined;
+}
+
+/**
+ * Map an error that escaped a transaction to the error `transaction()` throws.
+ *
+ * An intentional error is re-thrown as-is: an `ApiError` or a branded Building
+ * Block error (for example a 409 the app throws to abort the transaction) keeps
+ * its status, name and identity, so it reaches the client exactly as it would
+ * outside a transaction. A known DatabaseErrors name means an engine translator
+ * already produced a branded BB error, so it is re-thrown as-is too. Anything
+ * else is re-tagged to TransactionFailed as a branded error with a stable
+ * message (raw error kept as cause) so the name crosses the wire without
+ * leaking driver text (D-003).
+ */
+function transactionError(e: unknown): Error {
+  const error = e instanceof Error ? e : new Error(String(e));
+  if (isKnownDatabaseErrorName(error.name) || isWireSafeError(error)) return error;
+  return reTagged(DatabaseErrors.TransactionFailed, error);
 }
 
 /**
@@ -83,7 +102,9 @@ export class RLSEnabledDatabase extends DatabaseBase {
    * @param fn - Function receiving a {@link Transaction} with query/queryOne/execute methods
    * @returns The value returned by `fn`
    * @throws {DatabaseErrors.TransactionFailed} If the transaction cannot be committed
-   *   or if `fn` throws a non-database error
+   *   or if `fn` throws a non-database error. An `ApiError` or branded Building
+   *   Block error thrown by `fn` is re-thrown unchanged after the rollback, so it
+   *   keeps its status and name.
    *
    * @example
    * import { sql } from '@aws-blocks/bb-data';
@@ -96,13 +117,7 @@ export class RLSEnabledDatabase extends DatabaseBase {
     try {
       return await super.transaction(fn);
     } catch (e) {
-      const error = e instanceof Error ? e : new Error(String(e));
-      // A known DatabaseErrors name means an engine translator already produced a
-      // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
-      // as a branded error with a stable message (raw error kept as cause) so the
-      // name crosses the wire without leaking driver text (D-003).
-      if (isKnownDatabaseErrorName(error.name)) throw error;
-      throw reTagged(DatabaseErrors.TransactionFailed, error);
+      throw transactionError(e);
     }
   }
 }
@@ -182,13 +197,7 @@ class RLSScopedDatabase extends RLSEnabledDatabase {
           severity: readErrorField(rollbackErr, 'severity'),
         });
       }
-      const error = e instanceof Error ? e : new Error(String(e));
-      // A known DatabaseErrors name means an engine translator already produced a
-      // branded BB error — re-throw it as-is. Otherwise re-tag to TransactionFailed
-      // as a branded error with a stable message (raw error kept as cause) so the
-      // name crosses the wire without leaking driver text (D-003).
-      if (isKnownDatabaseErrorName(error.name)) throw error;
-      throw reTagged(DatabaseErrors.TransactionFailed, error);
+      throw transactionError(e);
     }
   }
 }
