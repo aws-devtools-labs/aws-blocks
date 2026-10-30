@@ -8,7 +8,11 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 export interface CronJobEvent<T = void> {
 	/** ISO 8601 timestamp of the scheduled invocation time. */
 	scheduledTime: string;
-	/** The CronJob's id (matches the `id` passed to the constructor). */
+	/**
+	 * The CronJob's fully-qualified id (`fullId`): the `id` passed to the
+	 * constructor, prefixed by its parent scope's `fullId` (`<parentFullId>-<id>`).
+	 * It equals the bare constructor `id` only when the CronJob has no parent.
+	 */
 	jobName: string;
 	/** Static input configured on the CronJob. `undefined` when no input is provided. */
 	input: T;
