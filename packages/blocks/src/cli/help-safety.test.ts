@@ -24,13 +24,28 @@ import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 let server: Server;
 let requests: string[] = [];
 const savedEnv: Record<string, string | undefined> = {};
+/**
+ * Settings that could send the SDK calls past the loopback endpoints to real
+ * AWS, or replace the fake credentials: cleared for the run.
+ */
+const ROUTING_ENV = [
+	'AWS_IGNORE_CONFIGURED_ENDPOINT_URLS',
+	'AWS_ENDPOINT_URL',
+	'AWS_PROFILE',
+	'AWS_DEFAULT_PROFILE',
+	'AWS_SESSION_TOKEN',
+	'AWS_USE_FIPS_ENDPOINT',
+	'AWS_USE_DUALSTACK_ENDPOINT',
+] as const;
 const STORE_ENV = [
 	'AWS_REGION',
 	'AWS_ACCESS_KEY_ID',
 	'AWS_SECRET_ACCESS_KEY',
 	'AWS_ENDPOINT_URL_SSM',
 	'AWS_ENDPOINT_URL_SECRETS_MANAGER',
-	'AWS_PROFILE',
+	'AWS_CONFIG_FILE',
+	'AWS_SHARED_CREDENTIALS_FILE',
+	...ROUTING_ENV,
 ] as const;
 
 before(async () => {
@@ -52,8 +67,11 @@ before(async () => {
 		AWS_SECRET_ACCESS_KEY: 'test',
 		AWS_ENDPOINT_URL_SSM: endpoint,
 		AWS_ENDPOINT_URL_SECRETS_MANAGER: endpoint,
+		// A shared config file can set ignore_configured_endpoint_urls or another endpoint: read none.
+		AWS_CONFIG_FILE: join(fixtureApp(), 'no-aws-config'),
+		AWS_SHARED_CREDENTIALS_FILE: join(fixtureApp(), 'no-aws-credentials'),
 	});
-	delete process.env.AWS_PROFILE;
+	for (const name of ROUTING_ENV) delete process.env[name];
 });
 
 after(async () => {
