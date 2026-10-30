@@ -77,6 +77,9 @@ import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Logger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { fabricateCodeDelivery, incorrectCredentialsError } from './enumeration.js';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
 import {
@@ -630,8 +633,95 @@ export function toCognitoApiError(e: unknown): ApiError {
 	return new ApiError('Unknown error', 500);
 }
 
-function asApiError(e: unknown): never {
-	throw toCognitoApiError(e);
+/**
+ * Which public flow an SDK error came from — selects the user-enumeration
+ * masking `asApiError` applies (design 04 §6.3):
+ *
+ * - `signIn` — a credential check (InitiateAuth, or a challenge answered with
+ *   a password). Unknown user, wrong password and disabled user all become the
+ *   one uniform {@link incorrectCredentialsError}.
+ * - `challenge` — any other sign-in challenge answer. A user who vanished
+ *   mid-challenge becomes the uniform credential failure, not a 404.
+ * - `confirmCode` — confirm-sign-up / confirm-reset-password. An unknown user
+ *   is answered exactly like a wrong code, as Cognito itself does when the
+ *   pool has `PreventUserExistenceErrors`.
+ *
+ * Omitted for authenticated and `admin.*` calls, which are not enumeration
+ * surfaces (the admin API may legitimately report `UserNotFoundException`).
+ */
+type ErrorFlow = 'signIn' | 'challenge' | 'confirmCode';
+
+/**
+ * SDK error names that mean AWS refused the *function's own* credentials or
+ * IAM policy — a deployment problem, not something the end user did. Their
+ * messages name the execution-role ARN and the account id.
+ */
+const AWS_ACCESS_ERROR_NAMES: ReadonlySet<string> = new Set([
+	'AccessDeniedException',
+	'UnrecognizedClientException',
+	'InvalidClientTokenId',
+	'InvalidSignatureException',
+	'ExpiredTokenException',
+	'CredentialsProviderError',
+]);
+
+/** Client-facing text for {@link AWS_ACCESS_ERROR_NAMES}; the detail is logged server-side. */
+const ACCESS_DENIED_MESSAGE = 'The authentication service is not permitted to complete this request.';
+
+/**
+ * The wire message for a wrong confirmation code — the same BB-authored text
+ * {@link toCognitoApiError} sends for `CodeMismatchException`, so an unknown
+ * user's confirm attempt can't be told apart from a wrong code.
+ */
+const WRONG_CODE_MESSAGE = COGNITO_ERROR_MESSAGES[AuthCognitoErrors.CodeMismatch] ?? DEFAULT_COGNITO_ERROR_MESSAGE;
+
+function sdkRequestId(e: Error): string | undefined {
+	const meta = (e as { $metadata?: { requestId?: unknown } }).$metadata;
+	return typeof meta?.requestId === 'string' ? meta.requestId : undefined;
+}
+
+/**
+ * Translate a thrown value into the `ApiError` the client sees.
+ *
+ * - An `ApiError` the block raised itself passes through untouched — its
+ *   status, name and `retriable` flag are already the intended ones.
+ * - SDK errors keep Cognito's `name`; the HTTP status comes from
+ *   {@link statusForCognitoError}. The SDK error rides along as a
+ *   non-enumerable `cause` for server-side logging only.
+ * - Enumeration masking per {@link ErrorFlow}.
+ * - AWS access/credential failures, and any message naming an ARN or account
+ *   id, never reach the client verbatim: the client gets a generic message and
+ *   the detail goes to `log`.
+ */
+function asApiError(e: unknown, log: ChildLogger, flow?: ErrorFlow): ApiError {
+	if (e instanceof ApiError) return e;
+	if (!(e instanceof Error)) return new ApiError('Unknown error', 500);
+
+	if (flow === 'signIn' && (e.name === AuthCognitoErrors.UserNotFound || e.name === AuthCognitoErrors.NotAuthorized)) {
+		if (!/^Incorrect username or password\.?$/.test(e.message) && e.name === AuthCognitoErrors.NotAuthorized) {
+			log.warn('[bb-auth-cognito] sign-in rejected; reported to the client as incorrect credentials', {
+				error: e.name,
+				message: e.message,
+				requestId: sdkRequestId(e),
+			});
+		}
+		return incorrectCredentialsError();
+	}
+	if (flow === 'challenge' && e.name === AuthCognitoErrors.UserNotFound) return incorrectCredentialsError();
+	if (flow === 'confirmCode' && e.name === AuthCognitoErrors.UserNotFound) {
+		return new ApiError(WRONG_CODE_MESSAGE, 400, { name: AuthCognitoErrors.CodeMismatch, retriable: true });
+	}
+
+	if (AWS_ACCESS_ERROR_NAMES.has(e.name)) {
+		log.error('[bb-auth-cognito] AWS rejected the Cognito call made with the function role — check its IAM policy', {
+			error: e.name,
+			message: e.message,
+			requestId: sdkRequestId(e),
+		});
+		return new ApiError(ACCESS_DENIED_MESSAGE, 500, { name: e.name, cause: e });
+	}
+
+	return toCognitoApiError(e);
 }
 
 /**
@@ -686,6 +776,10 @@ function statusForCognitoError(name: string): number {
 		case AuthCognitoErrors.TooManyRequests:
 		case AuthCognitoErrors.TooManyFailedAttempts:
 			return 429;
+		// A Cognito service-side fault: report it as the upstream failure it is
+		// (same 500 the block uses for "Cognito returned no tokens"), not a 400.
+		case AuthCognitoErrors.InternalError:
+			return 500;
 		default:
 			return 400;
 	}
@@ -712,6 +806,8 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private readonly sessions: SessionStore;
 	private readonly sessionSecretSetting: AppSetting;
 	private sessionSecret?: string;
+	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
+	protected log: ChildLogger;
 	/** Full admin surface, built once; the single generic projection lives in `get admin()`. */
 	private readonly adminSurface: GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions>;
 
@@ -720,6 +816,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// `AuthCognitoOptions` is all-optional; `{}` satisfies any concrete
 		// `O extends AuthCognitoOptions`. The cast is sound by the type bound.
 		this.options = (options ?? {}) as O;
+		// Same default as the mock: an error-level Logger, so operator-facing
+		// detail withheld from clients (see `asApiError`) still reaches the logs.
+		this.log = this.options.logger ?? new Logger(this, 'logger', { level: 'error' });
 		// Defense-in-depth: CDK construct already throws on unsupported
 		// authFlowType, but a `fromExisting` path (or any caller that skips
 		// the CDK layer) could bypass that check. Mirror the throw here.
@@ -828,7 +927,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminAddUserToGroupCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			removeUserFromGroup: async (username, group) => {
 				this.assertAdminAction('groups');
@@ -836,7 +935,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminRemoveUserFromGroupCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			listGroupsForUser: async (username) => {
 				this.assertAdminAction('groups');
@@ -851,7 +950,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 						nextToken = resp.NextToken;
 					} while (nextToken);
 					return out as GroupOf<AuthCognitoOptions>[];
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			listUsersInGroup: async (group) => {
 				this.assertAdminAction('groups');
@@ -866,7 +965,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 						nextToken = resp.NextToken;
 					} while (nextToken);
 					return out;
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 
 			// ── LifecycleAdmin ───────────────────────────────────────────────
@@ -887,7 +986,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 						MessageAction: init?.suppressInvite ? 'SUPPRESS' : undefined,
 					}));
 					return resp.User ? toAdminUser(resp.User) : { username, userSub: '', enabled: true, attributes: {} };
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			deleteUser: async (username) => {
 				this.assertAdminAction('lifecycle');
@@ -895,7 +994,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminDeleteUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			disableUser: async (username) => {
 				this.assertAdminAction('lifecycle');
@@ -903,7 +1002,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminDisableUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			enableUser: async (username) => {
 				this.assertAdminAction('lifecycle');
@@ -911,7 +1010,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminEnableUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			resetUserPassword: async (username) => {
 				this.assertAdminAction('lifecycle');
@@ -919,7 +1018,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminResetUserPasswordCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			setUserPassword: async (username, password, options) => {
 				this.assertAdminAction('lifecycle');
@@ -927,7 +1026,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminSetUserPasswordCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username, Password: password, Permanent: options?.permanent ?? false,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 			getUser: async (username) => {
 				this.assertAdminAction('lifecycle');
@@ -969,7 +1068,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					};
 				} catch (e) {
 					if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) return null;
-					throw asApiError(e);
+					throw this.mapError(e);
 				}
 			},
 			scan: (filter?: AdminUserFilter) => {
@@ -984,7 +1083,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 							resp = await self.client.send(new ListUsersCommand({
 								UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
 							}));
-						} catch (e) { throw asApiError(e); }
+						} catch (e) {
+							throw self.mapError(e);
+						}
 						for (const u of resp.Users ?? []) {
 							const attributes: Record<string, string> = {};
 							for (const a of (u.Attributes ?? []) as AttributeType[]) {
@@ -1007,7 +1108,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					await this.client.send(new AdminUserGlobalSignOutCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
-				} catch (e) { throw asApiError(e); }
+				} catch (e) { throw this.mapError(e); }
 			},
 		};
 	}
@@ -1087,7 +1188,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					},
 			};
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1148,7 +1249,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				},
 			};
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e, 'confirmCode');
 		}
 	}
 
@@ -1214,7 +1315,11 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				Username: username,
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			// Never reveal whether the account exists: an unknown user "gets" a
+			// resent code exactly like a real one (Cognito does the same when the
+			// pool has PreventUserExistenceErrors).
+			if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) return;
+			throw this.mapError(e);
 		}
 	}
 
@@ -1296,7 +1401,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			const user = await this.issueSession(context, resp.AuthenticationResult);
 			return { status: 'signedIn', user };
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e, 'signIn');
 		}
 	}
 
@@ -1457,7 +1562,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			const user = await this.issueSession(context, resp.AuthenticationResult);
 			return { status: 'signedIn', user };
 		} catch (e) {
-			throw asApiError(e);
+			// A password answer is a credential check like signIn; any other
+			// challenge only masks a user who vanished mid-flow.
+			throw this.mapError(e, envelope.awaitingPassword || envelope.name === 'PASSWORD' ? 'signIn' : 'challenge');
 		}
 	}
 
@@ -1776,7 +1883,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) {
 				throw new ApiError('Not authorized', 403, { name: AuthCognitoErrors.NotAuthorized });
 			}
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 		return out;
 	}
@@ -1795,7 +1902,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			const resp = await this.client.send(new GetUserCommand({ AccessToken: token }));
 			return attrsToRecord(resp.UserAttributes) as Partial<Record<ReadAttrOf<O>, string>>;
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1810,7 +1917,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				ProposedPassword: newPassword,
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1838,7 +1945,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			}
 			return out as Partial<Record<AttrOf<O>, UpdateAttributeOutcome>>;
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1860,7 +1967,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				Code: code,
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1872,7 +1979,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				AttributeName: String(name),
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1881,7 +1988,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		try {
 			await this.client.send(new DeleteUserCommand({ AccessToken: token }));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 		const id = await this.sessionIdFromCookie(context);
 		if (id) await this.sessions.deleteSession(id);
@@ -1912,16 +2019,18 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			};
 		} catch (e) {
 			// Cognito can throw UserNotFoundException; silently succeed per best practice.
+			// The fabricated details must look like a real delivery (an empty
+			// destination would itself reveal that the account does not exist).
 			if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) {
 				return {
 					isPasswordReset: false,
 					nextStep: {
 						name: 'CONFIRM_RESET_PASSWORD_WITH_CODE',
-						codeDeliveryDetails: { destination: '', deliveryMedium: 'EMAIL', attributeName: 'email' },
+						codeDeliveryDetails: fabricateCodeDelivery(username, await this.getSessionSecret()),
 					},
 				};
 			}
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1934,7 +2043,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				Password: newPassword,
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e, 'confirmCode');
 		}
 	}
 
@@ -1946,7 +2055,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			const resp = await this.client.send(new AssociateSoftwareTokenCommand({ AccessToken: token }));
 			return { sharedSecret: resp.SecretCode ?? '' };
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1958,7 +2067,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				UserCode: code,
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -1993,7 +2102,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				EmailMfaSettings: mapFactorSetting(raw.email),
 			}));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2016,7 +2125,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			// and cast at the boundary.
 			return { preferred, enabled } as MFAPreference<O>;
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2034,7 +2143,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					PaginationToken: pagination,
 				}));
 			} catch (e) {
-				throw asApiError(e);
+				throw this.mapError(e);
 			}
 			for (const d of resp.Devices ?? []) {
 				yield {
@@ -2083,7 +2192,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		try {
 			await this.client.send(new ForgetDeviceCommand({ AccessToken: token, DeviceKey: deviceKey }));
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2117,7 +2226,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				credentialCreationOptions: JSON.stringify(resp.CredentialCreationOptions ?? {}),
 			};
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2164,7 +2273,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			void resp;
 			return { credentialId };
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2198,7 +2307,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				nextToken = resp.NextToken;
 			} while (nextToken);
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 		return out;
 	}
@@ -2218,7 +2327,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				}),
 			);
 		} catch (e) {
-			throw asApiError(e);
+			throw this.mapError(e);
 		}
 	}
 
@@ -2411,6 +2520,11 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		return out;
 	}
 
+	/** {@link asApiError} bound to this instance's logger. */
+	private mapError(e: unknown, flow?: ErrorFlow): ApiError {
+		return asApiError(e, this.log, flow);
+	}
+
 	private async getSessionSecret(): Promise<string> {
 		if (this.sessionSecret) return this.sessionSecret;
 		this.sessionSecret = await this.sessionSecretSetting.get();
@@ -2466,6 +2580,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			}));
 			const tokens = resp.AuthenticationResult;
 			if (!tokens?.IdToken || !tokens.AccessToken) return null;
+			// Same verification as sign-in (`issueSession`) — the record's tokens
+			// are trusted on later reads without re-verification (see
+			// `sessions.ts`), so an unverified token must never be stored. A
+			// failure lands in the catch below → `null` → the caller signs the
+			// user out and clears the cookie.
+			await this.verifier.verify(tokens.IdToken);
 			const updated: SessionRecord = {
 				idToken: tokens.IdToken,
 				accessToken: tokens.AccessToken,
