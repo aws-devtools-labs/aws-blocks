@@ -5,7 +5,7 @@
 // sudo+runuser for the agent user, but FAIL on a GitHub Actions runner, so the selfcheck job proves
 // them on a real hosted runner (including against its real RUNNER_TEMP). Fakes are assembled at runtime.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -17,6 +17,7 @@ import {
 	buildAgentSpawn,
 	enterAgentPhase,
 	findAgentWritable,
+	groupKillArgv,
 	harnessUidPids,
 	isCI,
 	isolationAvailable,
@@ -61,6 +62,10 @@ function sudo(...args) {
 }
 function asAgent(script) {
 	return spawnSync('/usr/bin/sudo', ['-n', '/usr/sbin/runuser', '-u', BENCH_AGENT_USER, '--', '/bin/bash', '-c', script], { encoding: 'utf-8' });
+}
+
+function sleepMs(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 // A child process env for a CI job whose agent user is missing (isolation can't be entered).
@@ -182,6 +187,65 @@ describe('fail closed when the agent user is unavailable (CI)', () => {
 	});
 });
 
+// run-shell kills each command's process group as root after the command exits. procps-ng 4.0.4
+// (Ubuntu 24.04) turned `kill -9 -<pgid>` into kill(-1) whenever the pgid started with 1, which
+// took down every process on the runner once pids passed 100000 (the judge, late in each cell).
+describe('process-group kill argv', () => {
+	// A pgid starting with 1 that no process group has (checked below), so signal 0 probes it safely.
+	const ABSENT_PGID = 1999999;
+	const absent = () => {
+		try {
+			process.kill(-ABSENT_PGID, 0);
+			return false;
+		} catch {
+			return true;
+		}
+	};
+
+	it('ends option parsing right before the negative pgid', () => {
+		const argv = groupKillArgv(123456);
+		assert.deepEqual(argv.slice(-2), ['--', '-123456']);
+		assert.equal(argv[1], '-9');
+	});
+
+	// The exit status can't tell the two parses apart: 4.0.4's special case inverts kill()'s result,
+	// so its successful kill(-1, 0) exits 1, silently. Only the whole-pid path names the pgid in
+	// its "No such process" error. Signal 0 delivers nothing, so the bare probe below is safe.
+	it('names the pgid it was given: signal 0 to an absent group starting with 1 reports that group', { skip: absent() ? false : 'probe pgid exists' }, (t) => {
+		const [kill, ...args] = groupKillArgv(ABSENT_PGID, '-0');
+		const r = spawnSync(kill, args, { encoding: 'utf-8' });
+		assert.notEqual(r.status, 0, `${kill} ${args.join(' ')} succeeded, so it signalled some other group`);
+		assert.match(r.stderr, new RegExp(`${ABSENT_PGID}`), `${kill} ${args.join(' ')} didn't report the pgid it was given`);
+		const bare = spawnSync(kill, ['-0', `-${ABSENT_PGID}`], { encoding: 'utf-8' });
+		const whole = new RegExp(`${ABSENT_PGID}`).test(bare.stderr);
+		t.diagnostic(`${kill} -0 -${ABSENT_PGID} (no --): exit ${bare.status}, ${whole ? 'parses the whole pid' : 'read as kill(-1)'}`);
+	});
+
+	it('kills the target group and nothing else', async () => {
+		const argv = groupKillArgv(1);
+		// Never run a real SIGKILL through an argv without `--` (it could be kill(-1)).
+		assert.equal(argv.at(-2), '--');
+		const target = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+		const bystander = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' });
+		try {
+			const exited = new Promise((r) => target.once('exit', (code, sig) => r(sig)));
+			const [kill, ...args] = groupKillArgv(target.pid);
+			assert.equal(spawnSync(kill, args, { stdio: 'ignore' }).status, 0);
+			assert.equal(await exited, 'SIGKILL');
+			assert.equal(bystander.exitCode, null, 'the bystander group must survive');
+			assert.equal(bystander.signalCode, null, 'the bystander group must survive');
+		} finally {
+			for (const p of [target, bystander]) {
+				try {
+					process.kill(-p.pid, 'SIGKILL');
+				} catch {
+					/* already gone */
+				}
+			}
+		}
+	});
+});
+
 describe('the agent-user boundary on a real host', () => {
 	it('runner temp: readable before the lockdown, unreachable after it (file commands + harness environ)', needsBoundary, () => {
 		// A stand-in RUNNER_TEMP with the runner's default modes (0755 dirs, 0644 files) holding a
@@ -224,6 +288,28 @@ describe('the agent-user boundary on a real host', () => {
 		assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
 	});
 
+	// enterAgentPhase reaps before its ACL walks, which a live agent process could redirect with a
+	// symlink swap (acl walks by path), so the reap must not lose a process that keeps changing pid.
+	// Each link waits 50 ms before it forks the next and exits, so pgrep always has a process to see
+	// (a link that forks at once lives too briefly for pgrep's /proc scan), while the pid keeps changing.
+	it('reap: kills a fork-and-exit chain and nothing comes back', needsBoundary, () => {
+		try {
+			const started = asAgent(`setsid nohup bash -c 'r() { sleep 0.05; r & exit; }; r' </dev/null >/dev/null 2>&1 &`);
+			assert.equal(started.status, 0, started.stderr);
+			let running = false;
+			for (let i = 0; i < 10 && !running; i++) {
+				sleepMs(100);
+				running = spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status === 0;
+			}
+			assert.equal(running, true, 'the chain should be running');
+			assert.equal(reapAgentProcesses(), true);
+			sleepMs(500);
+			assert.equal(spawnSync('pgrep', ['-u', BENCH_AGENT_USER]).status, 1, 'no agent-user process may remain');
+		} finally {
+			reapAgentProcesses();
+		}
+	});
+
 	it('enterAgentPhase grants the workspace and verifies the boundary', needsBoundary, () => {
 		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
 		try {
@@ -238,6 +324,83 @@ describe('the agent-user boundary on a real host', () => {
 			assert.match(r.stdout, new RegExp(`^${BENCH_AGENT_USER}\\nexport \\{\\};`));
 		} finally {
 			rmSync(ws, { recursive: true, force: true });
+		}
+	});
+
+	// Step 3 enters a second agent phase on the workspace step 2's agent wrote to. Only a file's
+	// owner (or root) may set its ACL, so a runner-uid setfacl failed there on every cell.
+	it('enterAgentPhase re-grants a workspace holding files the agent user created', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const made = asAgent(`cd '${ws}' && mkdir dist && echo built > dist/out.js && echo notes > notes.md`);
+			assert.equal(made.status, 0, made.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const { file, args } = buildAgentSpawn('cat dist/out.js notes.md', ws, true, { PATH: '/usr/bin:/bin' });
+			const r = spawnSync(file, args, { encoding: 'utf-8' });
+			assert.equal(r.status, 0, r.stderr);
+			assert.equal(r.stdout, 'built\nnotes\n');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// The harness-user walk can't set ACLs inside a dir the agent made 0700, but the agent-user walk
+	// restores the harness user's access there, so the next round gets through.
+	it('enterAgentPhase re-grants a workspace holding a dir the agent made private', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const made = asAgent(`cd '${ws}' && mkdir private && echo kept > private/f && chmod 0700 private`);
+			assert.equal(made.status, 0, made.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			assert.equal(readFileSync(join(ws, 'private', 'f'), 'utf-8'), 'kept\n');
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// Each entry is granted by its owner, never by root, so an entry owned by anyone else is left
+	// alone and fails the phase closed.
+	it('enterAgentPhase fails closed on a workspace entry neither user owns, and leaves its ACL alone', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		const foreign = join(ws, 'root-owned');
+		try {
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			sudo('/usr/bin/touch', foreign);
+			sudo('/usr/bin/setfacl', '-b', foreign); // drop the ACL it inherited from the workspace default
+			const phase = withEnv({ PATH: path, BENCH_ALLOW_BARE_SHELL: undefined }, () => enterAgentPhase(ws));
+			assert.equal(phase.isolated, false);
+			assert.match(phase.error ?? '', /workspace ACL grant failed/);
+			const acl = spawnSync('/usr/bin/getfacl', ['--omit-header', foreign], { encoding: 'utf-8' });
+			assert.equal(acl.status, 0, acl.stderr);
+			assert.doesNotMatch(acl.stdout, new RegExp(`user:${BENCH_AGENT_USER}:`));
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+		}
+	});
+
+	// The grant must not follow a symlink the agent planted in the workspace.
+	it('the workspace grant does not follow an agent-planted symlink out of the workspace', needsBoundary, () => {
+		const ws = mkdtempSync(join(tmpdir(), 'bench-ws-'));
+		const outside = mkdtempSync(join(tmpdir(), 'bench-outside-'));
+		try {
+			writeFileSync(join(outside, 'secret'), `${FAKE_SECRET}\n`, { mode: 0o600 });
+			const path = onActionsRunner ? process.env.PATH : '/usr/bin:/bin';
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			const planted = asAgent(`cd '${ws}' && ln -s '${outside}' escape`);
+			assert.equal(planted.status, 0, planted.stderr);
+			assert.equal(reapAgentProcesses(), true);
+			assert.deepEqual(withEnv({ PATH: path }, () => enterAgentPhase(ws)), { isolated: true });
+			assert.deepEqual(verifyAgentIsolation({ paths: [outside, join(outside, 'secret')] }), []);
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', ws]);
+			rmSync(outside, { recursive: true, force: true });
 		}
 	});
 

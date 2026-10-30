@@ -12,10 +12,18 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { cleanupApt, DEADLINE_MINUTES, parseArgs, recordAttempt, runWatched, withRetry } from './install-playwright.mjs';
+import {
+	cleanupApt,
+	DEADLINE_MINUTES,
+	installCommand,
+	parseArgs,
+	recordAttempt,
+	runWatched,
+	withRetry,
+} from './install-playwright.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const quiet = () => {};
@@ -347,6 +355,7 @@ describe('parseArgs', () => {
 	it('defaults to the workspace playwright', () => {
 		assert.deepEqual(parseArgs(['chromium']), {
 			pkg: 'playwright',
+			bin: null,
 			deadlineMinutes: DEADLINE_MINUTES,
 			browsers: ['chromium'],
 		});
@@ -354,15 +363,45 @@ describe('parseArgs', () => {
 	it('takes a pinned package', () => {
 		assert.deepEqual(parseArgs(['--package', 'playwright@1.60.0', '--deadline-minutes', '17', 'chromium']), {
 			pkg: 'playwright@1.60.0',
+			bin: null,
 			deadlineMinutes: 17,
 			browsers: ['chromium'],
 		});
+	});
+	it('takes a playwright executable instead of an npx package', () => {
+		assert.deepEqual(parseArgs(['--bin', 'pin/node_modules/.bin/playwright', 'chromium']), {
+			pkg: 'playwright',
+			bin: 'pin/node_modules/.bin/playwright',
+			deadlineMinutes: DEADLINE_MINUTES,
+			browsers: ['chromium'],
+		});
+	});
+	it('rejects --package together with --bin, and --bin without a value', () => {
+		assert.throws(() => parseArgs(['--package', 'playwright', '--bin', 'x', 'chromium']), /exclusive/);
+		assert.throws(() => parseArgs(['--bin', 'x', '--package', 'playwright', 'chromium']), /exclusive/);
+		assert.throws(() => parseArgs(['chromium', '--bin']), /needs a value/);
+		assert.throws(() => parseArgs(['--bin', 'a', '--bin', 'b', 'chromium']), /given twice/);
+		assert.throws(() => parseArgs(['--package', 'a', '--package', 'b', 'chromium']), /given twice/);
 	});
 	it('rejects a missing browser or package value', () => {
 		assert.throws(() => parseArgs([]), /usage/);
 		assert.throws(() => parseArgs(['chromium', '--package']), /needs a value/);
 		assert.throws(() => parseArgs(['--deadline-minutes', 'x', 'chromium']), /positive number/);
 		assert.throws(() => parseArgs(['--deadline-minutes=17', 'chromium']), /unknown option/);
+	});
+});
+
+describe('installCommand', () => {
+	it('runs npx with the package by default', () => {
+		assert.deepEqual(installCommand(parseArgs(['--package', 'playwright@1.60.0', 'chromium'])), {
+			cmd: 'npx',
+			args: ['playwright@1.60.0', 'install', '--with-deps', 'chromium'],
+		});
+	});
+	it('runs the --bin executable by absolute path, without npx', () => {
+		const { cmd, args } = installCommand(parseArgs(['--bin', 'pin/node_modules/.bin/playwright', 'chromium', 'webkit']));
+		assert.equal(cmd, resolve('pin/node_modules/.bin/playwright'));
+		assert.deepEqual(args, ['install', '--with-deps', 'chromium', 'webkit']);
 	});
 });
 
@@ -470,6 +509,19 @@ describe('install-playwright.mjs', () => {
 		if (process.platform === 'linux') assert.match(sudoLog(dir), /dpkg --configure -a/);
 		await new Promise((res) => setTimeout(res, 100));
 		assert.equal(alive(run.grandchild()), false, 'grandchild survived');
+	});
+
+	it('with --bin runs that executable and never npx', T, async () => {
+		const dir = fakeBin();
+		const pw = join(dir, 'pin-playwright');
+		writeFileSync(pw, '#!/bin/sh\necho "pinned $*"\n');
+		chmodSync(pw, 0o755);
+		writeFileSync(join(dir, 'npx'), `#!/bin/sh\necho "$*" >> ${join(dir, 'npx.log')}\nexit 1\n`);
+		const run = start(dir, ['--bin', pw, 'chromium']);
+		assert.equal(await run.exited, 0);
+		assert.match(run.output(), /pinned install --with-deps chromium/);
+		assert.throws(() => readFileSync(join(dir, 'npx.log')), /ENOENT/);
+		assert.equal(readFileSync(join(dir, 'summary.md'), 'utf8'), '- install-playwright: attempt=1/3 result=ok\n');
 	});
 
 	it('on SIGTERM kills the attempt and any root apt-get/dpkg, and exits 143', T, async () => {

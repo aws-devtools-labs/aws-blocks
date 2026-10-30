@@ -45,7 +45,7 @@ const table = new DistributedTable(scope, id, options)
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | No | At-rest encryption key. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK; pass `DistributedTable.fromKmsKey(arn)` to encrypt with an existing CMK you own (shareable across tables). |
 | `readValidation` | `'off' \| 'coerce' \| 'strict'` | No | How reads (`get`/`getBatch`/`query`/`scan`) reconcile a stored item with `schema`. `'coerce'` (**default**) returns the coerced value and, on failure, the raw value + a warning (never throws); `'strict'` throws `ValidationFailed` on a non-conforming item; `'off'` returns the raw value with no validation. See [Reads and schema evolution](#reads-and-schema-evolution). |
 | `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. Durability/encryption options are ignored — the customer owns the table's configuration. |
-| `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
+| `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at warn level is created so `readValidation: 'coerce'` fallback warnings surface. |
 
 ### Key Object Pattern
 

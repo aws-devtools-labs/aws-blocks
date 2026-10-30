@@ -3,6 +3,8 @@ package com.aws.blocks.kotlin
 import com.aws.blocks.kotlin.model.TransferableTypeArg
 import com.aws.blocks.kotlin.model.narrowsTypeArg
 import com.aws.blocks.kotlin.model.transferableTypeArg
+import com.aws.blocks.kotlin.generator.narrowsTypeArgBinding
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 
@@ -27,6 +29,19 @@ class TransferableTypeArgsTest : FunSpec({
         // A third-party binding's arguments are payloads, as are those of a tag with no entry.
         transferableTypeArg("example-iot/device-link", 0) shouldBe TransferableTypeArg.Out
         narrowsTypeArg("example-iot/device-link", 0) shouldBe false
+    }
+
+    test("every narrowed argument has a Kotlin binding that writes one") {
+        // The model decides whether an argument is narrowed; the generator's binding carries what
+        // Kotlin writes for it. If they disagree, the generated code names a Provider the
+        // generator never emits, which only shows up when an app compiles.
+        for (tag in listOf("realtime/channel", "oidc/client", "file-bucket/download", "file-bucket/upload")) {
+            for (position in 0..2) {
+                withClue("$tag[$position]") {
+                    narrowsTypeArg(tag, position) shouldBe narrowsTypeArgBinding(tag, position)
+                }
+            }
+        }
     }
 
     test("a position a tag doesn't declare is returned") {

@@ -43,7 +43,7 @@ object ClassNames {
     val fileUploadHandle = ClassName("com.aws.blocks.kotlin.filebucket", "FileUploadHandle")
     val oidcClient = ClassName("com.aws.blocks.kotlin.oidc", "OidcClient")
     val oidcProvider = ClassName("com.aws.blocks.kotlin.oidc", "OidcProvider")
-    val providerName = ClassName("com.aws.blocks.kotlin.oidc", "ProviderName")
+    val anyProvider = ClassName("com.aws.blocks.kotlin.oidc", "AnyProvider")
     val realtimeChannel = ClassName("com.aws.blocks.kotlin.realtime", "RealtimeChannel")
     val unknownTransferable = ClassName("com.aws.blocks.kotlin", "UnknownTransferable")
 }

@@ -9,7 +9,7 @@ package com.aws.blocks.kotlin.oidc
  * [OidcClient.providers] is the deployed backend's own list, and the two drift when an app ships
  * against an older spec or a provider is added or removed server-side.
  *
- * A spec that doesn't name them leaves the client's provider [ProviderName], which carries any
+ * A spec that doesn't name them leaves the client's provider [AnyProvider], which carries any
  * name.
  */
 interface OidcProvider {
@@ -18,9 +18,9 @@ interface OidcProvider {
 }
 
 /**
- * Any provider name, for a client whose providers the spec didn't name.
+ * Any provider the backend names, for a client whose providers the spec didn't name.
  *
- * `OidcClient<ProviderName>` signs in with a name rather than a generated provider, and its
+ * `OidcClient<AnyProvider>` signs in with a name rather than a generated provider, and its
  * [signIn] and [exchange] take that name directly: `client.signIn("google")`.
  */
-data class ProviderName(override val providerName: String) : OidcProvider
+data class AnyProvider(override val providerName: String) : OidcProvider

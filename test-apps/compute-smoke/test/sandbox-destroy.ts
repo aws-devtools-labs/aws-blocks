@@ -4,20 +4,11 @@
 /**
  * Destroy every stack the compute-smoke app synthesizes for the leg selected by
  * `COMPUTE_API_FRONT_DOOR` (default cloudfront): the main stack and its vpc-ref
- * lookup stack. Uses `cdk destroy --all` to ensure complete cleanup. Run it once
- * per leg you deployed.
+ * lookup stack. Runs the product's own `destroySandbox` (`cdk destroy --all`,
+ * the multi-stack sandbox teardown `npm run sandbox:destroy` runs), which reads
+ * `COMPUTE_API_FRONT_DOOR` from the environment like the deploy. Run it once per
+ * leg you deployed, from the app directory.
  */
-import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { destroySandbox } from '@aws-blocks/blocks/scripts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const cwd = join(__dirname, '..');
-const backendPath = process.argv[2];
-
-execFileSync('npx', [
-  'cdk', 'destroy', '--all', '--force',
-  '--context', 'sandboxMode=true',
-  '--context', `projectRoot=${cwd}`,
-  '--app', `npx tsx -C cdk ${backendPath}`,
-], { cwd, stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' } });
+await destroySandbox(process.argv[2]);

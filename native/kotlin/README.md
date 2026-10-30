@@ -125,6 +125,57 @@ A nullable built-in result now returns null for a JSON-null body as well, where 
 
 The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
 
+## Signing In with OIDC
+
+```kotlin
+val blocks = Blocks()
+val client = blocks.authApi.getClient()
+val user = client.signIn(AuthApi.GetClient.Provider.Google)
+```
+
+On the JVM target the system browser is left open on a loopback address once sign-in finishes,
+so the runtime serves a page there. By default that is a built-in styled page. An app can
+replace it per outcome, from a JVM source set:
+
+```kotlin
+client.signIn(
+    provider = AuthApi.GetClient.Provider.Google,
+    options = OidcSignInOptions(
+        OidcSignInPlatformOptions(
+            // Send the browser to your own page, so the user ends on a real domain.
+            successPage = OidcLandingPage.Redirect("https://app.example.com/signed-in"),
+            // Or serve your own markup, with nothing to host.
+            errorPage = OidcLandingPage.Html(myLocalizedFailurePage),
+        ),
+    ),
+)
+```
+
+`OidcSignInPlatformOptions` has a different shape on each target, so it is only constructible
+where it applies — from `jvmMain` or `desktopMain`, not from `commonMain`. Shared code that
+calls `signIn(provider)` with no options needs no platform code and gets the built-in pages.
+
+| `OidcLandingPage` | Effect |
+|---|---|
+| `BuiltIn` (default) | The runtime's own page. The failure variant shows the provider's error, HTML-escaped. |
+| `Redirect(url)` | A 302 to `url`. Requires `https`, except on a loopback host for local development. |
+| `Html(document)` | `document` served verbatim. Must be a complete HTML document. |
+
+A `Redirect` is sent a clean URL: the callback query is dropped on success, so the
+authorization code and `state` are not appended to it, and on failure only `error` and
+`error_description` are. An `Html` page receives nothing, so use `Redirect` if you need the
+provider's reason.
+
+`BuiltIn` and `Html` are served as the response to the callback itself, so the callback query
+stays in the address bar and in `document.location` while that page is open. Markup you supply
+through `Html` can therefore read the authorization code; prefer `Redirect` if the page runs
+anything you would not want to see it, such as third-party analytics.
+
+Android and iOS have no options to set — their in-app browser dismisses itself.
+
+Bringing your window to the front after sign-in is the app's job; `signIn` returning is the
+signal.
+
 ### Typed OIDC Providers
 
 `OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. When the
@@ -148,13 +199,21 @@ AuthApi.GetClient.Provider.entries
 ```
 
 A provider name that is not a legal identifier is still spelled as one, and keeps the name it
-signs in with: `login.gov` becomes `LoginGov("login.gov")`.
-
-When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
-`OidcClient<ProviderName>`, whose `signIn` and `exchange` take a provider name, as before:
+signs in with: `login.gov` becomes `LoginGov("login.gov")`. Because the constant's name is rebuilt
+from the value, `valueOf` can't find one by the name the backend uses — the generated
+`fromProviderName` does:
 
 ```kotlin
-val client = blocks.authApi.getClient()        // OidcClient<ProviderName>
+// Restoring a provider read from a saved session, or off a deep-link callback
+val provider = AuthApi.GetClient.Provider.fromProviderName(saved) ?: return
+client.signIn(provider)
+```
+
+When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
+`OidcClient<AnyProvider>`, whose `signIn` and `exchange` take a provider name, as before:
+
+```kotlin
+val client = blocks.authApi.getClient()        // OidcClient<AnyProvider>
 val user = client.signIn("google")
 ```
 

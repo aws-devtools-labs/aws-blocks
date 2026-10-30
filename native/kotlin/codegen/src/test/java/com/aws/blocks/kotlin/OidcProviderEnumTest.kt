@@ -77,7 +77,7 @@ class OidcProviderEnumTest : FunSpec({
     test("a spec that names no providers signs in with any string") {
         val source = generate(spec(oidcResult())).source()
 
-        source shouldContain "public suspend fun getClient(): OidcClient<ProviderName>"
+        source shouldContain "public suspend fun getClient(): OidcClient<AnyProvider>"
         source shouldContain "OidcClient.fromJson(result, client, \"$RELAY_TO\")"
         source shouldNotContain "override val providerName"
         source shouldNotContain "enum class Provider"
@@ -169,7 +169,7 @@ class OidcProviderEnumTest : FunSpec({
         ).source()
 
         source shouldNotContain "enum class Provider"
-        source shouldContain "OidcClient<ProviderName>"
+        source shouldContain "OidcClient<AnyProvider>"
     }
 
     test("an unconfigured build stubs the method and emits no enum") {

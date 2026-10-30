@@ -211,7 +211,7 @@ class UnboundTransferableTest : FunSpec({
                 resultSpec("""{ "x-blocks-transferable": "oidc/client" }"""),
                 relayTo = "com.example.app://auth/callback",
             )
-            result.source() shouldContain "): OidcClient<ProviderName>"
+            result.source() shouldContain "): OidcClient<AnyProvider>"
             result.source() shouldNotContain "UnknownTransferable"
             result.warnings shouldBe emptyList()
         }

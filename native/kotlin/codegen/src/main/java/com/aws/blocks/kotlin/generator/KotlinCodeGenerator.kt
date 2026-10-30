@@ -89,13 +89,21 @@ private val knownTransferableBindings = mapOf(
         typeArgs = listOf(
             TypeArgBinding.Narrowed(
                 // A spec that didn't resolve its provider names signs in by name.
-                default = ClassNames.providerName,
+                default = ClassNames.anyProvider,
                 constraint = ClassNames.oidcProvider,
                 valueName = "providerName",
             ),
         ),
     ),
 )
+
+/**
+ * Whether the Kotlin binding for [transferableName]'s argument at [position] writes a narrowed
+ * enum. It has to agree with [com.aws.blocks.kotlin.model.narrowsTypeArg]: the model decides that
+ * an argument is narrowed, and this carries what Kotlin writes for one.
+ */
+internal fun narrowsTypeArgBinding(transferableName: String, position: Int): Boolean =
+    knownTransferableBindings[transferableName]?.typeArgs?.getOrNull(position) is TypeArgBinding.Narrowed
 
 /** The transferable tag of an OIDC client, which the relayTo gate and its hydration name. */
 private const val OIDC_CLIENT_TAG = "oidc/client"
@@ -361,6 +369,27 @@ class KotlinCodeGenerator(
                     .build(),
             )
         }
+        // A constant's name is rebuilt from the value, so valueOf can't find one by the name the
+        // backend uses. A caller restoring a saved provider, or reading one off a callback, needs
+        // this rather than a scan of entries.
+        builder.addType(
+            TypeSpec.companionObjectBuilder()
+                .addFunction(
+                    FunSpec.builder("fromProviderName")
+                        .addKdoc(
+                            "The provider the backend knows as %L, or null if this spec named none.",
+                            "[name]",
+                        )
+                        .addParameter("name", String::class)
+                        .returns(ClassName("", values.name).copy(nullable = true))
+                        .addStatement(
+                            "return entries.firstOrNull { it.%L == name }",
+                            binding.valueName,
+                        )
+                        .build(),
+                )
+                .build(),
+        )
         return builder.build()
     }
 
@@ -813,7 +842,7 @@ class KotlinCodeGenerator(
 
     /** Whether [name] can name a constant, as itself or backticked. */
     private fun canNameConstant(name: String): Boolean =
-        name.isNotEmpty() && name.none { it in IDENTIFIER_ILLEGAL_CHARS }
+        name.isNotEmpty() && name.all { isConstantNameChar(it) }
 
     private fun synthesizeConstantName(literal: String): String {
         val segments = literal.split(NON_IDENTIFIER_RUN)
@@ -2235,15 +2264,31 @@ class KotlinCodeGenerator(
         private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
 
         /**
-         * The characters a generated constant name can't hold.
+         * Whether [name] can hold [char] — an allowlist, because each platform the generated code
+         * reaches forbids more than the last.
          *
-         * The first nine are KotlinPoet's own: it refuses to escape a name containing one. The
-         * last three it escapes instead, which the Kotlin grammar excludes from a quoted
-         * identifier, so a name carrying one compiles to nothing — a backtick closes the quoting
-         * early, and a line break ends the name.
+         * Kotlin itself admits any character inside backticks except the grammar's nine, but a
+         * generated constant also has to survive DEX, whose SimpleName before version 040 is
+         * letters, digits, `$` and `_` plus a handful of Unicode ranges. `d8` rejects the rest
+         * outright: a provider named `c#` compiles and then fails the Android build with
+         * "Field name 'C#' cannot be represented in dex format".
+         *
+         * Non-ASCII is admitted, since the DEX ranges cover letters broadly, except the spaces
+         * DEX names explicitly — see
+         * [SimpleName](https://source.android.com/docs/core/runtime/dex-format#simplename).
          */
-        private val IDENTIFIER_ILLEGAL_CHARS =
-            charArrayOf('.', ';', '[', ']', '/', '<', '>', ':', '\\', '`', '\r', '\n')
+        private fun isConstantNameChar(char: Char): Boolean = when {
+            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' -> true
+            char == '$' || char == '_' -> true
+            char.code < 0x80 -> false
+            else -> char !in DEX_REJECTED_SPACES
+        }
+
+        /** The spaces DEX rejects before version 040, which its SimpleName grammar excludes. */
+        private val DEX_REJECTED_SPACES = charArrayOf(
+            '\u00a0', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
+            '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000',
+        )
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

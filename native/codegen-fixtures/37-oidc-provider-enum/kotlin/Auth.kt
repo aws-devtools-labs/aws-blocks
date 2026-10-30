@@ -25,6 +25,13 @@ public class Auth(
       MySso("my-sso"),
       LoginGov("login.gov"),
       ;
+
+      public companion object {
+        /**
+         * The provider the backend knows as [name], or null if this spec named none.
+         */
+        public fun fromProviderName(name: String): Provider? = entries.firstOrNull { it.providerName == name }
+      }
     }
   }
 }
