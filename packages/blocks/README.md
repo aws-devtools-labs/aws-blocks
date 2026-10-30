@@ -283,7 +283,7 @@ Errors print as `Error: <what failed>`, then where it failed and a `Try:` line w
 }
 ```
 
-`port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort`. `host` sets the interface to bind (default `127.0.0.1`). Without `blocks.dev`, the frontend is detected from the app's dependencies: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port 3100`, `vite` runs `npx vite --port 3100 --strictPort`, and neither runs the backend only. Flags override both: `npm run dev -- --port 4000` serves the app on http://localhost:4000.
+`port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort` (default `3100`). `host` sets the interface to bind (default `127.0.0.1`). Without `frontendCommand`, the frontend is detected from the app's dependencies and started on `frontendPort`: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>`, `vite` runs `npx vite --port <frontendPort> --strictPort`, and neither runs the backend only. A `frontendCommand` you set must listen on `frontendPort` itself. Flags override both: `npm run dev -- --port 4000` serves the app on http://localhost:4000.
 
 The lifecycle commands run the app's TypeScript with `tsx`, as the generated npm scripts did. The CLI uses the app's own `tsx` when it is installed, and otherwise the one that `@aws-blocks/blocks` depends on.
 

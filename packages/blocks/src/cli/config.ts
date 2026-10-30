@@ -6,9 +6,10 @@
  *
  *     "blocks": { "dev": { "port": 3000, "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 } }
  *
- * Without `blocks.dev`, the frontend is detected from the app's dependencies:
- * `next` runs the Next.js dev server, `vite` runs Vite, and neither runs the
- * backend only. Command-line flags override both.
+ * Without `blocks.dev.frontendCommand`, the frontend is detected from the app's
+ * dependencies: `next` runs the Next.js dev server, `vite` runs Vite, and
+ * neither runs the backend only. A detected dev server listens on
+ * `frontendPort` (default 3100). Command-line flags override both.
  */
 
 import { readFileSync } from 'node:fs';
@@ -21,7 +22,7 @@ export interface DevConfig {
 	port?: number;
 	/** Interface the local server binds. Default: 127.0.0.1. */
 	host?: string;
-	/** Command that starts the frontend dev server; absent runs the backend only. */
+	/** Command that starts the frontend dev server; absent detects it from the app's dependencies. */
 	frontendCommand?: string;
 	/** Port the frontend dev server listens on. Default: 3100. */
 	frontendPort?: number;
@@ -38,14 +39,12 @@ interface AppPackageJson {
 	blocks?: { dev?: Record<string, unknown> };
 }
 
+const DEFAULT_FRONTEND_PORT = 3100;
+
 /** The frontend dev servers that auto-detection knows, by dependency name, in priority order. */
 const FRONTENDS = [
-	{
-		dependency: 'next',
-		frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
-		frontendPort: 3100,
-	},
-	{ dependency: 'vite', frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 },
+	{ dependency: 'next', command: (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}` },
+	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
 ] as const;
 
 function readPackageJson(root: string): AppPackageJson {
@@ -94,7 +93,8 @@ export function detectFrontend(root: string): (typeof FRONTENDS)[number] | undef
 
 /**
  * Resolve the dev server settings: flags, then `package.json#blocks.dev`, then
- * auto-detection. `--no-frontend` drops the frontend from any source.
+ * auto-detection of the frontend command, which listens on the resolved
+ * `frontendPort`. `--no-frontend` drops the frontend from any source.
  */
 export function resolveDevConfig(root: string, flags: FlagValues = {}): ResolvedDevConfig {
 	if (
@@ -104,34 +104,30 @@ export function resolveDevConfig(root: string, flags: FlagValues = {}): Resolved
 		throw new UsageError('--no-frontend cannot be combined with --frontend-command or --frontend-port.');
 	}
 	const configured = readDevConfig(root);
-	let resolved: ResolvedDevConfig;
-	if (configured) {
-		resolved = { ...configured, source: 'package.json' };
-	} else {
-		const detected = detectFrontend(root);
-		resolved = detected
-			? {
-					frontendCommand: detected.frontendCommand,
-					frontendPort: detected.frontendPort,
-					source: detected.dependency,
-				}
-			: { source: 'none' };
-	}
+	const resolved: ResolvedDevConfig = { ...configured, source: 'none' };
 	const port = parsePort(flags.port, 'option --port');
 	if (port !== undefined) resolved.port = port;
 	const host = parseText(flags.host, 'option --host');
 	if (host !== undefined) resolved.host = host;
-	const frontendCommand = parseText(flags['frontend-command'], 'option --frontend-command');
-	if (frontendCommand !== undefined) {
-		resolved.frontendCommand = frontendCommand;
-		resolved.source = 'flags';
-	}
 	const frontendPort = parsePort(flags['frontend-port'], 'option --frontend-port');
 	if (frontendPort !== undefined) resolved.frontendPort = frontendPort;
+	const frontendCommand = parseText(flags['frontend-command'], 'option --frontend-command');
 	if (flags['no-frontend'] === true) {
 		resolved.frontendCommand = undefined;
 		resolved.frontendPort = undefined;
 		resolved.source = 'flags';
+	} else if (frontendCommand !== undefined) {
+		resolved.frontendCommand = frontendCommand;
+		resolved.source = 'flags';
+	} else if (resolved.frontendCommand !== undefined) {
+		resolved.source = 'package.json';
+	} else {
+		const detected = detectFrontend(root);
+		if (detected) {
+			resolved.frontendPort ??= DEFAULT_FRONTEND_PORT;
+			resolved.frontendCommand = detected.command(resolved.frontendPort);
+			resolved.source = detected.dependency;
+		}
 	}
 	return resolved;
 }

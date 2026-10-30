@@ -213,6 +213,29 @@ describe('per-app dev config', () => {
 		assert.strictEqual(flagged.frontendCommand, undefined);
 	});
 
+	it('starts a detected frontend on the resolved frontend port', () => {
+		const vite = fixtureApp({ devDependencies: { vite: '*' } });
+		const flagged = resolveDevConfig(vite, { 'frontend-port': '3200' });
+		assert.strictEqual(flagged.frontendCommand, 'npx vite --port 3200 --strictPort');
+		assert.strictEqual(flagged.frontendPort, 3200);
+		assert.strictEqual(flagged.source, 'vite');
+		// "blocks.dev" without a frontendCommand keeps detection on, and its frontendPort applies.
+		const next = fixtureApp({
+			devDependencies: { next: '*' },
+			blocks: { dev: { port: 3001, frontendPort: 3300 } },
+		});
+		assert.deepStrictEqual(resolveDevConfig(next), {
+			port: 3001,
+			host: undefined,
+			frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3300',
+			frontendPort: 3300,
+			source: 'next',
+		});
+		// A configured command is the app's own: the port flag never rewrites it.
+		const own = fixtureApp({ devDependencies: { vite: '*' }, blocks: { dev: { frontendCommand: 'npm run web' } } });
+		assert.strictEqual(resolveDevConfig(own, { 'frontend-port': '3200' }).frontendCommand, 'npm run web');
+	});
+
 	it('rejects invalid ports and conflicting flags as usage errors', () => {
 		const root = fixtureApp({ blocks: { dev: { port: 'abc' } } });
 		assert.throws(() => resolveDevConfig(root), /"blocks\.dev\.port" must be a port number/);
