@@ -289,6 +289,93 @@ describe('attachCdkWatchOutput', () => {
   });
 });
 
+describe('attachCdkWatchOutput — synth failure inside watch', () => {
+  /** Emulates `cdk watch`: CDK swallows a synth failure (no ❌) and keeps watching. */
+  function fakeWatch(): ChildProcess & { out: PassThrough; err: PassThrough } {
+    const out = new PassThrough();
+    const err = new PassThrough();
+    return Object.assign(new EventEmitter(), { stdout: out, stderr: err, out, err }) as unknown as ChildProcess & {
+      out: PassThrough;
+      err: PassThrough;
+    };
+  }
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const SYNTH_CRASH = [
+    "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
+    '/app/aws-blocks/index.ts:3',
+    'SyntaxError: Unexpected token }',
+  ];
+
+  it('classifies compound JS error names as failure lines', async () => {
+    const { isCdkFailureLine } = await import('./cdk-output.js');
+    assert.ok(isCdkFailureLine('SyntaxError: Unexpected token }'));
+    assert.ok(isCdkFailureLine('TypeError: x is not a function'));
+    assert.ok(!isCdkFailureLine('Detected change to errors.ts'));
+  });
+
+  it('at quiet, dumps the failed cycle once output goes idle', async () => {
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+    const err = collectingSink();
+    const child = fakeWatch();
+    attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 20 });
+    child.err.write(SYNTH_CRASH.join('\n') + '\n');
+    await sleep(5);
+    assert.strictEqual(err.text(), '', 'not before the idle window');
+    await sleep(60);
+    assert.match(err.text(), /cdk watch output \(3 lines, retained because BLOCKS_LOG_LEVEL=quiet\)/);
+    assert.ok(err.text().includes('SyntaxError: Unexpected token }\n'));
+  });
+
+  it('at normal, shows the error line and dumps when the next cycle starts', async () => {
+    const calls: string[] = [];
+    mock.method(console, 'log', (...a: unknown[]) => calls.push(a.join(' ')));
+    mock.method(console, 'error', (...a: unknown[]) => calls.push(a.join(' ')));
+    const err = collectingSink();
+    const child = fakeWatch();
+    attachCdkWatchOutput(child, { level: 'normal', stderr: err, failureIdleMs: 60_000 });
+    child.err.write(SYNTH_CRASH.join('\n') + '\n');
+    await sleep(5);
+    assert.ok(calls.includes('[CDK Watch] SyntaxError: Unexpected token }'));
+    assert.strictEqual(err.text(), '');
+    child.out.write("Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'\n");
+    await sleep(5);
+    assert.match(err.text(), /cdk watch output \(3 lines/);
+    child.emit('exit', null, 'SIGTERM');
+  });
+
+  it('does not dump a cycle that succeeds after an error-looking line', async () => {
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+    const err = collectingSink();
+    const child = fakeWatch();
+    attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 20 });
+    child.out.write("Detected change to 'a.ts'\nwarning: TypeError in a test fixture\n ✅  MyStack\n");
+    await sleep(60);
+    assert.strictEqual(err.text(), '');
+  });
+});
+
+describe('createCdkOutput — a descendant holding the pipes', { skip: process.platform === 'win32' ? 'POSIX shell' : false }, () => {
+  it('at quiet, lets the process exit promptly after the command finishes', { timeout: 30_000 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-cdk-pipes-'));
+    try {
+      const harness = join(dir, 'harness.mjs');
+      writeFileSync(
+        harness,
+        `const { createCdkOutput } = await import(${JSON.stringify(new URL('./cdk-output.js', import.meta.url).href)});
+await createCdkOutput({ label: 'cdk synth', level: 'quiet' }).run('sh', ['-c', 'echo synth-done; (sleep 15 &); exit 0']);`,
+      );
+      const started = Date.now();
+      const r = spawnSync(process.execPath, [harness], { encoding: 'utf-8', timeout: 20_000 });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.ok(Date.now() - started < 8000, `exited after ${Date.now() - started}ms`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('runDestroyWithRetries failure dump', () => {
   it('prints the retained output once, just before the final failure, and never on a recovered retry', async () => {
     const events: string[] = [];
