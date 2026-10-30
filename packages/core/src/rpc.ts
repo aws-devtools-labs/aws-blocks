@@ -164,6 +164,15 @@ export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {})
     return { ok: false, response: errorResponse(RpcErrorCode.ParseError, 'Parse error', null) };
   }
 
+  // A literal `null` body parses to null; reading `.id` off it would throw.
+  // Other primitives and arrays already fall through to Invalid Request below.
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, 'Invalid Request: body must be a JSON-RPC 2.0 object', null, { name: 'InvalidRequest' }),
+    };
+  }
+
   const id = parsed.id ?? null;
 
   if (parsed.jsonrpc !== VERSION || typeof parsed.method !== 'string') {
