@@ -12,7 +12,12 @@ import { describe, it } from 'node:test';
 // Only AWS requests and process launch boundaries are replaced. A fresh process
 // isolates SDK configuration caches and process.env from the developer's machine.
 const scriptsUrl = new URL('./', import.meta.url).href;
-function commandFixture(command: 'deploy' | 'sandbox', expectedRegion: string, explicitProfile?: string): string {
+function commandFixture(
+	command: 'deploy' | 'sandbox',
+	expectedRegion: string,
+	explicitProfile: string | undefined,
+	expectedAccessKey: string,
+): string {
 	return `
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
@@ -23,6 +28,7 @@ const scripts = ${JSON.stringify(scriptsUrl)};
 const moduleUrl = (name) => new URL(name + '.js', scripts).href;
 const expectedRegion = ${JSON.stringify(expectedRegion)};
 const explicitProfile = ${JSON.stringify(explicitProfile)};
+const expectedAccessKey = ${JSON.stringify(expectedAccessKey)};
 const originalRegion = process.env.AWS_REGION;
 const seen = [];
 const stop = new Error('fixture stopped before CDK');
@@ -42,6 +48,8 @@ mock.method(STSClient.prototype, 'send', async function () {
 mock.method(SSMClient.prototype, 'send', async function (command) {
   assert.equal(command.constructor.name, 'GetParameterCommand');
   assert.equal(this.config.profile, explicitProfile);
+  // The same identity as STS and CDK: never resolved by the credential chain on its own.
+  assert.equal((await this.config.credentials()).accessKeyId, expectedAccessKey);
   seen.push(['ssm', await this.config.region()]);
   return { Parameter: { Value: 'fixture-connection' }, $metadata: {} };
 });
@@ -55,7 +63,7 @@ for (const [name, Client, response] of [
 ]) {
   mock.method(Client.prototype, 'send', async function () {
     assert.equal(this.config.profile, explicitProfile);
-    assert.equal((await this.config.credentials()).accessKeyId, 'AKIAFIXTURETARGET');
+    assert.equal((await this.config.credentials()).accessKeyId, expectedAccessKey);
     seen.push([name, await this.config.region()]);
     return { ...response, $metadata: {} };
   });
@@ -115,7 +123,14 @@ assert.deepEqual(destroyed.sort(), ['account', 'freetier', 'iam']);
 
 describe('deploy/sandbox configured target', () => {
 	for (const command of ['deploy', 'sandbox'] as const) {
-		for (const source of ['profile', 'default-region', 'environment', 'cdk-profile', 'cdk-region'] as const) {
+		for (const source of [
+			'profile',
+			'default-region',
+			'environment',
+			'cdk-profile',
+			'cdk-region',
+			'environment-keys',
+		] as const) {
 			it(`${command} resolves ${source} for STS, metadata and SSM, prints it, and keeps CDK's environment`, async () => {
 				const directory = await mkdtemp(join(tmpdir(), 'blocks-target-'));
 				try {
@@ -151,28 +166,43 @@ describe('deploy/sandbox configured target', () => {
 						CDK_DEFAULT_REGION: 'us-west-2',
 					};
 					if (source === 'environment') env.AWS_REGION = 'ap-south-1';
+					// CDK deploys with access keys from the environment rather than AWS_PROFILE.
+					if (source === 'environment-keys') {
+						env.AWS_ACCESS_KEY_ID = 'AKIAFIXTUREENVKEYS';
+						env.AWS_SECRET_ACCESS_KEY = 'fixture';
+					}
 					const expected = {
 						profile: 'cn-north-1',
 						'default-region': 'us-gov-west-1',
 						environment: 'ap-south-1',
 						'cdk-profile': 'cn-north-1',
 						'cdk-region': 'eu-north-1',
+						'environment-keys': 'us-gov-west-1',
 					}[source];
+					const credentialsLabel =
+						source === 'environment-keys'
+							? 'access keys in AWS_ACCESS_KEY_ID (used instead of AWS_PROFILE)'
+							: 'AWS profile deployment';
 					const stdout = execFileSync(
 						process.execPath,
 						[
 							'--experimental-test-module-mocks',
 							'--input-type=module',
 							'-e',
-							commandFixture(command, expected, source === 'cdk-profile' ? 'deployment' : undefined),
+							commandFixture(
+								command,
+								expected,
+								source === 'cdk-profile' ? 'deployment' : undefined,
+								source === 'environment-keys' ? 'AKIAFIXTUREENVKEYS' : 'AKIAFIXTURETARGET',
+							),
 						],
 						{ cwd: directory, env, encoding: 'utf8', stdio: 'pipe', timeout: 15_000 },
 					);
-					assert.ok(stdout.includes(`Deployment target: AWS profile deployment, Region ${expected}`), stdout);
+					assert.ok(stdout.includes(`Deployment target: ${credentialsLabel}, Region ${expected}`), stdout);
 					assert.match(stdout, /Account name: Fixture project$/m);
 					assert.match(stdout, /Account plan: Paid \(active\)$/m);
 					assert.match(stdout, /^💳 Spend limit: https:\/\/settings\.aws\.com\/billing \(/m);
-					assert.doesNotMatch(stdout, /123456789012|AKIAFIXTURETARGET/);
+					assert.doesNotMatch(stdout, /123456789012|AKIAFIXTURETARGET|AKIAFIXTUREENVKEYS/);
 				} finally {
 					await rm(directory, { recursive: true, force: true });
 				}
