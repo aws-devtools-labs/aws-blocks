@@ -579,7 +579,12 @@ describe('whoami with the real credential chain', () => {
 
 	before(async () => {
 		server = createServer((req, res) => {
-			const key = /Credential=([^/]+)\//.exec(String(req.headers.authorization))?.[1] ?? '';
+			// SigV4: `Credential=<access key>/<scope>`; read the key without a regex over the header.
+			const authorization = String(req.headers.authorization);
+			const start = authorization.indexOf('Credential=');
+			const credential = start === -1 ? '' : authorization.slice(start + 'Credential='.length);
+			const slash = credential.indexOf('/');
+			const key = slash === -1 ? '' : credential.slice(0, slash);
 			signedWith.push(key);
 			req.resume();
 			req.on('end', () => {
