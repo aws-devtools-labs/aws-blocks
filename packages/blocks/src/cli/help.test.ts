@@ -102,4 +102,21 @@ describe('command help', () => {
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /Did you mean "deploy"\?/);
 	});
+
+	it('prints only the version for --version after a command, and never runs it', async () => {
+		const cwd = fixtureApp();
+		for (const argv of [
+			['whoami', '--version'],
+			['deploy', '--version'],
+			['destroy', '--yes', '--version'],
+		]) {
+			const run = await runCli(argv, { cwd, env: { AWS_REGION: 'not a region' } });
+			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.match(run.stdout, /^\d+\.\d+\.\d+\S*\n$/, argv.join(' '));
+			assert.strictEqual(run.stderr, '', argv.join(' '));
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+		}
+		const json = await runCli(['deploy', '--version', '--output', 'json'], { cwd });
+		assert.match(JSON.parse(json.stdout).version, /^\d+\.\d+\.\d+/);
+	});
 });
