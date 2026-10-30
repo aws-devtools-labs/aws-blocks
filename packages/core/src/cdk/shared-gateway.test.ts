@@ -151,6 +151,15 @@ describe('createSharedGateway — single shared REST API', () => {
 		});
 	});
 
+	test('passes every payload through as binary so RawRoute bodies keep their bytes', () => {
+		const { stack, compute } = setup('SharedGwBinary');
+		createSharedGateway(stack, { defaultCompute: compute, defaults: BlocksPresets.production });
+
+		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::RestApi', {
+			BinaryMediaTypes: ['*/*'],
+		});
+	});
+
 	test('caps every Lambda integration at API Gateway’s 29s request ceiling', () => {
 		const { stack, compute } = setup('SharedGwIntegrationTimeout');
 		createSharedGateway(stack, {

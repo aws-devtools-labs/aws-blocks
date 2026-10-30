@@ -339,7 +339,7 @@ The handler returns nothing; you write the response through `ctx.response`:
 | On `ctx.response` | Notes |
 |---|---|
 | `status: number` | Assignable. Defaults to `200`. |
-| `headers: Headers` | Standard `Headers`. Set `Content-Type` yourself; a string body is sent as-is, an object is serialized as JSON. |
+| `headers: Headers` | Standard `Headers`. Set `Content-Type` yourself; a string body is sent as-is, a `Buffer`/`Uint8Array`/`ArrayBuffer` as raw bytes, anything else as JSON. |
 | `send(body)` | Call once with the body. `send('')` for an empty body (redirects, `204`). |
 
 And what you read from `ctx.request`:
@@ -349,7 +349,7 @@ And what you read from `ctx.request`:
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
 | `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
 | `headers` | Request `Headers`, including `cookie`. |
-| `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
+| `json()` / `text()` / `body` | Body as parsed JSON, UTF-8 text, or a `ReadableStream<Uint8Array>` of the exact bytes the client sent. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
 
 Reading a path parameter and a query parameter:
@@ -365,6 +365,25 @@ new RawRoute(scope, 'user', {
 });
 // GET /users/42?q=hello → {"id":"42","q":"hello"}
 ```
+
+Binary bodies pass through unchanged, locally and on AWS: `ctx.request.body` yields the bytes the client sent (signed-webhook HMAC checks, uploads, protobuf), and a byte body sent through `send()` reaches the client as-is:
+
+```typescript
+import { createHash } from 'node:crypto';
+
+new RawRoute(scope, 'upload', {
+  method: 'PUT',
+  path: '/upload',
+  handler: async (ctx) => {
+    const bytes = new Uint8Array(await new Response(ctx.request.body).arrayBuffer());
+    ctx.response.headers.set('Content-Type', 'application/octet-stream');
+    // Send back the SHA-256 digest of the upload as 32 raw bytes.
+    ctx.response.send(createHash('sha256').update(bytes).digest());
+  },
+});
+```
+
+On AWS, API Gateway hands every request body to the Lambda base64-encoded, and a byte response goes back the same way, which adds a third to its size. Within Lambda's 6 MB payload limit, that leaves roughly 4.5 MB for a request body or a byte response. Move larger files directly to and from S3 with `FileBucket`'s presigned `putUrl()`/`getUrl()`.
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
 
