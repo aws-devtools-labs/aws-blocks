@@ -505,9 +505,13 @@ class DeviceLink<T> {
 
 Block authors do not edit `blocks.spec.json`. A block declares its native packages and bindings as static JSON under an `aws-blocks.native` key in its own `package.json`. The `aws-blocks` namespace is already in use for `vendorize` on the umbrella package.
 
+A block that declares nothing omits the key. Present but not an object — a string, a number, `null`, or the key's own value wrapped in an array — is an error rather than an absence, `"aws-blocks" must be an object (declared by <block>)`, because the declarations are usually inside and would otherwise be dropped without a word. A namespace object carrying only other keys, `vendorize` among them, declares no native metadata and is skipped, and a manifest whose own top level is not an object is skipped too, with the manifest case listed further down.
+
+That rule is the key's own, not a general one. Inside a registration, at `aws-blocks.native.packages[].platforms`, a field set to `null` is reported as the absence it resembles, `Missing "platforms" object (declared by <block>)`, while `packages` or `bindings` set to `null` is an error.
+
 `packages` and `bindings` are independently optional. Field values reach the two catalogs intact, but the catalogs are not a copy: bindings sort by `id`, packages sort by identity, each object's fields are emitted in a fixed order, `identity` becomes the catalog key rather than a field of the entry, and a repeated identity is emitted once.
 
-Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`.
+Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`. The seven are also the only fields a binding may carry, whatever its `kind`: once its `id` is usable, an eighth is rejected with `Unexpected field "<name>" — a binding holds only id, kind, tag, package, export, abi, genericArity (declared by <block>)`. The emitter rebuilds those seven unconditionally, so a field outside them would be dropped from the catalog rather than carried to a generator. A binding whose `id` is blank is reported for that alone.
 
 ```json
 {
@@ -546,7 +550,7 @@ npm nests a copy only when two dependents need different versions, so a block th
 
 `schemaVersion` is not authored here — the generator stamps it.
 
-Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key.
+Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key. On the CLI path the manifests are read before anything is validated, so a malformed `aws-blocks` in any resolvable manifest — including a hoisted one you do not own — is reported alongside every other read error and masks every validation error until it is fixed. A caller that supplies its own declarations skips the read and sees no masking. Validation collects its errors and returns them rather than throwing, except that a declaration with a throwing accessor abandons the rest of the pass it interrupts along with every later pass, replacing what they would have reported with a single summary error. Whatever was already collected survives, so a diagnostic raised earlier in the interrupted pass is kept while one that would have come later is not. Every manifest the scan reaches counts, so a malformed key in a hoisted transitive dependency fails the whole app's generation, not only one authored by the app; a copy nested inside another package is skipped with the rest of that directory.
 
 The last is deliberate — a manifest that carries the `aws-blocks` key but will not parse cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
 
@@ -562,7 +566,7 @@ A dependency that declares a binding therefore participates in the generated cli
 
 Once a generator consumes the catalogs, the client it emits will import the declared package and hand it the descriptor, which may carry a signed URL or a short-lived credential.
 
-Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` is unchecked. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
+Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` value is unchecked. Its field set is not: the seven-field rule above holds for every kind, so a new kind cannot carry a field of its own without a core change. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
 
 Restricting the scan to the spec project's own `dependencies` would narrow it further and is deferred, not rejected — see [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies).
 

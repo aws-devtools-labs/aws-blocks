@@ -177,11 +177,55 @@ describe('readNativeDeclarations', () => {
 		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
 	});
 
-	it('skips a package whose aws-blocks namespace is null', () => {
-		const root = makeApp();
-		installPackage(root, '@example/bb-iot', { 'aws-blocks': null });
+	it('reports a package whose aws-blocks namespace is not an object', () => {
+		// Present and malformed, so it is an error rather than an absence — the
+		// same split `aws-blocks.native` already draws one level down.
+		for (const namespace of [
+			null,
+			'transferable',
+			42,
+			true,
+			[{ native: { packages: PACKAGES, bindings: BINDINGS } }],
+		]) {
+			const root = makeApp();
+			installPackage(root, '@example/bb-iot', { 'aws-blocks': namespace });
 
-		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
+			assert.throws(
+				() => readNativeDeclarations(foundationOf(root)),
+				(err: unknown) => {
+					assert.ok(err instanceof NativeCatalogError);
+					assert.strictEqual(err.errors[0].path, 'aws-blocks', JSON.stringify(namespace));
+					assert.strictEqual(
+						err.errors[0].message,
+						'"aws-blocks" must be an object (declared by @example/bb-iot)',
+						JSON.stringify(namespace),
+					);
+					return true;
+				},
+			);
+		}
+	});
+
+	it('reports a malformed namespace in every manifest that carries one, not just the first', () => {
+		const root = makeApp();
+		installPackage(root, '@example/bb-iot', { 'aws-blocks': 'oops' });
+		installPackage(root, '@example/alpha', { 'aws-blocks': 42 });
+
+		assert.throws(
+			() => readNativeDeclarations(foundationOf(root)),
+			(err: unknown) => {
+				assert.ok(err instanceof NativeCatalogError);
+				assert.deepStrictEqual(
+					err.errors.map((e) => e.message).sort(),
+					[
+						'"aws-blocks" must be an object (declared by @example/alpha)',
+						'"aws-blocks" must be an object (declared by @example/bb-iot)',
+					],
+					'the read collects across manifests before it throws',
+				);
+				return true;
+			},
+		);
 	});
 
 	it('skips a package whose native object declares neither packages nor bindings', () => {

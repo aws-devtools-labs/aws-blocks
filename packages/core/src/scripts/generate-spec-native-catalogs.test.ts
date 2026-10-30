@@ -256,8 +256,26 @@ describe('generateSpec — native catalogs', () => {
 						err.errors[0].path,
 						'methods["api.connectDevice"].result.schema.x-blocks-type-args',
 					);
+					assert.match(err.errors[0].message, /by binding "example-device-link"/);
+					assert.match(err.errors[0].message, /\(declared by @example\/bb-iot\)$/);
 					return true;
 				},
+			);
+		});
+	});
+
+	it('emits type args as an array, so the arity diagnostic is the only one reachable at that path', async () => {
+		// `validateSpec` reports the same path with no binding context, for a
+		// document it did not generate. Nothing generated can reach it.
+		await withBackend('type-args-array', AST_BACKEND, async (foundationPath) => {
+			const doc = await generateSpec(foundationPath, stubTransferableLoader(), {
+				nativeDeclarations: iotDeclarations(1),
+			});
+
+			const schema = doc.methods[0].result.schema as Record<string, unknown>;
+			assert.ok(
+				Array.isArray(schema['x-blocks-type-args']),
+				'a non-array would reach the spec-level check instead',
 			);
 		});
 	});

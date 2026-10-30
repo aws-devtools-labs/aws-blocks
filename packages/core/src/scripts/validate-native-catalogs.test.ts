@@ -3,7 +3,12 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import type { NativeBindingRegistration, NativeDeclarationSource } from './native-catalogs.js';
+import {
+	buildNativeCatalogs,
+	NATIVE_BINDING_FIELDS,
+	type NativeBindingRegistration,
+	type NativeDeclarationSource,
+} from './native-catalogs.js';
 import { type ValidatableMethod, validateNativeCatalogs } from './validate-native-catalogs.js';
 import type { SpecValidationError } from './validate-spec.js';
 
@@ -107,6 +112,26 @@ describe('validateNativeCatalogs — valid input', () => {
 		assert.deepStrictEqual(errors, []);
 	});
 
+	// The field allowlist runs above the kind gate, so it binds every kind, and
+	// the emitter rebuilds the same seven whatever the kind — an eighth would be
+	// dropped rather than carried to a generator.
+	it('still rejects an unexpected field on a binding of another kind', () => {
+		const errors = errorsFrom([
+			source({
+				bindings: [
+					{ ...binding({ id: 'some-facade', kind: 'facade', abi: 'facade-v1' }), facadeOnly: true } as never,
+				],
+			}),
+		]);
+
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["some-facade"].facadeOnly']);
+		assert.strictEqual(
+			errors[0].message,
+			'Unexpected field "facadeOnly" — a binding holds only id, kind, tag, package, export, abi, genericArity ' +
+				'(declared by @example/bb-iot)',
+		);
+	});
+
 	it('still applies the structural checks to a binding of another kind', () => {
 		const errors = errorsFrom([source({ bindings: [binding({ id: '', kind: 'facade' })] })]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings[0].id']);
@@ -143,6 +168,7 @@ describe('untrusted containers — collected, never thrown', () => {
 	it('reports a non-array packages field once, not once per character', () => {
 		const errors = errorsFrom([{ sourcePackage: '@example/bb-iot', packages: 'abc' }] as never, []);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-packages.packages']);
+		assert.strictEqual(errors[0].message, 'Expected an array (declared by @example/bb-iot)');
 	});
 
 	it('reports an explicitly null container rather than reading it as absent', () => {
@@ -168,9 +194,32 @@ describe('untrusted containers — collected, never thrown', () => {
 		});
 		const errors = errorsFrom([{ sourcePackage: '@example/bb-iot', packages: [hostile] }] as never, []);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-packages']);
-		assert.match(errors[0].message, /could not be read \(/);
+		assert.match(errors[0].message, /could not be read \(Error\)/);
 		assert.ok(!errors[0].message.includes('author-controlled text'), 'must not echo the thrown message');
 		assert.match(errors[0].message, /while reading @example\/bb-iot/);
+	});
+
+	it('names the constructor of the thrown value, so one cause is not reported as another', () => {
+		for (const [thrown, label] of [
+			[new RangeError('x'), 'RangeError'],
+			[new TypeError('x'), 'TypeError'],
+			['a bare string', 'unrecognized string'],
+			[42, 'unrecognized number'],
+		] as [unknown, string][]) {
+			const hostile: Record<string, unknown> = { identity: 'p' };
+			Object.defineProperty(hostile, 'platforms', {
+				get() {
+					throw thrown;
+				},
+				enumerable: true,
+			});
+			const errors = errorsFrom([{ sourcePackage: '@example/bb-iot', packages: [hostile] }] as never, []);
+			assert.strictEqual(
+				errors[0].message,
+				`Native declarations could not be read (${label}) while reading @example/bb-iot`,
+				label,
+			);
+		}
 	});
 
 	it('does not blame the previous block when a later source throws on its own sourcePackage read', () => {
@@ -262,6 +311,7 @@ describe('untrusted containers — collected, never thrown', () => {
 
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-packages.packages["dup"]']);
 		assert.match(errors[0].message, /registered twice with different contents within this block/);
+		assert.match(errors[0].message, /A duplicate identity must be byte-identical\./);
 		assert.ok(
 			!/by @example\/bb-iot and @example\/bb-iot/.test(errors[0].message),
 			'one block must not be named on both sides',
@@ -500,6 +550,7 @@ describe('rule 2 — a tag is bound exactly once', () => {
 	it('rejects the same tag bound twice within one block', () => {
 		const errors = errorsFrom([source({ bindings: [binding(), binding({ id: 'duplicate-link' })] })]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["duplicate-link"].tag']);
+		assert.match(errors[0].message, /A tag must be bound exactly once\./);
 	});
 
 	it('matches a tag byte-for-byte, so a near miss is allowed', () => {
@@ -531,7 +582,11 @@ describe('rule 4 — generic arity matches each method result', () => {
 			[transferableMethod('api.connectDevice', 'example-iot/device-link')],
 		);
 		assert.deepStrictEqual(paths(errors), ['methods["api.connectDevice"].result.schema.x-blocks-type-args']);
-		assert.match(errors[0].message, /needs exactly 1 x-blocks-type-args entry, found 0/);
+		assert.strictEqual(
+			errors[0].message,
+			'Tag "example-iot/device-link" is bound with genericArity 1 by binding "example-device-link", ' +
+				'so this result needs exactly 1 x-blocks-type-args entry, found 0 (declared by @example/bb-iot)',
+		);
 	});
 
 	it('rejects arity 0 against a result that carries a type arg', () => {
@@ -540,6 +595,28 @@ describe('rule 4 — generic arity matches each method result', () => {
 			[transferableMethod('api.connectDevice', 'example-iot/device-link', [{ type: 'object' }])],
 		);
 		assert.match(errors[0].message, /needs exactly 0 x-blocks-type-args entries, found 1/);
+		assert.match(errors[0].message, /by binding "example-device-link"/);
+		assert.match(errors[0].message, /\(declared by @example\/bb-iot\)$/);
+	});
+
+	it('names the one block whose binding set the arity when several are installed', () => {
+		const other = {
+			sourcePackage: '@example/bb-other',
+			packages: [
+				{ identity: 'other-native', platforms: { dart: { package: { name: 'o', library: 'o.dart' } } } },
+			],
+			bindings: [binding({ id: 'other-link', tag: 'other/thing', package: 'other-native' })],
+		};
+
+		const errors = errorsFrom(
+			[source({ bindings: [binding({ genericArity: 1 })] }), other],
+			[transferableMethod('api.connectDevice', 'example-iot/device-link')],
+		);
+
+		assert.strictEqual(errors.length, 1);
+		assert.match(errors[0].message, /by binding "example-device-link"/);
+		assert.match(errors[0].message, /\(declared by @example\/bb-iot\)$/);
+		assert.ok(!errors[0].message.includes('@example/bb-other'), 'the innocent block must not be named');
 	});
 
 	it('reports every mismatching method, not just the first', () => {
@@ -575,7 +652,11 @@ describe('rule 4 — generic arity matches each method result', () => {
 			[transferableMethod('api.connectDevice', 'example-iot/device-link', 'not-an-array')],
 		);
 		assert.deepStrictEqual(paths(errors), ['methods["api.connectDevice"].result.schema.x-blocks-type-args']);
-		assert.match(errors[0].message, /must be an array/);
+		assert.strictEqual(
+			errors[0].message,
+			'x-blocks-type-args must be an array of JSON Schema objects, for tag "example-iot/device-link" ' +
+				'bound by binding "example-device-link" (declared by @example/bb-iot)',
+		);
 	});
 
 	it('rejects an arity outside the schema 1 range of zero and one', () => {
@@ -673,6 +754,7 @@ describe('rule 6 — malformed metadata', () => {
 		]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["dup"].id']);
 		assert.match(errors[0].message, /already declared by @example\/bb-iot/);
+		assert.match(errors[0].message, /A binding id must be unique across all blocks\./);
 	});
 
 	it('rejects a binding id reused twice within one block', () => {
@@ -694,6 +776,7 @@ describe('rule 6 — malformed metadata', () => {
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["dup"].id']);
 		// Ordinal is per-block, so an earlier block's two bindings must not shift it.
 		assert.match(errors[0].message, /binding 1 of this block/);
+		assert.match(errors[0].message, /A binding id must be unique across all blocks\./);
 		assert.ok(!errors[0].message.includes('@example/bb-earlier'), 'must not name the earlier block');
 	});
 
@@ -719,6 +802,10 @@ describe('rule 6 — malformed metadata', () => {
 	it('rejects a binding with an empty kind', () => {
 		const errors = errorsFrom([source({ bindings: [binding({ kind: '' })] })]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].kind']);
+		assert.strictEqual(
+			errors[0].message,
+			'Binding "kind" must be a non-blank string (declared by @example/bb-iot)',
+		);
 	});
 
 	it('rejects a missing platforms object', () => {
@@ -729,6 +816,7 @@ describe('rule 6 — malformed metadata', () => {
 			},
 		]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-packages.packages["p"].platforms']);
+		assert.strictEqual(errors[0].message, 'Missing "platforms" object (declared by @example/bb-iot)');
 	});
 
 	it('rejects an unrecognized field on a registration', () => {
@@ -739,6 +827,10 @@ describe('rule 6 — malformed metadata', () => {
 			},
 		]);
 		assert.deepStrictEqual(paths(errors), ['x-blocks-native-packages.packages["p"].delivery']);
+		assert.strictEqual(
+			errors[0].message,
+			'Unexpected field "delivery" — a registration holds only "identity" and "platforms" (declared by @example/bb-iot)',
+		);
 	});
 
 	it('rejects a duplicate identity that differs only in an unrecognized field', () => {
@@ -891,6 +983,14 @@ describe('rule 6 — malformed metadata', () => {
 			'x-blocks-native-bindings.bindings["example-device-link"].export',
 			'x-blocks-native-bindings.bindings["example-device-link"].tag',
 		]);
+		assert.deepStrictEqual(
+			errors.map((e) => e.message).sort(),
+			[
+				'Binding "abi" must be a non-blank string (declared by @example/bb-iot)',
+				'Binding "export" must be a non-blank string (declared by @example/bb-iot)',
+				'Binding "tag" must be a non-blank string (declared by @example/bb-iot)',
+			].sort(),
+		);
 	});
 
 	it('collects every error rather than stopping at the first', () => {
@@ -1016,6 +1116,7 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 			'x-blocks-native-packages.packages["example-iot-native"].platforms.dart.package.name',
 		]);
 		assert.match(errors[0].message, /name a package other than "blocks_runtime"/);
+		assert.match(errors[0].message, /which every generated client already imports/);
 	});
 
 	it('constrains only the platforms that declare a grammar', () => {
@@ -1047,5 +1148,249 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 			}),
 		]);
 		assert.deepStrictEqual(paths(errors), []);
+	});
+});
+
+describe('rule 8 — an unrecognized field on a binding', () => {
+	it('rejects a field a generator would not emit, naming the binding and the block', () => {
+		const errors = errorsFrom([source({ bindings: [{ ...binding(), abi2: 'blocks-transferable-v1' } as never] })]);
+
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["example-device-link"].abi2']);
+		assert.strictEqual(
+			errors[0].message,
+			'Unexpected field "abi2" — a binding holds only id, kind, tag, package, export, abi, genericArity ' +
+				'(declared by @example/bb-iot)',
+		);
+	});
+
+	it('rejects a field differing from a known one only in case', () => {
+		for (const key of ['genericarity', 'Export', 'ID']) {
+			const errors = errorsFrom([source({ bindings: [{ ...binding(), [key]: 1 } as never] })]);
+			assert.deepStrictEqual(
+				paths(errors),
+				[`x-blocks-native-bindings.bindings["example-device-link"].${key}`],
+				key,
+			);
+		}
+	});
+
+	it('reports every unrecognized field, not just the first', () => {
+		const errors = errorsFrom([source({ bindings: [{ ...binding(), one: 1, two: 2 } as never] })]);
+
+		assert.deepStrictEqual(paths(errors), [
+			'x-blocks-native-bindings.bindings["example-device-link"].one',
+			'x-blocks-native-bindings.bindings["example-device-link"].two',
+		]);
+	});
+
+	it('reports it alongside a duplicate id, as a registration reports it alongside a duplicate identity', () => {
+		// Both checks run: the field is rejected before the uniqueness check, which
+		// is where `collectPackages` puts the same loop relative to its own.
+		const errors = errorsFrom([
+			source(),
+			{ sourcePackage: '@example/bb-other', bindings: [{ ...binding(), tag: 'example-iot/other', nope: 1 }] },
+		] as never);
+
+		assert.deepStrictEqual(paths(errors), [
+			'x-blocks-native-bindings.bindings["example-device-link"].nope',
+			'x-blocks-native-bindings.bindings["example-device-link"].id',
+		]);
+	});
+
+	it('reports only the blank id when the id is unusable, so the path is never positional and keyed at once', () => {
+		const errors = errorsFrom([source({ bindings: [{ ...binding(), id: '', nope: 1 } as never] })]);
+
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings[0].id']);
+	});
+
+	it('exercises every declared field in its fixture, so the guard above is not vacuous', () => {
+		assert.deepStrictEqual(
+			Object.keys(binding()).sort(),
+			[...NATIVE_BINDING_FIELDS].sort(),
+			'the fixture must exercise every declared field, or the guard above proves less than it appears to',
+		);
+	});
+});
+
+describe('structural pre-checks — each diagnostic named, not merely counted', () => {
+	const pkg = (platforms: unknown) => [
+		{ sourcePackage: '@example/bb-iot', packages: [{ identity: 'p', platforms }] } as never,
+	];
+
+	for (const [label, srcs, path, message] of [
+		[
+			'a package registration that is not an object',
+			[{ sourcePackage: '@example/bb-iot', packages: ['not-an-object'] }] as never,
+			'x-blocks-native-packages.packages',
+			'Package registration must be an object (declared by @example/bb-iot)',
+		],
+		[
+			'a platforms field that is present but not an object',
+			pkg('nope'),
+			'x-blocks-native-packages.packages["p"].platforms',
+			'"platforms" must be an object (declared by @example/bb-iot)',
+		],
+		[
+			'a platform entry that is not an object',
+			pkg({ dart: 'nope' }),
+			'x-blocks-native-packages.packages["p"].platforms.dart',
+			'Platform entry must be an object (declared by @example/bb-iot)',
+		],
+		[
+			'a platform entry with no package object',
+			pkg({ dart: {} }),
+			'x-blocks-native-packages.packages["p"].platforms.dart.package',
+			'Missing "package" object (declared by @example/bb-iot)',
+		],
+		[
+			'a binding that is not an object',
+			[{ sourcePackage: '@example/bb-iot', bindings: ['not-an-object'] }] as never,
+			'x-blocks-native-bindings.bindings[0]',
+			'Binding must be an object (declared by @example/bb-iot)',
+		],
+		[
+			'a binding whose package is blank',
+			[{ sourcePackage: '@example/bb-iot', bindings: [{ ...binding(), package: '   ' }] }] as never,
+			'x-blocks-native-bindings.bindings["example-device-link"].package',
+			'Binding "package" must be a non-blank string (declared by @example/bb-iot)',
+		],
+	] as [string, never, string, string][]) {
+		it(`rejects ${label}`, () => {
+			assert.deepStrictEqual(errorsFrom(srcs), [{ path, message }]);
+		});
+	}
+
+	it('distinguishes an absent platforms field from one explicitly set to null', () => {
+		for (const platforms of [undefined, null]) {
+			const errors = errorsFrom(pkg(platforms));
+			assert.strictEqual(errors.length, 1, String(platforms));
+			assert.strictEqual(
+				errors[0].message,
+				'Missing "platforms" object (declared by @example/bb-iot)',
+				String(platforms),
+			);
+		}
+	});
+
+	it('trims a sourcePackage carrying whitespace rather than naming it as written', () => {
+		const errors = errorsFrom([{ sourcePackage: '  @example/bb-padded  ', packages: ['not-an-object'] }] as never);
+
+		assert.strictEqual(
+			errors[0].message,
+			'Package registration must be an object (declared by @example/bb-padded)',
+		);
+	});
+
+	it('hands back an empty source list when sources is not an array', () => {
+		const validated = validateNativeCatalogs('not-an-array' as never);
+
+		assert.ok(validated.ok);
+		assert.deepStrictEqual(validated.sources, [], 'a non-array must not reach the caller as itself');
+	});
+
+	it('echoes a padded id exactly as written, in the path and the message alike', () => {
+		// `describeSource` trims the block name; the id is not trimmed anywhere, so
+		// the author greps for what they typed and both halves agree.
+		const errors = errorsFrom(
+			[
+				source({
+					sourcePackage: '  @example/bb-iot  ',
+					bindings: [binding({ id: '  padded  ', genericArity: 1 })],
+				}),
+			],
+			[transferableMethod('api.connectDevice', 'example-iot/device-link')],
+		);
+
+		assert.deepStrictEqual(paths(errors), ['methods["api.connectDevice"].result.schema.x-blocks-type-args']);
+		assert.match(errors[0].message, /by binding " {2}padded {2}"/);
+		assert.match(errors[0].message, /\(declared by @example\/bb-iot\)$/);
+	});
+
+	it('treats ids differing only in whitespace as two bindings, uncaught by uniqueness and sorted padded-first', () => {
+		// `seenIds` keys on the raw id and `isNonBlankString` admits a padded one,
+		// so both reach the catalog. Pre-existing and untouched here; pinned so the
+		// verbatim echo above is not read as a uniqueness guarantee.
+		const sources = [
+			source({ bindings: [binding({ id: 'dup' }), binding({ id: ' dup ', tag: 'example-iot/other' })] }),
+		];
+
+		assert.deepStrictEqual(
+			errorsFrom(sources),
+			[],
+			'no duplicate-id diagnostic fires for a whitespace-only difference',
+		);
+		assert.deepStrictEqual(
+			buildNativeCatalogs(sources)?.['x-blocks-native-bindings']?.bindings?.map((b) => b.id),
+			[' dup ', 'dup'],
+			'both ids reach the emitted catalog, the padded one sorting first',
+		);
+	});
+
+	it('keys the binding path on the id as written, so the path and the message match', () => {
+		const errors = errorsFrom([source({ bindings: [binding({ id: '  padded  ', abi: 'bogus-v9' })] })]);
+
+		assert.deepStrictEqual(paths(errors), ['x-blocks-native-bindings.bindings["  padded  "].abi']);
+	});
+
+	it('checks arity only when both the tag and the arity survived their own checks', () => {
+		// A non-integer arity returns undefined while the tag resolves fine, so the
+		// arity pass must not run on half a binding and report `undefined` entries.
+		const errors = errorsFrom(
+			[source({ bindings: [binding({ genericArity: 1.5 })] })],
+			[transferableMethod('api.connectDevice', 'example-iot/device-link')],
+		);
+
+		assert.deepStrictEqual(paths(errors), [
+			'x-blocks-native-bindings.bindings["example-device-link"].genericArity',
+		]);
+	});
+
+	it('loses a whole pass to a throwing accessor, whatever order the sources are in', () => {
+		// `collectPackages` runs over every source before `collectBindings` does, so
+		// a throw in the first pass costs the second one for all of them, not only
+		// for the sources that follow the throwing one.
+		const hostile: Record<string, unknown> = { sourcePackage: '@example/bb-iot' };
+		Object.defineProperty(hostile, 'packages', {
+			enumerable: true,
+			get() {
+				throw new RangeError('boom');
+			},
+		});
+		// A package-pass error, so the ordering is observable: collected before the
+		// throw it survives, collected after it never happens.
+		const sibling = { sourcePackage: '@example/bb-third', packages: ['not-an-object'] };
+		const pass2Source = { sourcePackage: '@example/bb-fourth', bindings: [{ id: '' }] };
+
+		assert.strictEqual(errorsFrom([sibling, hostile] as never).length, 2, 'collected before the throw');
+		assert.strictEqual(errorsFrom([hostile, sibling] as never).length, 1, 'never reached after it');
+
+		for (const [order, sources] of [
+			['throwing first', [hostile, pass2Source]],
+			['throwing last', [pass2Source, hostile]],
+		] as [string, unknown[]][]) {
+			const errors = errorsFrom(sources as never);
+
+			assert.strictEqual(errors.length, 1, `${order}: the binding pass never runs, whatever the order`);
+			assert.match(errors[0].message, /could not be read \(RangeError\)/, order);
+		}
+
+		assert.strictEqual(errorsFrom([pass2Source] as never).length, 1, 'yet it reports on its own');
+	});
+
+	it('skips the bindings of a source the package pass already rejected, without a second diagnostic', () => {
+		// Not a plain object, so `collectPackages` reports it once and
+		// `collectBindings` must neither re-report it nor register what it carries.
+		class Smuggler {
+			sourcePackage = '@example/bb-iot';
+			packages = [{ identity: 'example-iot-native', platforms: { dart: DART } }];
+			bindings = [binding({ id: 'smuggled', tag: 'smuggled/tag' })];
+		}
+
+		const errors = errorsFrom([new Smuggler(), source({ bindings: [binding({ tag: 'smuggled/tag' })] })] as never);
+
+		assert.deepStrictEqual(
+			errors.map((e) => e.message),
+			['Declaration source must be an object (declaration source 1)'],
+		);
 	});
 });

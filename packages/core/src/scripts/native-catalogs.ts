@@ -85,6 +85,20 @@ export interface NativeBindingRegistration {
 }
 
 /**
+ * `orderBindingFields` rebuilds exactly these, so a field absent from this list
+ * is dropped rather than emitted; `validateNativeCatalogs` rejects one instead.
+ */
+export const NATIVE_BINDING_FIELDS = [
+	'id',
+	'kind',
+	'tag',
+	'package',
+	'export',
+	'abi',
+	'genericArity',
+] as const satisfies readonly (keyof NativeBindingRegistration)[];
+
+/**
  * One block's declarations, typed. `sourcePackage` is never emitted; it names
  * the declaring block in every validation error.
  */
