@@ -204,3 +204,53 @@ describe('ApiNamespaceClient namespace identity', () => {
     assert.strictEqual(Reflect.get(ApiNamespaceClient('pwAuth'), Symbol.for('other')), undefined, 'other symbols stay undefined');
   });
 });
+
+describe('ApiNamespaceClient — per-call fetch (test clients)', () => {
+  // `@aws-blocks/blocks/utils`'s createTestClient runs each call inside an
+  // AsyncLocalStorage whose store is the fetch to use (one cookie jar per test
+  // user). The client reads it through a `Symbol.for` key on globalThis
+  // (client/fetch-store.ts).
+  const KEY = Symbol.for('blocks:ClientFetch');
+
+  it('the key is exported once, from @aws-blocks/core/bb-utils', async () => {
+    const { CLIENT_FETCH_STORE } = await import('../bb-utils.js');
+    assert.strictEqual(CLIENT_FETCH_STORE, KEY);
+  });
+  const ok = () =>
+    new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  it('a call made inside the store uses its fetch; other calls keep the global one', async () => {
+    const { AsyncLocalStorage } = await import('node:async_hooks');
+    const { ApiNamespaceClient } = await import('./index.js');
+    const store = new AsyncLocalStorage<typeof fetch>();
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls.push('global');
+      return ok();
+    }) as typeof fetch;
+    const scoped = (async () => {
+      calls.push('scoped');
+      return ok();
+    }) as typeof fetch;
+    Reflect.set(globalThis, KEY, store);
+    try {
+      for (const retryStaleConnection of [true, false]) {
+        calls.length = 0;
+        const api = ApiNamespaceClient<{ ping(): Promise<string> }>('api', {
+          url: 'http://127.0.0.1:1/aws-blocks/api',
+          retryStaleConnection,
+        });
+        assert.strictEqual(await store.run(scoped, () => api.ping()), 'ok');
+        assert.strictEqual(await api.ping(), 'ok');
+        assert.deepStrictEqual(calls, ['scoped', 'global'], `retryStaleConnection: ${retryStaleConnection}`);
+      }
+    } finally {
+      Reflect.deleteProperty(globalThis, KEY);
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

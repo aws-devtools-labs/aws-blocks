@@ -1,9 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -12,6 +11,7 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
+let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 const serverPort = 3001;
@@ -20,18 +20,18 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
- * sent: every code is written to `.bb-data/<scope id>-<auth id>/last-code.json`
- * (here `my-app` + `auth`). On AWS, Cognito emails it instead.
+ * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
+ * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ *
+ * `user` defaults to this file's clients (the cookie jar `installCookieJar`
+ * installs); pass `createTestClient(app)` for another user with a session of
+ * their own, signed in at the same time.
  */
-async function signUpAndSignIn(username: string, password: string) {
-  const signUp = await authApi.setAuthState({ action: 'signUp', username, password });
+async function signUpAndSignIn(username: string, password: string, user = { authApi }) {
+  const signUp = await user.authApi.setAuthState({ action: 'signUp', username, password });
   assert.strictEqual(signUp.state, 'confirmingSignUp');
-  const last: { username: string; code: string } = JSON.parse(
-    await readFile('.bb-data/my-app-auth/last-code.json', 'utf-8'),
-  );
-  assert.strictEqual(last.username, username, 'expected a code for this user');
-  await authApi.setAuthState({ action: 'confirmSignUp', username, code: last.code });
-  return await authApi.setAuthState({ action: 'autoSignIn', username });
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username, code: await getLastAuthCode(username) });
+  return await user.authApi.setAuthState({ action: 'autoSignIn', username });
 }
 
 test.before(async () => {
@@ -47,9 +47,9 @@ test.before(async () => {
     await setTimeout(2000);
   }
 
-  const mod = await import('aws-blocks');
-  api = mod.api;
-  authApi = mod.authApi;
+  app = await import('aws-blocks');
+  api = app.api;
+  authApi = app.authApi;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 30; i++) {
@@ -184,25 +184,23 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
 // When you replace the sample API, update or delete this test.
 test('items: another user can neither see nor change them', async () => {
   const password = 'TestPass123!';
-  const owner = `e2e-owner-${Date.now().toString(36)}@example.com`;
-  await authApi.setAuthState({ action: 'signOut' });
-  assert.strictEqual((await signUpAndSignIn(owner, password)).state, 'signedIn');
-  const mine = await api.createItem('Private', 1);
+  // Two users signed in at once, each with a cookie jar of their own.
+  const owner = createTestClient(app);
+  const other = createTestClient(app);
+  assert.strictEqual((await signUpAndSignIn(`e2e-owner-${Date.now().toString(36)}@example.com`, password, owner)).state, 'signedIn');
+  assert.strictEqual((await signUpAndSignIn(`e2e-other-${Date.now().toString(36)}@example.com`, password, other)).state, 'signedIn');
+  const mine = await owner.api.createItem('Private', 1);
   assert.ok(mine.owner, "the item is keyed on the owner's userSub");
 
-  await authApi.setAuthState({ action: 'signOut' });
-  assert.strictEqual((await signUpAndSignIn(`e2e-other-${Date.now().toString(36)}@example.com`, password)).state, 'signedIn');
-  const theirs = await api.listItems();
+  const theirs = await other.api.listItems();
   assert.ok(!theirs.some((i) => i.itemId === mine.itemId), "listItems leaked the owner's item");
-  await assert.rejects(() => api.getItem(mine.itemId), /not found/i);
-  await assert.rejects(() => api.updateQuantity(mine.itemId, 9), /not found/i);
-  await assert.rejects(() => api.setQuantity(mine.itemId, 9, 1), /not found/i);
-  await api.deleteItem(mine.itemId); // a no-op outside the caller's own items
+  await assert.rejects(() => other.api.getItem(mine.itemId), /not found/i);
+  await assert.rejects(() => other.api.updateQuantity(mine.itemId, 9), /not found/i);
+  await assert.rejects(() => other.api.setQuantity(mine.itemId, 9, 1), /not found/i);
+  await other.api.deleteItem(mine.itemId); // a no-op outside the caller's own items
 
-  await authApi.setAuthState({ action: 'signOut' });
-  assert.strictEqual((await authApi.setAuthState({ action: 'signIn', username: owner, password })).state, 'signedIn');
-  const after = await api.getItem(mine.itemId);
+  const after = await owner.api.getItem(mine.itemId);
   assert.strictEqual(after.quantity, 1);
   assert.strictEqual(after.version, 1);
-  await api.deleteItem(mine.itemId);
+  await owner.api.deleteItem(mine.itemId);
 });

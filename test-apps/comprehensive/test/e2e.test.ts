@@ -26,6 +26,7 @@ import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authAdminScanFilterTests, authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
+import { authTestHelpersTests } from './auth-test-helpers.test.js';
 import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
@@ -53,6 +54,7 @@ let server: ChildProcess | null = null;
 let api: typeof apiType;
 let isolatedApi: typeof isolatedApiType;
 let authStateApis: AuthStateApis;
+let appModule: typeof import('aws-blocks');
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -143,6 +145,7 @@ test.before(async () => {
 
   // Import API after config is written
   const module = await import('aws-blocks');
+  appModule = module;
   api = module.api;
   isolatedApi = module.isolatedApi;
   authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
@@ -272,6 +275,9 @@ browserClientTests();
 
 // Auth createApi() narrowing: typed by the block options, refused at runtime (separate file)
 authApiNarrowingTests(() => authStateApis);
+
+// The auth test helpers: two createTestClient() users at once, getLastAuthCode (separate file)
+authTestHelpersTests(() => appModule);
 
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
 // queues, Lambda and the model, so each runs in its own child process against

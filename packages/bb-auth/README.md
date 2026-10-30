@@ -160,6 +160,62 @@ export const authApi = auth.createApi();
 2. **Register the callback URL** with the provider. Google calls it an *authorized redirect URI*: `https://my-app-auth.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML). Without `hostedUi.domainPrefix` the prefix is derived from the block's `fullId`; read it from the `UserPoolDomain` resource in the synthesized template. `hostedUi.domainPrefix` is create-only: choose it before the first deploy.
 3. **Test on a sandbox** (`npm run sandbox`). Locally the Google button answers `501`, because Cognito managed login needs a deployed user pool.
 
+### End-to-end tests: emailed codes and two users at once
+
+Against the local pool (`npm run dev`), a test reads the code a user was "sent" with `getLastAuthCode`, and acts as several users at once with `createTestClient`, which gives each user the app's typed clients with their own cookie jar. Both come from `@aws-blocks/blocks/utils` (`getLastAuthCode` also from `@aws-blocks/bb-auth/testing`), are Node-only, and belong in test code:
+
+```ts
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, KVStore, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const notes = new KVStore(scope, 'notes');
+const auth = new Auth(scope, 'auth', { users: { signInWith: ['email'] } });
+export const authApi = auth.createApi();
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async saveNote(text: string) {
+    const user = await auth.requireAuth(context);
+    await notes.put(user.userSub, text);
+  },
+  async readNote() {
+    const user = await auth.requireAuth(context);
+    return notes.get(user.userSub);
+  },
+}));
+```
+
+```ts
+// test/e2e.test.ts
+import assert from 'node:assert';
+import { test } from 'node:test';
+import { createTestClient, getLastAuthCode } from '@aws-blocks/blocks/utils';
+
+const app = await import('aws-blocks');
+
+/** A new user, signed up and signed in, with a session of their own. */
+async function newUser(email: string) {
+  const user = createTestClient(app);
+  await user.authApi.setAuthState({ action: 'signUp', username: email, password: 'Passw0rd!' });
+  const code = await getLastAuthCode(email);
+  await user.authApi.setAuthState({ action: 'confirmSignUp', username: email, code });
+  await user.authApi.setAuthState({ action: 'autoSignIn', username: email });
+  return user;
+}
+
+test('each user reads only their own note', async () => {
+  const owner = await newUser(`owner-${Date.now()}@example.com`);
+  const other = await newUser(`other-${Date.now()}@example.com`);
+  await owner.api.saveNote('mine');
+  assert.strictEqual(await other.api.readNote(), null); // both signed in at once
+  assert.strictEqual(await owner.api.readNote(), 'mine');
+});
+```
+
+- `getLastAuthCode(username, { block?, purpose?, cwd? })` takes the name the user signs in with (their email on an email sign-in pool). It finds the block's local data under `.bb-data/` itself, so renaming the scope or the block does not break it, and it reads the codes the pool still holds, so a user's code stays readable after another user's was sent. It throws, naming what each local block last sent, when there is no such code, and says so when there is no local pool at all: against a deployed backend Cognito emails the code.
+- Run the test from the directory the dev server runs in (the project root), under `tsx -C browser` so `import('aws-blocks')` is the generated client, as the scaffolded `npm run test:e2e` does.
+- `createTestClient(app)` returns the clients typed as passed. One user's clients share a jar, so a session `authApi` starts is sent by `api` too; the shared jar `installCookieJar()` installs is never involved.
+
 ## Which option and why
 
 Every sign-in method is a key on the same options object, and you can combine them in one block. They differ in what they cost, where they run, and which `Auth` features their users get:
@@ -365,7 +421,7 @@ An option `Auth` does not recognise is an error at construction, in `npm run dev
 
 ## Local development
 
-Locally, no email or SMS is sent. Every verification code (sign-up, password reset, MFA, attribute verification) is written to `.bb-data/<fullId>/last-code.json` as `{ username, code, purpose }`, and is passed to the optional, local-only `codeDelivery` hook:
+Locally, no email or SMS is sent. Every verification code (sign-up, password reset, MFA, attribute verification) is written to `.bb-data/<fullId>/last-code.json` as `{ username, code, purpose }`, and is passed to the optional, local-only `codeDelivery` hook. In a test, read it with `getLastAuthCode(username)` rather than the file: the path follows the scope and block names ([recipe](#end-to-end-tests-emailed-codes-and-two-users-at-once)):
 
 ```typescript
 const auth = new Auth(scope, 'auth', {
