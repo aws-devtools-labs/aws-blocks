@@ -428,8 +428,23 @@ const WATCH_PROGRESS_LINE = /Detected change|hotswap|Deployment time|^\s*✅/i;
 const WATCH_CYCLE_START_LINE =
   /Detected change(?!.*while 'cdk deploy' is still running)|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
 
-/** CDK's own watch lines (cycle starts and queued changes); they name a file, never a failure. */
-const WATCH_OWN_LINE = /Detected change|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
+/**
+ * CDK's own watch bookkeeping lines (aws-cdk `cdk-toolkit.js`), matched by their fixed message text
+ * so an embedded path such as `src/app/error.tsx` never reads as a failure.
+ */
+const WATCH_OWN_LINE = new RegExp(
+  [
+    /Detected change/,
+    /Detected file changes during deployment\. Invoking 'cdk deploy' again/,
+    /Triggering initial 'cdk deploy'/,
+    /^\s*'watch' is observing (?:directory|the file) '.*' for changes\s*$/,
+    /^\s*'watch' received the 'ready' event\. From now on, all file changes will trigger a deployment\s*$/,
+    /^\s*root directory used for 'watch' is: /,
+    /^\s*'(?:include|exclude)' patterns for 'watch': /,
+  ]
+    .map((r) => r.source)
+    .join('|'),
+);
 
 /** A watch deploy cycle that succeeded. */
 const WATCH_CYCLE_DONE_LINE = /^\s*✅|✨\s+(Deployment|Total) time:/;

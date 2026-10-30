@@ -371,6 +371,29 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     });
   }
 
+  for (const [kind, line] of [
+    ['file', "'watch' is observing the file 'src/app/error.tsx' for changes"],
+    ['directory', "'watch' is observing directory 'src/routes/error-demo' for changes"],
+  ]) {
+    for (const level of ['quiet', 'normal'] as const) {
+      it(`does not treat the observing line for a ${kind} as a failure (${level})`, async () => {
+        const logs: string[] = [];
+        mock.method(console, 'log', (m: string) => logs.push(m));
+        mock.method(console, 'error', (m: string) => logs.push(m));
+        const err = collectingSink();
+        const child = fakeWatch();
+        attachCdkWatchOutput(child, { level, stderr: err, failureIdleMs: 20 });
+        child.out.write(`${line}\nTriggering initial 'cdk deploy'\n`);
+        await sleep(60);
+        child.out.write(' ✅  MyStack\n');
+        await sleep(5);
+        assert.strictEqual(err.text(), '');
+        assert.ok(!logs.some((m) => m.includes('observing')));
+        child.emit('exit', null, 'SIGTERM');
+      });
+    }
+  }
+
   it('does not treat a queued change during a failed cycle as a new cycle', async () => {
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
