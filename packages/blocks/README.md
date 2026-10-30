@@ -230,7 +230,7 @@ npx --no -- blocks --version
 | | `blocks sandbox console` | Open the AWS console for the sandbox stack |
 | Deploy | `blocks deploy [--wait-live[=SECONDS]]` | Deploy the production stack; the target is printed first |
 | | `blocks destroy [--yes]` | Delete the production stack, after a confirmation |
-| | `blocks whoami` | Show the AWS identity, Region and the stacks that `sandbox` and `deploy` would affect |
+| | `blocks whoami` | Show the AWS identity and Region that `deploy` uses (with `.env.production` applied), and the stacks that `sandbox` and `deploy` would affect |
 | Configure | `blocks secret set KEY` / `list` / `remove KEY` | Manage secrets; a value is never accepted on the command line |
 | | `blocks config set KEY VALUE` / `list` / `remove KEY` | Manage non-secret config |
 | | `blocks telemetry [status\|enable\|disable] [--global]` | Show or change telemetry consent |

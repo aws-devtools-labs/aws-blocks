@@ -13,7 +13,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { resolveDevConfig } from './config.js';
-import { blocksVersion, type ChildResult, type Context, PromptInterrupted } from './context.js';
+import {
+	blocksVersion,
+	type ChildResult,
+	type Context,
+	PromptInterrupted,
+	STAGE_ENV_FILES,
+	stageEnv,
+} from './context.js';
 import { CliError, ExitCode, type ExitCodeValue, exitCodeForChild, UsageError } from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
 import { suggest } from './parse.js';
@@ -183,17 +190,22 @@ async function sandboxStack(ctx: Context, root: string): Promise<string | null> 
 
 /**
  * The Region and the credentials that CDK would use, read from local configuration
- * only, with the same credentials label as the deploy's own target line. When
- * environment access keys take precedence over an exported AWS_PROFILE (or
- * --profile), it says so on stderr, even with --quiet: the command is about to
- * act on whatever account those keys belong to.
+ * only, with the same credentials label as the deploy's own target line. `env`
+ * is the environment the runner deploys with: {@link stageEnv} for a stage
+ * whose env file core loads. When environment access keys take precedence over
+ * an exported AWS_PROFILE (or --profile), it says so on stderr, even with
+ * --quiet: the command is about to act on whatever account those keys belong to.
  */
-async function targetLabel(ctx: Context, root: string): Promise<{ region: string | null; label: string }> {
+async function targetLabel(
+	ctx: Context,
+	root: string,
+	env: NodeJS.ProcessEnv,
+): Promise<{ region: string | null; label: string }> {
 	const core = await ctx.core();
-	const target = await core.describeDeploymentCredentials({ env: ctx.env, projectRoot: root });
+	const target = await core.describeDeploymentCredentials({ env, projectRoot: root });
 	const region = target.region && /^[a-z0-9-]+$/.test(target.region) ? target.region : null;
 	if (target.keysOverrideProfile) {
-		const profile = ctx.env.AWS_PROFILE ?? ctx.env.AWS_DEFAULT_PROFILE;
+		const profile = env.AWS_PROFILE ?? env.AWS_DEFAULT_PROFILE;
 		ctx.out.error(
 			`Warning: access keys in the environment are set, so CDK uses them instead of the profile ${JSON.stringify(profile)}.\n` +
 				'  Unset AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to use the profile.\n',
@@ -326,9 +338,8 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		.map((word) => shellQuote(word))
 		.join(' ');
 	const stack = await sandboxStack(ctx, root);
-	ctx.out.progress(
-		`Sandbox stack: ${stack ?? '(created on the first deploy)'}; ${(await targetLabel(ctx, root)).label}`,
-	);
+	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'sandbox'));
+	ctx.out.progress(`Sandbox stack: ${stack ?? '(created on the first deploy)'}; ${label}`);
 	rmSync(join(root, LAST_DEPLOY_FILE), { force: true });
 	const code = await runRunner(ctx, {
 		runner: 'sandbox',
@@ -353,7 +364,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await sandboxStack(ctx, root);
-	const { label } = await targetLabel(ctx, root);
+	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'sandbox'));
 	const where = [`stack: ${stack ?? '(no sandbox id on this machine)'}`, label, `project: ${root}`];
 	ctx.out.progress(`Deleting your sandbox stack ${stack ?? '(no sandbox id on this machine)'}; ${label}.`);
 	ctx.out.progress('The production stack is not affected.');
@@ -389,7 +400,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	const root = ctx.requireRoot();
 	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
-	const { label } = await targetLabel(ctx, root);
+	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	ctx.out.progress(`Deploying the production stack ${stack}; ${label}; project ${root}.`);
 	// Core reads these flags from process.argv: `--wait-live` and `--wait-live-timeout=N`.
 	const args: string[] = [];
@@ -414,7 +425,8 @@ export async function destroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
 	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
-	const { label } = await targetLabel(ctx, root);
+	// Core's production destroy loads no env file, unlike its deploy.
+	const { label } = await targetLabel(ctx, root, ctx.env);
 	const where = [`stack: ${stack} (production)`, label, `project: ${root}`];
 	ctx.out.progress(`This deletes the production stack ${stack}; ${label}; project ${root}.`);
 	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where);
@@ -427,14 +439,32 @@ export async function destroy(ctx: Context): Promise<number> {
 	});
 }
 
+/**
+ * The identity and Region that `blocks deploy` uses: the environment with
+ * `.env.production` applied, as core's deploy applies it. When `.env.local`
+ * (the sandbox's env file) sets an AWS variable differently, it warns that
+ * `blocks sandbox` can use another identity or Region.
+ */
 export async function whoami(ctx: Context): Promise<number> {
 	const root = ctx.findRoot();
 	const core = await ctx.core();
+	const env = root ? stageEnv(ctx.env, root, 'production') : ctx.env;
+	if (root) {
+		const sandboxEnv = stageEnv(ctx.env, root, 'sandbox');
+		const differ = [...new Set([...Object.keys(env), ...Object.keys(sandboxEnv)])]
+			.filter((key) => key.startsWith('AWS_') && env[key] !== sandboxEnv[key])
+			.sort();
+		if (differ.length > 0) {
+			ctx.out.warn(
+				`${STAGE_ENV_FILES.sandbox} sets ${differ.join(', ')} unlike ${STAGE_ENV_FILES.production}, so "blocks sandbox" can use another identity or Region than this one, which "blocks deploy" uses.`,
+			);
+		}
+	}
 	let identity: AwsIdentity;
 	try {
 		identity = await core.readAwsIdentity({
 			invocation: 'blocks whoami',
-			env: ctx.env,
+			env,
 			projectRoot: root ?? ctx.startDir,
 		});
 	} catch (error) {

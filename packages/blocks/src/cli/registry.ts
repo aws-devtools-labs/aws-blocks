@@ -288,7 +288,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Show the AWS identity, Region and the stacks that commands would affect',
 		description:
 			'Show the AWS identity, the Region, and the sandbox and production stacks that\n' +
-			'"blocks sandbox" and "blocks deploy" would affect. Nothing is deployed.',
+			'"blocks sandbox" and "blocks deploy" would affect. Nothing is deployed.\n' +
+			'The identity and Region are the ones "blocks deploy" uses, with .env.production\n' +
+			'applied. A warning names the AWS settings that .env.local sets differently\n' +
+			'for the sandbox.',
 		json: ['account', 'arn', 'credentials', 'region', 'projectRoot', 'stacks'],
 		examples: [
 			{ command: 'blocks whoami', description: 'Show the deployment target' },
