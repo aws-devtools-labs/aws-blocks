@@ -5,6 +5,7 @@ import type {
   ChildProcess,
   SpawnOptions,
   SpawnSyncOptions,
+  SpawnSyncReturns,
 } from 'node:child_process';
 import spawn from 'cross-spawn';
 
@@ -22,8 +23,30 @@ export function runSync(
   args: string[],
   options: SpawnSyncOptions = {},
 ): void {
-  const result = spawn.sync(command, args, { stdio: 'inherit', ...options });
+  checkSyncResult(command, args, spawn.sync(command, args, { stdio: 'inherit', ...options }));
+}
 
+/**
+ * {@link runSync} with stdout captured instead of printed. On failure the
+ * captured stdout goes to `onFailure` before the error is thrown, so a hidden
+ * step stays diagnosable. stdin and stderr stay inherited.
+ */
+export function runSyncRetained(
+  command: string,
+  args: string[],
+  options: Omit<SpawnSyncOptions, 'stdio' | 'encoding'>,
+  onFailure: (stdout: string) => void,
+): void {
+  const result = spawn.sync(command, args, { ...options, stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf-8' });
+  try {
+    checkSyncResult(command, args, result);
+  } catch (error) {
+    if (result.stdout) onFailure(String(result.stdout));
+    throw error;
+  }
+}
+
+function checkSyncResult(command: string, args: string[], result: SpawnSyncReturns<string | Buffer>): void {
   if (result.error) {
     throw result.error;
   }

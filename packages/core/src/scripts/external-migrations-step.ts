@@ -28,8 +28,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
 import { getStackName } from './stack-id.js';
-import { runSync } from './run-command.js';
-import { log } from './log.js';
+import { runSync, runSyncRetained } from './run-command.js';
+import { log, progressToStderr, resolveLogLevel } from './log.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -61,10 +61,24 @@ function runMigrateSubprocess(
   migrationsDir: string,
   regenerateTypesDir?: string,
 ): void {
-  runSync('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
-    stdio: 'inherit',
-    env: { ...process.env, BLOCKS_MIGRATE_URL: connValue },
+  runMigrateCommand('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
+    ...process.env,
+    BLOCKS_MIGRATE_URL: connValue,
   });
+}
+
+/**
+ * Run the migrate child under the output policy. Its stdout is progress: it
+ * moves to stderr with `BLOCKS_LOG_STREAM=stderr`, and at `quiet` it is hidden
+ * and printed to stderr only if the child fails. With neither set, stdio is
+ * inherited as before. Exported for tests.
+ */
+export function runMigrateCommand(command: string, args: string[], env: NodeJS.ProcessEnv): void {
+  if (resolveLogLevel(env) === 'quiet') {
+    runSyncRetained(command, args, { env }, (stdout) => process.stderr.write(stdout));
+    return;
+  }
+  runSync(command, args, { stdio: progressToStderr(env) ? ['inherit', 2, 'inherit'] : 'inherit', env });
 }
 
 export interface ApplyExternalMigrationsOptions {
