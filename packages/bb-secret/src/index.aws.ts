@@ -252,7 +252,8 @@ class SecretImpl<T = string> extends Scope {
 	 * The fetched value is cached in-process per version selector (see the
 	 * class-level **Caching** note): the first read of a given version calls
 	 * Secrets Manager; subsequent reads of the same version in the same execution
-	 * environment are served from the cache until a `put()` clears it. A schema is
+	 * environment are served from the cache until the entry is older than
+	 * `cacheTtlSeconds` (default 300 s) or a `put()` clears it. A schema is
 	 * still applied on every call, so validation is never skipped.
 	 *
 	 * @param options - Optional read options; `version` selects which version.
