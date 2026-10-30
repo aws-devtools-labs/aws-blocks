@@ -217,6 +217,13 @@ private bucket, with the model credentials redacted, and the trace role is assum
 the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
 model credentials and use the network until the session expires.
 
+The human approval is enforced by the workflow, not by IAM. Both roles trust the
+`:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
+runs on `main` and references `harbor-bench` can assume them. Today only this workflow does, every
+job that uses `harbor-bench` needs the `approval` job, and `scripts/ci/harbor-approval-gate.test.mjs`
+checks both on every PR. Changes to `main` go through reviewed pull requests, so a new
+`harbor-bench` reference needs that review instead of a per-run approval.
+
 ## Local verification
 
 ```sh
