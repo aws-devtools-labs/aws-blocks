@@ -79,6 +79,11 @@ export interface CommandSpec {
 	verbs?: readonly string[];
 	/** The top-level fields of the `--output json` result; absent when the command has no JSON output. */
 	json?: readonly string[];
+	/**
+	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
+	 * Region code. An explicit `--region` is checked for every command.
+	 */
+	aws?: boolean;
 	/** Absent for a command group, which prints its help and exits 2. */
 	handler?: Handler;
 }
@@ -205,6 +210,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'against it. Ctrl-C stops the local processes; the stack keeps running until you\n' +
 			'run "blocks sandbox destroy".',
 		examples: [{ command: 'blocks sandbox', description: 'Deploy and watch your sandbox' }],
+		aws: true,
 		handler: commands.sandbox,
 	},
 	{
@@ -219,6 +225,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: 'Deploy, then keep the API URL in a shell variable',
 			},
 		],
+		aws: true,
 		handler: commands.sandboxDeploy,
 	},
 	{
@@ -229,6 +236,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Delete your personal sandbox stack. This never touches the production stack.\n' +
 			'In an interactive terminal it asks first; --yes skips the question.',
 		examples: [{ command: 'blocks sandbox destroy --yes', description: 'Delete the sandbox without asking' }],
+		aws: true,
 		handler: commands.sandboxDestroy,
 	},
 	{
@@ -236,6 +244,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Develop',
 		summary: 'Open the AWS console for the sandbox stack',
 		examples: [{ command: 'blocks sandbox console', description: 'Open the CloudFormation console' }],
+		aws: true,
 		handler: commands.sandboxConsole,
 	},
 	// ── Deploy ───────────────────────────────────────────────────────────────
@@ -267,6 +276,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
 			{ command: 'API_URL=$(blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
+		aws: true,
 		handler: commands.deploy,
 	},
 	{
@@ -280,6 +290,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'blocks destroy', description: 'Delete production, after a confirmation' },
 			{ command: 'blocks destroy --yes', description: 'Delete production without asking (CI)' },
 		],
+		aws: true,
 		handler: commands.destroy,
 	},
 	{
@@ -298,6 +309,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'blocks whoami --profile prod --output json', description: 'The same, as JSON' },
 			{ command: 'blocks whoami --query stacks.production', description: 'Print the production stack name' },
 		],
+		aws: true,
 		handler: commands.whoami,
 	},
 	// ── Configure ────────────────────────────────────────────────────────────
@@ -322,6 +334,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: "only for an app whose Hosting secretStore sets stage: 'prod'",
 			},
 		],
+		aws: true,
 		handler: commands.secret,
 	},
 	{
@@ -340,6 +353,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ command: 'blocks config set FEATURE_FLAG on', description: 'Set FEATURE_FLAG' },
 			{ command: 'blocks config list', description: 'List config values' },
 		],
+		aws: true,
 		handler: commands.config,
 	},
 	{
