@@ -203,8 +203,9 @@ export interface BlocksDefaults {
 	 * **One policy for many apps.** A platform can share a single boundary policy
 	 * across every app in an account by writing it with policy variables, e.g.
 	 * `arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*`, and tagging each
-	 * app's stack with its `app` name — {@link app} does the tagging, and the
-	 * `blocks-iam-policies` CLI generates such a policy. The policy (by name, ARN or
+	 * app's stack with its `app` name — {@link app} does the tagging, and the core
+	 * README section "Running many apps in one AWS account" documents such a
+	 * policy for the platform to write and own. The policy (by name, ARN or
 	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
 	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
 	 * so a pipeline can check both. See the core README section "Running many apps
@@ -256,9 +257,10 @@ export interface BlocksDefaults {
 	 * a per-app CloudFormation execution role that only creates bounded roles
 	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
 	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
-	 * qualifier. `blocks-iam-policies` generates the three policies, and
-	 * `blocks-iam-check` re-checks the synthesized templates in a pipeline. See the
-	 * core README section "Running many apps in one AWS account".
+	 * qualifier. The platform writes and owns the three policies; the core README
+	 * section "Running many apps in one AWS account" documents each of them, and
+	 * how a pipeline runs synth with `strict: true` and confirms the report's
+	 * `app.id`.
 	 *
 	 * @example A platform's app template
 	 * ```ts
@@ -298,12 +300,13 @@ export interface BlocksAppIdentity {
 	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and
 	 * stacks), the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`,
 	 * `me`, `mx`, `sa`, `us` (CDK names CloudFront Functions `<region>…`), and any
-	 * id starting with `aws` or `ssm` (names AWS reserves). Synth,
-	 * `blocks-iam-policies` and `blocks-iam-check` reject them, saying why.
+	 * id starting with `aws` or `ssm` (names AWS reserves). Synth rejects them,
+	 * saying why.
 	 *
 	 * Set it from the platform's pipeline (e.g. `process.env.APP_ID`), not from a
-	 * value the app's code chooses, and have the pipeline confirm it with
-	 * `blocks-iam-check --app <id>`.
+	 * value the app's code chooses, and have the pipeline confirm that the IAM
+	 * report's `app.id` (`cdk.out/<stack>.blocks-iam.json`) is the id it
+	 * registered for the app.
 	 */
 	id: string;
 

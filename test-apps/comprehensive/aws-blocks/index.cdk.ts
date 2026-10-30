@@ -21,10 +21,12 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 // synthesizes with it set to prove every Building Block's roles are covered.
 const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
 
-// Optional app identity for a shared app platform (`-c blocksAppId=<id>`).
-// test/app-identity-synth.test.ts synthesizes with it set to prove no Building
+// Optional app identity for a shared app platform (`-c blocksAppId=<id>`, and
+// `-c blocksAppStrict=true` to fail synth on any violation).
+// test/app-identity-synth.test.ts synthesizes with both set to prove no Building
 // Block's own grants or roles count as reaching outside the app.
 const appId: string | undefined = app.node.tryGetContext('blocksAppId');
+const appStrict = app.node.tryGetContext('blocksAppStrict') === 'true';
 
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
@@ -53,7 +55,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: { ...BlocksPresets.sandbox, permissionsBoundary, ...(appId ? { app: { id: appId } } : {}) },
+  defaults: { ...BlocksPresets.sandbox, permissionsBoundary, ...(appId ? { app: { id: appId, strict: appStrict } } : {}) },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB

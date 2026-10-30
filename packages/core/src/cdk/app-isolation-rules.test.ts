@@ -6,15 +6,12 @@ import { describe, test } from 'node:test';
 import {
 	APP_ID_PATTERN,
 	appIdProblem,
-	isValidAppId,
 	RESERVED_APP_ID_PREFIXES,
 	RESERVED_APP_IDS,
 	checkApiChild,
-	checkLayer,
 	checkResourcePolicy,
 	checkRole,
 	checkStatement,
-	checkTransforms,
 } from './app-isolation-rules.js';
 
 const rules = (violations: { rule: string }[]) => violations.map((v) => v.rule);
@@ -31,12 +28,12 @@ describe('app-isolation rules — statements fail closed', () => {
 	test('reserved ids and prefixes are rejected, with the reason', () => {
 		for (const [id, why] of Object.entries(RESERVED_APP_IDS)) {
 			assert.ok(APP_ID_PATTERN.test(id), `${id} is id-shaped, so only the reserved list stops it`);
-			assert.strictEqual(isValidAppId(id), false, id);
+			assert.notStrictEqual(appIdProblem(id), undefined, id);
 			assert.ok(appIdProblem(id)?.includes(why), id);
 		}
 		for (const [prefix, why] of Object.entries(RESERVED_APP_ID_PREFIXES)) {
 			for (const id of [prefix, `${prefix}app`]) {
-				assert.strictEqual(isValidAppId(id), false, id);
+				assert.notStrictEqual(appIdProblem(id), undefined, id);
 				assert.ok(appIdProblem(id)?.includes(why), id);
 			}
 		}
@@ -114,20 +111,6 @@ describe('app-isolation rules — statements fail closed', () => {
 		assert.deepStrictEqual(rules(checkStatement(kms(region, ['kms:Decrypt', 'dynamodb:GetItem']), 'appa', 'p')), ['wildcard-data-grant']);
 	});
 
-	test('a template transform or Fn::Transform is flagged', () => {
-		assert.deepStrictEqual(rules(checkTransforms({ Transform: 'AWS::Serverless-2016-10-31' }, 't')), ['template-transform']);
-		assert.deepStrictEqual(
-			rules(checkTransforms({ Resources: { X: { Properties: { 'Fn::Transform': { Name: 'AWS::Include' } } } } }, 't')),
-			['template-transform'],
-		);
-		assert.deepStrictEqual(
-			rules(checkTransforms({ Outputs: { O: { Value: { 'Fn::Transform': { Name: 'Macro' } } } } }, 't')),
-			['template-transform'],
-			'any section of the template',
-		);
-		assert.deepStrictEqual(checkTransforms({ Resources: { X: { Type: 'AWS::SQS::Queue' } } }, 't'), []);
-	});
-
 	test("lambda:UpdateFunctionCode and GetFunction on another app's function are flagged", () => {
 		for (const action of ['lambda:UpdateFunctionCode', 'lambda:GetFunction']) {
 			const s = { Effect: 'Allow', Action: action, Resource: 'arn:aws:lambda:us-east-1:111111111111:function:appb-Handler' };
@@ -142,13 +125,7 @@ describe('app-isolation rules — statements fail closed', () => {
 	});
 });
 
-describe('app-isolation rules — layers and APIs', () => {
-	test("a layer named outside the prefix, or with no name, is flagged; the app's own is fine", () => {
-		assert.deepStrictEqual(checkLayer({ LayerName: 'appa-AwsCliLayer' }, 'appa', 'p'), []);
-		assert.deepStrictEqual(rules(checkLayer({ LayerName: 'appb-AwsCliLayer' }, 'appa', 'p')), ['layer-outside-app']);
-		assert.deepStrictEqual(rules(checkLayer({}, 'appa', 'p')), ['layer-outside-app']);
-	});
-
+describe('app-isolation rules — APIs', () => {
 	test("a literal API id in an execute-api grant is outside the app; a reference to the app's own API is fine", () => {
 		const s = (Resource: unknown) => ({ Effect: 'Allow', Action: 'execute-api:ManageConnections', Resource });
 		assert.deepStrictEqual(

@@ -3,10 +3,9 @@
 
 /**
  * The app-isolation rules behind `defaults.app`: pure functions over
- * CloudFormation-resolved JSON (no `aws-cdk-lib`), so the synth-time IAM report
- * and the `blocks-iam-check` CLI apply exactly the same checks — the CLI to the
- * synthesized templates, which a malicious app can't fake the way it could fake
- * the report its own synth writes.
+ * CloudFormation-resolved JSON (no `aws-cdk-lib`), which the synth-time IAM
+ * report applies to the roles, policies and resource policies AWS Blocks
+ * renders for the app's templates (its `violations` list, and `strict`).
  *
  * Every rule answers "does this reach outside the app?". An app's resources are
  * the ones whose name starts with the app's prefix: `<id>` followed by `-`, `/`
@@ -17,7 +16,10 @@
  * Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`, the app's own
  * only when `stackId` is the app id).
  *
- * These checks are fast feedback, not the boundary: the boundary is IAM.
+ * These checks are fast feedback, not the boundary: the app's own code runs at
+ * synth, so a determined app could get around them. The boundary is IAM (the
+ * platform's permissions boundary, per-app execution role and deploy guard; see
+ * the core README's "Running many apps in one AWS account").
  *
  * @internal
  */
@@ -97,8 +99,8 @@ export const RESERVED_APP_ID_PREFIXES: Readonly<Record<string, string>> = {
 
 /**
  * Why `id` can't be an app id, or `undefined` when it can: the one check every
- * place that takes an app id uses (`defaults.app.id`, `blocks-iam-policies --app`,
- * `blocks-iam-check --app` and the ids in IAM reports).
+ * place that takes an app id uses (`defaults.app.id`, through
+ * `resolveAppIdentity`, which fails synth with this message).
  */
 export function appIdProblem(id: unknown): string | undefined {
 	if (typeof id !== 'string' || !APP_ID_PATTERN.test(id)) {
@@ -119,18 +121,12 @@ export function appIdProblem(id: unknown): string | undefined {
 	return undefined;
 }
 
-/** Whether `id` is a usable app id (see {@link appIdProblem}). */
-export function isValidAppId(id: unknown): id is string {
-	return appIdProblem(id) === undefined;
-}
-
 /** What a violation is about. */
 export type AppViolationRule =
 	| 'no-permissions-boundary'
 	| 'role-without-boundary'
 	| 'role-tag-mismatch'
 	| 'role-trust-not-service'
-	| 'stack-tag-mismatch'
 	| 'stack-name-outside-app'
 	| 'scope-outside-app'
 	| 'grant-outside-app'
@@ -139,14 +135,9 @@ export type AppViolationRule =
 	| 'wildcard-data-grant'
 	| 'broad-managed-policy'
 	| 'resource-policy-outside-app'
-	| 'unreadable-template'
-	| 'template-transform'
-	| 'layer-outside-app'
-	| 'api-outside-app'
-	| 'app-id-mismatch'
-	| 'invalid-app-id';
+	| 'api-outside-app';
 
-/** One finding. `path` is the construct path (synth) or `<stack>/<logicalId>` (CLI). */
+/** One finding. `path` is the construct path of what the finding is about. */
 export interface AppViolation {
 	rule: AppViolationRule;
 	message: string;
@@ -561,7 +552,7 @@ export function checkResourcePolicy(
 const BROAD_MANAGED_POLICY = /:aws:policy\/(AdministratorAccess|PowerUserAccess|IAMFullAccess|ReadOnlyAccess|[A-Za-z0-9]*FullAccess)$/;
 
 /** `broad-managed-policy` for each AWS managed policy ARN in `arns` that grants account-wide access. */
-export function checkManagedPolicies(arns: unknown[], where: string): AppViolation[] {
+function checkManagedPolicies(arns: unknown[], where: string): AppViolation[] {
 	const out: AppViolation[] = [];
 	for (const value of arns) {
 		const rendered = renderResource(value);
@@ -659,51 +650,6 @@ export function checkScopeFullId(fullId: string, id: string, where: string): App
 			message:
 				`Building Block "${fullId}" isn't under the app id "${id}": its resource names derive from its fullId, ` +
 				`which starts with the stack's id. Name the stack "${id}" or "${id}-…", and build every block under it.`,
-		},
-	];
-}
-
-/** Whether `value` contains an `Fn::Transform` anywhere. */
-function hasFnTransform(value: unknown): boolean {
-	if (Array.isArray(value)) return value.some(hasFnTransform);
-	if (!value || typeof value !== 'object') return false;
-	return Object.entries(value).some(([k, v]) => k === 'Fn::Transform' || hasFnTransform(v));
-}
-
-/**
- * `template-transform` when a template has a top-level `Transform` (a macro,
- * `AWS::Include`, `AWS::Serverless`) or an `Fn::Transform`: CloudFormation
- * expands them at deploy time, after the check ran, so what's checked isn't what
- * gets deployed.
- */
-export function checkTransforms(template: { Transform?: unknown } & Record<string, unknown>, where: string): AppViolation[] {
-	const transforms = template.Transform === undefined ? [] : Array.isArray(template.Transform) ? template.Transform : [template.Transform];
-	if (transforms.length === 0 && !hasFnTransform(template)) return [];
-	return [
-		{
-			rule: 'template-transform',
-			path: where,
-			message:
-				`${where} uses a CloudFormation transform (${transforms.length > 0 ? transforms.join(', ') : 'Fn::Transform'}), ` +
-				"which adds resources at deploy time that the check can't see. Remove it.",
-		},
-	];
-}
-
-/**
- * `layer-outside-app` for a Lambda layer whose name isn't under the app's prefix:
- * the platform scopes layer operations by name, so an unprefixed layer name is
- * either another app's or one the execution policy won't let the app manage.
- */
-export function checkLayer(props: Record<string, unknown>, id: string, where: string): AppViolation[] {
-	const name = renderResource(props.LayerName);
-	if (name.kind === 'arn' && isUnderAppPrefix(name.arn.split(TOKEN)[0], id)) return [];
-	if (name.kind === 'arn' && name.arn.startsWith(TOKEN)) return [];
-	return [
-		{
-			rule: 'layer-outside-app',
-			path: where,
-			message: `${where} is a Lambda layer named ${JSON.stringify(props.LayerName ?? null)}, which isn't under this app's prefix "${id}-".`,
 		},
 	];
 }

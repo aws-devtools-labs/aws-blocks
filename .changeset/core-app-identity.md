@@ -4,12 +4,15 @@
 "@aws-blocks/hosting": minor
 ---
 
-feat(core): `defaults.app` — an app identity for running many apps in one AWS account, plus `blocks-iam-check` and `blocks-iam-policies`
+feat(core): `defaults.app` — an app identity for running many apps in one AWS account
 
 For platforms that deploy many apps (often written by AI coding agents) into
 one AWS account through one pipeline. All of it is opt-in: without
 `defaults.app`, synthesized templates are unchanged. The core README section "Running many apps
-in one AWS account" shows what a platform puts in its own project template.
+in one AWS account" shows what a platform puts in its own project template, and
+documents the IAM policies the platform writes and owns: a shared permissions
+boundary keyed on `${aws:PrincipalTag/app}`, a per-app CloudFormation execution
+policy, and a deploy guard.
 
 - **`defaults.app: { id, strict? }`** (new, optional). AWS Blocks tags every
   resource and every IAM role it creates `app=<id>` — including the CDK
@@ -22,8 +25,8 @@ in one AWS account" shows what a platform puts in its own project template.
   qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
   would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
   `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
-  `eu`, and any id starting with `aws` or `ssm`); synth and both CLIs reject
-  them, saying why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
+  `eu`, and any id starting with `aws` or `ssm`); synth rejects them, saying
+  why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
   Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
   own.
 - **IAM report:** with `defaults.app` set, `cdk.out/<stack>.blocks-iam.json`
@@ -34,23 +37,8 @@ in one AWS account" shows what a platform puts in its own project template.
   resource, a role that trusts anything but an AWS service, a broad AWS managed
   policy, or a stack or block outside the prefix. With `strict: true`, synth
   fails on any violation.
-- **`blocks-iam-check`** (new CLI) for the platform's pipeline: checks the IAM
-  report and re-checks every stack template in the assembly (nested assemblies
-  and nested stacks included) with the same rules, and confirms the app is the
-  one the pipeline expects (`--app <id>`). Exits 1 on any violation, 2 when it
-  can't check.
-- **`blocks-iam-policies`** (new CLI, experimental) generates, from a
-  synthesized app, the shared permissions boundary (an allow-list keyed on
-  `${aws:PrincipalTag/app}`), the app's CloudFormation execution policy (one rule
-  per exact resource type; it prints the types it has no rule for and the
-  accepted CloudFront exceptions, and splits into parts with room for hand
-  additions), and a deploy guard that keeps the app's deploy role on its own
-  stacks. It lists the types the execution policy manages only once tagged
-  `app=<id>` (an existing app adopting `defaults.app` tags those resources
-  first; see the core README). It warns when the app calls its APIs through `execute-api` (Realtime,
-  Agent streaming), which needs a per-app boundary.
 - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
   the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
   Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
-  `defaults.app`, so a shared platform's checks and deploy guard see it as the
-  app's own stack.
+  `defaults.app`, so a shared platform's execution policy and deploy guard see it as
+  the app's own stack.

@@ -172,7 +172,7 @@ export type HostingConstructProps = {
    * functions are hoisted into when this stack is in another region. Default:
    * CDK's `edge-lambda-stack-<hash>`. AWS Blocks' `Hosting` sets `<app id>-edge`
    * when the fronted backend has `defaults.app`, so a shared platform's deploy
-   * guard and checks see it as the app's own stack.
+   * guard and execution policy see it as the app's own stack.
    */
   edgeStackId?: string;
 
