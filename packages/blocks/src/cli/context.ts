@@ -11,6 +11,7 @@ import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
 import { CliError, UsageError } from './errors.js';
 import { Output, type OutputStream } from './output.js';
@@ -92,6 +93,24 @@ export function findProjectRoot(start: string): string | undefined {
 		if (parent === dir) return undefined;
 		dir = parent;
 	}
+}
+
+/** The env file that core's deploy (`production`) and sandbox (`sandbox`) load from the project root. */
+export const STAGE_ENV_FILES = { production: '.env.production', sandbox: '.env.local' } as const;
+
+/**
+ * A copy of `env` with the stage's env file applied as core applies it
+ * (`loadProductionEnv`, `loadEnvFile`): a variable already set, even to an
+ * empty string, keeps its value. `env` is not changed.
+ */
+export function stageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof typeof STAGE_ENV_FILES): NodeJS.ProcessEnv {
+	const file = join(root, STAGE_ENV_FILES[stage]);
+	const copy = { ...env };
+	if (!existsSync(file)) return copy;
+	for (const [key, value] of Object.entries(parseEnv(readFileSync(file, 'utf-8')))) {
+		if (!(key in copy)) copy[key] = value;
+	}
+	return copy;
 }
 
 /** The installed `@aws-blocks/blocks` version. */

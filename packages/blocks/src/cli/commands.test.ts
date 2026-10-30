@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
-import type { SpawnSpec } from './context.js';
+import { type SpawnSpec, stageEnv } from './context.js';
 import { DEV_OPTIONS_ENV, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -393,6 +393,53 @@ describe('verbose echo', () => {
 			'--url',
 			'postgres://u:pw@h/db',
 		]);
+	});
+});
+
+describe('stage env files', () => {
+	/** An app whose .env.production and .env.local set other Regions than the shell. */
+	function stagedApp(): string {
+		const root = fixtureApp();
+		writeFileSync(join(root, '.env.production'), 'AWS_REGION=eu-west-2\nAPP_FLAG=prod\n');
+		writeFileSync(join(root, '.env.local'), 'AWS_REGION=ap-south-1\n');
+		return root;
+	}
+
+	it('applies a stage env file to a copy of the environment, as core does', () => {
+		const root = stagedApp();
+		const env: NodeJS.ProcessEnv = { APP_FLAG: '' };
+		assert.deepStrictEqual(stageEnv(env, root, 'production'), { APP_FLAG: '', AWS_REGION: 'eu-west-2' });
+		assert.deepStrictEqual(stageEnv({ AWS_REGION: 'us-west-1' }, root, 'sandbox'), { AWS_REGION: 'us-west-1' });
+		assert.deepStrictEqual(env, { APP_FLAG: '' });
+		assert.deepStrictEqual(stageEnv({ A: '1' }, fixtureApp(), 'production'), { A: '1' });
+	});
+
+	it('resolves whoami with .env.production, and names what .env.local sets differently', async () => {
+		const seen: NodeJS.ProcessEnv[] = [];
+		const run = await runCli(['whoami', '--output', 'json'], {
+			cwd: stagedApp(),
+			core: {
+				readAwsIdentity: async ({ env }) => {
+					seen.push(env ?? {});
+					return { ...IDENTITY, region: env?.AWS_REGION ?? null };
+				},
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.strictEqual(seen[0].AWS_REGION, 'eu-west-2');
+		assert.strictEqual(JSON.parse(run.stdout).region, 'eu-west-2');
+		assert.match(run.stderr, /Warning: \.env\.local sets AWS_REGION unlike \.env\.production/);
+	});
+
+	it('prints the target line of deploy and sandbox with their stage env file', async () => {
+		const root = stagedApp();
+		const deploy = await runCli(['deploy'], { cwd: root });
+		assert.match(deploy.stderr, /Deploying the production stack demo-prod; Region eu-west-2,/);
+		const sandbox = await runCli(['sandbox', 'deploy'], { cwd: root });
+		assert.match(sandbox.stderr, /Sandbox stack: \(created on the first deploy\); Region ap-south-1,/);
+		// The shell's own setting wins over the file, as in core.
+		const shell = await runCli(['deploy'], { cwd: root, env: { AWS_REGION: 'us-west-1' } });
+		assert.match(shell.stderr, /; Region us-west-1,/);
 	});
 });
 
