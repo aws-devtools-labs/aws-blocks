@@ -117,6 +117,35 @@ try {
 		assert.strictEqual(failed.stdout, '');
 		assert.strictEqual(failed.stderr, 'applied 0001_init.sql\nthrew: 4\n');
 	});
+
+	it('quiet: hides a warning the child writes to stderr when it succeeds, and dumps it after stdout on failure', () => {
+		const expected: Record<number, { stdout: string; stderr: string }> = {
+			0: { stdout: '', stderr: 'ok\n' },
+			3: { stdout: '', stderr: 'applied 0001_init.sql\nwarning: deprecated option\nthrew: 3\n' },
+		};
+		for (const [code, want] of Object.entries(expected)) {
+			const r = runHarness(
+				`import { runMigrateCommand } from '${here}external-migrations-step.js';
+try {
+  runMigrateCommand(process.execPath, ['-e', 'console.log("applied 0001_init.sql"); console.error("warning: deprecated option"); process.exitCode = ${code}'], process.env);
+  console.error('ok');
+} catch (e) { console.error('threw: ' + e.message.split(' ').pop()); }`,
+				{ BLOCKS_LOG_LEVEL: 'quiet' },
+			);
+			assert.deepStrictEqual({ stdout: r.stdout, stderr: r.stderr }, want, `exit code ${code}`);
+		}
+	});
+
+	it('quiet: a successful child with more than 1 MiB of output does not fail', () => {
+		const r = runHarness(
+			`import { runMigrateCommand } from '${here}external-migrations-step.js';
+runMigrateCommand(process.execPath, ['-e', 'const s = "x".repeat(1024 * 1024) + "\\\\n"; process.stdout.write(s + s); process.stderr.write(s + s)'], process.env);
+console.error('ok');`,
+			{ BLOCKS_LOG_LEVEL: 'quiet' },
+		);
+		assert.strictEqual(r.status, 0, r.stderr.slice(-500));
+		assert.strictEqual(r.stdout + r.stderr, 'ok\n');
+	});
 });
 
 describe('dev typegen watcher output', () => {
