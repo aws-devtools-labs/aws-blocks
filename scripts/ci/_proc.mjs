@@ -45,7 +45,8 @@ export function killTree(pid) {
  *   duplicate line). Default true.
  * @returns the spawnSync result (`{status, error, ...}`). Callers decide how a
  *   non-zero status is handled — {@link runBool} for a boolean, {@link runOrThrow}
- *   to throw — so the two drivers keep their existing control flow.
+ *   to throw, {@link runTeardown} to record it without throwing, so the two
+ *   drivers keep their existing control flow.
  */
 export function runSpawn(cmd, args, opts = {}, root, { log = true } = {}) {
 	if (log) console.log(`\n$ ${cmd} ${args.join(' ')}  (cwd: ${opts.cwd ?? root})`);
@@ -62,6 +63,28 @@ export function runOrThrow(cmd, args, opts = {}, root) {
 	const r = runSpawn(cmd, args, opts, root);
 	if (r.error) throw r.error;
 	if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited with ${r.status}`);
+}
+
+/**
+ * Run a teardown command without throwing, so a failed destroy can't mask the
+ * phase's own result or skip the next teardown. A spawn error or a non-zero
+ * exit is pushed onto `failures` so the caller can fail the job at the end.
+ *
+ * {@link runSpawn} returns the spawnSync result and never throws on a non-zero
+ * exit, so the result must be checked here: wrapping it in try/catch alone
+ * missed every failed `sandbox:destroy` and the job stayed green with a stack
+ * left deployed.
+ */
+export function runTeardown(cmd, args, opts = {}, root, failures) {
+	console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? root})`);
+	const r = runSpawn(cmd, args, opts, root, { log: false });
+	let reason = null;
+	if (r.error) reason = r.error.message;
+	else if (r.status !== 0) reason = r.status === null ? `terminated by signal ${r.signal}` : `exited with ${r.status}`;
+	if (reason === null) return;
+	const failure = `${cmd} ${args.join(' ')}: ${reason}`;
+	failures.push(failure);
+	console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
 }
 
 /**
