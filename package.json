@@ -91,7 +91,7 @@
     "test:dev": "npm run test:unit && npm run test:e2e:local && npm run test:e2e:sandbox",
     "test:templates": "node scripts/ci/templates-e2e.mjs",
     "test:vendorize": "cd test-apps/comprehensive && npx tsx --test test/vendorize.test.ts",
-    "test:iam-boundary": "cd test-apps/comprehensive && npx tsx --test test/iam-boundary-synth.test.ts",
+    "test:iam-boundary": "cd test-apps/comprehensive && npx tsx --test test/iam-boundary-synth.test.ts test/app-identity-synth.test.ts",
     "test:background-suites": "cd test-apps/comprehensive && npx tsx --test test/background-suites.test.ts",
     "create-app": "node packages/create-blocks-app/dist/index.js",
     "new:bb": "npm run build -w packages/create-block --silent && node packages/create-block/dist/index.js",

@@ -7,6 +7,9 @@ import { join, relative } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
+import { collectAppViolations, resolveAppIdentity } from './app-identity.js';
+import type { AppViolation } from './app-isolation-rules.js';
+import { BLOCKS_APP_TAG_KEY } from './blocks-defaults.js';
 import { finalizeBlocksRoles } from './blocks-roles.js';
 
 /** One statement on the shared execution role, normalized for diffing. */
@@ -201,6 +204,21 @@ function buildReport(root: Construct, role: iam.Role) {
 		};
 	});
 	const executionRoleProps = renderedProperties(roleCfn);
+	// `defaults.app` set: who the app is, and what reaches outside it.
+	const app = resolveAppIdentity(root);
+	const appSection = app
+		? {
+				app: {
+					id: app.id,
+					tagKey: BLOCKS_APP_TAG_KEY,
+					namePrefix: `${app.id}-`,
+					strict: app.strict === true,
+					stackName: stack.stackName,
+					bootstrapQualifier: (root.node.tryGetContext('@aws-cdk/core:bootstrapQualifier') as string | undefined) ?? null,
+				},
+				violations: collectAppViolations(root, app, finalizeBlocksRoles(root), renderedProperties),
+			}
+		: {};
 	return {
 		schemaVersion: 1,
 		description:
@@ -214,7 +232,16 @@ function buildReport(root: Construct, role: iam.Role) {
 			statements: sortJson(statements),
 		},
 		roles: roles.sort((a, b) => a.stack.localeCompare(b.stack) || a.logicalId.localeCompare(b.logicalId)),
+		...appSection,
 	};
+}
+
+/** The error a `strict` app's synth fails with, listing every violation. */
+function strictViolationsError(file: string, violations: readonly AppViolation[]): Error {
+	return new Error(
+		`[Blocks] defaults.app.strict: ${violations.length} app-isolation violation(s) (full list in ${file}):\n` +
+			violations.map((v) => `  • [${v.rule}] ${v.message}`).join('\n'),
+	);
 }
 
 /**
@@ -236,6 +263,13 @@ export function attachIamReport(root: Construct, role: iam.Role, fileStem: strin
 			const file = join(session.outdir, `${fileStem}.blocks-iam.json`);
 			const report = buildReport(root, role);
 			writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
+			const violations = 'violations' in report ? report.violations : undefined;
+			if (violations && violations.length > 0) {
+				if (report.app?.strict) throw strictViolationsError(file, violations);
+				process.stderr.write(
+					`[Blocks] ${violations.length} app-isolation violation(s) for app "${report.app?.id}" — see ${file}\n`,
+				);
+			}
 			// One line when synthesized by the CDK CLI (which sets CDK_OUTDIR); quiet in unit tests.
 			if (process.env.CDK_OUTDIR) {
 				const shown = relative(process.cwd(), file);

@@ -30,6 +30,7 @@ import {
 import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api-waf.js';
 import { BlocksPresets } from './cdk/blocks-defaults.js';
 import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
+import { applyAppIdentity } from './cdk/app-identity.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
@@ -2418,6 +2419,36 @@ describe('Hosting', () => {
         ),
         'the cross-region export writer role is among the checked roles',
       );
+    });
+
+    it('defaults.app: the us-east-1 edge stack is named <id>-edge, and its roles are bounded and tagged', () => {
+      const app = new App();
+      const stack = new Stack(app, 'appa', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks', BOUNDARY_ARN);
+      (backend as unknown as { defaults: Record<string, unknown> }).defaults.app = { id: 'appa' };
+      applyAppIdentity(backend as unknown as Construct);
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const edgeStack = stacks.find((c) => c.node.id === 'appa-edge');
+      assert.ok(edgeStack, `edge stack not named appa-edge: ${stacks.map((s) => s.node.id)}`);
+      assert.ok(!stacks.some((c) => c.node.id.startsWith('edge-lambda-stack')), 'no CDK-named edge stack');
+      // Role coverage finds the edge stack through EdgeFunction's private `_edgeFunction`: pin it.
+      // EdgeFunctions (bundlers may suffix the class name, e.g. `EdgeFunction2`).
+      const edgeFns = app.node.findAll().filter((n) => n.constructor.name.startsWith('EdgeFunction'));
+      assert.ok(edgeFns.length > 0, 'an EdgeFunction');
+      for (const fn of edgeFns) {
+        const real = (fn as unknown as { _edgeFunction?: Construct })._edgeFunction;
+        assert.ok(real, 'aws-cdk-lib no longer keeps the cross-region function in EdgeFunction._edgeFunction');
+        assert.strictEqual(Stack.of(real).node.id, 'appa-edge');
+      }
+      const roles = Object.values(Template.fromStack(edgeStack).findResources('AWS::IAM::Role'));
+      assert.ok(roles.length > 0, 'the edge stack should hold the Lambda@Edge role');
+      for (const r of roles) {
+        assert.strictEqual(r.Properties?.PermissionsBoundary, BOUNDARY_ARN);
+        assert.ok(
+          (r.Properties?.Tags as { Key: string; Value: string }[] | undefined)?.some((t) => t.Key === 'app' && t.Value === 'appa'),
+          'edge role tagged app=appa',
+        );
+      }
     });
 
     it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {

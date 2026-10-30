@@ -58,6 +58,8 @@ export {
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export {
+	BLOCKS_APP_TAG_KEY,
+	type BlocksAppIdentity,
 	type BlocksDefaults,
 	BlocksPresets,
 	type BlocksThrottling,

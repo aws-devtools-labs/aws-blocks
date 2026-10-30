@@ -202,8 +202,10 @@ export interface BlocksDefaults {
 	 *
 	 * **One policy for many apps.** A platform can share a single boundary policy
 	 * across every app in an account by writing it with policy variables, e.g.
-	 * `arn:aws:ssm:*:*:parameter/apps/${aws:PrincipalTag/app}/*`, and tagging each
-	 * app's stack with its `app` name. The policy (by name, ARN or
+	 * `arn:aws:ssm:*:*:parameter/${aws:PrincipalTag/app}-*`, and tagging each
+	 * app's stack with its `app` name — {@link app} does the tagging, and the core
+	 * README section "Running many apps in one AWS account" documents such a
+	 * policy for the platform to write and own. The policy (by name, ARN or
 	 * `IManagedPolicy`) is referenced as-is; Blocks never rewrites its document.
 	 * The synth-time IAM report lists every Blocks role with its boundary and tags,
 	 * so a pipeline can check both. See the core README section "Running many apps
@@ -222,6 +224,98 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	permissionsBoundary?: string | IManagedPolicy;
+
+	/**
+	 * The identity of this app on a **shared app platform**: one AWS account that
+	 * hosts many independently written apps (often written by AI coding agents)
+	 * and deploys them through one pipeline. Unset in both {@link BlocksPresets};
+	 * unset leaves synthesized templates unchanged.
+	 *
+	 * When set, AWS Blocks:
+	 * - tags every resource it creates, and every IAM role (including roles in
+	 *   helper stacks such as the `us-east-1` edge stack), with
+	 *   `app=<id>` ({@link BLOCKS_APP_TAG_KEY}), at a priority above the default
+	 *   `Tags.of(...).add()` (an app can still raise its own priority or remove the
+	 *   tag, so the platform's execution role rejects any role not tagged `<id>`);
+	 * - checks that every name it derives starts with the app's id. Building Block
+	 *   resource names (tables, queues, buckets, parameters, schedules, user
+	 *   pools) come from each block's `fullId`, which starts with the stack's id,
+	 *   and CloudFormation-generated names (functions, roles) start with the stack
+	 *   name — so the stack must be named `<id>` or `<id>-…`;
+	 * - adds an `app` section and a `violations` list to the synth-time IAM report
+	 *   (`cdk.out/<stack>.blocks-iam.json`): a role without the permissions
+	 *   boundary or the app tag, a grant on another app's resources, a wildcard
+	 *   grant on a data service, an "everything except" grant, a resource the check
+	 *   can't resolve, a resource policy that opens up another app's resource, a
+	 *   role that trusts anything but an AWS service, a broad AWS managed policy, the
+	 *   CDK asset bucket of another bootstrap, or a name outside the app's prefix;
+	 * - with `strict: true`, fails synth on any violation.
+	 *
+	 * The report and `strict` are fast feedback, not the security boundary: the
+	 * app's own code runs at synth. The boundary is IAM, enforced by AWS — a
+	 * permissions boundary keyed on the `app` tag ({@link permissionsBoundary})
+	 * a per-app CloudFormation execution role that only creates bounded roles
+	 * tagged as this app, and a deploy guard that keeps the app's deploy role on
+	 * its own stacks. Each app has its own CDK bootstrap, with the app id as its
+	 * qualifier. The platform writes and owns the three policies; the core README
+	 * section "Running many apps in one AWS account" documents each of them, and
+	 * how a pipeline runs synth with `strict: true` and confirms the report's
+	 * `app.id`.
+	 *
+	 * @example A platform's app template
+	 * ```ts
+	 * export const blocksStack = await BlocksStack.create(app, process.env.APP_ID!, {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: {
+	 *     ...BlocksPresets.production,
+	 *     app: { id: process.env.APP_ID! },
+	 *     permissionsBoundary: 'apps-boundary',
+	 *   },
+	 * });
+	 * ```
+	 */
+	app?: BlocksAppIdentity;
+}
+
+/** The tag key AWS Blocks stamps with {@link BlocksAppIdentity.id} on every resource and role. */
+export const BLOCKS_APP_TAG_KEY = 'app';
+
+/**
+ * An app's identity on a shared app platform. See {@link BlocksDefaults.app}.
+ */
+export interface BlocksAppIdentity {
+	/**
+	 * The app's id: 1–10 characters, lowercase letters and digits, starting with
+	 * a letter (`/^[a-z][a-z0-9]{0,9}$/`). No hyphen, so one app's name prefix
+	 * (`<id>-`) can never match another app's resources (`appa-*` doesn't match
+	 * `appab-…`). Lowercase so it is valid in S3 bucket names. At most 10
+	 * characters, CDK's limit for a bootstrap qualifier, so the id is also the
+	 * app's qualifier: one bootstrap per app, and no two apps share one.
+	 *
+	 * Some ids are reserved, because the app's `<id>-…` / `<id>/…` names would
+	 * include names other apps, AWS Blocks, CDK or AWS share: `cdk` (every app's
+	 * CDK bootstrap, `cdk-<qualifier>-…`, and CDK's `/cdk/…` parameters), `blocks`,
+	 * `secrets` and `config` (Hosting's `secret()` / `config()` values under
+	 * `blocks/…`), `amplify`, `cf`, `sagemaker` (those services' own buckets and
+	 * stacks), the region prefixes `af`, `ap`, `ca`, `cn`, `eu`, `eusc`, `il`,
+	 * `me`, `mx`, `sa`, `us` (CDK names CloudFront Functions `<region>…`), and any
+	 * id starting with `aws` or `ssm` (names AWS reserves). Synth rejects them,
+	 * saying why.
+	 *
+	 * Set it from the platform's pipeline (e.g. `process.env.APP_ID`), not from a
+	 * value the app's code chooses, and have the pipeline confirm that the IAM
+	 * report's `app.id` (`cdk.out/<stack>.blocks-iam.json`) is the id it
+	 * registered for the app.
+	 */
+	id: string;
+
+	/**
+	 * Fail synth when the IAM report lists any violation, instead of only writing
+	 * them to the report and printing a summary.
+	 * @default false
+	 */
+	strict?: boolean;
 }
 
 /**
