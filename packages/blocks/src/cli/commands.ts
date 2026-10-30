@@ -228,43 +228,39 @@ export interface DeployResult {
 }
 
 /**
- * The result of the last deploy in `root`, from the stack outputs it wrote to
- * `.blocks-sandbox/outputs.json`: the stack that carries `ApiUrl`, as core picks
- * it, its `ApiUrl` and its hosting URL. Not from `.blocks-sandbox/config.json`,
- * which a dev server or sandbox rewrites with its own (local) URL.
+ * The result of the last deploy of `stack` in `root`, from the stack outputs it
+ * wrote to `.blocks-sandbox/outputs.json`: its `ApiUrl` and its hosting URL.
+ * Only that stack's entry: a sandbox and the production deploy of the same app
+ * share the file, and either can rewrite it while the other runs. Not from
+ * `.blocks-sandbox/config.json`, which a dev server or sandbox rewrites with
+ * its own (local) URL.
  */
-export function readDeployResult(root: string): Omit<DeployResult, 'account' | 'region'> {
-	let apiUrl: string | null = null;
-	let url: string | null = null;
-	let stack: string | null = null;
+export function readDeployResult(root: string, stack: string | null): Omit<DeployResult, 'account' | 'region'> {
+	let values: Record<string, string> | undefined;
 	try {
 		const outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
 			string,
-			Record<string, string>
+			Record<string, string> | undefined
 		>;
-		const entry = Object.entries(outputs).find(([, values]) => values?.ApiUrl) ?? Object.entries(outputs)[0];
-		if (entry) {
-			stack = entry[0];
-			apiUrl = entry[1]?.ApiUrl ?? null;
-			const urlKey = Object.keys(entry[1] ?? {}).find((key) => key.includes('HostingUrl'));
-			url = urlKey ? entry[1][urlKey] : null;
-		}
+		values = stack === null ? undefined : outputs[stack];
 	} catch {
 		// No outputs.json: the deploy wrote no result.
 	}
-	return { apiUrl, url, stack };
+	if (!values) return { apiUrl: null, url: null, stack: null };
+	const urlKey = Object.keys(values).find((key) => key.includes('HostingUrl'));
+	return { apiUrl: values.ApiUrl ?? null, url: urlKey ? values[urlKey] : null, stack };
 }
 
 /**
- * Print the deploy result as JSON. The account and Region are the ones the deploy
+ * Print the result of deploying `stack` as JSON. The account and Region are the ones the deploy
  * runner recorded (`.blocks-sandbox/last-deploy.json`): it loaded the stage env
  * files, so its credentials can differ from this process's. Never queries AWS.
  */
-function emitDeployResult(ctx: Context, root: string): void {
+function emitDeployResult(ctx: Context, root: string, stack: string | null): void {
 	if (ctx.out.format !== 'json') return;
 	const target = readDeployTarget(root);
 	const result: DeployResult = {
-		...readDeployResult(root),
+		...readDeployResult(root, stack),
 		account: target?.account ?? null,
 		region: target?.region ?? null,
 	};
@@ -352,7 +348,8 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		terminateOnHangup: !deployOnly,
 	});
 	// After an interruption there is no result to report, and the files on disk are a previous deploy's.
-	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root);
+	// A first deploy creates the sandbox id, so the stack name is read again.
+	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, await sandboxStack(ctx, root));
 	return code;
 }
 
@@ -421,7 +418,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 		args,
 		where: [`stack: ${stack}`, label, `project: ${root}`],
 	});
-	if (code === ExitCode.Ok) emitDeployResult(ctx, root);
+	if (code === ExitCode.Ok) emitDeployResult(ctx, root, stack);
 	return code;
 }
 

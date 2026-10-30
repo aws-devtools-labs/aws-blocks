@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -666,6 +666,45 @@ describe('JSON output', () => {
 			region: 'eu-west-3',
 		});
 		assert.deepStrictEqual(lookups, [], 'the CLI never asks AWS with its own environment');
+	});
+
+	it('takes the result from the stack the command deployed, not another stack in outputs.json', async () => {
+		const root = fixtureApp();
+		const sandboxUrl = 'https://sandbox.execute-api.us-east-1.amazonaws.com/';
+		const prodUrl = 'https://prod.execute-api.us-east-1.amazonaws.com/';
+		/** A deploy that writes outputs.json with both stacks, in this order; a first sandbox deploy creates its id. */
+		const writeOutputs = (order: string[]) => () => {
+			mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+			writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+			const stacks: Record<string, Record<string, string>> = {
+				'demo-jdoe-abc123': { ApiUrl: sandboxUrl },
+				'demo-prod': { ApiUrl: prodUrl },
+			};
+			writeFileSync(
+				join(root, '.blocks-sandbox', 'outputs.json'),
+				JSON.stringify(Object.fromEntries(order.map((name) => [name, stacks[name]]))),
+			);
+			return { code: 0 };
+		};
+		// A sandbox deployed while the production deploy waited for liveness, and wrote its entry first.
+		const deploy = await runCli(['deploy', '--output', 'json'], {
+			cwd: root,
+			env: AWS_ENV,
+			onSpawn: writeOutputs(['demo-jdoe-abc123', 'demo-prod']),
+		});
+		assert.strictEqual(deploy.code, 0, deploy.stderr);
+		assert.deepStrictEqual(
+			{ apiUrl: JSON.parse(deploy.stdout).apiUrl, stack: JSON.parse(deploy.stdout).stack },
+			{ apiUrl: prodUrl, stack: 'demo-prod' },
+		);
+		rmSync(join(root, '.blocks-sandbox'), { recursive: true });
+		const sandbox = await runCli(['sandbox', 'deploy', '--query', 'apiUrl'], {
+			cwd: root,
+			env: AWS_ENV,
+			onSpawn: writeOutputs(['demo-prod', 'demo-jdoe-abc123']),
+		});
+		assert.strictEqual(sandbox.code, 0, sandbox.stderr);
+		assert.strictEqual(sandbox.stdout, `${sandboxUrl}\n`);
 	});
 
 	it('prints no result after an interrupted or failed deploy, even with old result files', async () => {
