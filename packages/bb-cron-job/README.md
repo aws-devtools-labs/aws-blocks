@@ -61,15 +61,33 @@ const cleanup = new CronJob(scope, 'cleanup', {
 | `timezone` | `string` | `'UTC'` | IANA timezone for cron expressions (e.g., `'America/Los_Angeles'`) |
 | `input` | `T` | — | Static payload passed to the handler on every invocation |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations; defaults to a Logger at error level |
-| `compute` | `Compute` | app default (serverless) | The `Compute` this job's handler runs on. Assign a container `Compute` for long-running work. |
+| `compute` | `Compute` | the scope's compute | The `Compute` to run the handler on: serverless for its own function, container for long-running work (see Running on Its Own Compute) |
 | `timeoutSeconds` | `number` | — | Wall-clock limit for one tick. On a container the runtime terminates the tick's worker at the deadline; on serverless it's bounded by the function timeout. |
+
+## Running on Its Own Compute
+
+By default the handler runs on its scope's compute, which is the app's default
+compute unless the scope sets one (`new Scope(id, { parent, compute })`). Pass a
+serverless `Compute` to give the job its own function, for example more memory
+or a longer timeout than the API's:
+
+```typescript
+import { Compute, CronJob } from '@aws-blocks/blocks';
+
+const reports = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 900 });
+
+new CronJob(scope, 'monthly-report', {
+  schedule: 'cron(0 3 1 * ? *)',
+  compute: reports,
+  handler: async () => { /* … */ },
+});
+```
 
 ### Running on a container compute
 
-By default a job runs on the app's serverless compute (Lambda), which stops a
-handler after at most 15 minutes. Assign a container `Compute` for a job that
-runs longer, using the same `Compute` objects and `timeoutSeconds` option as
-`AsyncJob`:
+A serverless compute (Lambda) stops a handler after at most 15 minutes. Assign
+a container `Compute` for a job that runs longer, using the same `Compute`
+objects and `timeoutSeconds` option as `AsyncJob`:
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';
@@ -100,8 +118,8 @@ container `AsyncJob`:
    `minInstances: 0` it scales to zero between ticks, and each tick starts a task,
    which delays the tick by a few minutes.
 
-In local dev the assignment is transparent — handlers run in-process. See
-`@aws-blocks/bb-compute`.
+A container inherited from the scope works the same way. Locally, every job
+runs in the dev server whatever its compute. See `@aws-blocks/bb-compute`.
 
 ## Schedule Expressions
 

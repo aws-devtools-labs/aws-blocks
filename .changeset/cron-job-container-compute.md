@@ -27,7 +27,6 @@ new CronJob(scope, 'nightly-rebuild', {
 On a container compute each tick is delivered like a container `AsyncJob`: the
 handler runs in its own worker thread, `timeoutSeconds` is enforced, and a
 failed tick is retried up to 3 attempts in total before moving to a dead-letter
-queue. Jobs on the default serverless compute deploy as before.
-
-Also fixes the shared scheduler role, which granted invoke on only the first
-CronJob's function. Each CronJob now grants access to its own target.
+queue. A CronJob under a container scope (`new Scope(id, { parent, compute })`)
+now runs on that container instead of failing synth. Jobs on a serverless
+compute deploy as before.

@@ -24,12 +24,43 @@ Hand a `Compute` to a workload that supports it:
 new AsyncJob(scope, 'reports', { compute: worker, timeoutSeconds: 1800, handler });
 
 export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* methods */ }), { compute: api });
+
+new CronJob(scope, 'nightly', { compute: api, schedule: 'cron(0 2 * * ? *)', handler: async () => { /* … */ } });
 ```
 
 | Workload | Option | Compute types |
 | --- | --- | --- |
 | `AsyncJob` | `compute` | `serverless`, `container` |
 | `ApiNamespace` | `compute` (4th argument) | `serverless` |
+| `CronJob` | `compute` | `serverless` |
+| `Scope` (everything under it) | `compute` | `serverless`, `container` (see below) |
+
+## Placing a whole scope
+
+Set `compute` on a `Scope` to place everything created under it, including in
+its child scopes, without passing `compute` to each block:
+
+```ts
+const reportsCompute = new Compute(scope, 'reports-compute', { type: 'serverless', memory: 4096 });
+const reports = new Scope('reports', { parent: scope, compute: reportsCompute });
+
+export const reportsApi = new ApiNamespace(reports, 'reports', (context) => ({ /* methods */ }));
+new AsyncJob(reports, 'rebuild', { handler: async () => { /* … */ } });
+new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async () => { /* … */ } });
+```
+
+- **Give the `Compute` and the `Scope` different ids** when they share a parent:
+  both are child constructs of it.
+- **Nearest wins.** A block's own `compute` option, then the nearest scope that
+  sets `compute`, then the app's default compute.
+- **A container scope** places its `AsyncJob`s and `CronJob`s on the container.
+  An `ApiNamespace` under it fails synth with an error naming the compute,
+  because it runs only on a `serverless` compute for now: give it its own
+  serverless `compute`, or create it outside that scope. Setting an
+  `AsyncJob`'s `maxConcurrencyPerCPU` still needs the container passed as the
+  job's own `compute`, so the option is typed for it.
+- **`Realtime` and `RawRoute` stay on the default compute**, inside such a scope
+  too. `Realtime`'s `publish()` works from any compute.
 
 ## Compute types
 
@@ -105,8 +136,9 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   `Compute` to each; they then run in the same function.
 - **Only `serverless` computes serve API namespaces** today; passing a
   `container` compute is a type error.
-- **Everything else stays on the default compute:** namespaces without a
-  `compute`, `RawRoute`s, and the auth routes.
+- **Everything else stays on the default compute:** namespaces with no
+  `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
+  routes (`/aws-blocks/auth/*`).
 
 ## Local development
 

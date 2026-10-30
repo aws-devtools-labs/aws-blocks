@@ -47,14 +47,18 @@ export interface CronJobOptions<T = void> {
 
 	/** Static payload passed to the handler on every invocation. */
 	input?: T;
+
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 
 	/**
-	 * The compute this job's handler runs on. Omit to run on the app's default
-	 * (serverless) compute. Pass a `Compute` block (the same objects `AsyncJob`
-	 * accepts) to run the handler elsewhere — e.g. a container (AWS Fargate)
-	 * compute for a job that runs longer than a serverless compute allows.
+	 * The compute this job's handler runs on. Omit to run on the scope's compute
+	 * (see `ScopeOptions.compute`), which defaults to the app's default compute.
+	 * Pass a `Compute` block (or any {@link ComputeProvider}; the same objects
+	 * `AsyncJob` accepts) to run the handler elsewhere: a serverless compute to
+	 * give the job its own function, for example more memory or a longer timeout
+	 * than the API's, or a container (AWS Fargate) compute for a job that runs
+	 * longer than a serverless compute allows.
 	 *
 	 * On a serverless compute the schedule invokes the function directly. On a
 	 * container compute each tick is sent to an internal `AsyncJob` queue that

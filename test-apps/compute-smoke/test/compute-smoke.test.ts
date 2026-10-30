@@ -10,6 +10,11 @@
  * way `comprehensive`'s e2e.test.ts does:
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
  * - api-namespace-compute.test.ts — an API namespace on its own serverless compute
+ * - scope-compute.test.ts — blocks placed by their scope's compute (a namespace, a
+ *   child scope's namespace, an AsyncJob, a CronJob), and a block's own compute
+ *   winning over its scope's
+ * - cron-job-compute.test.ts — a CronJob on its own compute, and two CronJobs on two
+ *   computes both running
  * - container-cron.test.ts — a CronJob whose ticks run on a container
  * - scale-from-zero.test.ts — a container compute with `minInstances: 0` wakes for a job
  *
@@ -29,7 +34,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { apiNamespaceComputeTests } from './api-namespace-compute.test.js';
 import { containerCronTests } from './container-cron.test.js';
 import { containerJobTests } from './container-jobs.test.js';
+import { cronJobComputeTests } from './cron-job-compute.test.js';
 import { scaleFromZeroTests } from './scale-from-zero.test.js';
+import { scopeComputeTests } from './scope-compute.test.js';
 import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from './context.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
@@ -114,6 +121,8 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
   });
 
   apiNamespaceComputeTests(ctx);
+  scopeComputeTests(ctx);
+  cronJobComputeTests(ctx);
   containerJobTests(ctx);
   containerCronTests(ctx);
   scaleFromZeroTests(ctx);

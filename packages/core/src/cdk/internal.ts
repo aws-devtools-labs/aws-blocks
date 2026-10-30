@@ -46,6 +46,7 @@ export { ComputeBase } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
+export { foreignComputeProblem } from './compute/compute-ownership.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // VPC integration helpers a concrete container compute needs to hook into the
 // central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve
