@@ -12,7 +12,9 @@
  * @example
  * ```typescript
  * import { isBlocksError } from '@aws-blocks/core';
- * import { SecretErrors } from '@aws-blocks/bb-secret';
+ * import { Secret, SecretErrors } from '@aws-blocks/bb-secret';
+ *
+ * const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
  *
  * try {
  *   await secret.put(value);
