@@ -105,9 +105,10 @@ import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 
 CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
 CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
+CronJobErrors.ScheduleNotSupported // valid schedule cannot be simulated by the local mock
 ```
 
-Both errors are thrown at construction time (fail-fast validation).
+These errors are thrown at construction time (fail-fast validation).
 
 ## Examples
 
@@ -206,6 +207,12 @@ In local dev mode, CronJob runs schedules in-process:
 - Console logs when the job fires: `[CronJob:{id}] triggered at {timestamp}`
 - When `enabled: false`, the schedule does not run automatically
 - Failed handlers are logged with a warning that AWS would retry
+
+Year restrictions such as `cron(* * * * ? 2099)` and `cron(* * * * ? 2099-2100)`
+are not simulated locally. They throw `CronJobErrors.ScheduleNotSupported`
+rather than scheduling the job in the current year. Use `*` for the year in
+locally simulated schedules, or deploy to a sandbox to exercise a year restriction.
+This also applies to disabled jobs. AWS deployment retains the original expression.
 
 ## AWS Deployment
 
