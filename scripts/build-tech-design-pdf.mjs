@@ -9,6 +9,9 @@
  *
  * Usage: node scripts/build-tech-design-pdf.mjs
  * Requires: pandoc (brew install pandoc)
+ * On GitHub Actions, `npm ci` skips Puppeteer's browsers (see .puppeteerrc.cjs); set
+ * PUPPETEER_SKIP_DOWNLOAD=false before installing, or run `npx puppeteer browsers install chrome`
+ * and `npx puppeteer browsers install chrome-headless-shell` from the repo root afterwards.
  */
 
 import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync, mkdirSync } from "fs";
