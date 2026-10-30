@@ -302,6 +302,28 @@ describe('serialization safety', () => {
 		assert.strictEqual((entry.data as any).self, '[Circular]');
 	});
 
+	test('shared (non-circular) references serialize fully', () => {
+		const log = new Logger(fakeScope, 'app');
+		const user = { id: 'u1' };
+		log.info('shared', { requester: user, owner: user, list: [user, user] });
+		const entry = getStdoutEntry();
+		assert.deepStrictEqual(entry.requester, { id: 'u1' });
+		assert.deepStrictEqual(entry.owner, { id: 'u1' });
+		assert.deepStrictEqual(entry.list, [{ id: 'u1' }, { id: 'u1' }]);
+	});
+
+	test('nested circular references deeper in the tree produce [Circular]', () => {
+		const log = new Logger(fakeScope, 'app');
+		const inner: Record<string, unknown> = { name: 'inner' };
+		const outer = { a: { b: inner }, sibling: inner };
+		inner.back = outer.a;
+		log.info('nested', { data: outer });
+		assert.deepStrictEqual(getStdoutEntry().data, {
+			a: { b: { name: 'inner', back: '[Circular]' } },
+			sibling: { name: 'inner', back: { b: '[Circular]' } },
+		});
+	});
+
 	test('BigInt values are serialized as strings', () => {
 		const log = new Logger(fakeScope, 'app');
 		log.info('bigint', { value: 9007199254740993n });
