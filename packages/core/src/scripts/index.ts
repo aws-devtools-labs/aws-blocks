@@ -11,7 +11,7 @@ export {
 } from '../telemetry/index.js';
 export { listConfig, removeConfig, runConfigCli, setConfig } from './config.js';
 export { type ConsoleOptions, openConsole } from './console.js';
-export { type DeployOptions, deploy } from './deploy.js';
+export { type DeployedStack, type DeployOptions, deploy } from './deploy.js';
 export { type DeploymentTarget, resolveDeploymentTarget } from './deployment-target.js';
 export { type DestroyOptions, destroy } from './destroy.js';
 export {
