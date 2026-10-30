@@ -5,6 +5,7 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
@@ -32,6 +33,7 @@ export interface CronJobEvent<T = void> {
 
 // @public
 export interface CronJobOptions<T = void> {
+    compute?: ComputeProvider<'serverless'>;
     description?: string;
     enabled?: boolean;
     handler: (event: CronJobEvent<T>) => Promise<void>;

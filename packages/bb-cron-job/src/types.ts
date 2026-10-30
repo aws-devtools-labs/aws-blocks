@@ -5,6 +5,7 @@
  * Event passed to the CronJob handler on each scheduled invocation.
  */
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 export interface CronJobEvent<T = void> {
 	/** ISO 8601 timestamp of the scheduled invocation time. */
 	scheduledTime: string;
@@ -45,6 +46,19 @@ export interface CronJobOptions<T = void> {
 
 	/** Static payload passed to the handler on every invocation. */
 	input?: T;
+
+	/**
+	 * The compute this job's handler runs on. Omit to run on the scope's compute
+	 * (see `ScopeOptions.compute`), which defaults to the app's default compute.
+	 * Pass a serverless `Compute` block (or any {@link ComputeProvider}) to give
+	 * the job its own function, for example more memory or a longer timeout than
+	 * the API's.
+	 *
+	 * Only a `serverless` compute can run a CronJob for now: the schedule invokes
+	 * the compute's function directly. A `container` compute is a type error, and
+	 * a container inherited from the scope fails synth.
+	 */
+	compute?: ComputeProvider<'serverless'>;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }

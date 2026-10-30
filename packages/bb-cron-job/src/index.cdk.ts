@@ -5,6 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Scope, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
+import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { Construct } from 'constructs';
@@ -31,23 +32,33 @@ export class CronJob<T = void> extends Scope {
 		validateSchedule(options.schedule);
 		if (options.timezone !== undefined) validateTimezone(options.timezone);
 
+		// Assign the requested compute (if any) before anything reads `this.compute`;
+		// without one the job runs on its scope's compute (else the default).
+		if (options.compute) {
+			this._compute = options.compute.resolve();
+		}
+
 		// The scheduler invokes the compute's function directly, so a CronJob
 		// currently requires a Lambda compute. Other compute types need a
 		// different scheduler target (e.g. EventBridge → ECS) — not yet supported.
 		// The brand check (not `instanceof`) survives duplicate bb-lambda-compute
 		// copies in one dependency tree.
 		const compute = this.compute;
+		const foreign = foreignComputeProblem(this, compute);
+		if (foreign) throw blocksError(CronJobErrors.UnsupportedCompute, `CronJob "${this.fullId}" ${foreign}`);
 		if (!LambdaCompute.isLambdaCompute(compute)) {
 			throw blocksError(
 				CronJobErrors.UnsupportedCompute,
-				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
+				`CronJob "${this.fullId}" runs only on a serverless compute, but resolves to ${compute.type} compute ` +
+					`'${compute.node.path}' (its own \`compute\`, or its scope's).`,
 			);
 		}
 		// Claim the key the Lambda runtime registers this job's handler under, so
 		// two jobs with the same `fullId` fail synth instead of on cold start.
 		this.registerLambdaEventHandler('blocks.cronjob', this.fullId);
 		const lambdaArn = compute.fn.functionArn;
-		const schedulerRole = getOrCreateSchedulerRole(this, lambdaArn);
+		const schedulerRole = getOrCreateSchedulerRole(this);
+		allowSchedulerToInvoke(schedulerRole, compute.fn);
 
 		// The payload EventBridge sends to the Lambda.
 		// <aws.scheduler.scheduled-time> is resolved by EventBridge at invocation time.
@@ -80,8 +91,8 @@ const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
 
 // Keyed on (and parented under) the owning backend root, so two BlocksBackends in
 // one cdk.Stack each get their own scheduler role — the role grants invoke on that
-// backend's handler, so sharing A's role would pin B's schedule to A's Lambda.
-function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Role {
+// backend's handlers, so sharing A's role would let B's schedules invoke A's Lambdas.
+function getOrCreateSchedulerRole(scope: Construct): iam.Role {
 	return getOrCreateOnRoot(scope, SCHEDULER_ROLE_KEY, (root) => {
 		// The trust is limited to EventBridge Scheduler schedules in this account and region.
 		// Scheduler reports the schedule GROUP ARN (not the individual schedule ARN) as aws:SourceArn,
@@ -98,10 +109,24 @@ function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Rol
 				},
 			}),
 		});
-		role.addToPolicy(new iam.PolicyStatement({
-			actions: ['lambda:InvokeFunction'],
-			resources: [handlerArn],
-		}));
 		return role;
 	});
+}
+
+// The functions (by construct address) each scheduler role may already invoke,
+// so a compute shared by several jobs is granted once.
+const invokableBySchedulerRole = new WeakMap<iam.Role, Set<string>>();
+
+// Grant the shared scheduler role invoke on one job's function. Jobs on different
+// computes target different functions, so every target is granted — not just the
+// first job's.
+function allowSchedulerToInvoke(role: iam.Role, fn: { readonly node: Construct['node']; readonly functionArn: string }): void {
+	let granted = invokableBySchedulerRole.get(role);
+	if (!granted) {
+		granted = new Set();
+		invokableBySchedulerRole.set(role, granted);
+	}
+	if (granted.has(fn.node.addr)) return;
+	granted.add(fn.node.addr);
+	role.addToPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [fn.functionArn] }));
 }

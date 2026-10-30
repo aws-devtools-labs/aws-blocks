@@ -59,6 +59,31 @@ const cleanup = new CronJob(scope, 'cleanup', {
 | `description` | `string` | — | Human-readable description of the job |
 | `timezone` | `string` | `'UTC'` | IANA timezone for cron expressions (e.g., `'America/Los_Angeles'`) |
 | `input` | `T` | — | Static payload passed to the handler on every invocation |
+| `compute` | `ComputeProvider<'serverless'>` | the scope's compute | A serverless `Compute` to run the handler on (see Running on Its Own Compute) |
+
+## Running on Its Own Compute
+
+By default the handler runs on its scope's compute, which is the app's default
+compute unless the scope sets one (`new Scope(id, { parent, compute })`). Pass a
+serverless `Compute` to give the job its own function, for example more memory
+or a longer timeout than the API's:
+
+```typescript
+import { Compute, CronJob } from '@aws-blocks/blocks';
+
+const reports = new Compute(scope, 'reports', { type: 'serverless', memory: 2048, maxTimeoutSeconds: 900 });
+
+new CronJob(scope, 'monthly-report', {
+  schedule: 'cron(0 3 1 * ? *)',
+  compute: reports,
+  handler: async () => { /* … */ },
+});
+```
+
+Only a `serverless` compute can run a CronJob for now, because the schedule
+invokes the compute's function directly. Passing a `container` compute is a type
+error, and a container compute inherited from the scope fails synth. Locally,
+every job runs in the dev server whatever its compute.
 
 ## Schedule Expressions
 
