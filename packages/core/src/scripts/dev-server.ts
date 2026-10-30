@@ -1448,7 +1448,10 @@ function handleApiRequest(
 ): void {
   if (method === 'POST' && isRpcPath(url.pathname)) {
     let body = '';
-    req.on('data', chunk => body += chunk);
+    // Decode as one UTF-8 stream so a multi-byte character split across
+    // chunks is reassembled rather than turned into U+FFFD.
+    req.setEncoding('utf8');
+    req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
       const rpcHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       // Verbose request/response logging — useful when debugging cross-stack
@@ -1582,6 +1585,8 @@ function handleApiRequest(
   const matched = matchRoute(method, url.pathname);
   if (matched) {
     let body = '';
+    // See the RPC dispatch above: decode the body as one UTF-8 stream.
+    req.setEncoding('utf8');
     req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
       // Hoisted above the try so the error catch below can reuse any headers
