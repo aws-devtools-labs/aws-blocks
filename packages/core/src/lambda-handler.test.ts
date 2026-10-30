@@ -3,6 +3,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { runInNewContext } from 'node:vm';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
@@ -426,6 +427,73 @@ describe('createLambdaHandler — RawRoute body handling', () => {
 
     assert.strictEqual(result.statusCode, 200);
     assert.strictEqual(capturedText, payload);
+  });
+
+  it('passes the exact bytes of a base64-encoded binary body to a RawRoute', async () => {
+    // Every byte value: invalid UTF-8 sequences must not be replaced with U+FFFD.
+    const payload = Buffer.from(Array.from({ length: 512 }, (_, i) => i & 0xff));
+    let streamed: Buffer | undefined;
+    let text = '';
+
+    registerRoute({
+      method: 'PUT',
+      path: '/upload',
+      handler: async (ctx) => {
+        streamed = Buffer.from(await new Response(ctx.request.body).arrayBuffer());
+        // The bytes stay readable after the stream is consumed.
+        text = await ctx.request.text();
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({
+      httpMethod: 'PUT',
+      path: '/upload',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: payload.toString('base64'),
+      isBase64Encoded: true,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.ok(streamed?.equals(payload), 'ctx.request.body must yield the bytes the client sent');
+    assert.strictEqual(text, payload.toString('utf-8'));
+  });
+
+  for (const [kind, toBody] of [
+    ['Buffer', (b: Buffer) => b],
+    ['Uint8Array', (b: Buffer) => new Uint8Array(b)],
+    ['ArrayBuffer', (b: Buffer) => new Uint8Array(b).buffer],
+    ['cross-realm ArrayBuffer', (b: Buffer) => runInNewContext('new Uint8Array(bytes).buffer', { bytes: [...b] })],
+  ] as const) {
+    it(`returns a RawRoute ${kind} response as base64 with isBase64Encoded`, async () => {
+      const bytes = Buffer.from([0x00, 0xff, 0x10, 0x80]);
+      registerRoute({
+        method: 'GET',
+        path: '/download',
+        handler: async (ctx) => {
+          ctx.response.headers.set('Content-Type', 'application/octet-stream');
+          ctx.response.send(toBody(bytes));
+        },
+      });
+
+      const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/download', body: null }));
+
+      assert.strictEqual(result.statusCode, 200);
+      assert.strictEqual(result.isBase64Encoded, true);
+      assert.ok(Buffer.from(result.body, 'base64').equals(bytes));
+    });
+  }
+
+  it('keeps string and JSON RawRoute responses as plain text', async () => {
+    registerRoute({ method: 'GET', path: '/text', handler: async (ctx) => ctx.response.send('plain') });
+    registerRoute({ method: 'GET', path: '/json', handler: async (ctx) => ctx.response.send({ a: 1 }) });
+
+    const text = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/text', body: null }));
+    const json = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/json', body: null }));
+
+    assert.strictEqual(text.body, 'plain');
+    assert.strictEqual(json.body, '{"a":1}');
+    assert.ok(!text.isBase64Encoded && !json.isBase64Encoded);
   });
 
   it('ctx.request.json() works for RawRoute POST with JSON body', async () => {

@@ -912,6 +912,17 @@ new RawRoute(scope, 'ItemsRoute', {
   },
 });
 
+// Binary body — echoes the exact request bytes back as a binary response
+new RawRoute(scope, 'BinaryEchoRoute', {
+  method: 'PUT',
+  path: '/binary-echo',
+  handler: async (context) => {
+    const bytes = new Uint8Array(await new Response(context.request.body).arrayBuffer());
+    context.response.headers.set('Content-Type', 'application/octet-stream');
+    context.response.send(bytes);
+  },
+});
+
 // Derived path — no explicit path; derives /status from scope chain
 new RawRoute(scope, 'status', {
   method: 'GET',

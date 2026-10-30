@@ -83,6 +83,25 @@ export function rawRouteTests() {
       assert.deepStrictEqual(body, { id: 'abc-123', name: 'Widget', updated: true });
     });
 
+    // ── Binary body ───────────────────────────────────────────────────────
+
+    test('PUT /binary-echo — request and response bytes round-trip unchanged', async () => {
+      // Every byte value, including sequences that are invalid UTF-8, and more
+      // than one socket chunk so the dev server has to reassemble the body.
+      const payload = new Uint8Array(300 * 1024);
+      for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + (i >> 8)) & 0xff;
+      const res = await fetch(`${getBaseUrl()}/binary-echo`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: payload,
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('content-type'), 'application/octet-stream');
+      const received = new Uint8Array(await res.arrayBuffer());
+      assert.strictEqual(received.byteLength, payload.byteLength);
+      assert.ok(Buffer.from(received).equals(Buffer.from(payload)), 'binary body was altered in transit');
+    });
+
     // ── 404 for unregistered route ────────────────────────────────────────
 
     test('GET /nonexistent — returns 404 for unregistered path', async () => {
