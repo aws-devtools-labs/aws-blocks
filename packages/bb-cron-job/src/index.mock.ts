@@ -89,11 +89,31 @@ export class CronJob<T = void> extends Scope {
 	private _start(): void {
 		if (this._schedule.type === 'rate') {
 			console.log(`[CronJob:${this.id}] scheduled: rate(${formatMs(this._schedule.intervalMs)})`);
-			this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
-			(this._timer as NodeJS.Timeout).unref();
+			if (this._schedule.intervalMs <= MAX_TIMEOUT_MS) {
+				this._timer = setInterval(() => this._fire(), this._schedule.intervalMs);
+				(this._timer as NodeJS.Timeout).unref();
+			} else {
+				this._scheduleRateTick(this._schedule.intervalMs);
+			}
 		} else {
 			this._scheduleCronTick();
 		}
+	}
+
+	private _scheduleRateTick(intervalMs: number, fireAt = Date.now() + intervalMs): void {
+		const delayMs = Math.max(1, Math.min(fireAt - Date.now(), MAX_TIMEOUT_MS));
+		this._timer = setTimeout(() => {
+			// Keep the same deadline across intermediate chunks and early wake-ups.
+			if (Date.now() < fireAt) {
+				this._scheduleRateTick(intervalMs, fireAt);
+			} else {
+				this._fire();
+				// Stay on the original schedule, skipping deadlines that have already passed.
+				const periods = Math.max(1, Math.floor((Date.now() - fireAt) / intervalMs) + 1);
+				this._scheduleRateTick(intervalMs, fireAt + periods * intervalMs);
+			}
+		}, delayMs);
+		(this._timer as NodeJS.Timeout).unref();
 	}
 
 	private _scheduleCronTick(): void {
