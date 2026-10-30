@@ -168,7 +168,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 - `npm run sandbox` — deploy backend to AWS, serve frontend locally
 - `npm run sandbox:deploy` — deploy backend to AWS once and exit (no watch, no dev server); use this from scripts and CI
 - `npm run deploy` — full production deploy to AWS
-- `npm run sandbox:destroy` — tear down sandbox resources
+- `npm run sandbox:destroy` — tear down sandbox resources; in a terminal it asks first (`npm run sandbox:destroy -- --yes` skips the question), and without one (CI, an agent's shell) it runs without asking
 
 `npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish. The same applies to a first `npm run sandbox:deploy`.
 
@@ -194,4 +194,4 @@ Every `npm run …` script above is a thin alias of the `blocks` command from `@
 - `--output json` prints one JSON document on stdout and keeps progress on stderr; `--query <field>` prints one field raw, for example `npx --no -- blocks deploy --query apiUrl` or `npx --no -- blocks whoami --query stacks.production`.
 - `npm run destroy` asks for confirmation in a terminal. Without one (CI, an agent's shell) it refuses with exit code 2 unless you pass `--yes`: `npm run destroy -- --yes`. Ask the user before you delete their production stack.
 - Exit codes: `0` success, `1` the operation failed, `2` usage error (unknown command or flag, or a confirmation the run could not give), `130` interrupted.
-- Dev server settings live in `package.json` under `"blocks": { "dev": { "port", "frontendCommand", "frontendPort" } }`; flags such as `npm run dev -- --port 4000` override them.
+- Dev server settings live in `package.json` under `"blocks": { "dev": { "port", "frontendCommand", "frontendPort" } }`; `"frontend": false` there runs the backend only; flags such as `npm run dev -- --port 4000` override them.

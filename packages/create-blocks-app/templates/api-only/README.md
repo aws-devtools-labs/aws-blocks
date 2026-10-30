@@ -49,7 +49,7 @@ npm run sandbox     # Deploy to AWS sandbox
 npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack
+npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
 npm run secret -- set KEY # Set a secret (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types (-- --check in CI)
