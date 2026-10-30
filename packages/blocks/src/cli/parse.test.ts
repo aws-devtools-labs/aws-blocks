@@ -108,6 +108,22 @@ describe('parseArgv', () => {
 		assert.deepStrictEqual(parseArgv(['console']).command, findCommand(['sandbox', 'console']));
 	});
 
+	it('resolves "sandbox --deploy-only" to "sandbox deploy", JSON output included', () => {
+		const parsed = parseArgv(['sandbox', '--deploy-only', '--output', 'json']);
+		assert.deepStrictEqual(parsed.command?.path, ['sandbox', 'deploy']);
+		assert.strictEqual(parsed.alias, 'sandbox --deploy-only');
+		assert.strictEqual(parsed.globals.output, 'json');
+		assert.deepStrictEqual(parseArgv(['-q', 'sandbox', '--deploy-only']).command?.path, ['sandbox', 'deploy']);
+		usageError(['sandbox', 'destroy', '--deploy-only'], /unknown option "--deploy-only"/);
+	});
+
+	it('reads --telemetry-file as a global option, before or after the command', () => {
+		assert.strictEqual(parseArgv(['dev', '--telemetry-file=a.json']).globals.telemetryFile, 'a.json');
+		assert.strictEqual(parseArgv(['dev', '--telemetry-file', 'a.json']).globals.telemetryFile, 'a.json');
+		assert.strictEqual(parseArgv(['--telemetry-file', 'a.json', 'deploy']).globals.telemetryFile, 'a.json');
+		usageError(['dev', '--telemetry-file'], /--telemetry-file needs a value/);
+	});
+
 	it('forwards everything after a passthrough command verbatim', () => {
 		const argv = ['set', 'KEY', '--stage', 'prod', '--value-stdin', '--', '-x'];
 		assert.deepStrictEqual(parseArgv(['secret', ...argv]).passthrough, argv);
