@@ -69,13 +69,14 @@ function runMigrateSubprocess(
 
 /**
  * Run the migrate child under the output policy. Its stdout is progress: it
- * moves to stderr with `BLOCKS_LOG_STREAM=stderr`, and at `quiet` it is hidden
- * and printed to stderr only if the child fails. With neither set, stdio is
- * inherited as before. Exported for tests.
+ * moves to stderr with `BLOCKS_LOG_STREAM=stderr`. At `quiet` both its stdout
+ * and its stderr (bb-data's warnings) are hidden and printed to stderr only if
+ * the child fails. With neither set, stdio is inherited as before. Exported
+ * for tests.
  */
 export function runMigrateCommand(command: string, args: string[], env: NodeJS.ProcessEnv): void {
   if (resolveLogLevel(env) === 'quiet') {
-    runSyncRetained(command, args, { env }, (stdout) => process.stderr.write(stdout));
+    runSyncRetained(command, args, { env }, (stdout, stderr) => process.stderr.write(stdout + stderr));
     return;
   }
   runSync(command, args, { stdio: progressToStderr(env) ? ['inherit', 2, 'inherit'] : 'inherit', env });
