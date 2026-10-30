@@ -42,7 +42,10 @@ Migrates AuthBasic / AuthCognito / AuthOIDC code to the Auth Building Block.
 The block id argument (new Auth(scope, '<id>')) is never changed: changing it
 would replace the Cognito user pool and delete every user in it.
 
-Read MIGRATION.md in @aws-blocks/bb-auth before you deploy.`;
+Read MIGRATION.md in @aws-blocks/bb-auth before you deploy.
+
+Other commands:
+  users       Group membership, e.g. the first admin: npx @aws-blocks/bb-auth users --help`;
 
 const SOURCE_EXT = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'cdk.out', 'coverage', 'out']);
