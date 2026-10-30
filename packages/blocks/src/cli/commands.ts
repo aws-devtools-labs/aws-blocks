@@ -20,6 +20,7 @@ import {
 	type Context,
 	PromptInterrupted,
 	readStageEnvFile,
+	type SpawnSpec,
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
@@ -40,7 +41,7 @@ import {
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
-interface ChildRun {
+interface ChildRun extends Pick<SpawnSpec, 'terminateOnHangup'> {
 	operation: string;
 	command: string;
 	args: string[];
@@ -78,6 +79,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			cwd: run.cwd,
 			env: { ...ctx.env, ...run.env },
 			stdoutToStderr: ctx.out.format === 'json',
+			terminateOnHangup: run.terminateOnHangup,
 		});
 	} catch (error) {
 		throw new CliError(
@@ -102,7 +104,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	return code;
 }
 
-interface RunnerRun {
+interface RunnerRun extends Pick<SpawnSpec, 'terminateOnHangup'> {
 	runner: RunnerName;
 	operation: string;
 	/** Passed to the runner as JSON in `process.argv[2]`. */
@@ -129,6 +131,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		cwd: root,
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
+		terminateOnHangup: run.terminateOnHangup,
 	});
 }
 
@@ -285,6 +288,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		operation: 'blocks dev',
 		tsxArgs: ['watch'],
 		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath, ...devConfig }) },
+		terminateOnHangup: true,
 	});
 }
 
@@ -344,6 +348,8 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
 		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
 		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }) },
+		// Watch mode runs until stopped; a deploy-only run keeps going through a hangup, as core's deploy does.
+		terminateOnHangup: !deployOnly,
 	});
 	// After an interruption there is no result to report, and the files on disk are a previous deploy's.
 	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root);

@@ -174,7 +174,7 @@ describe('signals sent to the CLI while a child runs', { skip: process.platform 
 	 * 50 ms after a SIGTERM; with `exitOnSigint`, after a SIGINT too, as the dev
 	 * server and the sandbox clean up after a Ctrl-C. SIGINT is otherwise ignored.
 	 */
-	async function start(options: { exitOnSigint?: boolean } = {}) {
+	async function start(options: { exitOnSigint?: boolean; terminateOnHangup?: boolean } = {}) {
 		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-signals-'));
 		const log = join(dir, 'signals.log');
 		const ready = join(dir, 'ready');
@@ -192,7 +192,13 @@ writeFileSync(${JSON.stringify(ready)}, String(process.pid));
 setInterval(() => {}, 1000);
 `;
 		const spawn = createSpawnChild({ sigintGraceMs: GRACE_MS });
-		const running = spawn({ command: process.execPath, args: ['-e', script], cwd: dir, env: process.env });
+		const running = spawn({
+			command: process.execPath,
+			args: ['-e', script],
+			cwd: dir,
+			env: process.env,
+			terminateOnHangup: options.terminateOnHangup,
+		});
 		// A real child process: poll for the file it writes once its handlers are installed.
 		while (!existsSync(ready) || readFileSync(ready, 'utf-8') === '') await sleep(10);
 		const received = () => (existsSync(log) ? readFileSync(log, 'utf-8').trim().split('\n') : []);
@@ -228,15 +234,30 @@ setInterval(() => {}, 1000);
 		assert.deepStrictEqual(child.received(), ['SIGINT'], 'only the Ctrl-C itself');
 	});
 
-	it('forwards SIGTERM, and SIGHUP as SIGTERM, which tsx passes on', async () => {
+	it('forwards SIGTERM, and SIGHUP as SIGTERM, which tsx passes on, for a watch runner', async () => {
 		const term = await start();
 		process.emit('SIGTERM');
 		assert.strictEqual((await term.running).interrupted, false);
 		assert.deepStrictEqual(term.received(), ['SIGTERM']);
-		const hangup = await start();
+		const hangup = await start({ terminateOnHangup: true });
 		process.emit('SIGHUP');
 		assert.strictEqual((await hangup.running).interrupted, false);
 		assert.deepStrictEqual(hangup.received(), ['SIGTERM']);
+	});
+
+	it('otherwise ignores SIGHUP and does not forward it, as core defers it during a deploy', async () => {
+		const listeners = process.listenerCount('SIGHUP');
+		const child = await start();
+		// A listener keeps the default action, which would end the CLI, from applying.
+		assert.strictEqual(process.listenerCount('SIGHUP'), listeners + 1);
+		process.emit('SIGHUP');
+		process.emit('SIGHUP');
+		await sleep(GRACE_MS);
+		assert.deepStrictEqual(child.received(), []);
+		process.emit('SIGTERM');
+		await child.running;
+		assert.deepStrictEqual(child.received(), ['SIGTERM']);
+		assert.strictEqual(process.listenerCount('SIGHUP'), listeners, 'the listener is removed once the child exits');
 	});
 });
 
