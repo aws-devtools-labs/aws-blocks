@@ -133,9 +133,24 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  benchmark:
+  approval:
     needs: [revisions, packages]
-    # blocks-team reviews exact candidate/baseline revisions before enabling model credentials.
+    # The one human gate per run: blocks-team reviews the exact candidate/baseline revisions in
+    # the run summary, then approves this single job. Required reviewers live on this environment,
+    # not on harbor-bench: an environment with reviewers is reviewed per matrix job, and one
+    # approval has left some of the 40 benchmark jobs waiting for another.
+    environment: harbor-bench-approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Record approval
+        run: echo "Approved model access for this run's candidate and baseline revisions."
+
+  benchmark:
+    needs: [revisions, packages, approval]
+    # Model credentials only after the approval job. harbor-bench holds the role/bucket secrets and
+    # is the OIDC subject the roles trust; it is restricted to main and has no reviewers of its own.
     environment: harbor-bench
     runs-on: ubuntu-24.04
     timeout-minutes: 110

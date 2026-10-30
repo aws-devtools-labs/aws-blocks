@@ -30,7 +30,11 @@ export interface AsyncJobBaseOptions<T> {
 	handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	/** Optional schema for runtime payload validation on submit. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType, etc.). */
 	schema?: StandardSchemaV1<T>;
-	/** Maximum retry attempts before sending to the DLQ. Default: 3. */
+	/**
+	 * Maximum delivery attempts, including the first, before the job is sent to
+	 * the DLQ (the queue's `maxReceiveCount`). `3` means one attempt plus two
+	 * retries. Default: 3.
+	 */
 	maxRetries?: number;
 	/**
 	 * Number of messages the Lambda trigger receives per invocation. 1–10, or up

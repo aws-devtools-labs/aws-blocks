@@ -213,7 +213,9 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		const handler = compute.apiHandler();
 		if (!handler) {
 			throw new Error(
-				`Compute '${compute.node.id}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic.`,
+				`Compute '${compute.node.path}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic. ` +
+					'API namespaces run only on a serverless compute today: give each one a serverless `compute`, or create ' +
+					'it outside the scope that sets this compute.',
 			);
 		}
 		// One integration per compute, reused across all of its namespace resources.
@@ -228,7 +230,7 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(
-					`API namespace export '${name}' can't be routed to compute '${compute.node.id}': ` +
+					`API namespace export '${name}' can't be routed to compute '${compute.node.path}': ` +
 						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
 				);
 			}

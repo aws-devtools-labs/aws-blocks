@@ -167,9 +167,8 @@ This package uses a custom `"cdk"` export condition:
 - **Message size**: 40 MB per message
 - **SES sandbox rate**: 1 email/sec (request production access for higher throughput)
 
-> **Note:** In local dev (mock), per-message recipient and size limits are enforced locally before
-> sending (limit violations are recorded as failed entries). In the AWS runtime, these limits are
-> enforced by SES itself, so the failure surfaces in the SES response rather than locally — the
-> failure point differs between runtimes, but in both cases failures appear per-entry in `results`.
+> **Note:** Both the mock and the AWS runtime enforce the per-message recipient and size limits
+> locally before calling SES (see [Input validation](#input-validation)): `send()` throws, and
+> `sendBatch()` records the violation as a failed entry in `results`.
 
 

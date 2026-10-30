@@ -12,6 +12,7 @@ import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
+import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
@@ -107,6 +108,8 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// checks (not `instanceof`) survive duplicate compute-package copies in one
 		// dependency tree.
 		const compute = this.compute;
+		const foreign = foreignComputeProblem(this, compute);
+		if (foreign) throw blocksError(AsyncJobErrors.UnsupportedCompute, `AsyncJob "${this.fullId}" ${foreign}`);
 		const onLambda = LambdaCompute.isLambdaCompute(compute);
 		const onContainer = ContainerCompute.isContainerCompute(compute);
 		if (!onLambda && !onContainer) {
