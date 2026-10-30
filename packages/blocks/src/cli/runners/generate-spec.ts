@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runs under `tsx`, started by `blocks generate spec`. Under tsx the default
+ * Runs with the `tsx` loader, started by `blocks generate spec`. With tsx the default
  * loader of `writeSpec` imports a TypeScript backend directly. The output
  * matches the `blocks-generate-spec` CLI of `@aws-blocks/core`.
  */

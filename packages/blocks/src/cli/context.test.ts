@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +14,7 @@ import { resolveDevConfig } from './config.js';
 import { createSpawnChild, findProjectRoot, isCi, logLevelFor, PromptInterrupted, promptLine } from './context.js';
 import { CliError } from './errors.js';
 import { parseArgv } from './parse.js';
-import { shellQuote } from './runners/launch.js';
+import { runnerArgs, shellQuote } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 describe('the confirmation prompt', () => {
@@ -258,6 +260,61 @@ setInterval(() => {}, 1000);
 		await child.running;
 		assert.deepStrictEqual(child.received(), ['SIGTERM']);
 		assert.strictEqual(process.listenerCount('SIGHUP'), listeners, 'the listener is removed once the child exits');
+	});
+
+	it('outlives a hangup of its process group, and reports the exit code of a runner that defers it', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-hangup-'));
+		writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'hangup-app', type: 'module' }));
+		// TypeScript, so it loads only with the tsx loader. It defers a SIGHUP, as core's deploy does, and keeps
+		// running for a moment after it (a real process: the hangup is an OS signal to its process group).
+		writeFileSync(
+			join(dir, 'runner.ts'),
+			[
+				"import { writeFileSync } from 'node:fs';",
+				'const seen: string[] = [];',
+				"process.on('SIGHUP', () => {",
+				"\tseen.push('SIGHUP');",
+				"\tsetTimeout(() => { writeFileSync('done', seen.join()); process.exit(7); }, 500);",
+				'});',
+				"writeFileSync('ready', String(process.pid));",
+				'setInterval(() => {}, 1000);',
+			].join('\n'),
+		);
+		// The CLI's side: the runner command line and the spawn that the lifecycle commands use.
+		const launcher = [
+			`import { createSpawnChild } from ${JSON.stringify(new URL('./context.js', import.meta.url).href)};`,
+			`import { runnerArgs } from ${JSON.stringify(new URL('./runners/launch.js', import.meta.url).href)};`,
+			"const args = runnerArgs(process.cwd(), 'runner.ts');",
+			'const result = await createSpawnChild()({ command: process.execPath, args, cwd: process.cwd(), env: process.env });',
+			'process.stdout.write(JSON.stringify(result));',
+			'process.exitCode = result.code ?? 1;',
+		].join('\n');
+		assert.ok(!runnerArgs(dir, 'runner.ts').some((arg) => /cli\.mjs$/.test(arg)), 'no tsx process in between');
+		// Its own process group, so that the hangup reaches the launcher and the runner, as a closed terminal does.
+		const cli = spawn(process.execPath, ['--input-type=module', '-e', launcher], {
+			cwd: dir,
+			detached: true,
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		let stdout = '';
+		let stderr = '';
+		cli.stdout.on('data', (chunk) => (stdout += chunk));
+		cli.stderr.on('data', (chunk) => (stderr += chunk));
+		const exited = once(cli, 'close');
+		try {
+			const ready = join(dir, 'ready');
+			while (!existsSync(ready) || readFileSync(ready, 'utf-8') === '') await sleep(10);
+			process.kill(-(cli.pid ?? 0), 'SIGHUP');
+			assert.strictEqual((await exited)[0], 7, stderr);
+			assert.deepStrictEqual(JSON.parse(stdout), { code: 7, signal: null, interrupted: false });
+			assert.strictEqual(readFileSync(join(dir, 'done'), 'utf-8'), 'SIGHUP');
+		} finally {
+			try {
+				process.kill(-(cli.pid ?? 0), 'SIGKILL');
+			} catch {
+				// The group has exited.
+			}
+		}
 	});
 });
 

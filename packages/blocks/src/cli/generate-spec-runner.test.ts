@@ -4,8 +4,8 @@
 /**
  * The bytes each stream carries when `blocks generate spec` runs its runner:
  * progress and detail follow `BLOCKS_LOG_STREAM`, and the `✅` result line stays
- * on stdout. The runner runs under `tsx` against a JavaScript backend, as the
- * CLI starts it.
+ * on stdout. The runner runs with the `tsx` loader against a JavaScript backend,
+ * as the CLI starts it.
  */
 
 import assert from 'node:assert';
@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { readNativeDeclarations } from '@aws-blocks/core/scripts';
-import { resolveTsxCli, runnerPath } from './runners/launch.js';
+import { runnerArgs, runnerPath } from './runners/launch.js';
 
 const coreDist = dirname(fileURLToPath(import.meta.resolve('@aws-blocks/core')));
 
@@ -37,7 +37,7 @@ function runSpec(env: NodeJS.ProcessEnv) {
 		);
 		const child = spawnSync(
 			process.execPath,
-			[resolveTsxCli(dir), runnerPath('generate-spec'), JSON.stringify({ backendPath, outputPath })],
+			runnerArgs(dir, runnerPath('generate-spec'), { args: [JSON.stringify({ backendPath, outputPath })] }),
 			{ cwd: dir, encoding: 'utf-8', env: { PATH: process.env.PATH, ...env } },
 		);
 		assert.strictEqual(child.status, 0, child.stderr);

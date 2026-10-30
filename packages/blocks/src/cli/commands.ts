@@ -7,7 +7,7 @@
  * it replaces; see `runners/launch.ts`.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,12 +28,20 @@ import { CliError, ExitCode, type ExitCodeValue, exitCodeForChild, UsageError } 
 import { commandHelp, rootHelp } from './help.js';
 import { suggest } from './parse.js';
 import { ALIASES, COMMANDS, type CommandInput, type CommandSpec, findCommand } from './registry.js';
-import { LAST_DEPLOY_FILE, readDeployTarget } from './runners/deploy-target.js';
+import {
+	type DeployStage,
+	forgetLastDeploy,
+	LAST_DEPLOY_FILE,
+	type LastDeploy,
+	readLastDeploy,
+} from './runners/last-deploy.js';
 import {
 	DEV_OPTIONS_ENV,
+	type RunnerLaunch,
 	type RunnerName,
 	resolveTsxCli,
 	resolveTsxLoader,
+	runnerArgs,
 	runnerPath,
 	shellQuote,
 	TSX_IMPORT_ENV,
@@ -104,22 +112,21 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	return code;
 }
 
-interface RunnerRun extends Pick<SpawnSpec, 'terminateOnHangup'> {
+interface RunnerRun extends Pick<SpawnSpec, 'terminateOnHangup'>, Pick<RunnerLaunch, 'watch' | 'conditions'> {
 	runner: RunnerName;
 	operation: string;
 	/** Passed to the runner as JSON in `process.argv[2]`. */
 	options?: unknown;
 	/** Arguments after the options. */
 	args?: string[];
-	/** `tsx` arguments before the runner, for example `watch` or `--conditions=cdk`. */
-	tsxArgs?: string[];
 	env?: NodeJS.ProcessEnv;
 	where?: string[];
 }
 
 /**
- * Run a lifecycle runner under the app's `tsx`, from the project root. The
- * runner's client generation (core's deploy and sandbox) loads the same `tsx`.
+ * Run a lifecycle runner with the app's `tsx`, from the project root (see
+ * {@link runnerArgs}). The runner's client generation (core's deploy and
+ * sandbox) loads the same `tsx`.
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = ctx.requireRoot();
@@ -127,7 +134,11 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	return runChild(ctx, {
 		operation: run.operation,
 		command: process.execPath,
-		args: [resolveTsxCli(root), ...(run.tsxArgs ?? []), runnerPath(run.runner), ...options, ...(run.args ?? [])],
+		args: runnerArgs(root, runnerPath(run.runner), {
+			watch: run.watch,
+			conditions: run.conditions,
+			args: [...options, ...(run.args ?? [])],
+		}),
 		cwd: root,
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
@@ -219,50 +230,32 @@ async function targetLabel(
 	return { region, label: `Region ${region ?? 'not set'}, credentials: ${target.credentials}` };
 }
 
-export interface DeployResult {
-	apiUrl: string | null;
-	url: string | null;
-	stack: string | null;
-	account: string | null;
-	region: string | null;
-}
+export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'account' | 'region'>;
 
 /**
- * The result of the last deploy of `stack` in `root`, from the stack outputs it
- * wrote to `.blocks-sandbox/outputs.json`: its `ApiUrl` and its hosting URL.
- * Only that stack's entry: a sandbox and the production deploy of the same app
- * share the file, and either can rewrite it while the other runs. Not from
- * `.blocks-sandbox/config.json`, which a dev server or sandbox rewrites with
- * its own (local) URL.
+ * Print the result of the deploy of `stage` that just ran, as JSON, from the
+ * entry its runner recorded in `.blocks-sandbox/last-deploy.json`:
+ * - the stack outputs core read when it deployed, not `.blocks-sandbox/outputs.json`
+ *   again, which a concurrent deploy of the other stage rewrites with only its own stack;
+ * - not `.blocks-sandbox/config.json`, which a dev server or sandbox rewrites with its own (local) URL;
+ * - the account and Region the runner deployed with: it loaded the stage env
+ *   files, so its credentials can differ from this process's. Never queries AWS.
  */
-export function readDeployResult(root: string, stack: string | null): Omit<DeployResult, 'account' | 'region'> {
-	let values: Record<string, string> | undefined;
-	try {
-		const outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
-			string,
-			Record<string, string> | undefined
-		>;
-		values = stack === null ? undefined : outputs[stack];
-	} catch {
-		// No outputs.json: the deploy wrote no result.
-	}
-	if (!values) return { apiUrl: null, url: null, stack: null };
-	const urlKey = Object.keys(values).find((key) => key.includes('HostingUrl'));
-	return { apiUrl: values.ApiUrl ?? null, url: urlKey ? values[urlKey] : null, stack };
-}
-
-/**
- * Print the result of deploying `stack` as JSON. The account and Region are the ones the deploy
- * runner recorded (`.blocks-sandbox/last-deploy.json`): it loaded the stage env
- * files, so its credentials can differ from this process's. Never queries AWS.
- */
-function emitDeployResult(ctx: Context, root: string, stack: string | null): void {
+function emitDeployResult(ctx: Context, root: string, stage: DeployStage, operation: string): void {
 	if (ctx.out.format !== 'json') return;
-	const target = readDeployTarget(root);
+	const last = readLastDeploy(root, stage);
+	if (!last) {
+		throw new CliError(
+			`${operation} finished, but recorded no result in ${LAST_DEPLOY_FILE}; the output above says why.`,
+			{ where: [`project: ${root}`] },
+		);
+	}
 	const result: DeployResult = {
-		...readDeployResult(root, stack),
-		account: target?.account ?? null,
-		region: target?.region ?? null,
+		apiUrl: last.apiUrl,
+		url: last.url,
+		stack: last.stack,
+		account: last.account,
+		region: last.region,
 	};
 	ctx.out.result(result, '');
 }
@@ -282,7 +275,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	return runRunner(ctx, {
 		runner: 'dev-server',
 		operation: 'blocks dev',
-		tsxArgs: ['watch'],
+		watch: true,
 		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath, ...devConfig }) },
 		terminateOnHangup: true,
 	});
@@ -338,18 +331,18 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 	const stack = await sandboxStack(ctx, root);
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'sandbox'));
 	ctx.out.progress(`Sandbox stack: ${stack ?? '(created on the first deploy)'}; ${label}`);
-	rmSync(join(root, LAST_DEPLOY_FILE), { force: true });
+	forgetLastDeploy(root, 'sandbox');
 	const code = await runRunner(ctx, {
 		runner: 'sandbox',
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
 		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
 		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }) },
-		// Watch mode runs until stopped; a deploy-only run keeps going through a hangup, as core's deploy does.
+		// Watch mode runs until stopped. A deploy-only run is not stopped by the CLI on a hangup,
+		// but core's sandbox deploy does not defer SIGHUP: a hangup of the whole process group ends it.
 		terminateOnHangup: !deployOnly,
 	});
-	// After an interruption there is no result to report, and the files on disk are a previous deploy's.
-	// A first deploy creates the sandbox id, so the stack name is read again.
-	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, await sandboxStack(ctx, root));
+	// After an interruption or a failure there is no result to report.
+	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, 'sandbox', 'blocks sandbox deploy');
 	return code;
 }
 
@@ -377,7 +370,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	return runRunner(ctx, {
 		runner: 'sandbox-destroy',
 		operation: 'blocks sandbox destroy',
-		tsxArgs: ['--conditions=cdk'],
+		conditions: 'cdk',
 		options: { backendPath },
 		where,
 	});
@@ -410,7 +403,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	if (typeof waitLive === 'string') args.push(`--wait-live-timeout=${waitLive}`);
 	if (typeof input.flags['wait-live-timeout'] === 'string')
 		args.push(`--wait-live-timeout=${input.flags['wait-live-timeout']}`);
-	rmSync(join(root, LAST_DEPLOY_FILE), { force: true });
+	forgetLastDeploy(root, 'production');
 	const code = await runRunner(ctx, {
 		runner: 'deploy',
 		operation: 'blocks deploy',
@@ -418,7 +411,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 		args,
 		where: [`stack: ${stack}`, label, `project: ${root}`],
 	});
-	if (code === ExitCode.Ok) emitDeployResult(ctx, root, stack);
+	if (code === ExitCode.Ok) emitDeployResult(ctx, root, 'production', 'blocks deploy');
 	return code;
 }
 
