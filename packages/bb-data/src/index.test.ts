@@ -3,6 +3,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { ApiError, blocksError } from '@aws-blocks/core';
 import { Database, DatabaseErrors } from './index.mock.js';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { RLSEnabledDatabase } from './database.js';
@@ -169,6 +170,32 @@ test('TransactionFailed wraps non-database errors in transaction', async () => {
     }
   );
 });
+
+// An intentional error the app throws to abort a transaction (an ApiError, or a
+// branded Building Block error) is re-thrown unchanged after the rollback, so
+// its status and name reach the client and `instanceof` still matches.
+for (const [label, make] of [
+  ['ApiError', () => new ApiError('Item already reserved', 409, { name: 'AlreadyReservedException' })],
+  ['branded Building Block error', () => blocksError('OutOfStockException', 'No stock left')],
+] as const) {
+  test(`transaction re-throws a callback ${label} unchanged and rolls back`, async () => {
+    const db = createDb();
+    await db.execute(sql`CREATE TABLE t (id TEXT PRIMARY KEY)`);
+    const thrown = make();
+
+    await assert.rejects(
+      () => db.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO t VALUES ('a')`);
+        throw thrown;
+      }),
+      (err: unknown) => {
+        assert.strictEqual(err, thrown);
+        return true;
+      },
+    );
+    assert.deepStrictEqual(await db.query(sql`SELECT * FROM t`), []);
+  });
+}
 
 // --- fromExisting ---
 
