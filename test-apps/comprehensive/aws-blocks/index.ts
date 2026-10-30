@@ -383,6 +383,24 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
   allowBearerAuth: true,
 });
 
+// Fourth OIDC instance — a web frontend on ANOTHER origin than this API signs in
+// with the browser redirect client (`@aws-blocks/bb-auth/browser-client`, L69).
+// It uses the relay transport with `relayTo` = the frontend's return page; a
+// loopback `http://127.0.0.1:<port>` frontend is always allowed, and a deployed
+// frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
+// routes apart from the other OIDC instances.
+const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
+  emailPassword: false,
+  oidcProviders: {
+    'web-idp': e2eOidcProvider(),
+  },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/web/callback',
+    signOutPath: '/aws-blocks/auth/web/signout',
+    allowedRelayOrigins: [relayOrigin('https://app.example.com')],
+  },
+});
+
 // `validateUser` (decision Q10): one policy for every sign-up and sign-in on
 // this instance — email + password and the stub IdP alike. Only addresses at
 // `@allowed.example` may join. On AWS the pool also gets a Cognito PreSignUp
