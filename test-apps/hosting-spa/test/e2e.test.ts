@@ -218,8 +218,10 @@ test.describe('Notes Manager — SPA Hosting', () => {
   test('11. A raw route outside /aws-blocks/* answers same-origin, with an encoded query intact', async ({ request }) => {
     const res = await request.get(`${hostingUrl}/hooks/echo?q=${encodeURIComponent('a b+c&d=é/%')}`);
     expect(res.status()).toBe(200);
-    // (The path the backend sees carries its API stage prefix on the CloudFront door, so only the query is compared.)
-    expect((await res.json()).q).toBe('a b+c&d=é/%');
+    const body = await res.json();
+    // The backend sees the route path, as in local dev: the CloudFront door's API stage prefix is not part of it.
+    expect(body.path).toBe('/hooks/echo');
+    expect(body.q).toBe('a b+c&d=é/%');
   });
 
   test('12. A namespace on its own compute is served by it through Hosting', async ({ request }) => {
