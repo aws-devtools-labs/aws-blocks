@@ -976,6 +976,133 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 		}
 	});
 
+	function swiftPkg(swift: Record<string, string>): NativeDeclarationSource {
+		return source({
+			packages: [
+				{
+					identity: 'example-iot-native',
+					platforms: { swift: { package: { ...SWIFT.package, ...swift } } },
+				},
+			],
+		});
+	}
+
+	function androidPkg(android: Record<string, string>): NativeDeclarationSource {
+		return source({
+			packages: [
+				{
+					identity: 'example-iot-native',
+					platforms: { android: { package: { ...ANDROID.package, ...android } } },
+				},
+			],
+		});
+	}
+
+	it('rejects a swift identity that is not a SwiftPM package identity', () => {
+		for (const identity of [
+			'Not An Identity',
+			'example iot',
+			'-example-iot',
+			'example-iot-',
+			'example--iot',
+			'.iot',
+		]) {
+			const errors = errorsFrom([swiftPkg({ identity })]);
+			assert.deepStrictEqual(paths(errors), [
+				'x-blocks-native-packages.packages["example-iot-native"].platforms.swift.package.identity',
+			]);
+			assert.match(errors[0].message, /to be a SwiftPM package identity/);
+		}
+	});
+
+	it('accepts the swift identity forms SwiftPM resolves', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([swiftPkg({ identity: 'example iot' })])), []);
+		for (const identity of ['example-iot-native', 'swift_log', 'ExampleIot', 'mona.LinkedList', 'a']) {
+			assert.deepStrictEqual(paths(errorsFrom([swiftPkg({ identity })])), []);
+		}
+	});
+
+	it('rejects a swift module that is not usable as `import <module>`', () => {
+		for (const module of ['9Native', 'Example Native', 'Example-Native', 'Example.Native']) {
+			const errors = errorsFrom([swiftPkg({ module })]);
+			assert.deepStrictEqual(paths(errors), [
+				'x-blocks-native-packages.packages["example-iot-native"].platforms.swift.package.module',
+			]);
+			assert.match(errors[0].message, /to be a Swift module name/);
+		}
+	});
+
+	it('accepts the swift module forms a package may legitimately export', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([swiftPkg({ module: 'Example Native' })])), []);
+		for (const module of ['ExampleIotNative', '_Private', 'Mod2', 'Modül']) {
+			assert.deepStrictEqual(paths(errorsFrom([swiftPkg({ module })])), []);
+		}
+	});
+
+	it('leaves a swift product unconstrained beyond non-blank, as SwiftPM does', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([swiftPkg({ product: '   ' })])), []);
+		for (const product of ['ExampleIotNative', '9 Any Product Name!', 'example.iot']) {
+			assert.deepStrictEqual(paths(errorsFrom([swiftPkg({ product })])), []);
+		}
+	});
+
+	it('rejects an android group or artifact outside the Maven id characters', () => {
+		for (const [field, shape] of [
+			['group', /to be a Maven group id/],
+			['artifact', /to be a Maven artifact id/],
+		] as const) {
+			for (const value of ['com example', 'com:example', 'com/example', 'com+example']) {
+				const errors = errorsFrom([androidPkg({ [field]: value })]);
+				assert.deepStrictEqual(paths(errors), [
+					`x-blocks-native-packages.packages["example-iot-native"].platforms.android.package.${field}`,
+				]);
+				assert.match(errors[0].message, shape);
+			}
+		}
+	});
+
+	it('rejects an android kotlinPackage that is not a Kotlin package name', () => {
+		for (const kotlinPackage of ['com..example', 'com.example-iot', '.com.example', 'com.example.', 'com.9iot']) {
+			const errors = errorsFrom([androidPkg({ kotlinPackage })]);
+			assert.deepStrictEqual(paths(errors), [
+				'x-blocks-native-packages.packages["example-iot-native"].platforms.android.package.kotlinPackage',
+			]);
+			assert.match(errors[0].message, /to be a Kotlin package name/);
+		}
+	});
+
+	it('accepts the android coordinate and package forms a module may legitimately publish', () => {
+		// Control: a validator that never runs would also report no errors below.
+		assert.notDeepStrictEqual(paths(errorsFrom([androidPkg({ kotlinPackage: 'com..example' })])), []);
+		for (const android of [
+			{ group: 'com.example.blocks', artifact: 'iot-native', kotlinPackage: 'com.example.blocks.iot' },
+			{ group: 'com.aws.blocks.filebucket', artifact: 'native', kotlinPackage: 'com.aws.blocks.filebucket' },
+			{ group: 'g', artifact: 'a', kotlinPackage: 'iot' },
+			{ group: 'com.example_iot', artifact: 'iot_native', kotlinPackage: 'com.example.custiot.native' },
+		]) {
+			assert.deepStrictEqual(paths(errorsFrom([androidPkg(android)])), []);
+		}
+	});
+
+	it('frames a grammar error with the platform, field, shape, offending value and declaring block', () => {
+		const message = (source: NativeDeclarationSource) => errorsFrom([source]).map((e) => e.message);
+		assert.deepStrictEqual(message(pkgWith({ library: 'lib/x.dart' })), [
+			'dart "package" requires "library" to be a .dart file path inside lib/, without the leading "lib/", ' +
+				'got "lib/x.dart" (declared by @example/bb-iot)',
+		]);
+		assert.deepStrictEqual(message(swiftPkg({ module: '9 Not A Module' })), [
+			'swift "package" requires "module" to be a Swift module name, got "9 Not A Module" ' +
+				'(declared by @example/bb-iot)',
+		]);
+		assert.deepStrictEqual(message(androidPkg({ artifact: 'bad artifact!' })), [
+			'android "package" requires "artifact" to be a Maven artifact id, got "bad artifact!" ' +
+				'(declared by @example/bb-iot)',
+		]);
+	});
+
 	it('rejects an export that cannot name a public type', () => {
 		for (const exported of [
 			'device link',
@@ -1018,7 +1145,7 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 		assert.match(errors[0].message, /name a package other than "blocks_runtime"/);
 	});
 
-	it('constrains only the platforms that declare a grammar', () => {
+	it('admits the upper case Swift and Android allow where pub does not', () => {
 		// Control: a validator that never runs would also report no errors below.
 		assert.notDeepStrictEqual(paths(errorsFrom([pkgWith({ name: 'My-Package' })])), []);
 		const errors = errorsFrom([
@@ -1030,7 +1157,7 @@ describe('rule 7 — values a generator interpolates into generated source', () 
 							swift: {
 								package: {
 									identity: 'Example-IOT',
-									product: 'X.Y',
+									product: 'ExampleIOT',
 									module: 'Example_IOT',
 								},
 							},
