@@ -2,7 +2,6 @@
 "@aws-blocks/hosting": minor
 "@aws-blocks/core": minor
 "@aws-blocks/auth-common": minor
-"@aws-blocks/bb-auth-basic": patch
 "@aws-blocks/blocks": patch
 ---
 
@@ -243,10 +242,9 @@ The framework-injected CORS hosting origin matches case-insensitively (an
 ALB's DNS name is case-preserving, the browser's `Origin` is lower case); the
 app's own `CORS_ALLOWED_ORIGINS` patterns keep their case sensitivity.
 
-`bb-auth-basic` sessions work behind a TLS-less ALB: its same-origin session
-cookie drops `Secure` when the deployed front door serves over plain HTTP
-(`isInsecurePublicOrigin()` and `plainHttpOrigin` in
-`@aws-blocks/auth-common/cookies`). The other auth Building Blocks still set
-`Secure`, so use an HTTPS door with them. Behind `'none'` (an HTTP S3 website
+`@aws-blocks/auth-common/cookies` can tell a plain-HTTP front door apart
+(`isInsecurePublicOrigin()`, and `plainHttpOrigin` to drop `Secure` from a
+same-origin cookie behind one). `Auth` still sets `Secure` on its session
+cookie, so use an HTTPS door with it. Behind `'none'` (an HTTP S3 website
 calling a cross-site API), auth needs `crossDomain: true`; that cookie keeps
 `Secure` and `Partitioned`.

@@ -1,7 +1,5 @@
 ---
 "@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-auth-basic": patch
-"@aws-blocks/bb-auth-cognito": patch
 "@aws-blocks/bb-cron-job": patch
 "@aws-blocks/bb-dashboard": patch
 "@aws-blocks/bb-email-client": patch
@@ -19,9 +17,6 @@ package's `browser` entry. Some of those imports failed the frontend build:
 - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
   of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
   `@aws-blocks/bb-logger`. They are now exported.
-- Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
-  `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
-  depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
 - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
   never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
   server's constants instead of keeping their own copies.

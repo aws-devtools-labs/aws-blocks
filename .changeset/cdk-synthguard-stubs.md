@@ -2,8 +2,6 @@
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/bb-app-setting": patch
 "@aws-blocks/bb-async-job": patch
-"@aws-blocks/bb-auth-cognito": patch
-"@aws-blocks/bb-auth-oidc": patch
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/bb-email-client": patch

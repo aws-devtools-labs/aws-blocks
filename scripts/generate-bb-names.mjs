@@ -27,12 +27,10 @@ if (!vendorize || typeof vendorize !== 'object') {
 	process.exit(1);
 }
 
-// The vendorize map uses class export names (e.g. "AuthOIDC"), but telemetry
-// needs runtime `bbName` values (e.g. "AuthOidc"), which occasionally differ.
-// This mapping bridges the gap so both vendorize-map and telemetry tests pass.
-const BB_NAME_OVERRIDES = {
-	'AuthOIDC': 'AuthOidc',
-};
+// The vendorize map uses class export names, but telemetry needs runtime
+// `bbName` values, which could differ. This mapping bridges any such gap so
+// both vendorize-map and telemetry tests pass. (None differ today.)
+const BB_NAME_OVERRIDES = {};
 
 // Keyed by BB name, while `vendorize-map.test.ts` keeps its own skip list keyed
 // by package name — an entry here for a package the umbrella depends on also
