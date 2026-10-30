@@ -15,9 +15,13 @@
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
 # Dependabot opens:
-#   - Version-update PRs run monthly.
-#   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
-#     and dev-dependencies (build/test only, low blast radius). Production deps
+#   - npm version-update PRs run weekly, Monday 06:00 Europe/Berlin, so they
+#     are waiting at the start of the working week.
+#   - Three groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep;
+#     dev-dependencies (build/test only, low blast radius); and
+#     production-dependencies, minor and patch only, so a weekly run opens a
+#     few PRs rather than one per package. Production majors (only on runs
+#     where that group has no open PR, dependabot/dependabot-core#14202)
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
 #   - typescript and @types/node are toolchain foundations: a major bump is a
@@ -41,7 +45,10 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "Europe/Berlin"
     cooldown:
       default-days: 3
     open-pull-requests-limit: 10
@@ -72,6 +79,18 @@ updates:
         exclude-patterns:
           - "typescript"
           - "@types/node"
+          # A group without patterns takes every match; keep the SDK together.
+          - "@aws-sdk/*"
+          - "@smithy/*"
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - "minor"
+          - "patch"
+        # As above: the SDK stays in the aws-sdk group.
+        exclude-patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
 
   # create-blocks-app templates. No lockfile: Dependabot updates the ranges in
   # each template's package.json, which is what scaffolded apps install from.
