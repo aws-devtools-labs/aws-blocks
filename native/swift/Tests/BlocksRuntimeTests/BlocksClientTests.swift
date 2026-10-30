@@ -36,6 +36,34 @@ final class BlocksClientTests: XCTestCase {
         XCTAssertNotNil(result)
     }
 
+    // MARK: - JSON-RPC errors on a non-2xx status (`httpErrorStatus`)
+
+    /// A namespace created with `httpErrorStatus: true` answers a 4xx `ApiError` with that HTTP
+    /// status and the same JSON-RPC error body it sends with a 200 otherwise: the client reports
+    /// the same `RPCError` (code and name) either way.
+    func testJSONRPCErrorOnHTTP401IsTheSameRPCErrorAsOnHTTP200() async throws {
+        for status in [401, 200] {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MockURLProtocol.self]
+            let session = URLSession(configuration: config)
+            MockURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+                let data = Data("""
+                {"jsonrpc":"2.0","error":{"code":401,"message":"Authentication required","data":{"name":"NotAuthenticatedException"}},"id":1}
+                """.utf8)
+                return (response, data)
+            }
+            let client = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: session)
+            do {
+                _ = try await client.execute(BlocksRequest(method: "api.authRequired", params: [], id: BlocksRequest.nextId()))
+                XCTFail("HTTP \(status): expected an RPCError")
+            } catch let error as RPCError {
+                XCTAssertEqual(error.code, 401, "HTTP \(status)")
+                XCTAssertEqual(error.name, "NotAuthenticatedException", "HTTP \(status)")
+            }
+        }
+    }
+
     // MARK: - Request URL
 
     func testExecutePostsToTheMethodsNamespacePath() async throws {

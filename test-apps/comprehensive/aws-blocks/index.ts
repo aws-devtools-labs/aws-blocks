@@ -2794,6 +2794,19 @@ export const protectedApi = auth.protect(scope, 'protectedApi', {
   }),
 });
 
+// ── HTTP status for failed calls (ApiNamespace `httpErrorStatus`) ──────────
+//
+// The same gated call as `api.authRequired`, on a namespace created with
+// `httpErrorStatus: true`: a signed-out call answers HTTP 401 instead of 200.
+// The JSON-RPC body is the same, so the typed client rejects with the same
+// `ApiError` either way (`isAuthError` / `isBlocksError` keep working).
+export const strictStatusApi = new ApiNamespace(scope, 'strictStatus', (context) => ({
+  async authRequired() {
+    const user = await auth.requireAuth(context);
+    return { user: { username: user.username } };
+  },
+}), { httpErrorStatus: true });
+
 // ── e2e test support (only when `e2eBuild`) ────────────────────────────────
 
 // The secret guarding `testSupport`: a random value made fresh for each e2e run

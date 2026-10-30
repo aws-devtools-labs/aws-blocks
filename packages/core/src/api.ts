@@ -110,6 +110,17 @@ export const API_NAMESPACE_EXPLICIT_COMPUTE = Symbol.for('blocks:ApiNamespaceExp
  */
 export const API_NAMESPACE_DISCOVER = Symbol.for('blocks:ApiNamespaceDiscover');
 
+/**
+ * Symbol under which an `ApiNamespace` records `true` when it was created with
+ * {@link ApiNamespaceOptions.httpErrorStatus}. The Lambda handler and the local
+ * dev server read it (through `rpcErrorHttpStatus` in `rpc-dispatch.ts`) to pick
+ * the HTTP status of a failed call. A symbol key, so client and spec generators
+ * never see it.
+ *
+ * @internal
+ */
+export const API_NAMESPACE_HTTP_ERROR_STATUS = Symbol.for('blocks:ApiNamespaceHttpErrorStatus');
+
 /** Structural view of a scope that may resolve a compute (only the CDK `Scope` does). */
 type ComputeResolvingScope = { compute?: unknown };
 
@@ -146,6 +157,65 @@ export interface ApiNamespaceOptions {
    * types.
    */
   compute?: { resolve(): { readonly type: 'serverless' } };
+
+  /**
+   * Send a failed call with the HTTP status of its error instead of `200`.
+   *
+   * By default every JSON-RPC response is HTTP `200`, and a failure is the
+   * `error` member of the body: `requireAuth()`'s `401` arrives as a `200`
+   * whose body says `401`. Anything that only sees status codes — API Gateway
+   * and CloudFront metrics, access logs, WAF rate rules, an alarm on 4xx — then
+   * cannot tell a rejected call from a successful one.
+   *
+   * With `httpErrorStatus: true`, a call that throws an `ApiError` with a
+   * `4xx` status (`401`, `403`, `404`, `409`, `429`, …) is answered with that
+   * HTTP status. The body is the same JSON-RPC error either way, and the
+   * TypeScript client reads the body whatever the status, so `isBlocksError()`
+   * and `error.status` behave exactly as without the option. Every other
+   * failure (a `5xx`, an uncaught exception, a malformed request) stays a
+   * `200`, as before. Applies on AWS and in the local dev server alike.
+   *
+   * ```ts
+   * export const api = new ApiNamespace(scope, 'api', (context) => ({
+   *   async getNote() {
+   *     const user = await auth.requireAuth(context); // HTTP 401 when signed out
+   *     return notes.get(user.userId);
+   *   },
+   * }), { httpErrorStatus: true });
+   * ```
+   *
+   * Before turning it on, check every client of the namespace reads the body
+   * of a non-2xx response: a hand-written `fetch` that throws on `!response.ok`,
+   * or a native client that treats a 4xx as a transport failure, would see a
+   * different error. Behind `Hosting`, a configured `errorPages.notFound` page
+   * replaces any `404` response — including this one — at CloudFront.
+   *
+   * Clients and front doors to plan for:
+   * - **Native clients.** The Swift and Kotlin clients (Kotlin from the release
+   *   that ships this option) decode the JSON-RPC error the same way on a 4xx.
+   *   The **Dart** client, when it has an `authProvider` (bearer tokens), treats
+   *   *any* HTTP 401 as an expired token: it calls `onAuthFailure()` (a refresh)
+   *   and runs the method **once more**. Without this option an `ApiError` 401
+   *   arrives as HTTP 200 and is not retried; with it, a method that throws 401
+   *   after a side effect runs twice for such a client. Put the guard first —
+   *   `await auth.requireAuth(context)` as the method's first statement, or
+   *   wrap the method with `auth.protect` (`Auth`), which runs the guard before
+   *   any of the method's code — so a rejected call has done nothing; and keep
+   *   methods that can still fail with 401 later idempotent.
+   * - **`Hosting` error pages.** CloudFront custom error responses apply to the
+   *   whole distribution, the proxied `/aws-blocks/*` paths included. When the
+   *   distribution maps 403 or 404 to a page — `errorPages.notFound`, a static
+   *   build's own `404.html`, or the default not-found page of a static
+   *   multi-page site (no server, no SPA fallback, no 404 page of its own) — a
+   *   403 / 404 from this namespace reaches the browser as that HTML page, and
+   *   the typed client's `response.json()` throws instead of rejecting with the
+   *   `ApiError`. `Hosting` emits a synth warning
+   *   (`@aws-blocks/hosting:HttpErrorStatusErrorPages`) for that combination; a
+   *   401, a 409 or a 429 is not mapped and is unaffected.
+   *
+   * @default false
+   */
+  httpErrorStatus?: boolean;
 }
 
 /**
@@ -318,6 +388,7 @@ export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
           ? (scope as ComputeResolvingScope).compute
           : undefined;
     if (compute) handler[API_NAMESPACE_EXPLICIT_COMPUTE] = true;
+    if (options?.httpErrorStatus === true) handler[API_NAMESPACE_HTTP_ERROR_STATUS] = true;
     // biome-ignore lint/correctness/noConstructorReturn: the export IS the tagged handler — dispatch, codegen and routing read it directly.
     return handler;
   }

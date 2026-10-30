@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -104,6 +105,70 @@ void main() {
       expect(sent['method'], 'api.echoArgs');
       expect(sent['params'], ['a', null, 'c']);
       expect(sentRaw, contains('"params":["a",null,"c"]'));
+    });
+
+    test(
+      'a JSON-RPC error on HTTP 401 (httpErrorStatus) decodes like on HTTP 200',
+      () async {
+        final body = jsonEncode({
+          'jsonrpc': '2.0',
+          'error': {
+            'code': 401,
+            'message': 'Authentication required',
+            'data': {'name': 'NotAuthenticatedException'},
+          },
+          'id': 1,
+        });
+        for (final status in [401, 200]) {
+          final client = BlocksClient(
+            baseUrl: 'http://test/aws-blocks/api',
+            client: MockClient((_) async => http.Response(body, status)),
+          );
+          await expectLater(
+            client.call('api.authRequired', []),
+            throwsA(
+              isA<BlocksRpcException>()
+                  .having((e) => e.code, 'code', 401)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'Authentication required',
+                  )
+                  .having(
+                    (e) => (e.data as Map)['name'],
+                    'data.name',
+                    'NotAuthenticatedException',
+                  ),
+            ),
+            reason: 'HTTP $status',
+          );
+        }
+      },
+    );
+
+    test('with an auth provider, a 401 JSON-RPC error refreshes and runs the method once more', () async {
+      // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
+      var calls = 0;
+      final client = BlocksClient(
+        baseUrl: 'http://test/aws-blocks/api',
+        client: MockClient((_) async {
+          calls++;
+          return http.Response(
+            jsonEncode({
+              'jsonrpc': '2.0',
+              'error': {'code': 401, 'message': 'Authentication required'},
+              'id': calls,
+            }),
+            401,
+          );
+        }),
+        authProvider: _RefreshingAuthProvider(),
+      );
+      await expectLater(
+        client.call('api.authRequired', []),
+        throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+      );
+      expect(calls, 2);
     });
 
     test('resends the same list params after a 401 refresh', () async {

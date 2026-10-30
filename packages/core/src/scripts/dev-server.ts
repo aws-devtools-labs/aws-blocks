@@ -25,7 +25,7 @@ import {
 import { redactToJson } from '../redact.js';
 import { errorResponseSetCookies } from '../set-cookie.js';
 import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
-import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
+import { isDispatchableExport, resolveApiMethod, rpcErrorHttpStatus } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
@@ -1575,7 +1575,9 @@ function handleApiRequest(
         const errHeaders: Record<string, string | string[]> = { 'Content-Type': 'application/json' };
         const errCookies = errorResponseSetCookies(responseHeaders);
         if (errCookies.length > 0) errHeaders['set-cookie'] = errCookies;
-        res.writeHead(200, errHeaders);
+        // `httpErrorStatus` namespaces answer a 4xx error with its status
+        // (same helper as the Lambda handler); everything else stays a 200.
+        res.writeHead(rpcErrorHttpStatus(apis.get(apiNamespace), error), errHeaders);
         res.end(errPayload);
       }
     });

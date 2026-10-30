@@ -89,7 +89,23 @@ The body is JSON-RPC 2.0:
 
 - `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
-- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
+- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status — unless the namespace opts in to `httpErrorStatus` (below).
+
+To let status-code-only tooling (API Gateway and CloudFront metrics, access logs, WAF rate rules, a 4xx alarm) see rejected calls, create the namespace with `httpErrorStatus: true`. A call that throws an `ApiError` with a `4xx` status is then answered with that HTTP status; the body is the same JSON-RPC error, and the typed client decodes it the same way, so `isBlocksError()` is unaffected. `5xx` and other failures stay HTTP `200`. It applies locally and on AWS:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getNote() {
+    const user = await auth.requireAuth(context); // signed out → HTTP 401
+    return notes.get(user.userId);
+  },
+}), { httpErrorStatus: true });
+```
+
+Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
+
+- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. `Hosting` warns at synth (`@aws-blocks/hosting:HttpErrorStatusErrorPages`). 401, 409 and 429 are not mapped.
+- **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
 Error responses use these JSON-RPC codes:
 
