@@ -487,12 +487,10 @@ describe('JSON output', () => {
 			},
 			onSpawn: () => {
 				mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+				// A dev server started during the deploy rewrote the shared config.json.
 				writeFileSync(
 					join(root, '.blocks-sandbox', 'config.json'),
-					JSON.stringify({
-						apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/',
-						environment: 'production',
-					}),
+					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
 				);
 				writeFileSync(
 					join(root, '.blocks-sandbox', 'outputs.json'),
@@ -569,10 +567,6 @@ describe('JSON output', () => {
 			core: { readAwsIdentity: async () => IDENTITY },
 			onSpawn: () => {
 				mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-				writeFileSync(
-					join(root, '.blocks-sandbox', 'config.json'),
-					JSON.stringify({ apiUrl: 'https://api.example/' }),
-				);
 				writeFileSync(
 					join(root, '.blocks-sandbox', 'outputs.json'),
 					JSON.stringify({ 'demo-prod': { ApiUrl: 'https://api.example/' } }),

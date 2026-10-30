@@ -223,33 +223,29 @@ export interface DeployResult {
 }
 
 /**
- * The result of the last deploy in `root`: `apiUrl` from `.blocks-sandbox/config.json`,
- * the stack and the frontend URL from `.blocks-sandbox/outputs.json`.
+ * The result of the last deploy in `root`, from the stack outputs it wrote to
+ * `.blocks-sandbox/outputs.json`: the stack that carries `ApiUrl`, as core picks
+ * it, its `ApiUrl` and its hosting URL. Not from `.blocks-sandbox/config.json`,
+ * which a dev server or sandbox rewrites with its own (local) URL.
  */
 export function readDeployResult(root: string): Omit<DeployResult, 'account' | 'region'> {
-	const dir = join(root, '.blocks-sandbox');
 	let apiUrl: string | null = null;
 	let url: string | null = null;
 	let stack: string | null = null;
 	try {
-		const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf-8')) as { apiUrl?: string };
-		apiUrl = config.apiUrl ?? null;
-	} catch {
-		// No config.json: the deploy wrote no result.
-	}
-	try {
-		const outputs = JSON.parse(readFileSync(join(dir, 'outputs.json'), 'utf-8')) as Record<
+		const outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<
 			string,
 			Record<string, string>
 		>;
 		const entry = Object.entries(outputs).find(([, values]) => values?.ApiUrl) ?? Object.entries(outputs)[0];
 		if (entry) {
 			stack = entry[0];
+			apiUrl = entry[1]?.ApiUrl ?? null;
 			const urlKey = Object.keys(entry[1] ?? {}).find((key) => key.includes('HostingUrl'));
 			url = urlKey ? entry[1][urlKey] : null;
 		}
 	} catch {
-		// No outputs.json.
+		// No outputs.json: the deploy wrote no result.
 	}
 	return { apiUrl, url, stack };
 }
