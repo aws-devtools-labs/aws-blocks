@@ -305,6 +305,17 @@ describe('destroy safety', () => {
 		runnerOptions(accepted.spawned[0], 'destroy');
 	});
 
+	it('exits 130 and deletes nothing on Ctrl-C at the destroy and sandbox destroy prompts', async () => {
+		const cwd = fixtureApp();
+		for (const argv of [['destroy'], ['sandbox', 'destroy']]) {
+			const run = await runCli(argv, { cwd, env: AWS_ENV, stdinIsTTY: true, answer: null });
+			assert.strictEqual(run.code, 130, argv.join(' '));
+			assert.strictEqual(run.prompts.length, 1, argv.join(' '));
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+			assert.match(run.stderr, /Interrupted; nothing was deleted\.\n$/);
+		}
+	});
+
 	it('runs with --yes and no prompt', async () => {
 		const run = await runCli(['destroy', '--yes'], { cwd: fixtureApp(), env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
