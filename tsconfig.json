@@ -12,6 +12,7 @@
     { "path": "packages/bb-auth-basic" },
     { "path": "packages/bb-auth-cognito" },
     { "path": "packages/bb-auth-oidc" },
+    { "path": "packages/bb-auth" },
     { "path": "packages/bb-app-setting" },
     { "path": "packages/bb-secret" },
     { "path": "packages/bb-file-bucket" },

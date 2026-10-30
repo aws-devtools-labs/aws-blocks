@@ -292,6 +292,12 @@ function namespaceRequestUrl(baseUrl: string, namespace: string): string {
 }
 
 /**
+ * The key under which an {@link ApiNamespaceClient} answers with its namespace (and URL, when
+ * overridden). A `Symbol.for` key, so a package reads it without importing this one.
+ */
+const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
+
+/**
  * Client-side API proxy. Creates a typed proxy that sends method calls
  * to the backend API over HTTP and hydrates Transferable descriptors
  * in responses via registered middleware.
@@ -333,8 +339,12 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
   // so a `fetch` installed later (a polyfill, a test spy) is the one used.
   const send: (url: string, init: RequestInit) => Promise<Response> =
     options?.retryStaleConnection === false ? (url, init) => fetch(url, init) : fetchWithStaleConnectionRetry;
+  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
+  const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {
     get(target, method: string | symbol) {
+      if (method === API_NAMESPACE_ID) return namespaceId;
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
         const baseUrl = urlOverride ?? await getApiUrl();
