@@ -290,6 +290,9 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      - name: Test the E2E cleanup wrapper
+        run: node --test scripts/ci/e2e-cleanup.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -1131,6 +1134,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1171,11 +1175,15 @@ jobs:
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup sandbox
-        if: always() && steps.destroy.outcome != 'success'
+        if: always() && steps.aws-creds.outcome == 'success' && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
   e2e-telemetry:
     name: Telemetry E2E
@@ -1211,6 +1219,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1225,12 +1234,16 @@ jobs:
       - name: Telemetry E2E Tests
         run: npm run test:telemetry
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup stacks
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         run: |
           cd test-apps/telemetry
-          npx tsx aws-blocks/scripts/sandbox-destroy.ts || true
-          npx tsx aws-blocks/scripts/destroy.ts || true
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/sandbox-destroy.ts
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/destroy.ts
 
   # Gate job — matches the branch protection required check name.
   # Skipped E2E jobs (not selected by detect-changes) are treated as passing.

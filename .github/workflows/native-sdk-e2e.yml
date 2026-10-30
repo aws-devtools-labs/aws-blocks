@@ -403,6 +403,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -495,10 +496,14 @@ jobs:
           dart pub get
           dart run bin/e2e_test.dart
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   swift-e2e-sandbox:
     permissions:
@@ -540,6 +545,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -599,10 +605,14 @@ jobs:
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   kotlin-e2e-sandbox:
     permissions:
@@ -666,6 +676,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -727,10 +738,14 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated
