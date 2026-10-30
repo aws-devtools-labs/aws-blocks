@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
@@ -9,6 +9,18 @@ import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
+
+/**
+ * The dev server settings that `blocks dev` resolves for an app, from the built
+ * `@aws-blocks/blocks` CLI in this repository: what the scaffolded `blocks.dev` does.
+ */
+async function resolvedDevConfig(root: string): Promise<{ frontendCommand?: string; port?: number; source: string }> {
+  // A runtime path, not a static import: `@aws-blocks/blocks` exports no `cli/config`, and
+  // create-blocks-app does not depend on it, so the test loads the sibling package's build.
+  const config = pathToFileURL(join(__dirname, '../../blocks/dist/cli/config.js')).href;
+  const { resolveDevConfig } = await import(config);
+  return resolveDevConfig(root);
+}
 
 function run(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
   try {
@@ -209,9 +221,9 @@ describe('create-blocks-app template metadata', () => {
     // the options the removed aws-blocks/scripts/server.ts passed to startDevServer.
     const vite = { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 };
     const expected: Record<string, unknown> = {
-      'api-only': { port: 3001 },
-      backend: { port: 3001 },
-      sql: { port: 3001 },
+      'api-only': { port: 3001, frontend: false },
+      backend: { port: 3001, frontend: false },
+      sql: { port: 3001, frontend: false },
       nextjs: { frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100', frontendPort: 3100 },
       'auth-cognito': vite,
       bare: vite,
@@ -325,10 +337,14 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('detects Amplify Gen 2 project over plain project', () => {
+  it('detects Amplify Gen 2 project over plain project, and keeps its Blocks dev server backend-only', async () => {
     const tmpDir = join(__dirname, '../.test-autodetect-amplify');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
-    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));
+    // An Amplify app usually has its own frontend dependency, which `blocks dev` would otherwise start.
+    writeFileSync(
+      join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'amplify-app', version: '1.0.0', devDependencies: { vite: '*', next: '*' } }),
+    );
     writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
@@ -340,8 +356,12 @@ describe('create-blocks-app auto-detection', () => {
       const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
       assert.strictEqual(packageJson.scripts['blocks:dev'], 'blocks dev');
       assert.strictEqual(packageJson.scripts['blocks:stop'], 'blocks dev stop');
-      // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it.
-      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001 } });
+      // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
+      // even with vite and next installed: the Amplify app runs its own frontend.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      const dev = await resolvedDevConfig(tmpDir);
+      assert.strictEqual(dev.frontendCommand, undefined);
+      assert.strictEqual(dev.port, 3001);
       assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts')));
       assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
       assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
@@ -593,6 +613,27 @@ describe('create-blocks-app auto-detection', () => {
       assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('keeps a backend-only template backend-only in an existing Vite or Next.js project', async () => {
+    for (const template of ['backend', 'api-only', 'sql']) {
+      const tmpDir = join(__dirname, `../.test-existing-backend-only-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(
+        join(tmpDir, 'package.json'),
+        JSON.stringify({ name: 'my-web-app', version: '1.0.0', dependencies: { next: '*' }, devDependencies: { vite: '*' } }),
+      );
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+        assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } }, template);
+        const dev = await resolvedDevConfig(tmpDir);
+        assert.strictEqual(dev.frontendCommand, undefined, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
     }
   });
 

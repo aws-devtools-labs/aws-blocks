@@ -513,8 +513,9 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
     },
-    // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend.
-    blocksConfig: { dev: { port: 3001 } },
+    // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
+    // so `"frontend": false` stops `blocks dev` from detecting the app's vite or next.
+    blocksConfig: { dev: { port: 3001, frontend: false } },
     gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
   });
