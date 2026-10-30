@@ -29,14 +29,14 @@ public final nonisolated class Api: Sendable {
     }
 
     /// Calls `api.connectDevice`.
-    public func connectDevice(deviceId: String) async throws -> ExampleIotNative.DeviceLink<ConnectDevice.ResultMessage> {
+    public func connectDevice(deviceId: String) async throws -> ExampleIotNative.APILink<ConnectDevice.ResultMessage> {
         let request = BlocksRuntime.BlocksRequest(method: "api.connectDevice", params: [deviceId], id: BlocksRuntime.BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw BlocksRuntime.RPCError(message: "Unexpected null result for api.connectDevice") }
         guard let descriptor = try JSONSerialization.jsonObject(with: result) as? [String: Any] else {
             throw BlocksRuntime.RPCError(message: "Invalid transferable descriptor for api.connectDevice")
         }
-        return try ExampleIotNative.DeviceLink<ConnectDevice.ResultMessage>.fromBlocksDescriptor(
+        return try ExampleIotNative.APILink<ConnectDevice.ResultMessage>.fromBlocksDescriptor(
             BlocksRuntime.validateTransferableDescriptor(descriptor, expectedTag: "example-iot/device-link")
         ) { data in
             try JSONDecoder().decode(ConnectDevice.ResultMessage.self, from: data)

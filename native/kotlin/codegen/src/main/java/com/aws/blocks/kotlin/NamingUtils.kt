@@ -16,10 +16,10 @@ object NamingUtils {
      * [toPascalCase] would lower its tail and name a type the package does not export.
      *
      * The empty-segment arm is defensive: the parser's `EXPORT` regex admits no dangling or
-     * doubled separator, so no value reaching here splits into one.
+     * doubled `-`, `_` or `.`, so no value reaching here splits into one.
      */
     fun exportTypeName(export: String): String =
-        export.split('_', '-')
+        export.split('-', '_', '.')
             .joinToString("") { if (it.isEmpty()) "" else it[0].uppercaseChar() + it.substring(1) }
 
     fun toPascalCase(name: String): String {

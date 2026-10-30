@@ -7,8 +7,8 @@ import com.aws.blocks.kotlin.UnknownTransferable
 import com.aws.blocks.kotlin.json.BlocksJson
 import com.aws.blocks.kotlin.validateTransferableDescriptor
 import com.example.blocks.gateway.GatewayLink
+import com.example.blocks.iot.APILink
 import com.example.blocks.iot.DeviceHandle
-import com.example.blocks.iot.DeviceLink
 import kotlin.Double
 import kotlin.String
 import kotlinx.serialization.Serializable
@@ -24,10 +24,10 @@ public class Api(
     return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag = "example-iot/device-handle"))
   }
 
-  public suspend fun connectDevice(deviceId: String): DeviceLink<ConnectDevice.Result> {
+  public suspend fun connectDevice(deviceId: String): APILink<ConnectDevice.Result> {
     val request = BlocksRequest(method = "api.connectDevice", params = listOf(JsonPrimitive(deviceId)), id = BlocksRequest.nextId())
     val result = client.execute(request)
-    return DeviceLink.fromBlocksDescriptor<ConnectDevice.Result>(validateTransferableDescriptor(result, expectedTag = "example-iot/device-link")) { BlocksJson.decodeFromJsonElement<ConnectDevice.Result>(it) }
+    return APILink.fromBlocksDescriptor<ConnectDevice.Result>(validateTransferableDescriptor(result, expectedTag = "example-iot/device-link")) { BlocksJson.decodeFromJsonElement<ConnectDevice.Result>(it) }
   }
 
   public suspend fun findDeviceHandle(serialNumber: String): DeviceHandle {
