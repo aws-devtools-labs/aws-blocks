@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
@@ -283,6 +283,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * {@link dispatchTurn} calls it in-process. Errors are caught and published as an `error`
 	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
 	 *
+	 * The `error` chunk and the persisted `metadata.error` are client-visible, so they carry the
+	 * error's message only when it is a branded Building Block error (`blocksError()` /
+	 * `brandBlocksError()`, or an `ApiError`), or wraps one as its `cause` (as Strands does for a
+	 * provider error). Any other failure — a Bedrock, DynamoDB or S3 SDK
+	 * error, whose text can name the account, role and resource ARNs — is reported as
+	 * `'Internal error'`; the original is logged server-side.
+	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
@@ -291,10 +298,27 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
+			// Same rule as core's RPC serializer: only a branded error's message is client-safe.
+			// Strands can wrap a provider error and keep the original as `cause`, which drops the
+			// brand from the outer error, so look a few levels down the chain for a branded one.
+			let clientMessage = 'Internal error';
+			let current: unknown = err;
+			for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+				const { cause } = current;
+				if (isWireSafeError(current)) {
+					clientMessage = current.message;
+					break;
+				}
+				current = cause;
+			}
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
 			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
 			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
-			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err) });
+			// Also log the deepest cause's message: a branded error keeps raw detail (e.g. a
+			// canned-dictionary SyntaxError) only on its non-enumerable cause, which the logger drops.
+			let deepest: unknown = err;
+			for (let depth = 0; depth < 5 && deepest instanceof Error && deepest.cause !== undefined; depth++) deepest = deepest.cause;
+			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err), ...(deepest !== err && deepest instanceof Error ? { cause: deepest.message } : {}) });
 			// An account-level model-access refusal (e.g. Anthropic first-time-use not submitted, or a
 			// model not entitled for the account) passes the health check and only fails at invoke. Replace
 			// the raw provider message with an actionable one and tag the chunk so the client rejects with
@@ -304,7 +328,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// the client adds back.
 			const modelAccessMessage = brandedModelUnavailableMessage(err) ?? classifyModelAccessError(err, this.singleModelId());
 			const errorName = modelAccessMessage ? AgentErrors.ModelUnavailable : undefined;
-			const clientMessage = modelAccessMessage ?? errorMessage;
+			if (modelAccessMessage) clientMessage = modelAccessMessage;
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
@@ -691,6 +715,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * when the AgentCore Runtime can't be invoked (unresolved runtime ARN, or an `InvokeAgentRuntime`
 	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
 	 * `stream()` so a dispatch failure isn't lost.
+	 *
+	 * The `error` chunk (and the `StreamFailed` error `complete()` rejects with) carries the message
+	 * of a branded Building Block error, or `'Internal error'` for any other failure, so raw
+	 * Bedrock/AWS SDK text never reaches the client. The original error is logged server-side.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;

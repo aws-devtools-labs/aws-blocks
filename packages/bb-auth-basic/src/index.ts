@@ -101,6 +101,10 @@ export interface AuthBasicOptions {
 	 * - Password reset (user requests a code, enters it with new password)
 	 *
 	 * When absent, signup is immediate and password reset is not available.
+	 *
+	 * If the callback throws during `setAuthState()`, an `ApiError` (or a branded Building
+	 * Block error) reaches the client as `AuthState.error`; any other error is logged and
+	 * reported as `'Internal error'`.
 	 */
 	codeDelivery?: CodeDeliveryFn;
 	/**
@@ -921,20 +925,23 @@ export class AuthBasic extends Scope implements BlocksAuth {
 						default:
 							return { ...this.signedOutState(), error: `Unknown action: ${(input as any).action}` };
 					}
-				} catch (e: any) {
+				} catch (e) {
 					// A signOut always clears the cookie (via its finally), so the
 					// session is gone even when the revocation write failed — report
 					// signed-out rather than the still-valid request cookie's signedIn.
 					const currentUser = input.action === 'signOut' ? null : await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
-					// Surface the message only for a wire-safe error (an ApiError, or a
-					// BB error branded via blocksError) — a raw SDK/driver error's
-					// message can carry $metadata/ARNs, so it gets a generic message,
-					// never echoed. The name crosses the wire only when it is an
-					// intentional, non-default BB error constant.
-					const errorMessage = isWireSafeError(e) ? e.message : 'An unexpected error occurred';
+					// The name crosses the wire only when it is an intentional, non-default BB error constant.
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
-					return { ...base, error: errorMessage, ...(errorName ? { errorName } : {}) };
+					// AuthState is returned to unauthenticated clients, so only an ApiError's or a
+					// branded BB error's message is client-safe. Anything else (an SDK, KVStore,
+					// AppSetting or codeDelivery failure) can name accounts and ARNs: log it and
+					// return the same generic message core's RPC serializer uses.
+					if (!isWireSafeError(e)) {
+						this.log.error('AuthBasic setAuthState failed', { action: input.action, error: e });
+						return { ...base, error: 'Internal error' };
+					}
+					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
 				}
 			},
 		}));
