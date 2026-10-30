@@ -1,6 +1,6 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it, beforeEach, afterEach, type TestContext } from 'node:test';
 import assert from 'node:assert';
-import { createServer, type Server } from 'node:http';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
@@ -33,6 +33,46 @@ const { cases }: { cases: DisableValueCase[] } = JSON.parse(
 );
 
 const DEAD_ENDPOINT = 'http://127.0.0.1:1/noop';
+
+/** Bound for tests that wait on the detached send worker to reach the local collector. */
+const DELIVERY_TIMEOUT = { timeout: 10_000 };
+
+/**
+ * Starts a local telemetry collector on an ephemeral port. Cleanup (dropping
+ * open connections, awaiting server close) is registered on `t` before the
+ * server listens, so it runs even when an assertion fails or the test times
+ * out; otherwise the open listener would keep the test process alive.
+ *
+ * `delivered` resolves once `expected` requests have been fully read and
+ * answered, so positive tests can wait for delivery instead of sleeping.
+ */
+async function startCollector(t: TestContext, expected = 1) {
+  const received: string[] = [];
+  const server = createServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+  const delivered = new Promise<void>((resolve) => {
+    server.on('request', (req, res) => {
+      let body = '';
+      req.on('data', (chunk: string) => { body += chunk; });
+      req.on('end', () => {
+        received.push(body);
+        res.writeHead(200);
+        res.end(() => { if (received.length >= expected) resolve(); });
+      });
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address() as { port: number };
+  return { received, delivered, endpoint: `http://127.0.0.1:${port}/collect` };
+}
 
 function spawnTelemetryChild(
   script: string,
@@ -183,19 +223,23 @@ describe('telemetry/consent', () => {
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1 });
     `;
 
-    async function countHttpRequests(options: { global?: boolean; project?: boolean }): Promise<number> {
-      let hits = 0;
-      const server: Server = await new Promise((resolve) => {
-        const s = createServer((req, res) => {
-          req.on('data', () => {});
-          req.on('end', () => { hits++; res.writeHead(200); res.end(); });
-        });
-        s.listen(0, '127.0.0.1', () => resolve(s));
-      });
-
-      const { port } = server.address() as { port: number };
+    /**
+     * Emits one event from a child process and returns how many requests the
+     * collector received. With `expectRequest`, waits for delivery; otherwise
+     * observes a fixed 1 s window to show nothing arrives.
+     */
+    async function countHttpRequests(
+      t: TestContext,
+      options: { global?: boolean; project?: boolean },
+      expectRequest: boolean,
+    ): Promise<number> {
       const home = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-home-'));
       const project = mkdtempSync(join(tmpdir(), 'blocks-precedence-http-proj-'));
+      t.after(() => {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(project, { recursive: true, force: true });
+      });
+      const collector = await startCollector(t);
       if (options.global !== undefined) writeTelemetryConfig(home, options.global);
       if (options.project !== undefined) writeTelemetryConfig(project, options.project);
 
@@ -210,24 +254,25 @@ describe('telemetry/consent', () => {
           AWS_BLOCKS_DISABLE_TELEMETRY: '',
           CI: '',
           PATH: process.env.PATH ?? '',
-          BLOCKS_TELEMETRY_ENDPOINT: `http://127.0.0.1:${port}/collect`,
+          BLOCKS_TELEMETRY_ENDPOINT: collector.endpoint,
         },
       });
       assert.strictEqual(result.status, 0, result.stderr);
 
-      await new Promise((r) => setTimeout(r, 1_000));
-      server.close();
-      rmSync(home, { recursive: true, force: true });
-      rmSync(project, { recursive: true, force: true });
-      return hits;
+      if (expectRequest) {
+        await collector.delivered;
+      } else {
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+      return collector.received.length;
     }
 
-    it('sends an HTTP request when only the project config enables (positive control)', async () => {
-      assert.strictEqual(await countHttpRequests({ project: true }), 1);
+    it('sends an HTTP request when only the project config enables (positive control)', DELIVERY_TIMEOUT, async (t) => {
+      assert.strictEqual(await countHttpRequests(t, { project: true }, true), 1);
     });
 
-    it('sends no HTTP request when the global config disables and the project config enables', async () => {
-      assert.strictEqual(await countHttpRequests({ global: false, project: true }), 0);
+    it('sends no HTTP request when the global config disables and the project config enables', async (t) => {
+      assert.strictEqual(await countHttpRequests(t, { global: false, project: true }, false), 0);
     });
   });
 
@@ -693,24 +738,11 @@ describe('telemetry/trackCommand', () => {
 });
 
 describe('telemetry/client', () => {
-  it('buildAndSendEvent sends event when telemetry is enabled', async () => {
+  it('buildAndSendEvent sends event when telemetry is enabled', DELIVERY_TIMEOUT, async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -723,11 +755,11 @@ describe('telemetry/client', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 1234 });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]);
@@ -740,61 +772,29 @@ describe('telemetry/client', () => {
     assert.ok(parsed.identifiers.eventId);
     assert.ok(parsed.product.blocksVersion);
     assert.ok(parsed.environment.os);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
-  it('buildAndSendEvent does not send HTTP when telemetry is disabled', async () => {
+  it('buildAndSendEvent does not send HTTP when telemetry is disabled', async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 500 });
 
     await new Promise((r) => setTimeout(r, 200));
 
     assert.strictEqual(received.length, 0);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
-  it('sendEvent fires HTTP POST to configured endpoint', async () => {
+  it('sendEvent fires HTTP POST to configured endpoint', DELIVERY_TIMEOUT, async (t) => {
     const originalEnv = { ...process.env };
-    const received: string[] = [];
+    t.after(() => { process.env = { ...originalEnv }; });
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     const event: BlocksTelemetryEvent = {
       telemetryVersion: '1.0.0',
@@ -810,7 +810,7 @@ describe('telemetry/client', () => {
 
     sendEvent(event);
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]);
@@ -824,9 +824,6 @@ describe('telemetry/client', () => {
     assert.strictEqual(parsed.environment.os, 'linux');
     assert.strictEqual(parsed.environment.nodeVersion, '22.0.0');
     assert.strictEqual(parsed.environment.ci, false);
-
-    server.close();
-    process.env = { ...originalEnv };
   });
 
   it('sendEvent does not throw on network error', () => {
@@ -852,24 +849,9 @@ describe('telemetry/client', () => {
 });
 
 describe('telemetry/send-worker', () => {
-  it('worker POSTs payload from stdin to endpoint', async () => {
-    const received: string[] = [];
+  it('worker POSTs payload from stdin to endpoint', async (t) => {
+    const { received, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
-    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
     const payload = JSON.stringify({ test: true, command: 'dev' });
     const workerPath = join(__dirname, 'telemetry-send-worker.js');
 
@@ -886,8 +868,6 @@ describe('telemetry/send-worker', () => {
     assert.strictEqual(exitCode, 0);
     assert.strictEqual(received.length, 1);
     assert.deepStrictEqual(JSON.parse(received[0]), { test: true, command: 'dev' });
-
-    server.close();
   });
 
   it('worker exits with 1 on unreachable endpoint', async () => {
@@ -907,18 +887,9 @@ describe('telemetry/send-worker', () => {
     assert.strictEqual(exitCode, 1);
   });
 
-  it('worker writes debug output to stderr when NODE_DEBUG is set', async () => {
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => { res.writeHead(200); res.end(); });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
+  it('worker writes debug output to stderr when NODE_DEBUG is set', async (t) => {
+    const { endpoint } = await startCollector(t);
 
-    const addr = server.address() as { port: number };
-    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
     const payload = JSON.stringify({ test: true });
     const workerPath = join(__dirname, 'telemetry-send-worker.js');
 
@@ -936,8 +907,6 @@ describe('telemetry/send-worker', () => {
 
     assert.strictEqual(result.code, 0);
     assert.ok(result.stderr.includes('BLOCKS-TELEMETRY: sent (status=200)'), `Expected debug output, got: ${result.stderr}`);
-
-    server.close();
   });
 });
 
@@ -948,23 +917,9 @@ describe('telemetry/trackCommand integration', () => {
     process.env = { ...originalEnv };
   });
 
-  it('sends telemetry event matching server schema on successful command', async () => {
-    const received: string[] = [];
+  it('sends telemetry event matching server schema on successful command', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -977,13 +932,13 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await trackCommand('deploy', async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -1006,27 +961,11 @@ describe('telemetry/trackCommand integration', () => {
     for (const key of Object.keys(parsed)) {
       assert.ok(allowedTopLevel.includes(key), `Unexpected top-level field: ${key}`);
     }
-
-    server.close();
   });
 
-  it('sends telemetry event with error info on failure', async () => {
-    const received: string[] = [];
+  it('sends telemetry event with error info on failure', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -1039,7 +978,7 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await assert.rejects(
       () => trackCommand('sandbox', async () => {
@@ -1048,7 +987,7 @@ describe('telemetry/trackCommand integration', () => {
       { message: 'Deployment failed: stack update failed' },
     );
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -1057,27 +996,11 @@ describe('telemetry/trackCommand integration', () => {
     assert.ok(parsed.event.error);
     assert.strictEqual(parsed.event.error!.code, 'CDK_DEPLOY_FAILED');
     assert.strictEqual(parsed.event.error!.phase, 'deploy');
-
-    server.close();
   });
 
-  it('includes product and counters when options provided', async () => {
-    const received: string[] = [];
+  it('includes product and counters when options provided', DELIVERY_TIMEOUT, async (t) => {
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -1090,7 +1013,7 @@ describe('telemetry/trackCommand integration', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     await trackCommand('create-blocks-app', async () => {}, {
       template: 'demo',
@@ -1098,7 +1021,7 @@ describe('telemetry/trackCommand integration', () => {
       blocksCount: 2,
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     assert.strictEqual(received.length, 1);
     const parsed = JSON.parse(received[0]) as BlocksTelemetryEvent;
@@ -1109,8 +1032,6 @@ describe('telemetry/trackCommand integration', () => {
     assert.strictEqual(parsed.product!.buildingBlocks, undefined);
     assert.ok(parsed.counters);
     assert.strictEqual(parsed.counters!.blocksCount, 2);
-
-    server.close();
   });
 });
 
@@ -1313,26 +1234,13 @@ describe('telemetry/--telemetry-file flag', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('still sends HTTP when --telemetry-file is set (additive)', async () => {
+  it('still sends HTTP when --telemetry-file is set (additive)', DELIVERY_TIMEOUT, async (t) => {
     const tmp = join(tmpdir(), `blocks-telemetry-both-test-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, delivered, endpoint } = await startCollector(t);
 
-    const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
-
-    const addr = server.address() as { port: number };
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     delete process.env.CI;
     delete process.env.CONTINUOUS_INTEGRATION;
@@ -1345,11 +1253,11 @@ describe('telemetry/--telemetry-file flag', () => {
     delete process.env.TF_BUILD;
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
     buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await delivered;
 
     // File sink fired
     assert.ok(existsSync(filePath));
@@ -1358,46 +1266,25 @@ describe('telemetry/--telemetry-file flag', () => {
 
     // HTTP sink also fired
     assert.strictEqual(received.length, 1);
-
-    server.close();
-    rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('writes no file and sends no HTTP when telemetry is disabled', async () => {
+  it('writes no file and sends no HTTP when telemetry is disabled', async (t) => {
     const tmp = join(tmpdir(), `blocks-telemetry-file-no-http-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, endpoint } = await startCollector(t);
 
-    const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => {
-          received.push(body);
-          res.writeHead(200);
-          res.end();
-        });
-      });
-      s.listen(0, '127.0.0.1', () => resolve(s));
-    });
+    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
-    try {
-      const addr = server.address() as { port: number };
-      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-      process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
 
-      buildAndSendEvent({ command: 'deploy', state: 'SUCCESS', duration: 300 });
+    await new Promise((r) => setTimeout(r, 200));
 
-      await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!existsSync(filePath), 'File must not be written when telemetry is disabled');
 
-      assert.ok(!existsSync(filePath), 'File must not be written when telemetry is disabled');
-
-      assert.strictEqual(received.length, 0, 'HTTP should NOT be sent when telemetry is disabled');
-    } finally {
-      server.close();
-      rmSync(tmp, { recursive: true, force: true });
-    }
+    assert.strictEqual(received.length, 0, 'HTTP should NOT be sent when telemetry is disabled');
   });
 
   it('does not write file when telemetry is disabled via project config', () => {
@@ -1693,34 +1580,20 @@ describe('telemetry/--telemetry-file flag', () => {
     }
   });
 
-  it('still sends the HTTP event when the append throws', async () => {
+  it('still sends the HTTP event when the append throws', DELIVERY_TIMEOUT, async (t) => {
     const tmp = join(tmpdir(), `blocks-telemetry-contain-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
+    t.after(() => rmSync(tmp, { recursive: true, force: true }));
+    const { received, delivered, endpoint } = await startCollector(t, 2);
+    process.env.BLOCKS_TELEMETRY_ENDPOINT = endpoint;
 
-    const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const srv = createServer((req, res) => {
-        let body = '';
-        req.on('data', (chunk) => { body += chunk; });
-        req.on('end', () => { received.push(body); res.writeHead(200); res.end(); });
-      });
-      srv.listen(0, '127.0.0.1', () => resolve(srv));
-    });
-    const addr = server.address() as { port: number };
-    process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
+    buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
+    writeFileSync(filePath, 'not json');
+    buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
+    await delivered;
 
-    try {
-      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 1 });
-      writeFileSync(filePath, 'not json');
-      buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: 2 });
-      await new Promise((r) => setTimeout(r, 400));
-
-      assert.strictEqual(received.length, 2, 'a failed file append must not suppress the HTTP sink');
-    } finally {
-      server.close();
-      rmSync(tmp, { recursive: true, force: true });
-    }
+    assert.strictEqual(received.length, 2, 'a failed file append must not suppress the HTTP sink');
   });
 
   describe('pre-existing file handling (shared case table)', () => {
