@@ -164,6 +164,8 @@ Two top-level extension objects let a block declare its own native package inste
 
 `x-blocks-native-bindings` holds an array of bindings. Each carries a stable `id`, a `kind` (only `transferable` in schema 1), and maps an exact `tag` to a package `export`, a factory `abi`, and a `genericArity` of 0 or 1.
 
+A well-formed binding whose `kind` schema 1 does not define is skipped rather than rejected, and reported as `AWSBLOCKS-NATIVE-004`. An ill-formed one is still an error: the package-existence, tag-presence and tag-uniqueness checks run whatever the kind, so a binding naming an undeclared package, or re-binding a tag another binding already took, is a generation error regardless. A package a binding names is referenced whatever that binding's kind, so it alone does not raise `AWSBLOCKS-NATIVE-003`. `genericArity` is required, and a result whose `x-blocks-type-args` count disagrees with it is a generation error for the binding that emits. The per-binding field checks span every kind on all three, matching the single enforcement point in `validate-native-catalogs.ts`, whose own kind gate sits below them: an absent `abi` or `export`, an `export` that does not name a type, and a `genericArity` that is absent, not an integer, or outside 0...1 are each a generation error whatever the kind. Only the ABI allowlist is `transferable`-specific, so another kind's `abi` value is unchecked.
+
 Both objects carry `schemaVersion: 1` and are emitted only when non-empty. An absent platform field means the package is not offered there, and that result degrades to `UnknownTransferable` on that platform alone.
 
 A block authors both catalogs as static JSON under an `aws-blocks.native` key in its own `package.json`, rather than in a TypeScript registration call.
@@ -180,7 +182,7 @@ When a bare direct result's `x-blocks-transferable` tag has no known runtime bin
 
 The unbound fallback is direct-only; a transferable in any other position is unchanged from before the fallback, except that on Kotlin a nullable result still fails code generation.
 
-A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding is direct-only in iteration 1: a nullable, nested, or list-wrapped result keeps the pre-fallback type, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
+A nullable result carrying a *built-in* transferable tag does hydrate to its optional concrete type. A declared binding reaches a nullable result on Swift and Kotlin, which unwrap the optional and emit the optional declared type, while Dart applies a declared binding to a bare direct result only, so on Dart alone a nullable result keeps the pre-fallback type. A nested or list-wrapped result keeps the pre-fallback type on all three, and does so silently — only a bare direct result reports `AWSBLOCKS-NATIVE-001`.
 
 ---
 

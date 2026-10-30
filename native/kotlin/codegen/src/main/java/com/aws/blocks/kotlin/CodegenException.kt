@@ -9,3 +9,6 @@ package com.aws.blocks.kotlin
  * reject, such as a binding whose `genericArity` disagrees with an operation's result.
  */
 open class CodegenException(message: String) : RuntimeException(message)
+
+/** Keep a diagnostic on one log line even if a spec-supplied value carries a newline. */
+internal fun String.forDiagnostic(): String = replace("\n", "\\n").replace("\r", "\\r")

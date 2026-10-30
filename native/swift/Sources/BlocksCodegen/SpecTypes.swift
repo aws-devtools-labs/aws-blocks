@@ -83,7 +83,6 @@ struct NativeBinding: Decodable {
     let package: String
     let export: String
     let abi: String
-    /// An absent arity resolves to 0.
     let genericArity: Int?
 }
 

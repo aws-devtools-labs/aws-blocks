@@ -125,6 +125,7 @@ data class Method(
  * field, which keeps the tag on the `UnknownTransferable` fallback for Kotlin alone.
  */
 data class NativeTransferableBinding(
+    val id: String,
     val tag: String,
     val packageIdentity: String,
     val export: String,
@@ -132,12 +133,16 @@ data class NativeTransferableBinding(
     val kotlinPackage: String?,
 )
 
+data class DeclaredBinding(val id: String, val kind: String)
+
 data class NativeCatalogs(
     val bindings: List<NativeTransferableBinding> = emptyList(),
     /** Declared identities that no binding of any kind names. */
     val unreferencedPackages: Set<String> = emptySet(),
     /** Every identity the packages catalog declares, whether or not a binding names it. */
     val declaredPackages: Set<String> = emptySet(),
+    /** Every entry the bindings catalog declared, in declaration order, whatever its kind. */
+    val declaredBindings: List<DeclaredBinding> = emptyList(),
 ) {
     companion object {
         val EMPTY = NativeCatalogs()

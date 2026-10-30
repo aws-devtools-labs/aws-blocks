@@ -117,6 +117,29 @@ final class DeclaredBindingParserTests: XCTestCase {
         )
     }
 
+    func testAnUndefinedKindWithAnOutOfRangeGenericArityIsStillAnError() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(kind: "facade", arity: 7))),
+            contains: "declares genericArity 7"
+        )
+    }
+
+    func testAnUndefinedKindWithAnAbsentGenericArityIsStillAnError() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(
+                binding(kind: "facade").replacingOccurrences(of: #", "genericArity": 1"#, with: "")
+            )),
+            contains: "requires a genericArity"
+        )
+    }
+
+    func testAnUndefinedKindWhoseExportIsNotATypeIsStillAnError() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(kind: "facade", export: "9not"))),
+            contains: "does not name a Swift type"
+        )
+    }
+
     func testModuleThatIsNotASwiftIdentifierIsAnError() {
         for module in ["A.B", "example-iot", "9Native", "has space"] {
             assertInvalidCatalog(
@@ -144,14 +167,39 @@ final class DeclaredBindingParserTests: XCTestCase {
         assertInvalidCatalog(catalogSpec(bindings: bindingsCatalog(binding(export: "Self"))), contains: "does not name a Swift type")
     }
 
-    func testAbsentGenericArityResolvesAsArityZero() throws {
+    func testAnUndefinedKindNamingAnUndeclaredPackageIsStillAnError() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(id: "other", kind: "facade", package: "not-declared"))),
+            contains: "names package 'not-declared'"
+        )
+    }
+
+    func testTagUniquenessSpansEveryKind() {
+        let bindings = bindingsCatalog(
+            binding(id: "first"),
+            binding(id: "second", kind: "facade")
+        )
+        assertInvalidCatalog(catalogSpec(bindings: bindings), contains: "is bound by more than one binding")
+    }
+
+    func testANewlineInASpecValueCannotSplitACatalogError() {
+        let forged = #"ev\nAWSBLOCKS-NATIVE-999: forged"#
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(package: forged))),
+            contains: #"names package 'ev\nAWSBLOCKS-NATIVE-999: forged'"#
+        )
+    }
+
+    func testAbsentGenericArityIsAnError() {
         let bindings = """
         { "schemaVersion": 1, "bindings": [{ "id": "link", "kind": "transferable", \
         "tag": "example-iot/device-link", "package": "example-iot-native", \
         "export": "deviceLink", "abi": "blocks-transferable-v1" }] }
         """
-        let model = try parser.parse(data: catalogSpec(bindings: bindings))
-        XCTAssertEqual(model.declaredTransferableBindings["example-iot/device-link"]?.isGeneric, false)
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindings),
+            contains: "binding 'link' requires a genericArity in 0...1"
+        )
     }
 
     func testPackageEntryWithoutPlatformsMatchesEmptyPlatforms() throws {
@@ -295,11 +343,24 @@ final class DeclaredBindingParserTests: XCTestCase {
         assertInvalidCatalog(catalogSpec(bindings: bindingsCatalog(binding(tag: ""))), contains: "declares an empty tag")
     }
 
-    func testPackageReferencedOnlyByANonTransferableBindingIsStillUnreferenced() throws {
+    func testAnEmptyTagIsAnErrorWhateverTheKind() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(kind: "opaque", tag: ""))),
+            contains: "declares an empty tag"
+        )
+    }
+
+    func testPackageReferencedOnlyByANonTransferableBindingIsStillReferenced() throws {
         let bindings = bindingsCatalog(binding(id: "other", kind: "opaque"))
         let model = try parser.parse(data: catalogSpec(bindings: bindings))
+        XCTAssertFalse(
+            model.nativeCatalogWarnings.contains {
+                $0.contains("AWSBLOCKS-NATIVE-003") && $0.contains("example-iot-native")
+            },
+            "a package a binding names is referenced whatever the kind, got: \(model.nativeCatalogWarnings)"
+        )
         XCTAssertTrue(
-            model.nativeCatalogWarnings.contains { $0.contains("AWSBLOCKS-NATIVE-003") && $0.contains("example-iot-native") },
+            model.nativeCatalogWarnings.contains { $0.contains("AWSBLOCKS-NATIVE-004") && $0.contains("opaque") },
             "got: \(model.nativeCatalogWarnings)"
         )
     }
