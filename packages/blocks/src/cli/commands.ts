@@ -135,12 +135,14 @@ function telemetryArgs(ctx: Context): string[] {
 /**
  * The environment of the dev server runner. An explicit host also opts the
  * local realtime WebSocket into that host's origins, which it reads from
- * `BLOCKS_DEV_HOST`; a loopback host adds nothing, as loopback is always allowed.
+ * `BLOCKS_DEV_HOST`, unless `BLOCKS_DEV_HOST` is already set in the environment:
+ * an inherited opt-in (for example a hostname behind `--host 0.0.0.0`) wins.
  */
-function devServerEnv(options: { backendPath: string; host?: string }): NodeJS.ProcessEnv {
+function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; host?: string }): NodeJS.ProcessEnv {
+	const exportHost = options.host !== undefined && !env.BLOCKS_DEV_HOST;
 	return {
 		[DEV_OPTIONS_ENV]: JSON.stringify(options),
-		...(options.host === undefined ? {} : { BLOCKS_DEV_HOST: options.host }),
+		...(exportHost ? { BLOCKS_DEV_HOST: options.host } : {}),
 	};
 }
 
@@ -297,7 +299,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		runner: 'dev-server',
 		operation: 'blocks dev',
 		watch: true,
-		env: devServerEnv({ backendPath, ...devConfig }),
+		env: devServerEnv(ctx.env, { backendPath, ...devConfig }),
 		terminateOnHangup: true,
 	});
 }
@@ -357,7 +359,7 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		runner: 'sandbox',
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
 		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
-		env: devServerEnv({ backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
+		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not stopped by the CLI on a hangup,
 		// but core's sandbox deploy does not defer SIGHUP: a hangup of the whole process group ends it.
 		terminateOnHangup: !deployOnly,
