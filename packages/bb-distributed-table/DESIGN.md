@@ -230,11 +230,15 @@ This is dramatically faster than sequential GSI creation (seconds vs. minutes/ho
 
 Items are stored as DynamoDB JSON (marshalled via `@aws-sdk/lib-dynamodb` DocumentClient). The type parameter `T` is inferred from the StandardSchemaV1 schema at compile time. Runtime validation occurs on `put` and `putBatch` before writing. Both mock and AWS runtime use the same validation path (`schema['~standard'].validate()`).
 
+`undefined` inside an item is normalized identically on both layers before it is stored (shared `normalizeUndefinedValues()` in `errors.ts`): an `undefined` property of a plain object is dropped, and an `undefined` array entry is stored as `null`, so list positions are preserved (`[1, undefined, 3]` reads back as `[1, null, 3]`). This matches what the mock's JSON persistence produces. On AWS it is applied to `put`, `putBatch` and `ifFieldEquals` values; without it the DocumentClient rejects the write, and its `removeUndefinedValues` option is not used because it drops `undefined` list entries and shifts later indices. Sets, Maps, binary values, Dates and other class instances are left as-is.
+
 ## Mock Implementation
 
 - Data stored in `.bb-data/{scope.fullId}/data.json` via `getMockDataDir()` from core.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
 - Index queries implemented via in-memory filtering over the full dataset.
+- Index queries are sparse like DynamoDB indexes: an item that lacks the queried
+  index's sort-key attribute is never returned, with or without a sort-key condition.
 - Conditional write/delete failures throw with `error.name = 'ConditionalCheckFailedException'`.
 - Schema validation on `put()` and `putBatch()`; throws with `error.name = 'ValidationFailedException'`.
 - Validates 400 KB serialized item size limit.
