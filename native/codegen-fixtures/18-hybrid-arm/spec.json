@@ -435,6 +435,114 @@
                   "action",
                   "credentialId"
                 ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "setUpTotp"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "verifyTotpSetup"
+                    ]
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action",
+                  "code"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "getMfaPreference"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "updateMfaPreference"
+                    ]
+                  },
+                  "sms": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "totp": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "email": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "ENABLED",
+                          "DISABLED",
+                          "PREFERRED",
+                          "NOT_PREFERRED"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
               }
             ]
           }

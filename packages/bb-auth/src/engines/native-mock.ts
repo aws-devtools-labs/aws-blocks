@@ -13,7 +13,8 @@
  * engine's — the same statuses, `retriable` flags and enumeration masking.
  *
  * Mock vs AWS differences are listed in `DESIGN.md` ("Mock vs AWS behaviour
- * differences"). In short: TOTP accepts any 6-digit code, passkey assertions
+ * differences"). In short: TOTP accepts any 6-digit code (unless
+ * `totpVerification: 'rfc6238'`, which checks RFC 6238 codes), passkey assertions
  * are matched by credential id without a signature check, passwords are stored
  * in plain text, and tokens are unsigned (`alg: 'none'`).
  *
@@ -56,6 +57,7 @@ import { signUpNotPermitted } from './attribute-write-rules.js';
 import { MockAttributeSchema } from './mock-attribute-schema.js';
 import { mockAdminEngine } from './native-mock-admin.js';
 import { MockStore, type MockUserRecord, revisionOf, serviceError, userNotFound } from './native-mock-store.js';
+import { verifyTotpCode } from './totp.js';
 import type {
 	EngineHost,
 	NativeAdminEngine,
@@ -73,6 +75,8 @@ import type {
 export interface MockEngineOptions {
 	/** The mock-only `codeDelivery` hook (`AuthMockOptions.codeDelivery`). */
 	codeDelivery?: CodeDeliveryFn;
+	/** How TOTP codes are checked (`AuthMockOptions.totpVerification`). Default `'any'`. */
+	totpVerification?: 'any' | 'rfc6238';
 }
 
 /** The `mfa` option, resolved: mode plus permitted factors (default `['SMS', 'TOTP']`, the CDK layer's). */
@@ -173,9 +177,12 @@ export class MockNativeEngine implements NativeEngine {
 	private readonly signInMode: SignInMode;
 	/** Which attributes a write may carry, as the provisioned pool's schema allows (`mock-attribute-schema.ts`). */
 	private readonly attributeSchema: MockAttributeSchema;
+	/** Check TOTP codes by RFC 6238 (`totpVerification: 'rfc6238'`), not just their shape. */
+	private readonly verifyTotp: boolean;
 
 	constructor(host: EngineHost, options: MockEngineOptions = {}) {
 		this.host = host;
+		this.verifyTotp = options.totpVerification === 'rfc6238';
 		const opts = host.options;
 		const ep = opts.emailPassword;
 		this.emailPassword = typeof ep === 'object' ? ep : {};
@@ -646,8 +653,9 @@ export class MockNativeEngine implements NativeEngine {
 				break;
 			}
 			case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
-				// No RFC 6238 verifier locally: any 6-digit code passes (DESIGN.md).
-				if (!SIX_DIGITS.test(response)) {
+				// By default any 6-digit code passes (DESIGN.md); `totpVerification:
+				// 'rfc6238'` checks it against the enrolled secret.
+				if (!this.totpCodeAccepted(user.totpSharedSecret, response)) {
 					throw serviceError(AuthErrors.CodeMismatch, 'Invalid code received for user');
 				}
 				break;
@@ -666,10 +674,11 @@ export class MockNativeEngine implements NativeEngine {
 				return { status: 'continueSignIn', nextStep: this.challengeForMfaSetup(username, response) };
 			}
 			case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP': {
-				if (!SIX_DIGITS.test(response)) {
+				if (!this.totpCodeAccepted(challenge.sharedSecret, response)) {
 					throw serviceError(AuthErrors.EnableSoftwareTokenMFA, 'Code mismatch');
 				}
 				user.totpSharedSecret = challenge.sharedSecret;
+				delete user.totpPendingSecret;
 				user.totpVerified = true;
 				const enabled = new Set(user.mfaPreference.enabled);
 				enabled.add('TOTP');
@@ -984,22 +993,40 @@ export class MockNativeEngine implements NativeEngine {
 
 	// ── MFA ─────────────────────────────────────────────────────────────────
 
+	/**
+	 * Whether `code` answers a TOTP check for `sharedSecret`: any six digits by
+	 * default, the RFC 6238 code (± one 30 s step) with `totpVerification: 'rfc6238'`.
+	 */
+	private totpCodeAccepted(sharedSecret: string | undefined, code: string): boolean {
+		if (!SIX_DIGITS.test(code)) return false;
+		if (!this.verifyTotp) return true;
+		return sharedSecret !== undefined && verifyTotpCode(sharedSecret, code);
+	}
+
 	async setUpTotp(accessToken: string): Promise<{ sharedSecret: string }> {
 		const { user } = this.store.userForAccessToken(accessToken);
 		const sharedSecret = generateTotpSecret();
-		user.totpSharedSecret = sharedSecret;
-		user.totpVerified = false;
+		// Pending until verified: an enrolled authenticator keeps working (and
+		// keeps being challenged) until `verifyTotpSetup` accepts the new one.
+		user.totpPendingSecret = sharedSecret;
 		this.store.flush();
 		return { sharedSecret };
 	}
 
 	async verifyTotpSetup(accessToken: string, code: string): Promise<void> {
 		const { user } = this.store.userForAccessToken(accessToken);
-		if (!user.totpSharedSecret) {
+		const candidate = user.totpPendingSecret ?? user.totpSharedSecret;
+		if (!candidate) {
 			throw serviceError(AuthErrors.SoftwareTokenMFANotFound, 'Software token TOTP not set up for this user.');
 		}
-		// No RFC 6238 verifier locally: any 6-digit code passes (DESIGN.md).
-		if (!SIX_DIGITS.test(code)) throw serviceError(AuthErrors.EnableSoftwareTokenMFA, 'Code mismatch');
+		// By default any 6-digit code passes (DESIGN.md); `totpVerification:
+		// 'rfc6238'` checks it against the secret `setUpTotp` issued.
+		if (!this.totpCodeAccepted(candidate, code)) {
+			throw serviceError(AuthErrors.EnableSoftwareTokenMFA, 'Code mismatch');
+		}
+		// The new authenticator replaces the old one only now.
+		user.totpSharedSecret = candidate;
+		delete user.totpPendingSecret;
 		user.totpVerified = true;
 		const enabled = new Set(user.mfaPreference.enabled);
 		enabled.add('TOTP');

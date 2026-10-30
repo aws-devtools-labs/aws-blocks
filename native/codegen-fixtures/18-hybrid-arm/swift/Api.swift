@@ -317,6 +317,60 @@ public final nonisolated class AuthApi: Sendable {
             }
         }
 
+        public struct VerifyTotpSetup: Codable {
+            public let code: String
+
+            public init(code: String) {
+                self.code = code
+            }
+        }
+
+        public struct UpdateMfaPreference: Codable {
+            public let email: Email?
+            public let sms: Sms?
+            public let totp: Totp?
+
+            enum CodingKeys: String, CodingKey {
+                case email
+                case sms
+                case totp
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.container(keyedBy: CodingKeys.self)
+                try c.encodeIfPresent(self.email, forKey: .email)
+                try c.encodeIfPresent(self.sms, forKey: .sms)
+                try c.encodeIfPresent(self.totp, forKey: .totp)
+            }
+
+            public init(email: Email? = nil, sms: Sms? = nil, totp: Totp? = nil) {
+                self.email = email
+                self.sms = sms
+                self.totp = totp
+            }
+
+            public enum Email: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+
+            public enum Sms: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+
+            public enum Totp: String, Codable {
+                case enabled = "ENABLED"
+                case disabled = "DISABLED"
+                case preferred = "PREFERRED"
+                case notPreferred = "NOT_PREFERRED"
+            }
+        }
+
         public enum Input: Codable {
             case signUp(SignUp)
             case resetPassword(ResetPassword)
@@ -332,6 +386,10 @@ public final nonisolated class AuthApi: Sendable {
             case completePasskeyRegistration(CompletePasskeyRegistration)
             case listPasskeys
             case deletePasskey(DeletePasskey)
+            case setUpTotp
+            case verifyTotpSetup(VerifyTotpSetup)
+            case getMfaPreference
+            case updateMfaPreference(UpdateMfaPreference)
 
             enum CodingKeys: String, CodingKey {
                 case action
@@ -379,6 +437,16 @@ public final nonisolated class AuthApi: Sendable {
                 case .deletePasskey(let params):
                     try container.encode("deletePasskey", forKey: .action)
                     try params.encode(to: encoder)
+                case .setUpTotp:
+                    try container.encode("setUpTotp", forKey: .action)
+                case .verifyTotpSetup(let params):
+                    try container.encode("verifyTotpSetup", forKey: .action)
+                    try params.encode(to: encoder)
+                case .getMfaPreference:
+                    try container.encode("getMfaPreference", forKey: .action)
+                case .updateMfaPreference(let params):
+                    try container.encode("updateMfaPreference", forKey: .action)
+                    try params.encode(to: encoder)
                 }
             }
 
@@ -400,6 +468,10 @@ public final nonisolated class AuthApi: Sendable {
                 case "completePasskeyRegistration": self = .completePasskeyRegistration(try CompletePasskeyRegistration(from: decoder))
                 case "listPasskeys": self = .listPasskeys
                 case "deletePasskey": self = .deletePasskey(try DeletePasskey(from: decoder))
+                case "setUpTotp": self = .setUpTotp
+                case "verifyTotpSetup": self = .verifyTotpSetup(try VerifyTotpSetup(from: decoder))
+                case "getMfaPreference": self = .getMfaPreference
+                case "updateMfaPreference": self = .updateMfaPreference(try UpdateMfaPreference(from: decoder))
                 default:
                     throw DecodingError.dataCorruptedError(forKey: .action, in: container, debugDescription: "Unknown value: \(disc)")
                 }

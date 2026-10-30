@@ -631,10 +631,15 @@ describe('built-in components use submitAuthAction (R11–R14)', () => {
 		};
 		visit(sf);
 
+		// `MfaSettings` is the one exception, by design: its actions (MFA
+		// enrolment and preferences) never change who is signed in, so they have
+		// nothing to notify, and it keeps its states out of the store so a
+		// mounted Authenticator keeps its signed-in card. It never writes the
+		// store or broadcasts (the asserts below).
 		assert.deepStrictEqual(
 			[...callers.setAuthState],
-			['submitAuthAction'],
-			'only submitAuthAction calls setAuthState',
+			['submitAuthAction', 'MfaSettings'],
+			'only submitAuthAction (and the MFA settings panel) calls setAuthState',
 		);
 		assert.deepStrictEqual(
 			[...callers.broadcastAuthChange],

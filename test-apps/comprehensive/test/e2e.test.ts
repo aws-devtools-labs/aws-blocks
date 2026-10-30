@@ -28,6 +28,7 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { authApiNarrowingTests, type AuthStateApis } from './auth-api-narrowing.test.js';
 import { authTestHelpersTests } from './auth-test-helpers.test.js';
 import { authProtectTests, type ProtectApis } from './auth-protect.test.js';
+import { authTotpEnrolmentTests, type AuthTotpApis } from './auth-totp-enrolment.test.js';
 import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
@@ -57,6 +58,7 @@ let isolatedApi: typeof isolatedApiType;
 let authStateApis: AuthStateApis;
 let appModule: typeof import('aws-blocks');
 let protectApis: ProtectApis;
+let authTotpApis: AuthTotpApis;
 
 async function waitForServer(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -152,6 +154,7 @@ test.before(async () => {
   isolatedApi = module.isolatedApi;
   authStateApis = { authApi: module.authApi, oidcAuthApi: module.oidcAuthApi, authCApi: module.authCApi, api: module.api };
   protectApis = { api: module.api, protectedApi: module.protectedApi };
+  authTotpApis = { authCMfaApi: module.authCMfaApi, authApi: module.authApi, api: module.api };
   
   await waitForServer();
   console.log('✅ Server ready\n');
@@ -284,6 +287,9 @@ authTestHelpersTests(() => appModule);
 
 // Auth protect(): a deny-by-default namespace (separate file)
 authProtectTests(() => protectApis);
+
+// Auth createApi() TOTP enrolment: set up, verify, challenged sign-in (separate file)
+authTotpEnrolmentTests(() => authTotpApis);
 
 // Agent, AsyncJob and AsyncJob status spend most of their time waiting on
 // queues, Lambda and the model, so each runs in its own child process against

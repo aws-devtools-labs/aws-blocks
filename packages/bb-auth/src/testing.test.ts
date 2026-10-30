@@ -15,7 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { Auth } from './index.mock.js';
-import { getLastAuthCode } from './testing.js';
+import { totpCode } from './engines/totp.js';
+import { getLastAuthCode, totpCodeFor } from './testing.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -113,5 +114,25 @@ describe('getLastAuthCode', () => {
 		} finally {
 			rmSync(empty, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('totpCodeFor', () => {
+	// RFC 6238 Appendix B, SHA-1 (ASCII "12345678901234567890"); the six-digit code is the last six digits.
+	const seed = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+
+	test('is the local pool\'s own RFC 6238 code (one implementation), for a Date or epoch milliseconds', () => {
+		for (const [seconds, eight] of [
+			[59, '94287082'],
+			[1111111109, '07081804'],
+			[2000000000, '69279037'],
+		] as const) {
+			assert.strictEqual(totpCodeFor(seed, seconds * 1000), eight.slice(-6));
+			assert.strictEqual(totpCodeFor(seed, new Date(seconds * 1000)), totpCode(seed, seconds * 1000));
+		}
+	});
+
+	test('refuses a secret that is not base32', () => {
+		assert.throws(() => totpCodeFor('not-base32!'), /base32/);
 	});
 });

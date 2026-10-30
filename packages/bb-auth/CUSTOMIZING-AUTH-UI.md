@@ -276,7 +276,9 @@ gets full narrowing.
 
 `auth.createApi()` also narrows the input to what the block's options allow
 (`AuthActionInputOf<O>`). The password actions need email + password, the
-passkey actions need `passkeys`, and `confirmSignIn` takes only the challenges
+passkey actions need `passkeys`, the authenticator-app enrolment actions
+(`setUpTotp`, `verifyTotpSetup`) need `mfa` on with `'TOTP'` in `mfa.types`,
+`getMfaPreference` / `updateMfaPreference` need `mfa` on, and `confirmSignIn` takes only the challenges
 the configuration can produce: the MFA ones follow `mfa.types`, the
 first-factor ones need `users.authFlow: 'USER_AUTH'`. On an
 `emailPassword: false` block, `authApi.setAuthState({ action: 'signIn', … })`
@@ -337,6 +339,15 @@ nearest hooked ancestor instead.
 | `account-menu-signin` | Sign-in button in the bar, shown when signed out |
 | `account-menu-modal` | Modal the bar opens, hosting an `Authenticator` |
 | `account-menu-modal-close` | Close button on that modal |
+| `mfa-settings` | Root element returned by `MfaSettings` (empty while signed out) |
+| `mfa-settings-heading` | Its heading |
+| `mfa-settings-error` | Its inline error (a wrong code, MFA off, signed out). Absent when there is none |
+| `mfa-settings-action-<action>` | One `<form>` per action, e.g. `mfa-settings-action-setUpTotp`, `mfa-settings-action-verifyTotpSetup`. An `updateMfaPreference` form names its change: `mfa-settings-action-updateMfaPreference-<factor>-<setting>`, e.g. `…-totp-disabled`, `…-totp-preferred` |
+| `mfa-settings-<field>` | One per input, named after the field: `mfa-settings-code`, and the hidden `mfa-settings-sharedSecret` / `mfa-settings-otpauthUri` |
+| `mfa-settings-submit` | Each form's button |
+| `mfa-settings-qr` | The QR code your `renderQrCode` option returned. Absent without it |
+| `mfa-settings-secret` | The setup key, in groups of four |
+| `mfa-settings-otpauth-uri` | The "Open in authenticator app" link (`href` is the `otpauth://` URI) |
 
 Action and field names come from the server, so the hooks follow whatever the
 Building Block emits: `authenticator-action-confirmSignUp`,
@@ -367,6 +378,44 @@ await expect(page.getByTestId('authenticator-signed-in')).toContainText('alice')
 Depth 2 and 3 render your DOM instead of ours, so hooks inside a replaced action
 or field are yours to add. Whatever the `Authenticator` still renders around them
 (the container, the heading, the error) keeps its hook.
+
+## MFA settings
+
+`MfaSettings(authApi, options?)` is the authenticator-app (TOTP) enrolment
+panel for an account page. Like the `Authenticator`, it renders the actions the
+server returns, each as a `<form>`: it starts with `getMfaPreference` once the
+user is signed in, then follows `setUpTotp`, `verifyTotpSetup` and
+`updateMfaPreference`. A wrong code comes back `retriable`, so the setup panel
+stays with the error. Replacing an enrolled authenticator or turning a factor
+off on a session older than `session.freshAgeSeconds` shows the server's
+`ReauthenticationRequiredException` message: sign in again, then retry.
+
+It does not write the shared auth-state store or broadcast: these actions never
+change who is signed in, and a mounted `Authenticator` keeps its signed-in card.
+No QR library ships with the block; pass `renderQrCode` to draw one:
+
+```typescript
+import { MfaSettings } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
+
+declare function qrCodeDataUrl(text: string): string; // from your QR library
+
+document.querySelector('#security')!.appendChild(
+  MfaSettings(authApi, {
+    heading: 'Sign-in security',
+    renderQrCode: (otpauthUri) => {
+      const img = document.createElement('img');
+      img.alt = 'Scan with your authenticator app';
+      img.src = qrCodeDataUrl(otpauthUri);
+      return img;
+    },
+  }),
+);
+```
+
+For a fully custom panel, submit the actions yourself (see the `Auth` README's
+MFA recipe): `setUpTotp`'s state carries the `sharedSecret` and `otpauthUri` as
+hidden fields of its `verifyTotpSetup` action.
 
 ## See also
 
