@@ -2,7 +2,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -109,86 +109,10 @@ async function isAmplifyGen2Project(dir: string): Promise<boolean> {
 
 /**
  * Copies shared resources (maintained once in `resources/`) into the scaffolded project.
- * A template's own `AGENTS.template.md` (e.g. the platform template's rules) is
- * appended to the shared AGENTS.md and removed.
  */
 async function copySharedResources(targetDir: string): Promise<void> {
   const resourcesDir = join(__dirname, '../resources');
-  const agents = join(targetDir, 'AGENTS.md');
-  await cp(join(resourcesDir, 'AGENTS.md'), agents);
-  const extra = join(targetDir, 'AGENTS.template.md');
-  if (await exists(extra)) {
-    await writeFile(agents, `${await readFile(agents, 'utf-8')}${await readFile(extra, 'utf-8')}`);
-    await rm(extra);
-  }
-}
-
-/** `defaults.app.id`: lowercase letters and digits, starting with a letter, at most 10 (CDK's qualifier limit). */
-const APP_ID = /^[a-z][a-z0-9]{0,9}$/;
-
-/**
- * App ids that are id-shaped but reserved, because the app's `<id>-…` / `<id>/…`
- * names would include names it doesn't own. Mirrors `RESERVED_APP_IDS` in
- * `@aws-blocks/core` (`src/cdk/app-isolation-rules.ts`, which has the reason for
- * each); this package doesn't depend on core, and a test keeps the two in sync.
- */
-export const RESERVED_APP_IDS: readonly string[] = [
-  'cdk', 'blocks', 'secrets', 'config', 'amplify', 'cf', 'sagemaker',
-  'af', 'ap', 'ca', 'cn', 'eu', 'eusc', 'il', 'me', 'mx', 'sa', 'us',
-];
-
-/** Prefixes no app id may start with (mirrors core's `RESERVED_APP_ID_PREFIXES`). */
-export const RESERVED_APP_ID_PREFIXES: readonly string[] = ['aws', 'ssm'];
-
-/** Why `id` can't be an app id, or `undefined` when it can (the same rules as core's `appIdProblem`). */
-export function appIdProblem(id: string): string | undefined {
-  if (!APP_ID.test(id)) return `"${id}" isn't an app id: use 1–10 lowercase letters and digits, starting with a letter.`;
-  if (RESERVED_APP_IDS.includes(id)) {
-    return `"${id}" is reserved: its "${id}-…" / "${id}/…" names would include names AWS Blocks, CDK or AWS share between apps (e.g. CDK's "cdk-<qualifier>-…" bootstrap or Hosting's "/blocks/…" values). Choose another id.`;
-  }
-  const prefix = RESERVED_APP_ID_PREFIXES.find((p) => id.startsWith(p));
-  if (prefix) return `"${id}" starts with "${prefix}", a prefix AWS reserves for its own names. Choose another id.`;
-  return undefined;
-}
-
-/**
- * For the platform template: when `APP_ID` is set, write the app's bootstrap
- * qualifier and toolkit stack name into cdk.json; otherwise say how to.
- *
- * @returns the app id when `APP_ID` is a valid one: the caller uses it as the
- *   app's `stackId` (`.blocks/config.json`), so Hosting's `secret()` / `config()`
- *   values live under `blocks/<id>/`, the app's own on a shared platform. A
- *   reserved `APP_ID` (see {@link appIdProblem}) is treated as invalid.
- */
-async function pinPlatformBootstrap(targetDir: string): Promise<string | undefined> {
-  const appId = process.env.APP_ID;
-  const problem = appId ? appIdProblem(appId) : undefined;
-  if (!appId || problem) {
-    console.log(
-      `\nPlatform app: ${problem ? `APP_ID ${problem} ` : ''}set APP_ID (1–10 lowercase letters and digits, not a reserved id) and re-run, or add ` +
-        '"@aws-cdk/core:bootstrapQualifier": "<id>" to cdk.json\'s context and "toolkitStackName": "CDKToolkit-<id>", ' +
-        'and set "stackId" in .blocks/config.json to "<id>".',
-    );
-    return undefined;
-  }
-  const cdkJsonPath = join(targetDir, 'cdk.json');
-  const cdkJson = JSON.parse(await readFile(cdkJsonPath, 'utf-8'));
-  cdkJson.context = { ...cdkJson.context, '@aws-cdk/core:bootstrapQualifier': appId };
-  cdkJson.toolkitStackName = `CDKToolkit-${appId}`;
-  await writeFile(cdkJsonPath, `${JSON.stringify(cdkJson, null, 2)}\n`);
-  return appId;
-}
-
-/** The dev-server port of a template with no frontend (no `src/` or `index.html`), or `undefined`. */
-async function apiOnlyDevPort(templateDir: string): Promise<number | undefined> {
-  if ((await exists(join(templateDir, 'src'))) || (await exists(join(templateDir, 'index.html')))) return undefined;
-  try {
-    const server = await readFile(join(templateDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
-    const port = /port:\s*(\d+)/.exec(server)?.[1];
-    return port ? Number(port) : undefined;
-  } catch {
-    return undefined;
-  }
+  await cp(join(resourcesDir, 'AGENTS.md'), join(targetDir, 'AGENTS.md'));
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
@@ -313,7 +237,7 @@ type TemplateInfo = {
   overlayOnly: boolean;
 };
 
-const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'platform', 'sql', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
 
 let templateCatalogCache: TemplateInfo[] | null = null;
 
@@ -427,10 +351,6 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Overlay shared resources (AGENTS.md — maintained once, not per-template)
   await copySharedResources(targetDir);
 
-  // The platform template: pin this app's own CDK bootstrap (qualifier = app id)
-  // in cdk.json, which AWS Blocks' deploy scripts read for their bootstrap check.
-  const platformAppId = templateName === 'platform' ? await pinPlatformBootstrap(targetDir) : undefined;
-
   // Rename gitignore to .gitignore
   await rename(join(targetDir, 'gitignore'), join(targetDir, '.gitignore'));
   
@@ -464,9 +384,8 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Generate .blocks/config.json with a unique stackId. A platform app's stackId is
-  // its app id, so Hosting's secret()/config() names (`blocks/<stackId>/…`) are the app's own.
-  const stackId = platformAppId ?? generateStackId(appName);
+  // Generate .blocks/config.json with a unique stackId
+  const stackId = generateStackId(appName);
   const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
@@ -483,13 +402,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.log(`  npm install`);
   }
   console.log(`  npm run dev`);
-  // A template with no frontend serves only the API, on the port its dev server sets.
-  const apiOnlyPort = await apiOnlyDevPort(templateDir);
-  console.log(
-    apiOnlyPort
-      ? `\nThis template has no UI: the API runs at http://localhost:${apiOnlyPort}/aws-blocks/api`
-      : `\nThen open http://localhost:3000`,
-  );
+  console.log(`\nThen open http://localhost:3000`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 

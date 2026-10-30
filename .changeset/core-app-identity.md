@@ -1,7 +1,6 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/blocks": minor
-"@aws-blocks/create-blocks-app": minor
 "@aws-blocks/hosting": minor
 ---
 
@@ -9,7 +8,8 @@ feat(core): `defaults.app` — an app identity for running many apps in one AWS 
 
 For platforms that deploy many apps (often written by AI coding agents) into
 one AWS account through one pipeline. All of it is opt-in: without
-`defaults.app`, synthesized templates are unchanged.
+`defaults.app`, synthesized templates are unchanged. The core README section "Running many apps
+in one AWS account" shows what a platform puts in its own project template.
 
 - **`defaults.app: { id, strict? }`** (new, optional). AWS Blocks tags every
   resource and every IAM role it creates `app=<id>` — including the CDK
@@ -22,8 +22,8 @@ one AWS account through one pipeline. All of it is opt-in: without
   qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
   would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
   `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
-  `eu`, and any id starting with `aws` or `ssm`); synth, both CLIs and the
-  platform template reject them, saying why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
+  `eu`, and any id starting with `aws` or `ssm`); synth and both CLIs reject
+  them, saying why. Keep `.blocks/config.json`'s `stackId` equal to the id, so
   Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
   own.
 - **IAM report:** with `defaults.app` set, `cdk.out/<stack>.blocks-iam.json`
@@ -49,10 +49,6 @@ one AWS account through one pipeline. All of it is opt-in: without
   `app=<id>` (an existing app adopting `defaults.app` tags those resources
   first; see the core README). It warns when the app calls its APIs through `execute-api` (Realtime,
   Agent streaming), which needs a per-app boundary.
-- **`create-blocks-app --template platform`** (new template): the api-only
-  service with `defaults.app`, the permissions boundary, a `check:iam` script and
-  platform rules for coding agents in `AGENTS.md`. With `APP_ID` set, it pins
-  the app's bootstrap qualifier and writes the app id as the `stackId`.
 - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
   the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
   Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has

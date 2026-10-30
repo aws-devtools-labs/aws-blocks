@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { appIdProblem, RESERVED_APP_ID_PREFIXES, RESERVED_APP_IDS, SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
+import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -41,7 +41,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, platform, sql, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, amplify, demo/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -122,86 +122,6 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.match(result.stderr, /amplify.*auto-selected/i);
       assert.match(result.stderr, /--template default/);
       assert.doesNotMatch(result.stderr, /ENOENT/);
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('--template platform: appends the platform rules to AGENTS.md and sets the app identity', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-'));
-    const target = join(tmpDir, 'my-app');
-    try {
-      const result = run([target, '--template', 'platform', '--skip-install', '-y']);
-      assert.strictEqual(result.exitCode, 0, result.stderr);
-      const agents = readFileSync(join(target, 'AGENTS.md'), 'utf-8');
-      assert.match(agents, /^# Agent Guide/, 'the shared guide comes first');
-      assert.match(agents, /## Platform rules/);
-      assert.strictEqual(existsSync(join(target, 'AGENTS.template.md')), false);
-      const cdkEntry = readFileSync(join(target, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
-      assert.match(cdkEntry, /app: \{ id: appId, strict: true \}/);
-      assert.match(cdkEntry, /permissionsBoundary:/);
-      const pkg = JSON.parse(readFileSync(join(target, 'package.json'), 'utf-8'));
-      assert.match(pkg.scripts['check:iam'], /blocks-iam-check cdk\.out --app "\$APP_ID"/);
-      assert.match(result.stdout, /no UI: the API runs at http:\/\/localhost:3001/);
-      assert.match(result.stdout, /set APP_ID/);
-      assert.match(result.stdout, /"stackId" in \.blocks\/config\.json/);
-      assert.notStrictEqual(JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8')).stackId, undefined);
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('--template platform with APP_ID set pins the app\'s bootstrap qualifier and toolkit stack in cdk.json, and its stackId', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-id-'));
-    const target = join(tmpDir, 'my-app');
-    try {
-      const result = run([target, '--template', 'platform', '--skip-install', '-y'], undefined, { APP_ID: 'orders' });
-      assert.strictEqual(result.exitCode, 0, result.stderr);
-      const cdkJson = JSON.parse(readFileSync(join(target, 'cdk.json'), 'utf-8'));
-      assert.strictEqual(cdkJson.context['@aws-cdk/core:bootstrapQualifier'], 'orders');
-      assert.strictEqual(cdkJson.toolkitStackName, 'CDKToolkit-orders');
-      // The stackId is the app id, so Hosting's secret()/config() values live under blocks/orders/.
-      const blocksConfig = JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8'));
-      assert.strictEqual(blocksConfig.stackId, 'orders');
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('--template platform with a reserved APP_ID treats it as invalid and says why', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-platform-reserved-'));
-    const target = join(tmpDir, 'my-app');
-    try {
-      const result = run([target, '--template', 'platform', '--skip-install', '-y'], undefined, { APP_ID: 'cdk' });
-      assert.strictEqual(result.exitCode, 0, result.stderr);
-      assert.match(result.stdout, /APP_ID "cdk" is reserved/);
-      const cdkJson = JSON.parse(readFileSync(join(target, 'cdk.json'), 'utf-8'));
-      assert.strictEqual(cdkJson.context?.['@aws-cdk/core:bootstrapQualifier'], undefined);
-      assert.notStrictEqual(JSON.parse(readFileSync(join(target, '.blocks', 'config.json'), 'utf-8')).stackId, 'cdk');
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('the reserved app ids match @aws-blocks/core\'s', () => {
-    const core = readFileSync(join(__dirname, '../../core/src/cdk/app-isolation-rules.ts'), 'utf-8');
-    const keys = (name: string) => {
-      const start = core.indexOf(`export const ${name}`);
-      const block = core.slice(start, core.indexOf('\n};', start));
-      return [...block.matchAll(/^\t([a-z0-9]+):/gm)].map((m) => m[1]).sort();
-    };
-    assert.deepStrictEqual([...RESERVED_APP_IDS].sort(), keys('RESERVED_APP_IDS'));
-    assert.deepStrictEqual([...RESERVED_APP_ID_PREFIXES].sort(), keys('RESERVED_APP_ID_PREFIXES'));
-    assert.match(appIdProblem('awsapp') ?? '', /starts with "aws"/);
-    assert.strictEqual(appIdProblem('orders'), undefined);
-  });
-
-  it('a template without AGENTS.template.md gets only the shared AGENTS.md', () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-agents-'));
-    const target = join(tmpDir, 'my-app');
-    try {
-      assert.strictEqual(run([target, '--template', 'api-only', '--skip-install', '-y']).exitCode, 0);
-      assert.doesNotMatch(readFileSync(join(target, 'AGENTS.md'), 'utf-8'), /## Platform rules/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
