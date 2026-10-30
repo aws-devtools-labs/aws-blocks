@@ -25,6 +25,7 @@ import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
+import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -278,6 +279,8 @@ databaseTests(() => api);
 
 // DSQL Database tests (separate file)
 dsqlTests(() => api);
+
+databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)
 appSettingTests(() => api);
