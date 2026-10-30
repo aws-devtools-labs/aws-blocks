@@ -30,6 +30,7 @@ let backendPath: string;
 let earlyReadBackendPath: string;
 let throwingBackendPath: string;
 let computeBackendPath: string;
+let containerBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -64,6 +65,23 @@ before(() => {
 			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
 			"export const reports = new ApiNamespace(scope, 'reportsApi', () => ({ async build() { return 'ok'; } }), { compute: reportsCompute });\n" +
 			"export const reportsJob = new AsyncJob(scope, 'reports-job', { compute: reportsCompute, handler: async () => {} });\n",
+	);
+	// A `render` namespace (constructed as 'renderApi') and an AsyncJob on one
+	// container `Compute`, a `preview` namespace on a second, and a container that
+	// only runs a job.
+	containerBackendPath = join(tmpDir, 'backend-container.mjs');
+	writeFileSync(
+		containerBackendPath,
+		"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 1, memory: 2048 } });\n" +
+			"const batchCompute = new Compute(scope, 'batch', { type: 'container' });\n" +
+			"const previewCompute = new Compute(scope, 'preview', { type: 'container' });\n" +
+			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
+			"export const render = new ApiNamespace(scope, 'renderApi', () => ({ async build() { return 'ok'; } }), { compute: renderCompute });\n" +
+			"export const preview = new ApiNamespace(scope, 'preview', () => ({ async show() { return 'ok'; } }), { compute: previewCompute });\n" +
+			"export const renderJob = new AsyncJob(scope, 'render-job', { compute: renderCompute, handler: async () => {} });\n" +
+			"export const batchJob = new AsyncJob(scope, 'batch-job', { compute: batchCompute, handler: async () => {} });\n",
 	);
 });
 
@@ -485,14 +503,175 @@ describe('ApiNamespace compute option', () => {
 	});
 });
 
+// A namespace on a container `Compute`: the gateway reaches the container's tasks
+// through a VPC link to an internal load balancer the compute provisions.
+describe('ApiNamespace on a container compute', () => {
+	type Resource = { Type: string; Properties: Record<string, any>; DependsOn?: string[] };
+	type Resources = Record<string, Resource>;
+	const ofType = (resources: Resources, type: string) =>
+		Object.entries(resources).filter(([, r]) => r.Type === type);
+	const one = (resources: Resources, type: string) => {
+		const found = ofType(resources, type);
+		assert.strictEqual(found.length, 1, `one ${type}, got ${found.length}`);
+		return found[0];
+	};
+
+	let resources: Resources;
+	before(async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ContainerApiStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		resources = Template.fromStack(stack).toJSON().Resources as Resources;
+	});
+
+	/** The target group (logical id) of the container compute whose construct path contains `compute`. */
+	const targetGroupOf = (compute: string) => {
+		const [id] = ofType(resources, 'AWS::ElasticLoadBalancingV2::TargetGroup').find(([tgId]) =>
+			tgId.toLowerCase().includes(`${compute}backing`),
+		) ?? [];
+		assert.ok(id, `a target group for ${compute}`);
+		return id;
+	};
+
+	test('one internal load balancer and one listener; 404 for paths no container serves', () => {
+		const [lbId, lb] = one(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
+		assert.strictEqual(lb.Properties.Scheme, 'internal');
+		assert.strictEqual(lb.Properties.Type, 'application');
+		const [, listener] = one(resources, 'AWS::ElasticLoadBalancingV2::Listener');
+		assert.deepStrictEqual(listener.Properties.LoadBalancerArn, { Ref: lbId });
+		assert.strictEqual(listener.Properties.Protocol, 'HTTP');
+		assert.strictEqual(listener.Properties.Port, 10_000);
+		assert.strictEqual(listener.Properties.DefaultActions[0].Type, 'fixed-response');
+		assert.strictEqual(listener.Properties.DefaultActions[0].FixedResponseConfig.StatusCode, '404');
+		// The two API containers get a target group each; the job-only one none.
+		assert.strictEqual(ofType(resources, 'AWS::ElasticLoadBalancingV2::TargetGroup').length, 2);
+	});
+
+	test('each namespace path forwards to its own compute', () => {
+		const [listenerId] = one(resources, 'AWS::ElasticLoadBalancingV2::Listener');
+		const rules = ofType(resources, 'AWS::ElasticLoadBalancingV2::ListenerRule').map(([, r]) => r.Properties);
+		const forwards = Object.fromEntries(
+			rules.map((r) => {
+				assert.deepStrictEqual(r.ListenerArn, { Ref: listenerId });
+				return [r.Conditions[0].PathPatternConfig.Values.join(','), r.Actions[0].TargetGroupArn.Ref];
+			}),
+		);
+		assert.deepStrictEqual(forwards, {
+			'/aws-blocks/api/render': targetGroupOf('render'),
+			'/aws-blocks/api/preview': targetGroupOf('preview'),
+		});
+		assert.strictEqual(new Set(rules.map((r) => r.Priority)).size, 2, 'distinct priorities');
+	});
+
+	test('target groups: API port 8080, health-checked on readiness port 8081', () => {
+		for (const compute of ['render', 'preview']) {
+			const tg = resources[targetGroupOf(compute)].Properties;
+			assert.strictEqual(tg.Port, 8080);
+			assert.strictEqual(tg.TargetType, 'ip');
+			assert.strictEqual(tg.HealthCheckPort, '8081');
+			assert.strictEqual(tg.HealthCheckPath, '/');
+			// Past the longest call a front door allows (60 s), so a deploy or scale-in never cuts one short.
+			const attributes = Object.fromEntries(tg.TargetGroupAttributes.map((a: { Key: string; Value: string }) => [a.Key, a.Value]));
+			assert.strictEqual(attributes['deregistration_delay.timeout_seconds'], '65');
+		}
+		const services = ofType(resources, 'AWS::ECS::Service');
+		const withLb = services.filter(([, s]) => s.Properties.LoadBalancers.length > 0);
+		assert.strictEqual(withLb.length, 2, 'the two API services are load balanced');
+		// The job-only one says so explicitly, so a compute that stops serving API traffic detaches its target group.
+		const jobOnly = services.find(([id]) => id.toLowerCase().includes('batchbacking'));
+		assert.ok(jobOnly);
+		assert.deepStrictEqual(jobOnly[1].Properties.LoadBalancers, []);
+		const render = withLb.find(([id]) => id.toLowerCase().includes('renderbacking'));
+		assert.ok(render);
+		assert.deepStrictEqual(render[1].Properties.LoadBalancers, [
+			{ ContainerName: 'Backend', ContainerPort: 8080, TargetGroupArn: { Ref: targetGroupOf('render') } },
+		]);
+		assert.strictEqual(render[1].Properties.HealthCheckGracePeriodSeconds, 60);
+	});
+
+	test('/aws-blocks/api/render proxies to the load balancer through a VPC link', () => {
+		const [lbId] = one(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
+		const [linkId] = one(resources, 'AWS::ApiGatewayV2::VpcLink');
+		const parts = ofType(resources, 'AWS::ApiGateway::Resource');
+		const renderPart = parts.find(([, r]) => r.Properties.PathPart === 'render');
+		assert.ok(renderPart, 'routed by the export name');
+		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'renderApi'), 'not the constructor name');
+		const methods = ofType(resources, 'AWS::ApiGateway::Method').filter(
+			([, m]) => m.Properties.ResourceId?.Ref === renderPart[0],
+		);
+		assert.strictEqual(methods.length, 1);
+		const integration = methods[0][1].Properties.Integration;
+		assert.strictEqual(methods[0][1].Properties.HttpMethod, 'ANY');
+		assert.strictEqual(integration.Type, 'HTTP_PROXY');
+		assert.strictEqual(integration.ConnectionType, 'VPC_LINK');
+		assert.deepStrictEqual(integration.ConnectionId, { Ref: linkId });
+		assert.deepStrictEqual(integration.IntegrationTarget, { Ref: lbId }, 'the load balancer ARN, not a listener ARN');
+		assert.deepStrictEqual(integration.Uri, {
+			'Fn::Join': ['', ['http://', { 'Fn::GetAtt': [lbId, 'DNSName'] }, ':10000/aws-blocks/api/render']],
+		});
+		assert.deepStrictEqual(integration.RequestParameters, {
+			'integration.request.header.x-blocks-forwarded-host': 'context.domainName',
+			'integration.request.header.x-blocks-forwarded-stage': 'context.stage',
+		});
+	});
+
+	test('the API port is open to the load balancer only, on a security group of its own', () => {
+		const [lbId, lb] = one(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
+		const lbSg = lb.Properties.SecurityGroups[0]['Fn::GetAtt'][0];
+		const ingress = ofType(resources, 'AWS::EC2::SecurityGroupIngress').map(([, r]) => r.Properties);
+		const into = (sg: string) => ingress.filter((r) => r.GroupId?.['Fn::GetAtt']?.[0] === sg);
+		const fromSg = (r: Record<string, any>) => r.SourceSecurityGroupId?.['Fn::GetAtt']?.[0];
+
+		// Tasks: 8080 + 8081 from the load balancer, on the API group only.
+		const [, service] = ofType(resources, 'AWS::ECS::Service').find(([id]) => id.toLowerCase().includes('renderbacking')) ?? [];
+		const serviceSgs: string[] = service?.Properties.NetworkConfiguration.AwsvpcConfiguration.SecurityGroups.map(
+			(g: Record<string, string[]>) => g['Fn::GetAtt'][0],
+		);
+		assert.strictEqual(serviceSgs.length, 2, 'shared compute group + the API group');
+		const apiSg = serviceSgs.find((g) => /renderbackingApiSg/.test(g));
+		const sharedSg = serviceSgs.find((g) => /BlocksLambdaSg/.test(g));
+		assert.ok(apiSg && sharedSg, `API + shared compute groups, got ${serviceSgs.join(', ')}`);
+		assert.deepStrictEqual(
+			into(apiSg).map((r) => [r.FromPort, r.ToPort, fromSg(r)]),
+			[[8080, 8081, lbSg]],
+		);
+		assert.deepStrictEqual(into(sharedSg), [], 'the shared compute group admits nothing');
+		// Nor inline: CDK writes a CIDR peer's rule into the group itself, not as a standalone resource.
+		for (const sg of [apiSg, sharedSg, lbSg]) {
+			assert.deepStrictEqual(resources[sg].Properties.SecurityGroupIngress ?? [], [], `${sg} has no inline ingress`);
+		}
+
+		// Load balancer: the listener port range from the VPC link only, in one rule.
+		const [linkSgId] = ofType(resources, 'AWS::EC2::SecurityGroup').find(([id]) => /ApiVpcLinkSg/.test(id)) ?? [];
+		assert.ok(linkSgId, 'the VPC link has its own security group');
+		assert.deepStrictEqual(
+			into(lbSg).map((r) => [r.FromPort, r.ToPort, fromSg(r)]),
+			[[10_000, 10_999, linkSgId]],
+		);
+		void lbId;
+	});
+
+	test('a Lambda-only app gets no VPC link or load balancer', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'LambdaOnlyStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGatewayV2::VpcLink', 0);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+	});
+});
+
 // Compile-time only (never called): `ApiNamespaceOptions.compute` takes a
-// serverless `Compute` and rejects other compute types.
+// serverless or a container `Compute`.
 function _apiNamespaceComputeTypeChecks(scope: InstanceType<typeof Scope>) {
 	const serverless = new Compute(scope, 'serverless', { type: 'serverless' });
 	new ApiNamespace(scope, 'ok', () => ({}), { compute: serverless });
 
 	const container = new Compute(scope, 'container', { type: 'container' });
-	// @ts-expect-error — only a serverless compute can serve an API namespace
-	new ApiNamespace(scope, 'notYet', () => ({}), { compute: container });
+	new ApiNamespace(scope, 'onContainer', () => ({}), { compute: container });
 }
 void _apiNamespaceComputeTypeChecks;

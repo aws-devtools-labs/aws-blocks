@@ -29,7 +29,12 @@ import { join } from 'node:path';
 import type { ContainerScaling, ScalingSignal, ScopeParent } from '@aws-blocks/core';
 import { getConfigDeployment, getConfigLocation } from '@aws-blocks/core/cdk';
 import {
+	API_LISTENER_PORTS,
+	CONTAINER_HTTP_PORT,
+	CONTAINER_READINESS_PORT,
+	CONTAINER_SERVES_API_ENV,
 	ComputeBase,
+	type ComputeApiIngress,
 	getBlocksRoot,
 	getOrCreateOnRoot,
 	getOrCreateVpc,
@@ -40,14 +45,16 @@ import {
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
-import type * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { bundleContainerAsset } from './bundle.js';
 import {
+	buildContainerApiWidgets,
 	buildContainerHealthWidgets,
 	buildContainerLoggingWidgets,
 	buildContainerTracingWidgets,
@@ -70,8 +77,42 @@ const CPU_UNITS_PER_VCPU = 1024;
 const DEFAULT_VCPU = 0.5;
 const DEFAULT_MEMORY_MB = 1024;
 
-/** Container port the runtime's health server listens on (worker mode still exposes it). */
-const CONTAINER_PORT = 8080;
+/**
+ * Container port the runtime's HTTP server listens on: the backend's API when the
+ * compute hosts an API namespace, a health check otherwise (see `runContainer`).
+ */
+const CONTAINER_PORT = CONTAINER_HTTP_PORT;
+
+/** Container port the API server reports readiness on — the load balancer's health check. */
+const READINESS_PORT = CONTAINER_READINESS_PORT;
+
+/**
+ * Port of the listener every container compute's API namespaces share on the
+ * backend's load balancer: the first port of core's listener range (the rest is
+ * reserved for listeners a single compute owns).
+ */
+const RPC_LISTENER_PORT = API_LISTENER_PORTS.min;
+
+/** Listener rule priorities ALB accepts. */
+const MAX_RULE_PRIORITY = 50_000;
+
+/** Listener rules an Application Load Balancer allows by default (an adjustable quota). */
+const DEFAULT_RULES_PER_LOAD_BALANCER = 100;
+
+/** Longest path pattern a listener rule condition accepts. */
+const MAX_PATH_PATTERN_LENGTH = 128;
+
+/**
+ * How long the load balancer lets a stopping task's in-flight requests finish
+ * before ECS sends it SIGTERM: past the longest call a front door allows (a
+ * CloudFront VPC origin's 60 s), so a deploy or scale-in never cuts one short.
+ */
+const API_DEREGISTRATION_DELAY = cdk.Duration.seconds(65);
+
+/** Per-root registry keys for the shared API load balancer, its RPC listener, and the rule priorities taken on it. */
+const API_LOAD_BALANCER: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_LOAD_BALANCER');
+const API_RPC_LISTENER: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_RPC_LISTENER');
+const API_RULE_PRIORITIES: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_RULE_PRIORITIES');
 
 /**
  * Default container image when the workload didn't set `image`. A stock, public,
@@ -89,6 +130,15 @@ const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
 /** SQS queue URLs an AsyncJob assigned to a container registers here so the compute's
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
 const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
+
+/** FNV-1a hash of a string — stable across processes and Node versions. */
+function hashPath(value: string): number {
+	let hash = 0x811c9dc5;
+	for (const char of value) {
+		hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
+	}
+	return hash;
+}
 
 export class ContainerCompute extends ComputeBase {
 	/**
@@ -113,6 +163,14 @@ export class ContainerCompute extends ComputeBase {
 	private readonly scalingConfig?: ContainerScaling;
 	/** Its own container so setEnv can add env vars after construction. */
 	private readonly container?: ecs.ContainerDefinition;
+	/** The API ingress, provisioned on the first {@link apiIngress} call. */
+	private apiIngressInfo?: {
+		readonly ingress: ComputeApiIngress;
+		readonly loadBalancer: elbv2.IApplicationLoadBalancer;
+		readonly targetGroup: elbv2.ApplicationTargetGroup;
+		/** The namespace paths routed here — the target group serves traffic once there is one. */
+		readonly routedPaths: string[];
+	};
 
 	constructor(scope: ScopeParent, id: string, options?: ContainerComputeProps) {
 		super(id, { parent: scope });
@@ -245,6 +303,202 @@ export class ContainerCompute extends ComputeBase {
 			maxHealthyPercent: 200,
 			circuitBreaker: { rollback: true },
 		});
+		// Always render the service's load balancers — none until the compute serves
+		// API traffic (apiIngress replaces this). CloudFormation keeps an attached
+		// target group when the property is simply absent, so a compute that stops
+		// serving API traffic must say `[]` to detach it.
+		(this.service.node.defaultChild as ecs.CfnService).addPropertyOverride('LoadBalancers', []);
+	}
+
+	/**
+	 * Serve this compute's API namespaces through an internal Application Load
+	 * Balancer: the gateway calls this (once the backend is imported) for a
+	 * container that hosts an API namespace, and the load balancer, listener and
+	 * target group are provisioned then — a container that only runs jobs gets
+	 * none.
+	 *
+	 * - One internal load balancer per backend, in the compute subnets, shared by
+	 *   every container that serves API traffic, with one listener for all their
+	 *   API namespaces: a rule per namespace path (added through the ingress's
+	 *   `routePath`) forwards to its compute, anything else gets a 404.
+	 * - A target group per compute on the task's API port (8080), health-checked
+	 *   on its readiness port (8081), which reports not-ready while a task drains.
+	 * - A security group of its own on the tasks that admits only the load
+	 *   balancer, so the shared compute security group stays closed to inbound
+	 *   traffic.
+	 *
+	 * Returns `undefined` when the compute isn't provisioned (no backend module
+	 * discoverable, as in an isolated unit test).
+	 *
+	 * @internal
+	 */
+	override apiIngress(): ComputeApiIngress | undefined {
+		if (!this.apiIngressInfo) {
+			const vpcContext = getVpcContext(this);
+			if (!this.service || !this.container || !vpcContext) return undefined;
+			// The load balancer forwards only to running tasks, and nothing starts one
+			// on a request: with none, every call would get a 503.
+			if (this.scalingConfig?.minInstances === 0) {
+				throw new Error(
+					`Compute '${this.node.id}' serves API namespaces, so it needs a running task: set scaling.minInstances ` +
+						'to 1 or more (a container compute does not start a task for an incoming request).',
+				);
+			}
+			this.apiIngressInfo = this.provisionApiIngress(this.service, this.container, vpcContext.vpc, vpcContext.computeSubnets);
+		}
+		return this.apiIngressInfo.ingress;
+	}
+
+	private provisionApiIngress(
+		service: ecs.FargateService,
+		container: ecs.ContainerDefinition,
+		vpc: ec2.IVpc,
+		subnets: ec2.SubnetSelection,
+	): NonNullable<ContainerCompute['apiIngressInfo']> {
+		const loadBalancer = getOrCreateOnRoot(this, API_LOAD_BALANCER, (root) => {
+			const securityGroup = new ec2.SecurityGroup(root, 'BlocksApiLoadBalancerSg', {
+				vpc,
+				description: 'Blocks container API load balancer',
+				allowAllOutbound: false,
+			});
+			return new elbv2.ApplicationLoadBalancer(root, 'BlocksApiLoadBalancer', {
+				vpc,
+				internetFacing: false,
+				vpcSubnets: subnets,
+				securityGroup,
+			});
+		});
+		// One listener for every container's API namespaces; a path rule per
+		// namespace forwards to its compute. Anything else — a path no container
+		// serves — gets a 404 from the load balancer itself.
+		const listener = getOrCreateOnRoot(this, API_RPC_LISTENER, () =>
+			loadBalancer.addListener('Rpc', {
+				port: RPC_LISTENER_PORT,
+				protocol: elbv2.ApplicationProtocol.HTTP,
+				open: false,
+				defaultAction: elbv2.ListenerAction.fixedResponse(404, {
+					contentType: 'application/json',
+					messageBody: JSON.stringify({ error: 'Not Found' }),
+				}),
+			}),
+		);
+
+		container.addPortMappings({ containerPort: READINESS_PORT });
+		// Tells the image entry to serve the backend's API (see containerMainEntry).
+		container.addEnvironment(CONTAINER_SERVES_API_ENV, 'true');
+		const targetGroup = new elbv2.ApplicationTargetGroup(this, 'ApiTargets', {
+			vpc,
+			port: CONTAINER_PORT,
+			protocol: elbv2.ApplicationProtocol.HTTP,
+			targetType: elbv2.TargetType.IP,
+			healthCheck: {
+				port: String(READINESS_PORT),
+				path: '/',
+				healthyHttpCodes: '200',
+				interval: cdk.Duration.seconds(10),
+				healthyThresholdCount: 2,
+			},
+			// ECS deregisters a stopping task and lets in-flight requests finish for
+			// this long before it sends SIGTERM (then the container drains for up to
+			// 25 s within ECS's 30 s stop timeout).
+			deregistrationDelay: API_DEREGISTRATION_DELAY,
+		});
+
+		// The tasks' own API security group: only the load balancer reaches the API
+		// and readiness ports. Kept separate from the shared compute security group
+		// (which in-VPC Lambdas also use) so that one admits no inbound traffic.
+		const apiSecurityGroup = new ec2.SecurityGroup(this, 'ApiSg', {
+			vpc,
+			description: 'Blocks container API tasks (load balancer traffic only)',
+			allowAllOutbound: false,
+		});
+		service.connections.addSecurityGroup(apiSecurityGroup);
+		const tasks = new ec2.Connections({ securityGroups: [apiSecurityGroup] });
+		// One rule for the API and readiness ports (adjacent), so each container adds
+		// a single egress rule to the shared load balancer's security group.
+		loadBalancer.connections.allowTo(
+			tasks,
+			ec2.Port.tcpRange(CONTAINER_PORT, READINESS_PORT),
+			'Blocks container API traffic and readiness',
+		);
+
+		// Register the service with the target group at the CloudFormation level.
+		// The L2 route (`listener.addTargets(service)`) would also open the load
+		// balancer to every security group on the service — including the shared
+		// compute group — which the dedicated group above exists to avoid.
+		const cfnService = service.node.defaultChild as ecs.CfnService;
+		// FargateService fixes its network configuration at construction, so the
+		// added group must also be written into it.
+		cfnService.addPropertyOverride(
+			'NetworkConfiguration.AwsvpcConfiguration.SecurityGroups',
+			service.connections.securityGroups.map((group) => group.securityGroupId),
+		);
+		cfnService.addPropertyOverride('LoadBalancers', [
+			{ ContainerName: container.containerName, ContainerPort: CONTAINER_PORT, TargetGroupArn: targetGroup.targetGroupArn },
+		]);
+		cfnService.addPropertyOverride('HealthCheckGracePeriodSeconds', 60);
+
+		const routedPaths: string[] = [];
+		const routePath = (path: string) => {
+			if (path.length > MAX_PATH_PATTERN_LENGTH) {
+				throw new Error(
+					`API path '${path}' is ${path.length} characters; a load balancer rule matches at most ` +
+						`${MAX_PATH_PATTERN_LENGTH}. Shorten the namespace's export name.`,
+				);
+			}
+			// Scoped to the shared listener and named after the path alone
+			// (`/aws-blocks/api/render` → `Route-aws-blocks-api-render`), so moving a
+			// namespace to another container compute updates the rule's target in place
+			// rather than replacing it — a new rule couldn't take the priority the old
+			// one still holds until CloudFormation deletes it.
+			const rule = new elbv2.ApplicationListenerRule(listener, `Route${path.replaceAll('/', '-')}`, {
+				listener,
+				priority: this.allocateRulePriority(path, listener),
+				conditions: [elbv2.ListenerCondition.pathPatterns([path])],
+				action: elbv2.ListenerAction.forward([targetGroup]),
+			});
+			// ECS rejects a target group no listener rule forwards to yet.
+			service.node.addDependency(rule);
+			routedPaths.push(path);
+		};
+
+		return {
+			ingress: { kind: 'load-balancer', loadBalancer, port: RPC_LISTENER_PORT, vpc, subnets, routePath },
+			loadBalancer,
+			targetGroup,
+			routedPaths,
+		};
+	}
+
+	/**
+	 * A listener rule priority for `path`, derived from the path alone, so a
+	 * namespace keeps its rule's priority across deploys whatever namespaces come
+	 * and go (renumbering would update rules in place, and two rules can't hold one
+	 * priority even mid-update). Two paths that hash to the same priority fail
+	 * synth: shifting one to a free priority would make it depend on its neighbours,
+	 * and break a later deploy that removes or adds one. Warns once the shared
+	 * listener passes the load balancer's default rule quota.
+	 */
+	private allocateRulePriority(path: string, listener: elbv2.ApplicationListener): number {
+		const taken = getOrCreateOnRoot(this, API_RULE_PRIORITIES, () => new Map<number, string>());
+		const priority = 1 + (hashPath(path) % MAX_RULE_PRIORITY);
+		const holder = taken.get(priority);
+		if (holder !== undefined) {
+			throw new Error(
+				`API paths '${holder}' and '${path}' map to the same load balancer rule priority (${priority}). ` +
+					'Rename one of the two namespace exports.',
+			);
+		}
+		taken.set(priority, path);
+		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
+			cdk.Annotations.of(listener).addWarningV2(
+				'@aws-blocks/bb-container-compute:api-rule-quota',
+				`More than ${DEFAULT_RULES_PER_LOAD_BALANCER} container API namespaces share one load balancer, over its ` +
+					`default quota of ${DEFAULT_RULES_PER_LOAD_BALANCER} listener rules: request an increase of "Rules per ` +
+					'Application Load Balancer" before deploying.',
+			);
+		}
+		return priority;
 	}
 
 	/**
@@ -285,11 +539,22 @@ export class ContainerCompute extends ComputeBase {
 		});
 
 		// Resolve the strategy: explicit signals, or an inferred default. A compute
-		// that drains queues defaults to queue-depth; otherwise CPU.
+		// that drains queues defaults to queue-depth; otherwise CPU. One that also
+		// serves API traffic tracks CPU (the API load) too, and its queue backlog only
+		// adds capacity: a queue-depth scale-in step would remove tasks the API still
+		// needs whenever the queue is empty. CPU tracking scales it in.
 		const ownedQueues = (this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
+		const servesApi = (this.apiIngressInfo?.routedPaths.length ?? 0) > 0;
 		let signals: ScalingSignal[];
+		let queueScaleIn = true;
 		if (cfg.strategy) {
 			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
+		} else if (ownedQueues.length > 0 && servesApi) {
+			signals = [
+				{ on: 'cpu', targetPercent: 65 },
+				{ on: 'queue-depth', backlogPerInstance: 100 },
+			];
+			queueScaleIn = false;
 		} else if (ownedQueues.length > 0) {
 			signals = [{ on: 'queue-depth', backlogPerInstance: 100 }];
 		} else {
@@ -337,7 +602,7 @@ export class ContainerCompute extends ComputeBase {
 					// exists — leaving tasks pinned at the scaled-out count (full Fargate
 					// cost) long after the queue drains.
 					scalingSteps: [
-						{ upper: 0, change: -1 },
+						...(queueScaleIn ? [{ upper: 0, change: -1 }] : []),
 						{ upper: per, change: 0 },
 						{ lower: per, change: +1 },
 						{ lower: per * 5, change: +3 },
@@ -378,7 +643,13 @@ export class ContainerCompute extends ComputeBase {
 	}
 
 	protected healthWidgets(region: string): IWidget[][] {
-		return buildContainerHealthWidgets(this.service?.serviceName ?? this.fullId, this.getClusterName(), region);
+		const health = buildContainerHealthWidgets(this.service?.serviceName ?? this.fullId, this.getClusterName(), region);
+		// API widgets once a namespace path is routed here (a target group's metrics
+		// need it attached to the load balancer, which its first rule does).
+		const api = this.apiIngressInfo;
+		return api && api.routedPaths.length > 0
+			? [...health, ...buildContainerApiWidgets(api.loadBalancer, api.targetGroup, region)]
+			: health;
 	}
 
 	protected loggingWidgets(region: string): IWidget[][] {

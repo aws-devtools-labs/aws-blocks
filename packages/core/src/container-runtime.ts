@@ -35,9 +35,19 @@
 
 import { createServer } from 'node:http';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
+import { CONTAINER_HTTP_PORT, CONTAINER_READINESS_PORT } from './constants.js';
+import { serveHttp } from './http-server.js';
 
 /** Container port the health server listens on. Matches the CDK port mapping. */
-const HEALTH_PORT = 8080;
+const HEALTH_PORT = CONTAINER_HTTP_PORT;
+
+/**
+ * Ports the API server listens on when the container serves the backend's API:
+ * requests on {@link API_PORT}, readiness on {@link API_READINESS_PORT}. Match the
+ * container compute's port mappings and load balancer target group.
+ */
+const API_PORT = CONTAINER_HTTP_PORT;
+const API_READINESS_PORT = CONTAINER_READINESS_PORT;
 
 /** How long graceful shutdown waits for in-flight workers before exiting. */
 const DRAIN_GRACE_MS = 25_000;
@@ -228,19 +238,49 @@ export async function runJobWorker(
 
 // ── Parent process boot ──────────────────────────────────────────────────────
 
+/** Options for {@link runContainer}. */
+export interface RunContainerOptions {
+	/**
+	 * The imported backend module (the app's `aws-blocks/index.ts`). When given,
+	 * the container serves the backend's API — the same RawRoute and JSON-RPC
+	 * dispatch as the Lambda handler — on port 8080, with readiness on port 8081,
+	 * for the load balancer in front of a container that hosts an API namespace.
+	 * Without it, the container answers a health check on port 8080 only. The
+	 * container compute's image entry passes it only to a compute that serves API
+	 * traffic (the `BLOCKS_CONTAINER_SERVES_API` env var its CDK sets).
+	 */
+	backend?: unknown;
+}
+
 /**
- * Boot the container parent: start a health server and every registered poller,
- * then keep the process alive until SIGTERM/SIGINT, on which it drains gracefully
- * — stop receiving, let in-flight workers finish within {@link DRAIN_GRACE_MS},
- * then exit. Invoked by the co-bundled image entry after config load + backend
- * import (so all pollers are registered).
+ * Boot the container parent: start the HTTP server (the backend's API, or a
+ * health check) and every registered poller, then keep the process alive until
+ * SIGTERM/SIGINT, on which it drains gracefully — stop receiving, let in-flight
+ * requests and workers finish within {@link DRAIN_GRACE_MS}, then exit. Invoked by
+ * the co-bundled image entry after config load + backend import (so all pollers
+ * are registered).
  */
-export async function runContainer(): Promise<void> {
-	const server = createServer((req, res) => {
-		res.writeHead(200, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({ status: 'ok', path: req.url }));
-	});
-	server.listen(HEALTH_PORT);
+export async function runContainer(options: RunContainerOptions = {}): Promise<void> {
+	// The task runs in private subnets and only its load balancer's security group
+	// is admitted, so the API server binds every interface for the load balancer.
+	const api =
+		options.backend === undefined
+			? undefined
+			: await serveHttp(options.backend, {
+					host: '0.0.0.0',
+					port: API_PORT,
+					healthPort: API_READINESS_PORT,
+					drainTimeoutMs: DRAIN_GRACE_MS,
+					// Every path to the listener goes through a front door that
+					// overwrites or strips the stamped host/stage headers.
+					trustForwardedHeaders: true,
+				});
+	const health = api
+		? undefined
+		: createServer((req, res) => {
+				res.writeHead(200, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ status: 'ok', path: req.url }));
+			}).listen(HEALTH_PORT);
 
 	const handles: ContainerPollerHandle[] = [];
 	for (const starter of POLLER_STARTERS) {
@@ -252,7 +292,7 @@ export async function runContainer(): Promise<void> {
 	}
 
 	console.log(
-		`[Blocks container] parent up (compute=${getContainerComputeId() ?? 'unknown'}, pollers=${handles.length})`,
+		`[Blocks container] parent up (compute=${getContainerComputeId() ?? 'unknown'}, pollers=${handles.length}, api=${api ? 'on' : 'off'})`,
 	);
 
 	await new Promise<void>((resolve) => {
@@ -263,13 +303,15 @@ export async function runContainer(): Promise<void> {
 			console.log(`[Blocks container] ${signal} received — draining (grace ${DRAIN_GRACE_MS}ms)`);
 			// Stop pulling new work immediately.
 			await Promise.allSettled(handles.map((h) => h.stop()));
-			// Let in-flight workers finish within the grace window.
+			// Let in-flight workers and API requests finish within the grace window.
+			// Closing the API server reports not-ready at once, so the load balancer
+			// stops routing here while requests drain.
 			const drains = handles.filter((h) => h.drain).map((h) => h.drain!());
-			await Promise.race([
-				Promise.allSettled(drains),
-				new Promise((r) => setTimeout(r, DRAIN_GRACE_MS)),
+			await Promise.allSettled([
+				api?.close(),
+				Promise.race([Promise.allSettled(drains), new Promise((r) => setTimeout(r, DRAIN_GRACE_MS))]),
 			]);
-			server.close();
+			health?.close();
 			resolve();
 		};
 		process.once('SIGTERM', () => void shutdown('SIGTERM'));

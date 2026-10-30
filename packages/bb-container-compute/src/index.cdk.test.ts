@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { containerMainEntry } from './bundle.js';
 import { ContainerCompute } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -287,5 +288,213 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 				Match.objectLike({ Image: 'public.ecr.aws/example/custom-node:24' }),
 			]),
 		});
+	});
+});
+
+describe('ContainerCompute — API ingress', () => {
+	async function stackWith(ids: string[], stackId = `ApiIngress${ids.join('')}`) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, stackId, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const computes = ids.map((id) => new ContainerCompute(stack as never, id));
+		return { stack: stack as unknown as cdk.Stack, computes };
+	}
+
+	test('provisions nothing for a container that serves no API', async () => {
+		const { stack, computes } = await stackWith(['worker']);
+		computes[0].finalize();
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
+	});
+
+	test('returns the same ingress on every call', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const first = computes[0].apiIngress();
+		assert.ok(first && first.kind === 'load-balancer');
+		assert.strictEqual(computes[0].apiIngress(), first);
+		Template.fromStack(stack).resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+	});
+
+	test('shares one load balancer and one listener; a rule per routed path', async () => {
+		const { stack, computes } = await stackWith(['render', 'preview']);
+		const [render, preview] = computes.map((c) => c.apiIngress());
+		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
+		assert.strictEqual(render.loadBalancer, preview.loadBalancer);
+		assert.strictEqual(render.port, 10_000);
+		assert.strictEqual(preview.port, 10_000);
+		render.routePath('/aws-blocks/api/render');
+		preview.routePath('/aws-blocks/api/preview');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+			Port: 10_000,
+			DefaultActions: [Match.objectLike({ Type: 'fixed-response', FixedResponseConfig: Match.objectLike({ StatusCode: '404' }) })],
+		});
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+	});
+
+	test('a rule keeps its priority whatever other paths are routed, in any order', async () => {
+		const prioritiesFor = async (paths: string[]) => {
+			// Same stack id: a compute's fullId (and so its rules' ids) includes the stack name.
+			const { stack, computes } = await stackWith(['render'], 'ApiIngressPriorities');
+			const ingress = computes[0].apiIngress();
+			assert.ok(ingress?.kind === 'load-balancer');
+			for (const path of paths) ingress.routePath(path);
+			const rules = Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule');
+			return Object.fromEntries(
+				Object.values(rules).map((r) => [r.Properties.Conditions[0].PathPatternConfig.Values[0], r.Properties.Priority]),
+			);
+		};
+		const both = await prioritiesFor(['/aws-blocks/api/render', '/aws-blocks/api/preview']);
+		const reversed = await prioritiesFor(['/aws-blocks/api/preview', '/aws-blocks/api/render']);
+		const alone = await prioritiesFor(['/aws-blocks/api/render']);
+		assert.notStrictEqual(both['/aws-blocks/api/render'], both['/aws-blocks/api/preview']);
+		assert.deepStrictEqual(reversed, both);
+		assert.strictEqual(alone['/aws-blocks/api/render'], both['/aws-blocks/api/render']);
+		for (const priority of Object.values(both) as number[]) assert.ok(priority >= 1 && priority <= 50_000);
+	});
+
+	test('only a compute that serves API traffic tells its image entry to serve the API', async () => {
+		const { stack, computes } = await stackWith(['render', 'worker']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/aws-blocks/api/render');
+		const envOf = (compute: string) => {
+			const [, taskDef] = Object.entries(Template.fromStack(stack).findResources('AWS::ECS::TaskDefinition')).find(([id]) =>
+				id.includes(compute),
+			) ?? [];
+			const env: Array<{ Name: string; Value: unknown }> = (taskDef as any).Properties.ContainerDefinitions[0].Environment;
+			return env.find((e) => e.Name === 'BLOCKS_CONTAINER_SERVES_API')?.Value;
+		};
+		assert.strictEqual(envOf('render'), 'true');
+		assert.strictEqual(envOf('worker'), undefined);
+	});
+
+	test("a rule's id follows its path, not the compute serving it", async () => {
+		const ruleIdOn = async (compute: string) => {
+			const { stack, computes } = await stackWith(['render', 'preview'], 'ApiIngressMove');
+			const ingress = computes.find((c) => c.node.id === compute)?.apiIngress();
+			assert.ok(ingress?.kind === 'load-balancer');
+			ingress.routePath('/aws-blocks/api/render');
+			return Object.keys(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+		};
+		// Moving a namespace between containers updates its rule in place, never replaces it.
+		assert.deepStrictEqual(await ruleIdOn('preview'), await ruleIdOn('render'));
+	});
+
+	test('two paths that map to one rule priority fail synth, naming both', async () => {
+		const { computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/aws-blocks/api/orders428');
+		assert.throws(
+			() => ingress.routePath('/aws-blocks/api/orders842'),
+			/'\/aws-blocks\/api\/orders428' and '\/aws-blocks\/api\/orders842' map to the same load balancer rule priority/,
+		);
+	});
+
+	test('a path longer than a rule can match fails synth', async () => {
+		const { computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		const path = `/aws-blocks/api/${'n'.repeat(113)}`;
+		assert.throws(() => ingress.routePath(path), /129 characters; a load balancer rule matches at most 128/);
+	});
+
+	test('warns once more namespaces share the load balancer than its default rule quota', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		let routed = 0;
+		for (let i = 0; routed < 101; i++) {
+			try {
+				ingress.routePath(`/aws-blocks/api/ns${i}`);
+				routed++;
+			} catch {
+				// A name that collides with an earlier one's priority: skip it.
+			}
+		}
+		const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('More than 100 container API namespaces'));
+		assert.strictEqual(warnings.length, 1);
+	});
+
+	test('a compute that serves API traffic needs a running task', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ApiIngressMinZero', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 2 } });
+		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
+	});
+
+	test('a compute that serves API traffic and drains a queue scales on CPU, and the queue only adds tasks', async () => {
+		const scalingOf = async (servesApi: boolean) => {
+			const app = new cdk.App();
+			const stack = await BlocksStack.create(app, `ApiIngressScaling${servesApi}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: BlocksPresets.production,
+				defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+			} as never);
+			const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 1, maxInstances: 4 } });
+			const sqs = await import('aws-cdk-lib/aws-sqs');
+			compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+			if (servesApi) {
+				const ingress = compute.apiIngress();
+				assert.ok(ingress?.kind === 'load-balancer');
+				ingress.routePath('/aws-blocks/api/render');
+			}
+			compute.finalize();
+			const policies = Object.values(Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ApplicationAutoScaling::ScalingPolicy'));
+			const steps = policies
+				.filter((p) => p.Properties.PolicyType === 'StepScaling')
+				.flatMap((p) => p.Properties.StepScalingPolicyConfiguration.StepAdjustments.map((s: { ScalingAdjustment: number }) => s.ScalingAdjustment));
+			const cpu = policies.filter(
+				(p) => p.Properties.TargetTrackingScalingPolicyConfiguration?.PredefinedMetricSpecification?.PredefinedMetricType === 'ECSServiceAverageCPUUtilization',
+			);
+			return { cpu: cpu.length, scalesIn: steps.some((s: number) => s < 0), scalesOut: steps.some((s: number) => s > 0) };
+		};
+		assert.deepStrictEqual(await scalingOf(true), { cpu: 1, scalesIn: false, scalesOut: true });
+		assert.deepStrictEqual(await scalingOf(false), { cpu: 0, scalesIn: true, scalesOut: true }, 'a job-only compute keeps queue-depth scaling');
+	});
+
+	test('the service waits for the rule that forwards to it', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/aws-blocks/api/render');
+		const template = Template.fromStack(stack).toJSON();
+		const [ruleId] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ElasticLoadBalancingV2::ListenerRule') ?? [];
+		const [, service] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ECS::Service') ?? [];
+		assert.ok(ruleId && (service as any).DependsOn.includes(ruleId), 'service depends on its listener rule');
+	});
+
+	test('adds API widgets to the compute dashboard section', async () => {
+		const { computes } = await stackWith(['render']);
+		const titles = (compute: ContainerCompute) =>
+			JSON.stringify(compute.dashboardSection('us-east-1')).match(/API (Requests|Latency|Task Health)[^"]*/g) ?? [];
+		assert.deepStrictEqual(titles(computes[0]), []);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		assert.deepStrictEqual(titles(computes[0]), [], 'no API widgets before a path is routed');
+		ingress.routePath('/aws-blocks/api/render');
+		assert.deepStrictEqual(titles(computes[0]).sort(), ['API Latency (p99)', 'API Requests and 5xx Errors', 'API Task Health']);
+	});
+});
+
+describe('ContainerCompute — image entry', () => {
+	test('serves the backend\'s API only when the compute says it serves API traffic', () => {
+		const entry = containerMainEntry('/app/backend.js');
+		assert.match(entry, /const backend = await import\("\/app\/backend\.js"\);/);
+		assert.match(entry, /await runContainer\(process\.env\.BLOCKS_CONTAINER_SERVES_API === 'true' \? \{ backend \} : \{\}\);/);
 	});
 });

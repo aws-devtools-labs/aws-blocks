@@ -307,7 +307,7 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * Call once, after the backend module has imported and every compute exists.
  * The gateway's catch-all resources front the default compute's function (its
  * `apiHandler()`), and every other compute's namespaces are routed to that
- * compute's function — by export name, read from `backendModule` (see
+ * compute — its function, or a container's load balancer — by export name, read from `backendModule` (see
  * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
  * its logical IDs match the per-compute gateway it replaced — existing
  * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so

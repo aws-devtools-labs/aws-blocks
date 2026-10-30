@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
  * the asset + command override are wired, and `bootstrap.mjs` for the fetch.
  * ─────────────────────────────────────────────────────────────────────────────
  */
+import { CONTAINER_SERVES_API_ENV } from '@aws-blocks/core/cdk/internal';
 import { buildSync } from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,33 @@ const PKG_ROOT = join(__dirname, '..');
  * real path instead of throwing under CommonJS output.
  */
 const CJS_BANNER = 'const importMetaUrl = require("url").pathToFileURL(__filename).href;';
+
+/**
+ * Source of the container's parent entry (`main.js`): loads config, points the
+ * runtime at the worker bundle it spawns per job, imports the backend (constructs
+ * and registers every BB and its pollers), then runs the parent loop. Wrapped in an
+ * async IIFE (CJS has no TLA).
+ *
+ * The backend module is also what the container serves its API from — exactly as
+ * the Lambda handler does — but only on a compute that serves API traffic (its
+ * CDK sets {@link CONTAINER_SERVES_API_ENV}); a compute that only runs jobs keeps
+ * a plain health check.
+ *
+ * @internal Exported for testing.
+ */
+export function containerMainEntry(backendModulePath: string): string {
+	return [
+		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
+		'(async () => {',
+		'  await loadConfigToProcessEnv();',
+		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
+		// bootstrap.mjs writes both bundles here before exec, so the path is stable.
+		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
+		`  const backend = await import(${JSON.stringify(backendModulePath)});`,
+		`  await runContainer(process.env.${CONTAINER_SERVES_API_ENV} === 'true' ? { backend } : {});`,
+		'})();',
+	].join('\n');
+}
 
 /**
  * Co-bundle the app backend + `runContainer()` into a self-contained S3 asset
@@ -73,24 +101,8 @@ export function bundleContainerAsset(backendModulePath: string, outDir: string):
 		define: { 'import.meta.url': 'importMetaUrl' },
 	} satisfies Partial<Parameters<typeof buildSync>[0]>;
 
-	// ── Parent entry (main.js) ──────────────────────────────────────────────
-	// Loads config, points the runtime at the worker bundle it will spawn per
-	// job, imports the backend (constructs + registers every BB and its pollers),
-	// then runs the parent loop. Wrapped in an async IIFE (CJS has no TLA).
-	const mainEntry = [
-		"import { loadConfigToProcessEnv, runContainer } from '@aws-blocks/core';",
-		'(async () => {',
-		'  await loadConfigToProcessEnv();',
-		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
-		// bootstrap.mjs writes both bundles here before exec, so the path is stable.
-		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
-		`  await import(${JSON.stringify(backendModulePath)});`,
-		'  await runContainer();',
-		'})();',
-	].join('\n');
-
 	buildSync({
-		stdin: { contents: mainEntry, resolveDir: PKG_ROOT, sourcefile: '__container_main.mjs', loader: 'js' },
+		stdin: { contents: containerMainEntry(backendModulePath), resolveDir: PKG_ROOT, sourcefile: '__container_main.mjs', loader: 'js' },
 		outfile: join(outDir, 'main.js'),
 		...shared,
 	});

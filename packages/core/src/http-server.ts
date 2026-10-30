@@ -10,7 +10,14 @@ import * as http from 'node:http';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { registerBuiltinRoutes } from './builtin-routes.js';
-import { CLIENT_USER_AGENT_HEADER, FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER, isRpcPath } from './constants.js';
+import {
+  CLIENT_USER_AGENT_HEADER,
+  CONTAINER_HTTP_PORT,
+  CONTAINER_READINESS_PORT,
+  FORWARDED_HOST_HEADER,
+  FORWARDED_STAGE_HEADER,
+  isRpcPath,
+} from './constants.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
 import type { Dispatcher, DispatchResponse } from './dispatch.js';
@@ -62,8 +69,8 @@ export interface HttpServerHandle {
   close(): Promise<void>;
 }
 
-const DEFAULT_PORT = 8080;
-const DEFAULT_HEALTH_PORT = 8081;
+const DEFAULT_PORT = CONTAINER_HTTP_PORT;
+const DEFAULT_HEALTH_PORT = CONTAINER_READINESS_PORT;
 const DEFAULT_DRAIN_TIMEOUT_MS = 25_000;
 
 /**

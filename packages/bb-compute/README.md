@@ -29,7 +29,7 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* met
 | Workload | Option | Compute types |
 | --- | --- | --- |
 | `AsyncJob` | `compute` | `serverless`, `container` |
-| `ApiNamespace` | `compute` (4th argument) | `serverless` |
+| `ApiNamespace` | `compute` (4th argument) | `serverless`, `container` |
 
 ## Compute types
 
@@ -100,9 +100,29 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.
 - **Share a compute** across namespaces and `AsyncJob`s by passing the same
-  `Compute` to each; they then run in the same function.
-- **Only `serverless` computes serve API namespaces** today; passing a
-  `container` compute is a type error.
+  `Compute` to each; they then run in the same function (or the same
+  container tasks).
+- **A `container` compute serves its namespaces from its long-running tasks** —
+  no cold starts, CPU and memory sized for the workload:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ /* methods */ }), { compute: renderCompute });
+  ```
+
+  The gateway reaches the tasks through an internal Application Load Balancer
+  the compute provisions in the app's VPC (with a VPC link), so the same
+  ~29-second cap applies. One load balancer (and one listener) is shared by
+  every container in the backend that hosts a namespace.
+
+  - It needs at least one running task: `scaling.minInstances: 0` fails synth.
+  - Without a `scaling.strategy`, a container that also runs an `AsyncJob`
+    scales on CPU (the API load), and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during
+    that deploy, its calls can get 503s for the minute or two the new tasks take
+    to start, because the route switches before they're healthy.
+  - The load balancer allows 100 namespaces by default (synth warns past that;
+    the quota can be raised), and an export name can be at most 112 characters.
 - **Everything else stays on the default compute:** namespaces without a
   `compute`, `RawRoute`s, and the auth routes.
 
