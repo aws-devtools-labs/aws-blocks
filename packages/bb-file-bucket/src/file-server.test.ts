@@ -438,6 +438,34 @@ describe('file-server: versioning', () => {
 			`Expected 3 versions, got ${versions.length}`,
 		);
 	});
+
+	test('GET without versionId returns 404 when the current version is a delete marker', async () => {
+		const bucket = new FileBucket(scope, 'fs-ver-delete-marker', { versioned: true });
+		await bucket.put('doc.txt', 'v1', { contentType: 'text/plain' });
+		await bucket.put('kept.txt', 'kept', { contentType: 'text/plain' });
+		const url = (await bucket.getUrl('doc.txt')).replace(/localhost:\d+/, `localhost:${port}`);
+		const keptUrl = (await bucket.getUrl('kept.txt')).replace(/localhost:\d+/, `localhost:${port}`);
+
+		await bucket.delete('doc.txt');
+		assert.strictEqual(await bucket.get('doc.txt'), null);
+
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 404, 'deleted key must not be served');
+		assert.ok(!(await res.text()).includes('v1'));
+
+		const kept = await fetch(keptUrl);
+		assert.strictEqual(kept.status, 200);
+		assert.strictEqual(await kept.text(), 'kept');
+	});
+
+	test('GET returns 404 after delete on an unversioned bucket', async () => {
+		const bucket = new FileBucket(scope, 'fs-unver-delete', { versioned: false });
+		await bucket.put('doc.txt', 'v1', { contentType: 'text/plain' });
+		const url = (await bucket.getUrl('doc.txt')).replace(/localhost:\d+/, `localhost:${port}`);
+		await bucket.delete('doc.txt');
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 404);
+	});
 });
 
 // ── CORS headers ────────────────────────────────────────────────────────────
