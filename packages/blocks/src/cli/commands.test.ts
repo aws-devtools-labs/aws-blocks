@@ -181,10 +181,12 @@ describe('lifecycle commands', () => {
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
-		// package.json "blocks.dev" replaces auto-detection: no frontend.
+		// package.json "blocks.dev" without a frontendCommand keeps auto-detection on.
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
 			backendPath: join(root, 'aws-blocks', 'index.ts'),
 			port: 3005,
+			frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
+			frontendPort: 3100,
 		});
 	});
 
