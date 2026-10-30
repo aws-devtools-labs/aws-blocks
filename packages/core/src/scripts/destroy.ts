@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
-import { runSync } from './run-command.js';
+import { createCdkOutput } from './cdk-output.js';
+import { log } from './log.js';
 import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
@@ -35,14 +36,14 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
       .filter(Boolean);
   } catch (e) {
     const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
-    console.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
+    log.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
     return [];
   }
 }
 
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
-    console.log('🗑️  Destroying production stack...');
+    log.progress('🗑️  Destroying production stack...');
 
     // Fail fast on a missing/expired credential BEFORE entering the retry loop:
     // a credential error is deterministic, so retrying it only burns the full
@@ -79,8 +80,12 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
     '--force',
     '--context', `projectRoot=${options.projectRoot}`,
   ];
+  // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
+  // the retry loop prints it once the destroy finally fails.
+  const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv }),
+    printRetainedOutput: () => cdkOutput.printRetained(),
     listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
     emptyBuckets: emptySandboxBuckets,
     isThrottled: destroyWasThrottled,

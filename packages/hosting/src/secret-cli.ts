@@ -41,6 +41,26 @@ export interface ValueCliOptions {
 	region?: string;
 	/** Command label shown in usage text (e.g. `'blocks secret'`, `'hosting-config'`). */
 	label?: string;
+	/**
+	 * Whether the CLI may prompt. `false` (for example `--no-input` or `CI` in the
+	 * caller) refuses the hidden value prompt with a {@link ValueCliUsageError}
+	 * even on a terminal. Default: prompt when stdin is a TTY.
+	 */
+	interactive?: boolean;
+	/** Confirm a forced secret delete, as `--yes` in argv does (for a caller's global `--yes`). */
+	yes?: boolean;
+}
+
+/**
+ * A usage error of the secret/config CLI: a missing argument, an unknown
+ * subcommand, a missing flag value, or input or a confirmation the run cannot
+ * give. Callers map it to their usage exit code (the `blocks` CLI exits 2).
+ */
+export class ValueCliUsageError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ValueCliUsageError';
+	}
 }
 
 function assertValidKey(key: string): void {
@@ -211,14 +231,123 @@ export async function removeValue(
 	}
 }
 
+const SUBCOMMANDS = ['set', 'list', 'remove', 'rm'] as const;
+
+/**
+ * The usage of `<label> [subcommand]`, describing the flags exactly as
+ * {@link runValueCli} applies them. `prefix` is the store prefix in effect.
+ * @internal
+ */
+export function valueCliHelp(kind: ValueKind, label: string, subcommand: string | undefined, prefix: string): string {
+	const store = kind === 'secret' ? 'AWS Secrets Manager' : 'SSM Parameter Store (SecureString)';
+	const storeKind = storeForKind(kind);
+	const staged = secretStoreLocator('<KEY>', { prefix, store: storeKind, stage: '<name>' });
+	const unstaged = secretStoreLocator('<KEY>', { prefix, store: storeKind });
+	const stageHelp = [
+		`  --stage <name>     Use the store name ${staged} instead of ${unstaged}.`,
+		'                     Any name is accepted; there is no fixed list. Without --stage it is',
+		'                     the shared value, which a staged app falls back to when its own is unset.',
+		`  --prefix <path>    Store prefix (default: ${prefix}).`,
+		"  --region <name>    AWS Region of the store (default: the SDK's: AWS_REGION, then the profile).",
+		'  -h, --help         Print this help and exit.',
+	];
+	const keyRule = 'KEY must start with a letter or underscore, then letters, digits or underscores.';
+	switch (subcommand) {
+		case 'set':
+			return [
+				`Usage: ${label} set <KEY> ${kind === 'secret' ? '' : '[<value>] '}[--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
+				'',
+				`Create or overwrite ${kind} KEY in ${store}. ${keyRule}`,
+				kind === 'secret'
+					? 'The value comes from stdin with --value-stdin, or from a hidden prompt; a value on the\ncommand line is refused, because it would land in the shell history.'
+					: 'The value is the rest of the arguments, or stdin with --value-stdin, or a hidden prompt.',
+				'',
+				'Options:',
+				'  --value-stdin      Read the value from stdin (one trailing newline is dropped).',
+				...stageHelp,
+			].join('\n');
+		case 'list':
+			return [
+				`Usage: ${label} list [--stage <name>] [--prefix <path>] [--region <name>]`,
+				'',
+				`List the ${kind} keys under the prefix (with --stage, under <prefix>/<name>). Values are never printed.`,
+				'',
+				'Options:',
+				...stageHelp,
+			].join('\n');
+		case 'remove':
+		case 'rm':
+			return [
+				`Usage: ${label} remove <KEY> ${kind === 'secret' ? '[--force --yes] ' : ''}[--stage <name>] [--prefix <path>] [--region <name>]`,
+				'',
+				kind === 'secret'
+					? `Delete secret KEY. By default Secrets Manager schedules the deletion with its recovery\nwindow, so it can be restored with "aws secretsmanager restore-secret".`
+					: 'Delete config KEY. Parameter Store deletes it at once; there is no recovery window.',
+				`"rm" is the same command.`,
+				'',
+				'Options:',
+				...(kind === 'secret'
+					? [
+							'  --force            Delete at once, with no recovery window. Requires --yes.',
+							'  -y, --yes          Confirm --force.',
+						]
+					: []),
+				...stageHelp,
+			].join('\n');
+		default:
+			return [
+				`Usage: ${label} <set|list|remove> [options]`,
+				'',
+				`Manage ${kind} values in ${store}.`,
+				'',
+				'Commands:',
+				kind === 'secret'
+					? `  set <KEY>          Set a secret; the value comes from --value-stdin or a hidden prompt`
+					: '  set <KEY> [value]  Set a config value',
+				'  list               List keys (never values)',
+				'  remove <KEY>       Delete a value (alias: rm)',
+				'',
+				`Run "${label} <command> --help" for the options of a command.`,
+			].join('\n');
+	}
+}
+
 /**
  * CLI dispatcher. Two shapes:
  *  - `kind` fixed by the wrapper → argv is `<subcommand> [...args]` (e.g. `secret set KEY`).
  *  - `kind` not fixed → argv is `<secret|config> <subcommand> [...args]`.
+ *
+ * `-h`/`--help` anywhere in argv prints the usage of the subcommand (if any) and
+ * returns before any flag parsing, prompt or store call.
  * @internal
  */
 export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
-	const { stage, valueStdin, prefix, region, force, yes, positional } = extractFlags(argv);
+	if (argv.includes('--help') || argv.includes('-h')) {
+		const kind = opts.kind ?? argv.find((arg): arg is ValueKind => arg === 'secret' || arg === 'config');
+		if (!kind) {
+			console.log(
+				'Usage: <secret|config> <set|list|remove> [options]\n\nRun "<secret|config> <command> --help" for the options of a command.',
+			);
+			return;
+		}
+		const subcommand = argv.find((arg) => (SUBCOMMANDS as readonly string[]).includes(arg));
+		const prefixAt = argv.findIndex((arg) => arg === '--prefix' || arg.startsWith('--prefix='));
+		const prefixArg =
+			prefixAt === -1
+				? undefined
+				: argv[prefixAt].startsWith('--prefix=')
+					? argv[prefixAt].slice('--prefix='.length)
+					: argv[prefixAt + 1];
+		const prefix =
+			prefixArg && prefixArg !== '--help' && prefixArg !== '-h'
+				? prefixArg
+				: (opts.prefix ?? defaultPrefixForKind(kind));
+		console.log(valueCliHelp(kind, opts.label ?? kind, subcommand, prefix));
+		return;
+	}
+	const flags = extractFlags(argv);
+	const { stage, valueStdin, prefix, region, force, positional } = flags;
+	const yes = flags.yes || opts.yes === true;
 
 	let kind = opts.kind;
 	let rest = positional;
@@ -240,22 +369,24 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		case 'set': {
 			const [key, ...valueParts] = args;
 			if (!key)
-				throw new Error(
-					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
+				throw new ValueCliUsageError(
+					`Usage: ${label} set <KEY> ${kind === 'secret' ? '' : '[<value>] '}[--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
 				);
 			// Validate the key up front — before reading/prompting for a value — so a bad
 			// key fails fast rather than after a prompt or a store call.
 			assertValidKey(key);
 			let value: string;
 			if (valueStdin) {
-				if (valueParts.length > 0) throw new Error('Pass the value via stdin OR as an argument, not both.');
+				if (valueParts.length > 0) {
+					throw new ValueCliUsageError('Pass the value via stdin OR as an argument, not both.');
+				}
 				value = await readStdin();
 			} else if (valueParts.length > 0) {
 				// A secret is sensitive: a positional value lands in argv / shell history,
 				// so it must come from stdin or the hidden prompt. A config value is
 				// non-sensitive, so a positional value is allowed (ergonomic).
 				if (kind === 'secret') {
-					throw new Error(
+					throw new ValueCliUsageError(
 						`A secret value must not be passed on the command line — it lands in argv / shell history. ` +
 							`Pipe it with \`--value-stdin\` (e.g. \`cat key.txt | ${label} set ${key} --value-stdin\`) ` +
 							`or omit the value to be prompted (hidden input).`,
@@ -263,7 +394,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 				}
 				value = valueParts.join(' ');
 			} else {
-				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `);
+				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `, opts.interactive);
 			}
 			if (value.length === 0) throw new Error(`No value provided for '${key}'.`);
 			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage, region: effRegion });
@@ -283,14 +414,16 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		case 'rm': {
 			const [key] = args;
 			if (!key)
-				throw new Error(`Usage: ${label} remove <KEY> [--force --yes] [--stage <name>] [--region <name>]`);
+				throw new ValueCliUsageError(
+					`Usage: ${label} remove <KEY> [--force --yes] [--stage <name>] [--region <name>]`,
+				);
 			// Every forced secret delete needs --yes: a stage name can't tell production
 			// apart reliably (`prod-us-east-1`, `prd`, `live`, …), and there is no undo.
 			if (force && kind === 'secret' && !yes) {
 				const where = effStage
 					? `stage '${effStage}'`
 					: 'the shared namespace (every stage, including production)';
-				throw new Error(
+				throw new ValueCliUsageError(
 					`Refusing to force-delete ${label} '${key}' in ${where} without confirmation: the delete is immediate and cannot be recovered. Re-run with --yes to confirm, or drop --force for a recoverable delete.`,
 				);
 			}
@@ -298,7 +431,9 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			break;
 		}
 		default:
-			throw new Error(`Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`);
+			throw new ValueCliUsageError(
+				`Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
+			);
 	}
 }
 
@@ -326,19 +461,23 @@ function extractFlags(argv: string[]): {
 			yes = true;
 		} else if (arg === '--stage') {
 			stage = argv[++i];
-			if (stage === undefined) throw new Error('`--stage` requires a value, e.g. --stage prod');
+			if (stage === undefined) throw new ValueCliUsageError('`--stage` requires a value, e.g. --stage prod');
 		} else if (arg.startsWith('--stage=')) {
 			stage = arg.slice('--stage='.length);
 		} else if (arg === '--value-stdin') {
 			valueStdin = true;
 		} else if (arg === '--prefix') {
 			prefix = argv[++i];
-			if (prefix === undefined) throw new Error('`--prefix` requires a value, e.g. --prefix /myapp/secrets');
+			if (prefix === undefined) {
+				throw new ValueCliUsageError('`--prefix` requires a value, e.g. --prefix /myapp/secrets');
+			}
 		} else if (arg.startsWith('--prefix=')) {
 			prefix = arg.slice('--prefix='.length);
 		} else if (arg === '--region') {
 			region = argv[++i];
-			if (region === undefined) throw new Error('`--region` requires a value, e.g. --region us-east-1');
+			if (region === undefined) {
+				throw new ValueCliUsageError('`--region` requires a value, e.g. --region us-east-1');
+			}
 		} else if (arg.startsWith('--region=')) {
 			region = arg.slice('--region='.length);
 		} else {
@@ -356,9 +495,16 @@ async function readStdin(): Promise<string> {
 		.replace(/\r?\n$/, '');
 }
 
-async function promptHidden(prompt: string): Promise<string> {
+async function promptHidden(prompt: string, interactive: boolean | undefined): Promise<string> {
+	if (interactive === false) {
+		throw new ValueCliUsageError(
+			'No value provided, and this run cannot prompt (--no-input or CI). Pass `--value-stdin` and pipe the value instead.',
+		);
+	}
 	if (!process.stdin.isTTY) {
-		throw new Error('No value provided and stdin is not a TTY. Pass `--value-stdin` and pipe the value instead.');
+		throw new ValueCliUsageError(
+			'No value provided and stdin is not a TTY. Pass `--value-stdin` and pipe the value instead.',
+		);
 	}
 	const { createInterface } = await import('node:readline');
 	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });

@@ -18,6 +18,7 @@ import {
 	REGION_CODE,
 	resolveDeploymentTarget,
 } from './deployment-target.js';
+import { log } from './log.js';
 import { type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bootstrap.js';
 
 /**
@@ -183,6 +184,40 @@ async function credentialsLabel(
 	return { text: 'AWS profile default', profile: 'default' };
 }
 
+/** The credentials and Region that a deploy would use, as {@link describeDeploymentCredentials} reports them. */
+export interface DeploymentCredentials {
+	/**
+	 * How CDK authenticates, for example `AWS profile dev`, or
+	 * `access keys in AWS_ACCESS_KEY_ID (used instead of AWS_PROFILE)` when
+	 * environment access keys take precedence over an exported profile.
+	 */
+	credentials: string;
+	/** The profile CDK uses, when one does. */
+	profile?: string;
+	region: string | null;
+	/** True when environment access keys are used although AWS_PROFILE (or AWS_DEFAULT_PROFILE) is set. */
+	keysOverrideProfile: boolean;
+}
+
+/**
+ * The credentials and Region that a deploy would use, from local configuration
+ * only: the same label the deploy commands print, without any AWS request.
+ */
+export async function describeDeploymentCredentials(
+	options: DeploymentTargetOptions = {},
+): Promise<DeploymentCredentials> {
+	const env = options.env ?? process.env;
+	const { region, profile } = await resolveDeploymentTarget(options);
+	const environmentKeys = profile ? undefined : environmentAccessKeys(env);
+	const target = await credentialsLabel(env, profile, environmentKeys);
+	return {
+		credentials: target.text,
+		...(target.profile ? { profile: target.profile } : {}),
+		region: region || null,
+		keysOverrideProfile: environmentKeys !== undefined && Boolean(env.AWS_PROFILE || env.AWS_DEFAULT_PROFILE),
+	};
+}
+
 /**
  * The deployment target, then the optional metadata unless `metadata` is `null`.
  * The spend-limit guidance follows only for the AWS-managed sign-in role: AWS
@@ -249,7 +284,7 @@ export async function assertAwsCredentials({
 	const environmentKeys = profile ? undefined : environmentAccessKeys(env);
 	const target = await credentialsLabel(env, profile, environmentKeys);
 	if (!region) {
-		console.warn(
+		log.warn(
 			[
 				`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
 					'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
@@ -280,12 +315,12 @@ export async function assertAwsCredentials({
 
 		// Not a credential problem: don't block a deploy that might still work.
 		if (failure === 'network') {
-			console.warn(
+			log.warn(
 				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
 					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
 			);
 		} else if (failure === 'inconclusive') {
-			console.warn(
+			log.warn(
 				`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${label}); ` +
 					'continuing — the deploy will report any real error.',
 			);
@@ -295,18 +330,8 @@ export async function assertAwsCredentials({
 					command,
 					errorName: label,
 					failure,
-					// The guidance follows the deploy: with environment keys, no profile is used, and
-					// the keys are passed under the AWS_ names that the guidance reads.
-					env: environmentKeys
-						? {
-								...env,
-								AWS_PROFILE: undefined,
-								AWS_DEFAULT_PROFILE: undefined,
-								AWS_ACCESS_KEY_ID: environmentKeys.accessKeyId,
-								AWS_SECRET_ACCESS_KEY: environmentKeys.secretAccessKey,
-								AWS_SESSION_TOKEN: environmentKeys.sessionToken,
-							}
-						: env,
+					// The guidance follows the deploy: with environment keys, no profile is used.
+					env: guidanceEnv(env, environmentKeys),
 					profile,
 					readAwsCliVersion,
 				}),
@@ -338,4 +363,102 @@ export async function assertAwsCredentials({
 	console.log(targetSummary(target, region, metadata));
 	const failure = await bootstrapFailure;
 	if (failure) throw new Error(failure);
+}
+
+/**
+ * The environment that the failure guidance reads. With environment keys, no
+ * profile is used, and the keys are passed under the AWS_ names that the guidance reads.
+ */
+function guidanceEnv(env: NodeJS.ProcessEnv, environmentKeys: AwsCredentialIdentity | undefined): NodeJS.ProcessEnv {
+	if (!environmentKeys) return env;
+	return {
+		...env,
+		AWS_PROFILE: undefined,
+		AWS_DEFAULT_PROFILE: undefined,
+		AWS_ACCESS_KEY_ID: environmentKeys.accessKeyId,
+		AWS_SECRET_ACCESS_KEY: environmentKeys.secretAccessKey,
+		AWS_SESSION_TOKEN: environmentKeys.sessionToken,
+	};
+}
+
+/** The AWS identity and Region that the deploy commands use, from {@link readAwsIdentity}. */
+export interface AwsIdentity {
+	/** How the deploy credentials are selected, for example `AWS profile dev` or `access keys in AWS_ACCESS_KEY_ID`. */
+	credentials: string;
+	/** The profile that the deploy uses, when one is selected. */
+	profile?: string;
+	/** The configured Region; `null` when no Region is set. */
+	region: string | null;
+	/** The account ID from STS GetCallerIdentity. Absent when no Region is set. */
+	account?: string;
+	/** The caller ARN from STS GetCallerIdentity. Absent when no Region is set. */
+	arn?: string;
+}
+
+/** Options for {@link readAwsIdentity}. */
+export interface ReadAwsIdentityOptions extends DeploymentTargetOptions {
+	/** How the user runs the command, used in the failure guidance (for example `blocks whoami`). */
+	invocation: string;
+	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
+	probe?: CredentialProbe;
+	/** Reads `aws --version` when the guidance recommends `aws login`. Override in tests. */
+	readAwsCliVersion?: AwsCliVersionReader;
+}
+
+/**
+ * Read the AWS identity, the credentials label and the Region that the deploy
+ * commands would use, without deploying. It resolves the target the same way as
+ * {@link assertAwsCredentials} and verifies it with STS GetCallerIdentity.
+ *
+ * When no Region is set, it returns the target without `account` and `arn`, and
+ * sends no request. Unlike {@link assertAwsCredentials}, a network or service
+ * error is an error here, because there is no deploy to continue with.
+ *
+ * @throws {Error} With actionable guidance when the credentials are missing,
+ * expired or rejected, or when AWS cannot be reached to verify them.
+ */
+export async function readAwsIdentity({
+	invocation,
+	probe = stsProbe,
+	readAwsCliVersion,
+	...options
+}: ReadAwsIdentityOptions): Promise<AwsIdentity> {
+	const env = options.env ?? process.env;
+	const { region, profile } = await resolveDeploymentTarget(options);
+	const environmentKeys = profile ? undefined : environmentAccessKeys(env);
+	const target = await credentialsLabel(env, profile, environmentKeys);
+	const identity: AwsIdentity = {
+		credentials: target.text,
+		...(target.profile ? { profile: target.profile } : {}),
+		region: region || null,
+	};
+	if (!region) return identity;
+
+	let verified: VerifiedCredentials | undefined;
+	try {
+		verified = await probe(region, profile, environmentKeys);
+	} catch (error) {
+		const label = credentialErrorLabel(error);
+		const failure = classifyCredentialError(label);
+		if (failure === 'network') {
+			throw new Error(
+				`Could not reach AWS to verify credentials for \`${invocation}\` (${label}). Check your network or proxy settings.`,
+			);
+		}
+		if (failure === 'inconclusive') {
+			throw new Error(`Could not verify AWS credentials for \`${invocation}\` (${label}).`);
+		}
+		throw new Error(
+			await credentialFailureMessage({
+				command: invocation,
+				invocation,
+				errorName: label,
+				failure,
+				env: guidanceEnv(env, environmentKeys),
+				profile,
+				readAwsCliVersion,
+			}),
+		);
+	}
+	return { ...identity, account: verified?.account, arn: verified?.callerArn };
 }

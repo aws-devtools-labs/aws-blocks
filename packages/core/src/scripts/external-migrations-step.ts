@@ -29,6 +29,7 @@ import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
 import { getStackName } from './stack-id.js';
 import { runSync } from './run-command.js';
+import { log } from './log.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -106,7 +107,7 @@ export async function applyExternalMigrations(opts: ApplyExternalMigrationsOptio
     await assertNotProductionTarget(conn.value, { command: 'npm run sandbox', announceFailOpen: true });
   }
 
-  console.log(`🧬 Applying external database migrations (${opts.stage})...`);
+  log.progress(`🧬 Applying external database migrations (${opts.stage})...`);
   runMigrateSubprocess(conn.value, opts.stage, migrationsDir);
   return true;
 }
@@ -256,7 +257,7 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
     optOutHint: 'set BLOCKS_SKIP_DEV_MIGRATIONS=1 to opt out',
   });
 
-  console.log(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})...`);
+  log.progress(`🧬 Applying migrations to your dev database (${hostOf(conn.value)})...`);
   try {
     // Dev loop: apply, then refresh generated types from the migrated schema in
     // the SAME subprocess (one developer-visible step). Deploy/sandbox omit the
@@ -266,8 +267,9 @@ export async function applyDevMigrations(opts?: { migrationsDir?: string; genera
   } catch (e: any) {
     // Don't block local dev on a migration apply failure (e.g. port 5432 blocked
     // on a corp network). Warn and continue — the app may still run.
-    console.warn(`⚠️  Could not apply migrations in dev: ${e?.message ?? e}`);
-    console.warn(`    Continuing without applying. Run migrations before deploy.`);
+    log.warn(`⚠️  Could not apply migrations in dev: ${e?.message ?? e}`);
+    log.warn(`    Continuing without applying. Run migrations before deploy.`);
+    log.debugError(e);
     return false;
   }
 }
