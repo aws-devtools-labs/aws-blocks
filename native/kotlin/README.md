@@ -213,9 +213,15 @@ When the spec does not name them — the providers resolved to plain strings —
 `OidcClient<AnyProvider>`, whose `signIn` and `exchange` take a provider name, as before:
 
 ```kotlin
+// Signing in by name is an extension on this one instantiation, so it needs importing.
+import com.aws.blocks.kotlin.oidc.signIn
+
 val client = blocks.authApi.getClient()        // OidcClient<AnyProvider>
 val user = client.signIn("google")
 ```
+
+Without that import the call resolves to the member that takes a provider, and the compiler reports
+an `AnyProvider` was expected rather than a missing import.
 
 When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
 prints a `kotlin:` warning that names it.
