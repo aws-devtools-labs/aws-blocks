@@ -639,6 +639,76 @@ describe('Scope-level compute', () => {
 	});
 });
 
+describe('a compute bound to another backend fails synth (multi-backend)', () => {
+	// create() re-runs only the top-level backend module per backend, so a Compute
+	// from a cached sub-module stays bound to the first backend. A job in another
+	// backend must not be wired to that backend's function: a schedule's runs would
+	// all fail (that function never registered the job), and a queue would create a
+	// cross-stack dependency cycle. Each case writes its own sub-module, since the
+	// module cache outlives a test.
+	const writeBackend = (name: string, body: string) => {
+		writeFileSync(
+			join(tmpDir, `computes-${name}.mjs`),
+			"import { Compute, Scope } from '@aws-blocks/blocks';\n" +
+				"export const heavy = new Compute(new Scope('shared'), 'heavy', { type: 'serverless', memory: 1024 });\n",
+		);
+		const backend = join(tmpDir, `backend-foreign-${name}.mjs`);
+		writeFileSync(
+			backend,
+			"import { AsyncJob, CronJob, Scope } from '@aws-blocks/blocks';\n" +
+				`import { heavy } from './computes-${name}.mjs';\n` +
+				"const scope = new Scope('app');\n" +
+				body,
+		);
+		return backend;
+	};
+	/** Build two BlocksStacks from one backend module; the first owns `heavy`. */
+	const secondStack = async (id: string, backendCDKPath: string) => {
+		const app = new cdk.App();
+		const make = (stackId: string) =>
+			BlocksStack.create(app, stackId, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production });
+		await make(`${id}One`);
+		return make(`${id}Two`);
+	};
+
+	test("a CronJob's own compute", async () => {
+		const backend = writeBackend('cron', "new CronJob(scope, 'tick', { schedule: 'rate(1 hour)', compute: heavy, handler: async () => {} });\n");
+		await assert.rejects(
+			secondStack('ForeignCron', backend),
+			/CronJob "ForeignCronTwo-app-tick" resolves to compute 'ForeignCronOne\/shared\/heavy\/backing', which belongs to another backend \('ForeignCronOne'\)/,
+		);
+	});
+
+	test("an AsyncJob's own compute", async () => {
+		const backend = writeBackend('job', "export const job = new AsyncJob(scope, 'job', { compute: heavy, handler: async () => {} });\n");
+		await assert.rejects(
+			secondStack('ForeignJob', backend),
+			/AsyncJob "ForeignJobTwo-app-job" resolves to compute 'ForeignJobOne\/shared\/heavy\/backing', which belongs to another backend/,
+		);
+	});
+
+	test('a compute inherited from a scope', async () => {
+		const backend = writeBackend(
+			'scope',
+			"const placed = new Scope('placed', { parent: scope, compute: heavy });\n" +
+				"new CronJob(placed, 'tick', { schedule: 'rate(1 hour)', handler: async () => {} });\n",
+		);
+		await assert.rejects(
+			secondStack('ForeignScope', backend),
+			/CronJob "ForeignScopeTwo-app-placed-tick" resolves to compute 'ForeignScopeOne\/shared\/heavy\/backing'/,
+		);
+	});
+
+	test('two BlocksBackends in one stack', async () => {
+		const backendCDKPath = writeBackend('backends', "new CronJob(scope, 'tick', { schedule: 'rate(1 hour)', compute: heavy, handler: async () => {} });\n");
+		const parent = new cdk.Stack(new cdk.App(), 'ForeignParent');
+		const make = (id: string) =>
+			BlocksBackend.create(parent, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production });
+		await make('BackendOne');
+		await assert.rejects(make('BackendTwo'), /which belongs to another backend \('ForeignParent\/BackendOne'\)/);
+	});
+});
+
 // Compile-time only (never called): a scope takes either kind of compute; a
 // CronJob's own `compute` takes only a serverless one.
 function _scopeAndCronComputeTypeChecks(scope: InstanceType<typeof Scope>) {

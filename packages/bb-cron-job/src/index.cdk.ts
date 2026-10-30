@@ -5,6 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Scope, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
+import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { Construct } from 'constructs';
@@ -43,6 +44,8 @@ export class CronJob<T = void> extends Scope {
 		// The brand check (not `instanceof`) survives duplicate bb-lambda-compute
 		// copies in one dependency tree.
 		const compute = this.compute;
+		const foreign = foreignComputeProblem(this, compute);
+		if (foreign) throw blocksError(CronJobErrors.UnsupportedCompute, `CronJob "${this.fullId}" ${foreign}`);
 		if (!LambdaCompute.isLambdaCompute(compute)) {
 			throw blocksError(
 				CronJobErrors.UnsupportedCompute,

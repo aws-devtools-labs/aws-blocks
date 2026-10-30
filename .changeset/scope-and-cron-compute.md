@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/bb-cron-job": minor
+"@aws-blocks/bb-async-job": patch
 "@aws-blocks/bb-compute": patch
 "@aws-blocks/blocks": minor
 ---
@@ -30,5 +31,12 @@ new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async 
 type error). Each job's schedule now gets permission to invoke the function it
 targets: before, the shared scheduler role could only invoke the first job's
 function, so a job on a different function would have been refused at run time.
+
+A `CronJob` or `AsyncJob` whose compute (its own, or its scope's) belongs to a
+different backend now fails synth with an error naming the compute. This happens
+when several backends are built from one backend module and the `Compute` comes
+from a sub-module, which stays bound to the first backend that imported it.
+Before, the job was wired to that backend's function: a scheduled run failed
+every time, or synth stopped with a dependency cycle.
 
 In local dev every block still runs in the dev server.
