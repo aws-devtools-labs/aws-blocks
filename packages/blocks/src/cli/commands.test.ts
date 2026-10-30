@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
@@ -431,6 +434,33 @@ describe('stage env files', () => {
 		assert.match(run.stderr, /Warning: \.env\.local sets AWS_REGION unlike \.env\.production/);
 	});
 
+	it('warns about .env.local only when it exists and sets a different value', async () => {
+		const whoami = (root: string) =>
+			runCli(['whoami'], {
+				cwd: root,
+				core: { readAwsIdentity: async ({ env }) => ({ ...IDENTITY, region: env?.AWS_REGION ?? null }) },
+			});
+		const noLocal = fixtureApp();
+		writeFileSync(join(noLocal, '.env.production'), 'AWS_REGION=us-west-2\n');
+		const missing = await whoami(noLocal);
+		assert.strictEqual(missing.code, 0, missing.stderr);
+		assert.doesNotMatch(missing.stderr, /Warning/);
+		const same = fixtureApp();
+		writeFileSync(join(same, '.env.production'), 'AWS_REGION=us-west-2\nAWS_PROFILE=prod\n');
+		writeFileSync(join(same, '.env.local'), 'AWS_REGION=us-west-2\nAPP_FLAG=local\n');
+		assert.doesNotMatch((await whoami(same)).stderr, /Warning/);
+		// The shell's value wins in both stages, so the files cannot differ there.
+		const shell = await runCli(['whoami'], {
+			cwd: stagedApp(),
+			env: { AWS_REGION: 'us-west-1' },
+			core: { readAwsIdentity: async () => IDENTITY },
+		});
+		assert.doesNotMatch(shell.stderr, /Warning/);
+		const profile = fixtureApp();
+		writeFileSync(join(profile, '.env.local'), 'AWS_PROFILE=sandbox\n');
+		assert.match((await whoami(profile)).stderr, /Warning: \.env\.local sets AWS_PROFILE unlike \.env\.production/);
+	});
+
 	it('prints the target line of deploy and sandbox with their stage env file', async () => {
 		const root = stagedApp();
 		const deploy = await runCli(['deploy'], { cwd: root });
@@ -440,6 +470,106 @@ describe('stage env files', () => {
 		// The shell's own setting wins over the file, as in core.
 		const shell = await runCli(['deploy'], { cwd: root, env: { AWS_REGION: 'us-west-1' } });
 		assert.match(shell.stderr, /; Region us-west-1,/);
+	});
+});
+
+describe('whoami with the real credential chain', () => {
+	/** A loopback STS stand-in: each access key belongs to one account; records the keys that signed. */
+	const ACCOUNTS: Record<string, string> = { AKIDDEFAULT: '111111111111', AKIDPROD: '222222222222' };
+	let server: Server;
+	let endpoint: string;
+	let signedWith: string[] = [];
+
+	before(async () => {
+		server = createServer((req, res) => {
+			const key = /Credential=([^/]+)\//.exec(String(req.headers.authorization))?.[1] ?? '';
+			signedWith.push(key);
+			req.resume();
+			req.on('end', () => {
+				const account = ACCOUNTS[key];
+				if (!account) {
+					res.writeHead(403, { 'content-type': 'text/xml' });
+					res.end(
+						'<ErrorResponse><Error><Type>Sender</Type><Code>InvalidClientTokenId</Code><Message>no</Message></Error><RequestId>1</RequestId></ErrorResponse>',
+					);
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'text/xml' });
+				res.end(
+					`<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>arn:aws:iam::${account}:user/u</Arn><UserId>U</UserId><Account>${account}</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>1</RequestId></ResponseMetadata></GetCallerIdentityResponse>`,
+				);
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	});
+
+	after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+
+	/** An AWS config dir: `[default]` signs with AKIDDEFAULT, `[profile prod]` with AKIDPROD. */
+	function awsFiles(defaultKey = 'AKIDDEFAULT'): { AWS_CONFIG_FILE: string; AWS_SHARED_CREDENTIALS_FILE: string } {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-aws-'));
+		writeFileSync(join(dir, 'config'), '[default]\nregion = us-east-1\n[profile prod]\nregion = us-east-1\n');
+		writeFileSync(
+			join(dir, 'credentials'),
+			`[default]\naws_access_key_id = ${defaultKey}\naws_secret_access_key = secret\n` +
+				'[prod]\naws_access_key_id = AKIDPROD\naws_secret_access_key = secret\n',
+		);
+		return { AWS_CONFIG_FILE: join(dir, 'config'), AWS_SHARED_CREDENTIALS_FILE: join(dir, 'credentials') };
+	}
+
+	/** Run the built `blocks` bin, with only these variables and an empty HOME. */
+	async function whoami(root: string, env: NodeJS.ProcessEnv) {
+		signedWith = [];
+		const child = spawn(
+			process.execPath,
+			[fileURLToPath(new URL('./bin.js', import.meta.url)), 'whoami', '--output', 'json'],
+			{
+				cwd: root,
+				env: {
+					PATH: process.env.PATH,
+					HOME: mkdtempSync(join(tmpdir(), 'blocks-cli-home-')),
+					AWS_EC2_METADATA_DISABLED: 'true',
+					AWS_ENDPOINT_URL_STS: endpoint,
+					AWS_REGION: 'us-east-1',
+					...env,
+				},
+			},
+		);
+		let stdout = '';
+		let stderr = '';
+		child.stdout.on('data', (chunk) => (stdout += chunk));
+		child.stderr.on('data', (chunk) => (stderr += chunk));
+		const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+		assert.strictEqual(code, 0, stderr);
+		return { result: JSON.parse(stdout) as { account: string; credentials: string }, signedWith };
+	}
+
+	it('signs with the AWS_PROFILE that .env.production sets, unless the shell exports one', async () => {
+		const root = fixtureApp();
+		writeFileSync(join(root, '.env.production'), 'AWS_PROFILE=prod\n');
+		const files = awsFiles();
+		const staged = await whoami(root, files);
+		assert.deepStrictEqual(staged.signedWith, ['AKIDPROD']);
+		assert.strictEqual(staged.result.account, '222222222222');
+		assert.strictEqual(staged.result.credentials, 'AWS profile prod');
+		const shell = await whoami(root, { ...files, AWS_PROFILE: 'default' });
+		assert.deepStrictEqual(shell.signedWith, ['AKIDDEFAULT']);
+		assert.strictEqual(shell.result.account, '111111111111');
+	});
+
+	it('reads the AWS config and credentials files that .env.production names', async () => {
+		const root = fixtureApp();
+		const files = awsFiles('AKIDPROD');
+		writeFileSync(
+			join(root, '.env.production'),
+			`AWS_CONFIG_FILE=${files.AWS_CONFIG_FILE}\nAWS_SHARED_CREDENTIALS_FILE=${files.AWS_SHARED_CREDENTIALS_FILE}\n`,
+		);
+		const staged = await whoami(root, {});
+		assert.deepStrictEqual(staged.signedWith, ['AKIDPROD']);
+		assert.strictEqual(staged.result.account, '222222222222');
 	});
 });
 

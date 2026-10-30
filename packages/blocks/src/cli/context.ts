@@ -44,7 +44,10 @@ export interface CliDeps {
 	stdout: OutputStream;
 	stderr: OutputStream;
 	stdinIsTTY: boolean;
-	/** The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it for the run. */
+	/**
+	 * The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it
+	 * for the run, and `blocks whoami` loads `.env.production` into it, as core's deploy does.
+	 */
 	env: NodeJS.ProcessEnv;
 	cwd: string;
 	/** Ask a question on stderr and read one line from stdin; rejects with {@link PromptInterrupted} on Ctrl-C. */
@@ -98,18 +101,30 @@ export function findProjectRoot(start: string): string | undefined {
 /** The env file that core's deploy (`production`) and sandbox (`sandbox`) load from the project root. */
 export const STAGE_ENV_FILES = { production: '.env.production', sandbox: '.env.local' } as const;
 
-/**
- * A copy of `env` with the stage's env file applied as core applies it
- * (`loadProductionEnv`, `loadEnvFile`): a variable already set, even to an
- * empty string, keeps its value. `env` is not changed.
- */
-export function stageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof typeof STAGE_ENV_FILES): NodeJS.ProcessEnv {
+/** The variables that the stage's env file sets, or `undefined` when the project has no such file. */
+export function readStageEnvFile(
+	root: string,
+	stage: keyof typeof STAGE_ENV_FILES,
+): Record<string, string | undefined> | undefined {
 	const file = join(root, STAGE_ENV_FILES[stage]);
-	const copy = { ...env };
-	if (!existsSync(file)) return copy;
-	for (const [key, value] of Object.entries(parseEnv(readFileSync(file, 'utf-8')))) {
-		if (!(key in copy)) copy[key] = value;
+	return existsSync(file) ? parseEnv(readFileSync(file, 'utf-8')) : undefined;
+}
+
+/**
+ * Apply the stage's env file to `env` in place, as core applies it to
+ * `process.env` (`loadProductionEnv`, `loadEnvFile`): a variable already set,
+ * even to an empty string, keeps its value.
+ */
+export function applyStageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof typeof STAGE_ENV_FILES): void {
+	for (const [key, value] of Object.entries(readStageEnvFile(root, stage) ?? {})) {
+		if (!(key in env)) env[key] = value;
 	}
+}
+
+/** A copy of `env` with the stage's env file applied by {@link applyStageEnv}. `env` is not changed. */
+export function stageEnv(env: NodeJS.ProcessEnv, root: string, stage: keyof typeof STAGE_ENV_FILES): NodeJS.ProcessEnv {
+	const copy = { ...env };
+	applyStageEnv(copy, root, stage);
 	return copy;
 }
 

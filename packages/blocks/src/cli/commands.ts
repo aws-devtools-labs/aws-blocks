@@ -14,10 +14,12 @@ import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { resolveDevConfig } from './config.js';
 import {
+	applyStageEnv,
 	blocksVersion,
 	type ChildResult,
 	type Context,
 	PromptInterrupted,
+	readStageEnvFile,
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
@@ -436,18 +438,22 @@ export async function destroy(ctx: Context): Promise<number> {
 }
 
 /**
- * The identity and Region that `blocks deploy` uses: the environment with
- * `.env.production` applied, as core's deploy applies it. When `.env.local`
- * (the sandbox's env file) sets an AWS variable differently, it warns that
- * `blocks sandbox` can use another identity or Region.
+ * The identity and Region that `blocks deploy` uses. Like core's deploy, it
+ * loads `.env.production` into the environment of this process (an exported
+ * variable wins): the credential chain of the AWS SDK reads `process.env`, so
+ * a copy would not reach AWS_PROFILE, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE
+ * or the web-identity variables. When `.env.local` (the sandbox's env file)
+ * sets an AWS variable to another value, it warns that `blocks sandbox` can
+ * use another identity or Region.
  */
 export async function whoami(ctx: Context): Promise<number> {
 	const root = ctx.findRoot();
 	const core = await ctx.core();
-	const env = root ? stageEnv(ctx.env, root, 'production') : ctx.env;
+	const env = ctx.env;
 	if (root) {
-		const sandboxEnv = stageEnv(ctx.env, root, 'sandbox');
-		const differ = [...new Set([...Object.keys(env), ...Object.keys(sandboxEnv)])]
+		const sandboxEnv = stageEnv(env, root, 'sandbox');
+		applyStageEnv(env, root, 'production');
+		const differ = Object.keys(readStageEnvFile(root, 'sandbox') ?? {})
 			.filter((key) => key.startsWith('AWS_') && env[key] !== sandboxEnv[key])
 			.sort();
 		if (differ.length > 0) {
