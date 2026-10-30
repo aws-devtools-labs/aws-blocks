@@ -71,7 +71,7 @@ Things to know:
 - **Email + password is on by default.** `new Auth(scope, 'auth')` gives you a Cognito user pool. Turn it off with `emailPassword: false`.
 - **Sign-up always needs the emailed code.** There is no instant sign-up any more. With `emailPassword.autoSignIn` (on by default) the user is signed in as soon as they enter the code, without retyping the password.
 - **Stricter password defaults.** `Auth` requires upper case, lower case, digits and symbols unless you turn them off. `AuthBasic` required none. `requireSpecialChars` is now `requireSymbols`.
-- **Cognito's default email sender sends at most 50 emails a day** (sign-up, reset and email-MFA codes all count). Fine for development, not for production. `Auth` can't configure Amazon SES yet; for volume, set SES up on a pool you manage and wrap it with `userPool: Auth.fromExisting(userPoolId, clientId)`.
+- **Cognito's default email sender sends at most 50 emails a day** (sign-up, reset and email-MFA codes all count). Fine for development, not for production. For volume, send through your own Amazon SES identity with `email: { fromAddress: 'no-reply@example.com' }`. You can add it at any time: it updates the pool in place.
 - **Misspelled options are errors.** `{ emailPasword: false }` or a top-level `preferredChallenge` used to compile and do nothing. Now the constructor throws in `npm run dev`, at synth and in Lambda, naming the path and a suggestion (`did you mean users.preferredChallenge?`). Boolean options must be real booleans: `selfSignUp: 0` from untyped code used to turn sign-up **on**.
 - **Methods your configuration can't use don't compile.** With `emailPassword: false`, calling `auth.signUp(...)` is a compile error whose message names the cause (`ERROR_emailPassword_is_disabled_on_this_Auth_instance`). The same applies to MFA, passkey, admin and federated methods (see the README's "Mode gates"). Pass options inline so the compiler can see them.
 - **`validateUser`** is one hook for "may this person sign up or sign in", for every method. Throw to refuse. On AWS it also installs a Cognito PreSignUp trigger, so it also guards users created outside your app (the console, CLI, a first social sign-in). Cognito gives the trigger 5 seconds, cold start included.
@@ -201,7 +201,7 @@ const pref = await auth.getMfaPreference(context);
 - MFA and passkey methods are compile errors unless the options turn them on.
 - MFA applies to email + password users only. Federated users get their IdP's MFA.
 - `rememberDevice` still throws `501` on AWS, as in `AuthCognito`. `scanDevices` (was `fetchDevices`) and `forgetDevice` work.
-- `preferredChallenge: 'EMAIL_OTP'` (passwordless email codes) needs Amazon SES, so on a pool the block creates synth fails. See [section 5.1](#51-from-authcognito-the-safe-path) for the upgrade trap.
+- `preferredChallenge: 'EMAIL_OTP'` (passwordless email codes) needs Amazon SES, so on a pool the block creates synth fails until you add `email: { fromAddress }`. See [section 5.1](#51-from-authcognito-the-safe-path) for the upgrade trap.
 - **New:** `requireAuth(context, { fresh: true })` demands a recent sign-in (default 15 minutes, `session.freshAgeSeconds`) before a sensitive action, and throws `ReauthenticationRequiredException` otherwise.
 
 ### 3.6 Groups and roles (`requireAuth`, `requireRole`)

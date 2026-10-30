@@ -212,15 +212,72 @@ describe('Auth (CDK) — synth-time option checks', () => {
 		);
 	});
 
-	test('Email MFA on a BB-created pool throws and points at fromExisting', () => {
-		assert.match(constructError({ mfa: { mode: 'optional', types: ['EMAIL'] } }), /Auth\.fromExisting/);
+	test('Email MFA on a BB-created pool without `email` throws and points at `email` and fromExisting', () => {
+		const message = constructError({ mfa: { mode: 'optional', types: ['EMAIL'] } });
+		assert.match(message, /`email: \{ fromAddress \}`/);
+		assert.match(message, /Auth\.fromExisting/);
 	});
 
-	test("users.preferredChallenge: 'EMAIL_OTP' on a BB-created USER_AUTH pool throws and points at fromExisting", () => {
+	test("users.preferredChallenge: 'EMAIL_OTP' on a BB-created USER_AUTH pool without `email` throws and points at `email` and fromExisting", () => {
 		const message = constructError({ users: { authFlow: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' } });
 		assert.match(message, /preferredChallenge: 'EMAIL_OTP'/);
 		assert.match(message, /SES/);
+		assert.match(message, /`email: \{ fromAddress \}`/);
 		assert.match(message, /Auth\.fromExisting/);
+	});
+
+	describe('email (SES sender, L75)', () => {
+		const sender = { fromAddress: 'no-reply@example.com' };
+
+		test('refused on a wrapped pool: its email configuration belongs to its owner', () => {
+			const message = constructError({ email: sender, userPool: Auth.fromExisting('us-east-1_x') });
+			assert.match(
+				message,
+				/^Auth 'TestStack-auth': `email` configures the email sender of a user pool this block creates/,
+			);
+			assert.match(message, /Auth\.fromExisting/);
+		});
+
+		test('refused when the configuration creates no pool (direct OIDC only)', () => {
+			const message = constructError({ email: sender, emailPassword: false, oidcProviders: OKTA });
+			assert.match(message, /`email` .* no user pool/);
+		});
+
+		test('fromAddress and replyTo must be email addresses', () => {
+			for (const fromAddress of ['', 'no-reply', 'a b@example.com', '@example.com']) {
+				assert.match(
+					constructError({ email: { fromAddress } }),
+					/`email\.fromAddress` must be an email address/,
+					JSON.stringify(fromAddress),
+				);
+			}
+			assert.match(
+				constructError({ email: { ...sender, replyTo: 'support' } }),
+				/`email\.replyTo` must be an email address/,
+			);
+			assert.match(constructError(untyped({ email: {} })), /`email\.fromAddress` must be an email address/);
+		});
+
+		test('sesVerifiedDomain must be the domain of fromAddress', () => {
+			assert.match(
+				constructError({ email: { ...sender, sesVerifiedDomain: 'other.example' } }),
+				/`email\.sesVerifiedDomain` \('other\.example'\) must be the domain of `email\.fromAddress` \('example\.com'\)/,
+			);
+		});
+
+		test('sesRegion must look like an AWS Region', () => {
+			assert.match(
+				constructError({ email: { ...sender, sesRegion: 'virginia' } }),
+				/`email\.sesRegion` must be an AWS Region such as 'us-east-1'/,
+			);
+		});
+
+		test('configurationSetName must not be empty', () => {
+			assert.match(
+				constructError({ email: { ...sender, configurationSetName: '' } }),
+				/`email\.configurationSetName` must be a non-empty SES configuration set name/,
+			);
+		});
 	});
 
 	test("users.preferredChallenge: 'EMAIL_OTP' is allowed on a wrapped pool, and wherever it enables nothing", () => {

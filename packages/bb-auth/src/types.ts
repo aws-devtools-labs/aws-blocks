@@ -350,8 +350,81 @@ export interface AuthOptions {
 	 */
 	featurePlan?: 'lite' | 'essentials' | 'plus';
 
+	/**
+	 * Send the user pool's email (sign-up and password-reset codes, email MFA,
+	 * the `EMAIL_OTP` first factor) through your own Amazon SES identity instead
+	 * of Cognito's default sender.
+	 *
+	 * Cognito's default sender is limited to **50 emails per day**: enough for
+	 * development, not for production. Set this before real users sign up.
+	 *
+	 * Setting it is also what allows email MFA (`mfa.types: ['EMAIL']`) and
+	 * `users.preferredChallenge: 'EMAIL_OTP'` on a pool this block creates —
+	 * Cognito sends those codes only through SES.
+	 *
+	 * **Prerequisites (in SES, not in this stack):** `fromAddress` (or
+	 * `sesVerifiedDomain`) must be a verified SES identity in `sesRegion`. A new
+	 * SES account is in the sandbox and only delivers to verified recipients;
+	 * request production access before launch. On the first deploy Cognito
+	 * creates its email service-linked role (`AWSServiceRoleForAmazonCognitoIdpEmailService`),
+	 * so the deploying role needs `iam:CreateServiceLinkedRole` (CDK's default
+	 * deployment role has it).
+	 *
+	 * Adding, changing or removing it later updates the pool in place: no user,
+	 * session or token is affected.
+	 *
+	 * Only for a pool this block creates; a pool wrapped with `userPool` keeps
+	 * its owner's email configuration (synth refuses `email` there), and a
+	 * configuration that creates no pool has nothing to configure.
+	 *
+	 * Locally (`npm run dev`) codes are delivered the usual way (`codeDelivery`);
+	 * SES is not involved.
+	 *
+	 * @example
+	 * ```ts
+	 * new Auth(scope, 'auth', {
+	 *   email: { fromAddress: 'no-reply@example.com', fromName: 'Example App' },
+	 * });
+	 * ```
+	 *
+	 * @default Cognito's default email sender
+	 */
+	email?: EmailSenderOptions;
+
 	/** Optional logger. When omitted, a default `Logger` at `error` level is created. */
 	logger?: ChildLogger;
+}
+
+/**
+ * Settings for {@link AuthOptions.email}: the Amazon SES identity the user pool
+ * sends from. The CDK layer maps them to `UserPoolEmail.withSES()`.
+ */
+export interface EmailSenderOptions {
+	/**
+	 * The sender address, for example `no-reply@example.com`. It must be a
+	 * verified SES identity, or an address in {@link EmailSenderOptions.sesVerifiedDomain}.
+	 * The same address an `EmailClient` sends from (its `fromAddress`) works here.
+	 */
+	fromAddress: string;
+	/** Display name shown with the address (`Example App <no-reply@example.com>`). */
+	fromName?: string;
+	/** Address replies go to, when it differs from {@link EmailSenderOptions.fromAddress}. */
+	replyTo?: string;
+	/**
+	 * Region of the SES identity. Cognito can send from SES in the pool's own
+	 * Region and, for some Regions, in a designated other one (see "SES Region"
+	 * in the Cognito developer guide).
+	 *
+	 * @default the pool's Region
+	 */
+	sesRegion?: string;
+	/**
+	 * A verified SES **domain** identity to send from, instead of the address
+	 * identity. Must be the domain of {@link EmailSenderOptions.fromAddress}.
+	 */
+	sesVerifiedDomain?: string;
+	/** SES configuration set applied to every email the pool sends (for event publishing or a dedicated IP pool). */
+	configurationSetName?: string;
 }
 
 /** Settings for {@link AuthOptions.emailPassword}. */
@@ -940,7 +1013,7 @@ export interface UserPoolOptions {
 	 * `AllowedFirstAuthFactors`, alongside the factors `mfa.types` lists.
 	 * Cognito sends the `'EMAIL_OTP'` code only through Amazon SES, so under
 	 * `'USER_AUTH'` it needs a pool with an SES sender: on a pool this block
-	 * creates, synth fails and points at `Auth.fromExisting`.
+	 * creates, set {@link AuthOptions.email}; without it, synth fails.
 	 */
 	preferredChallenge?: PreferredChallenge;
 
