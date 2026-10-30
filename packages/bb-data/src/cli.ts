@@ -18,6 +18,9 @@
  *                            migrate/status/generate-types refuse on a fromExisting() app
  *                            (they would otherwise silently target local PGlite).
  *   --stage <name>           Stage label for external runs (advisory-lock key + logging).
+ *   -h, --help               Print usage (of the verb, when one is given) and exit 0. Checked
+ *                            before anything else, anywhere in the arguments, so
+ *                            `bb-data pull --help` never connects, prompts or writes.
  */
 
 import { PGliteEngine } from './engines/pglite-engine.js';
@@ -105,7 +108,66 @@ function takeFlagOrBool(args: string[], flag: string): { present: boolean; value
   return { present: false };
 }
 
+/** The verbs, with the usage that `bb-data <verb> --help` prints. */
+const VERB_HELP: Record<string, string> = {
+  migrate: `
+Usage: bb-data migrate [dir] [--url <conn>] [--stage <name>] [--regenerate-types[=<dir>]]
+
+Apply pending SQL migrations from [dir] (default: ./migrations), in file-name order.
+Without --url it applies them to the local PGlite database in .bb-data/; on an app whose
+database is external (fromExisting()) it refuses instead, with exit 1.
+
+Options:
+  --url <conn>             Apply to this external database (Supabase/Neon connection string).
+                           Default: the BLOCKS_MIGRATE_URL environment variable, if set.
+  --stage <name>           Stage label for an external run (advisory-lock key and logging).
+  --regenerate-types[=<dir>]
+                           After an external migrate that applied something, refresh
+                           database.types.ts and database.meta.ts in <dir> (default: ./aws-blocks).
+  -h, --help               Print this help and exit.
+`,
+  status: `
+Usage: bb-data status [dir] [--url <conn>]
+
+Show applied and pending migrations from [dir] (default: ./migrations). Reads only.
+Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+external (fromExisting()) it refuses instead, with exit 1.
+
+Options:
+  --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  -h, --help               Print this help and exit.
+`,
+  'generate-types': `
+Usage: bb-data generate-types [output] [--url <conn>]
+
+Introspect the schema and write TypeScript types to [output] (default: ./types/database.ts).
+Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+external (fromExisting()) it refuses instead, with exit 1.
+
+Options:
+  --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  -h, --help               Print this help and exit.
+`,
+  pull: `
+Usage: bb-data pull [output-dir]
+
+Interactive: asks whether the database is for development or production, then for its
+connection string, introspects it and writes the generated files to [output-dir]
+(default: ./aws-blocks). It needs a terminal and exits 1 without one.
+
+Options:
+  -h, --help               Print this help and exit.
+`,
+};
+
 async function main() {
+  // Help first, anywhere in the arguments: `bb-data pull x --help` must not run pull.
+  if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
+    const verb = rawArgs.find((arg) => Object.hasOwn(VERB_HELP, arg));
+    if (verb) console.log(VERB_HELP[verb]);
+    else printHelp();
+    return;
+  }
   const args = rawArgs.slice(1);
   const url = takeFlag(args, '--url') ?? process.env.BLOCKS_MIGRATE_URL;
   const stage = takeFlag(args, '--stage');
@@ -145,7 +207,7 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
     if (applied.length === 0) console.log('No pending migrations.');
     else {
       console.log(`Applied ${applied.length} migration(s) to the external database:`);
-      applied.forEach(m => console.log(`  ✓ ${m}`));
+      for (const m of applied) console.log(`  ✓ ${m}`);
     }
 
     // Dev loop: refresh generated types from the migrated schema so the customer
@@ -184,7 +246,7 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
       console.log('No pending migrations.');
     } else {
       console.log(`Applied ${applied.length} migration(s):`);
-      applied.forEach(m => console.log(`  ✓ ${m}`));
+      for (const m of applied) console.log(`  ✓ ${m}`);
     }
   } finally {
     await engine.destroy();
@@ -214,14 +276,14 @@ async function status(args: string[], url: string | undefined) {
 
       console.log(`Total: ${allFiles.length} | Applied: ${applied.length} | Pending: ${pending.length}`);
       if (pending.length > 0) {
-        pending.forEach(m => console.log(`  ⏳ ${m}`));
+        for (const m of pending) console.log(`  ⏳ ${m}`);
       } else {
         console.log('All migrations applied.');
       }
     } catch {
       // _migrations table doesn't exist yet — all are pending
       console.log(`Total: ${allFiles.length} | Applied: 0 | Pending: ${allFiles.length}`);
-      allFiles.forEach(m => console.log(`  ⏳ ${m}`));
+      for (const m of allFiles) console.log(`  ⏳ ${m}`);
     }
   } finally {
     await engine.destroy();
@@ -269,6 +331,7 @@ Flags:
                            Without it, migrate/status/generate-types refuse on a fromExisting()
                            app rather than silently operating on local PGlite.
   --stage <name>           Stage label for external runs (advisory-lock key + logging).
+  -h, --help               Print help; \`bb-data <command> --help\` prints that command's usage.
   --regenerate-types[=<dir>]
                            After a successful external \`migrate --url\`, refresh
                            database.types.ts + database.meta.ts from the migrated

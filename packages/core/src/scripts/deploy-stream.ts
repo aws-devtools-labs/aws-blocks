@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ChildProcess } from 'node:child_process';
+import { progressToStderr } from './log.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 
@@ -403,6 +404,24 @@ export interface SignalRegistry {
   off(signal: NodeJS.Signals, handler: () => void): unknown;
 }
 
+/**
+ * A curated destination for {@link runStreaming}'s output, used at
+ * `BLOCKS_LOG_LEVEL=quiet|normal` (see `cdk-output.ts`). The runner still
+ * parses every raw line for progress and the hosting URL; it then hands raw
+ * lines to these sinks instead of `stdout`/`stderr`, and its own status lines
+ * to {@link CuratedStreams.status}.
+ */
+export interface CuratedStreams {
+  /** Receives each raw child stdout line as `line\n`. */
+  stdout: OutputSink;
+  /** Receives each raw child stderr line as `line\n`. */
+  stderr: OutputSink;
+  /** A runner status line (no trailing newline): an idle heartbeat or a signal notice. */
+  status(message: string, kind: 'heartbeat' | 'signal'): void;
+  /** Called once when the child is done: `ok` is false when the run throws. */
+  close(ok: boolean): void;
+}
+
 export interface RunStreamingOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -425,6 +444,11 @@ export interface RunStreamingOptions {
    * survives a caller-timeout kill. Fired at most once.
    */
   onHostingUrl?: (url: string) => void;
+  /**
+   * Curate the output instead of relaying it raw. When absent (every level
+   * except `quiet`/`normal`), output is relayed exactly as before.
+   */
+  curated?: CuratedStreams;
 }
 
 /** Raised when the child exits non-zero, is killed, or the operator aborts. */
@@ -475,6 +499,9 @@ export class DeployProcessError extends Error {
  *   their own sinks and never merged, so a deploy failure reason (which the CDK
  *   CLI keeps on stderr even under `--ci`) stays on stderr while progress is on
  *   stdout.
+ * - **Optional curation.** With `curated` (set by callers at
+ *   `BLOCKS_LOG_LEVEL=quiet|normal`), raw lines and the runner's status lines
+ *   go to {@link CuratedStreams} instead; without it, every line is relayed raw.
  *
  * Resolves when the child exits 0; otherwise throws {@link DeployProcessError}.
  */
@@ -488,11 +515,13 @@ export async function runStreaming(
     env,
     label = 'deploy',
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
-    stdout = process.stdout,
+    // BLOCKS_LOG_STREAM=stderr (the blocks CLI): the relayed CloudFormation events are progress.
+    stdout = progressToStderr() ? process.stderr : process.stdout,
     stderr = process.stderr,
     now = Date.now,
     signalTarget = process,
     onHostingUrl,
+    curated,
   } = options;
 
   const startedAt = now();
@@ -553,8 +582,8 @@ export async function runStreaming(
       }
     }
   };
-  relay(child.stdout, stdout, true);
-  relay(child.stderr, stderr, false);
+  relay(child.stdout, curated?.stdout ?? stdout, true);
+  relay(child.stderr, curated?.stderr ?? stderr, false);
 
   const heartbeat =
     heartbeatMs > 0
@@ -564,9 +593,9 @@ export async function runStreaming(
           const waitingOn = converging
             ? `waiting on ${describeConvergingResource(converging)}`
             : 'CloudFormation is converging';
-          stdout.write(
-            `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — ${waitingOn} (pid ${child.pid ?? '?'})\n`,
-          );
+          const message = `⏳ [${label}] still running after ${formatElapsed(now() - startedAt)} — ${waitingOn} (pid ${child.pid ?? '?'})`;
+          if (curated) curated.status(message, 'heartbeat');
+          else stdout.write(`${message}\n`);
         }, heartbeatMs)
       : undefined;
   // Never let the heartbeat timer be the reason the process stays alive.
@@ -617,13 +646,15 @@ export async function runStreaming(
         if (!coalesced) {
           deferredAt.set(signal, now());
           lastOutputAt = now();
-          stdout.write(`${message}\n`);
+          if (curated) curated.status(message, 'signal');
+          else stdout.write(`${message}\n`);
         }
         return;
       }
       if (aborting) return; // already tearing down; a repeat signal is a no-op
       aborting = true;
-      stdout.write(`${message}\n`);
+      if (curated) curated.status(message, 'signal');
+      else stdout.write(`${message}\n`);
       // Reap the whole tree (npx → cdk → node), not just the npx parent, so an
       // abort cannot leave an orphaned CDK CLI still driving the stack.
       void terminateProcessTree(child, ABORT_GRACE_MS);
@@ -632,6 +663,7 @@ export async function runStreaming(
     signalTarget.on(signal, handler);
   }
 
+  let ok = false;
   try {
     const { code, signal } = await exited;
     // Let the pipes drain so a caller reading our stdout sees the child's final
@@ -655,8 +687,10 @@ export async function runStreaming(
         { exitCode: code },
       );
     }
+    ok = true;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     removeHandlers();
+    curated?.close(ok);
   }
 }
