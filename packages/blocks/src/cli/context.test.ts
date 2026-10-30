@@ -369,6 +369,30 @@ describe('per-app dev config', () => {
 		assert.strictEqual(resolveDevConfig(own, { 'frontend-port': '3200' }).frontendCommand, 'npm run web');
 	});
 
+	it('runs the backend only with "frontend": false, even with vite or next installed', () => {
+		const root = fixtureApp({
+			dependencies: { vite: '*', next: '*' },
+			blocks: { dev: { port: 3001, frontend: false } },
+		});
+		assert.deepStrictEqual(resolveDevConfig(root), {
+			port: 3001,
+			host: undefined,
+			frontendCommand: undefined,
+			frontendPort: undefined,
+			source: 'package.json',
+		});
+		// A frontend command flag still starts one.
+		assert.strictEqual(resolveDevConfig(root, { 'frontend-command': 'npm run web' }).frontendCommand, 'npm run web');
+		assert.throws(
+			() => resolveDevConfig(fixtureApp({ blocks: { dev: { frontend: false, frontendCommand: 'npm run web' } } })),
+			/"blocks\.dev\.frontend": false cannot be combined/,
+		);
+		assert.throws(
+			() => resolveDevConfig(fixtureApp({ blocks: { dev: { frontend: true } } })),
+			/"blocks\.dev\.frontend" can only be false/,
+		);
+	});
+
 	it('rejects invalid ports and conflicting flags as usage errors', () => {
 		const root = fixtureApp({ blocks: { dev: { port: 'abc' } } });
 		assert.throws(() => resolveDevConfig(root), /"blocks\.dev\.port" must be a port number/);
