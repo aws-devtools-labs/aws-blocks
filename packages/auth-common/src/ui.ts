@@ -1052,7 +1052,9 @@ export interface AuthenticatorOptions {
  *   navigates; Enter in any field submits it), and inputs carry `autocomplete`
  *   hints — `username`, `current-password` / `new-password`, `one-time-code` — so
  *   password managers fill and save them; a field override's `autocomplete` wins
- * - External actions (with `url`): submits a real HTML form to the external URL
+ * - External actions (with `url`): submits a real HTML form to the external URL.
+ *   One marked `unavailable` (a hosted-UI provider in `npm run dev`) renders its
+ *   button disabled, with the reason as a hint below it
  * - Broadcasts auth changes via `broadcastAuthChange()` so other components
  *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically.
  *   It does so only through {@link submitAuthAction}, so each sign-in or
@@ -1695,6 +1697,23 @@ function renderExternalAction(action: AuthAction): Node {
 	btn.textContent = action.label;
 	btn.className = 'bb-button bb-button-primary bb-button-block';
 	form.appendChild(btn);
+
+	// An action this environment cannot serve (a hosted-UI provider in
+	// `npm run dev`): a disabled button with the reason, instead of a
+	// navigation to an error.
+	if (action.unavailable) {
+		btn.disabled = true;
+		// Presentational (no `data-testid`, like field hints): tests read the
+		// text off the action's hooked form.
+		const hintId = `bb-unavailable-${action.name}`;
+		const hint = document.createElement('p');
+		hint.className = 'bb-hint';
+		hint.id = hintId;
+		hint.textContent = action.unavailable;
+		btn.setAttribute('aria-describedby', hintId);
+		form.appendChild(hint);
+		form.addEventListener('submit', (event) => event.preventDefault());
+	}
 
 	return form;
 }

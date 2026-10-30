@@ -1101,6 +1101,35 @@ describe('test hooks', () => {
 		assert.strictEqual(testId(form!, 'authenticator-submit')?.textContent, 'Sign in with Google');
 	});
 
+	test('an unavailable external action renders a disabled button with its reason, and never navigates', async () => {
+		const hint = 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.';
+		const api = mockApi(signedOutState([
+			{ name: 'signIn:google', label: 'Sign in with Google', url: '/aws-blocks/auth/signin/google', method: 'GET', fields: [], unavailable: hint },
+			{ name: 'signIn:okta', label: 'Sign in with Okta', url: '/aws-blocks/auth/signin/okta', method: 'GET', fields: [] },
+		]));
+		const el = Authenticator(api);
+		await flush();
+
+		const google = testId(el, 'authenticator-action-signIn:google');
+		assert.ok(google, 'the unavailable action is still rendered, under its usual hook');
+		const button = testId(google!, 'authenticator-submit') as HTMLButtonElement | null;
+		assert.ok(button);
+		assert.strictEqual(button!.disabled, true, 'its button is disabled');
+		assert.ok(google!.textContent?.includes(hint), 'the reason is shown in the action');
+		const describedBy = button!.getAttribute('aria-describedby');
+		assert.ok(describedBy, 'the button is described by the hint');
+		assert.strictEqual(google!.querySelector(`[id="${describedBy}"]`)?.textContent, hint);
+
+		// A submit that slips through (e.g. a script) is cancelled.
+		const event = new window.Event('submit', { cancelable: true });
+		google!.dispatchEvent(event as unknown as Event);
+		assert.strictEqual(event.defaultPrevented, true);
+
+		const okta = testId(el, 'authenticator-action-signIn:okta');
+		assert.strictEqual((testId(okta!, 'authenticator-submit') as HTMLButtonElement).disabled, false);
+		assert.ok(!okta!.textContent?.includes('works after deploy'), 'an available action carries no hint');
+	});
+
 	// Federated action names carry a `<action>:<provider>` suffix, and the hook
 	// keeps it verbatim, so the documented name contains a colon. That is only a
 	// hazard where a locator would parse the value as selector grammar, so pin

@@ -13,6 +13,7 @@
 import assert from 'node:assert';
 import { createHmac } from 'node:crypto';
 import { rmSync } from 'node:fs';
+import { get as httpGet } from 'node:http';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import type { AuthState } from '@aws-blocks/auth-common';
 import { ApiError, clearRouteRegistry, getRegisteredRoutes } from '@aws-blocks/core';
@@ -451,6 +452,94 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 			'signIn:my idp': '/aws-blocks/auth/signin/my%20idp',
 			'signIn:acme': '/aws-blocks/auth/signin/acme',
 		});
+
+		// Locally, the hosted-UI providers (social, SAML, `federateVia: 'cognito'`)
+		// are marked unavailable, with the hint the Authenticator shows; the
+		// providers that work offline are not.
+		const unavailable = Object.fromEntries(state.actions.map((a) => [a.name, a.unavailable ?? null]));
+		assert.deepStrictEqual(unavailable, {
+			'signIn:google': 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+			'signIn:corp': null,
+			'signIn:okta': null,
+			'signIn:gh': null,
+			'signIn:entra': 'Entra sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+			'signIn:my idp': null,
+			'signIn:acme': 'Acme sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+		});
+	});
+
+	test('mock: a browser navigating to a hosted-UI sign-in route gets an HTML page, an API client the JSON', async () => {
+		new Auth(unique(), 'auth', mixed());
+		const url = `${server.origin}/aws-blocks/auth/signin/google`;
+		// Node's `fetch` replaces `Sec-Fetch-Mode`, so a navigation is sent with `node:http`.
+		const navigate = (headers: Record<string, string>) =>
+			new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>(
+				(resolve, reject) => {
+					httpGet(url, { headers }, (res) => {
+						let body = '';
+						res.setEncoding('utf8');
+						res.on('data', (chunk: string) => {
+							body += chunk;
+						});
+						res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }));
+					}).on('error', reject);
+				},
+			);
+		const navigations: Record<string, string>[] = [
+			{ accept: 'text/html,application/xhtml+xml' },
+			{ 'sec-fetch-mode': 'navigate' },
+		];
+		for (const headers of navigations) {
+			const page = await navigate(headers);
+			assert.strictEqual(page.status, 501, 'the same status as the JSON answer');
+			assert.match(String(page.headers['content-type']), /^text\/html/);
+			assert.match(String(page.headers['content-security-policy']), /default-src 'none'/);
+			const html = page.body;
+			assert.match(html, /<title>Google sign-in is not available here<\/title>/);
+			assert.match(html, /Google sign-in works after deploy \(npm run sandbox\), or use stubIdp\(\) locally\./);
+			assert.match(html, /not a configuration error/);
+			assert.match(html, /ProviderMisconfiguredException/);
+			assert.doesNotMatch(html, /<script/i);
+		}
+		// No Accept header (fetch, a native SDK): the JSON body, name unchanged.
+		const json = await fetch(url, { redirect: 'manual' });
+		assert.strictEqual(json.status, 501);
+		assert.match(json.headers.get('content-type') ?? '', /^application\/json/);
+		assert.strictEqual((await json.json()).name, AuthErrors.ProviderMisconfigured);
+		// A provider that works offline still redirects a browser.
+		const okta = await fetch(`${server.origin}/aws-blocks/auth/signin/okta`, {
+			redirect: 'manual',
+			headers: { accept: 'text/html' },
+		});
+		assert.strictEqual(okta.status, 302);
+	});
+
+	test('mock: the unavailable page escapes a hostile provider id everywhere it appears, and cannot be framed', async () => {
+		const hostile = '<svg/onload=alert(1)>';
+		new Auth(unique(), 'auth', {
+			emailPassword: false,
+			samlProviders: { [hostile]: { metadataUrl: 'https://idp.example.com/metadata.xml' } },
+		});
+		const page = await fetch(`${server.origin}/aws-blocks/auth/signin/${encodeURIComponent(hostile)}`, {
+			redirect: 'manual',
+			headers: { accept: 'text/html' },
+		});
+		assert.strictEqual(page.status, 501);
+		assert.match(page.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/);
+		assert.strictEqual(page.headers.get('x-content-type-options'), 'nosniff');
+		const html = await page.text();
+		assert.ok(!html.includes('<svg'), 'no raw tag from the provider id anywhere in the page');
+		const title = /<title>([\s\S]*?)<\/title>/.exec(html)?.[1] ?? '';
+		const h1 = /<h1>([\s\S]*?)<\/h1>/.exec(html)?.[1] ?? '';
+		const paragraphs = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => m[1]);
+		const message = paragraphs.find((p) => p.includes('unavailable locally')) ?? '';
+		for (const [where, text] of [
+			['title', title],
+			['h1', h1],
+			['message', message],
+		] as const) {
+			assert.ok(text.includes('&lt;svg/onload=alert(1)&gt;'), `${where} carries the escaped id: ${text}`);
+		}
 	});
 
 	test('aws-runtime: a deployed stub IdP answers an actionable 501; a hosted-UI provider without its config keys refuses clearly', async () => {
