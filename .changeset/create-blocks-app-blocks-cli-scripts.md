@@ -1,0 +1,14 @@
+---
+"@aws-blocks/create-blocks-app": minor
+"@aws-blocks/core": patch
+---
+
+feat(create-blocks-app): scaffold apps that call the blocks CLI
+
+New apps no longer get `aws-blocks/scripts/*.ts` wrappers. Every lifecycle script in `package.json` keeps its name and becomes an alias of the `blocks` CLI from `@aws-blocks/blocks`: `"dev": "blocks dev"`, `"dev:stop": "blocks dev stop"`, `"sandbox": "blocks sandbox"`, `"sandbox:deploy": "blocks sandbox deploy"`, `"sandbox:destroy": "blocks sandbox destroy"`, `"deploy": "blocks deploy"`, `"destroy": "blocks destroy"`, `"secret": "blocks secret"`, `"typegen": "blocks generate types"`, `"spec": "blocks generate spec"`, `"vendorize": "blocks vendorize"` and `"cleanup": "blocks dev stop --all"`. `npm run dev` and the other commands work as before; run `npx --no -- blocks --help` for every command and its options. The next steps and docs show the npm scripts first and `npx --no -- blocks <command>` for a direct run: `--no` uses the installed CLI and never downloads a package, while a bare `npx blocks` would install the unrelated `blocks` package from npm.
+
+The dev server settings that `server.ts` used to hard-code are now in `package.json` under `"blocks": { "dev": { … } }`: port 3001 for the backend-only templates (`api-only`, `backend`, `sql`), Vite on port 3100 for the Vite templates, and `next dev` on port 3100 for `nextjs`. Adding AWS Blocks to an existing project writes the same scripts and copies the template's `blocks.dev` unless the project already has one. The Amplify overlay's `blocks:dev` and `blocks:stop` scripts call the CLI too (backend-only on port 3001); the overlay keeps `aws-blocks/scripts/generate-client.ts`, because its client needs the Amplify auth middleware.
+
+Two behaviours change with the CLI. `npm run destroy` now asks before it deletes the production stack, and without a terminal it needs `npm run destroy -- --yes`. `npm run cleanup` now stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
+
+The scaffolded `AGENTS.md` describes the Blocks CLI (`--output json`, `--query`, `--yes` and the exit codes) and no longer says that `sandbox:deploy` generates the client after the deploy. The `@aws-blocks/core` README now shows how to set the dev server host with `blocks dev --host` or `package.json#blocks.dev.host`.

@@ -55,16 +55,11 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 │   ├── index.cdk.ts      # CDK stack definition
 │   ├── index.handler.ts  # Lambda handler
 │   ├── client.js         # Auto-generated frontend client
-│   ├── package.json      # Backend workspace dependencies
-│   └── scripts/
-│       ├── server.ts     # Local dev server
-│       ├── sandbox.ts    # Sandbox deployment
-│       ├── deploy.ts     # Production deployment
-│       └── destroy.ts    # Stack teardown
+│   └── package.json      # Backend workspace dependencies
 ├── cdk.json              # CDK configuration
 ├── src/
 │   └── ...               # Your existing code
-└── package.json          # Updated with Blocks scripts
+└── package.json          # Updated with Blocks scripts and "blocks" CLI settings
 ```
 
 ### Backend Structure
@@ -120,19 +115,36 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
+Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws-blocks/blocks`, so the npm script names stay the same and `npm run deploy` runs `blocks deploy`. Run `npx --no -- blocks --help` in the app for every command and its options. The dev server settings that the scripts used to hard-code live in `package.json#blocks.dev`.
+
 ```json
 {
   "scripts": {
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "dev": "blocks dev",
+    "dev:stop": "blocks dev stop",
+    "sandbox": "blocks sandbox",
+    "sandbox:deploy": "blocks sandbox deploy",
+    "sandbox:destroy": "blocks sandbox destroy",
+    "sandbox:console": "blocks sandbox console",
+    "cleanup": "blocks dev stop --all",
+    "deploy": "blocks deploy",
+    "destroy": "blocks destroy",
+    "secret": "blocks secret",
+    "typegen": "blocks generate types",
+    "spec": "blocks generate spec",
+    "vendorize": "blocks vendorize",
+    "prebuild": "blocks-generate-client",
     "build": "tsc && vite build"
+  },
+  "blocks": {
+    "dev": { "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 }
   }
 }
 ```
+
+Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001 } }`; `nextjs` runs `npx next dev --webpack --hostname 127.0.0.1 --port 3100`. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way, and copies the template's `blocks.dev` unless your `package.json` already has one. The Amplify overlay adds `blocks:dev` (`blocks dev`, backend-only on port 3001) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
+
+`npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`.
 
 ## Templates
 
@@ -146,7 +158,7 @@ npx @aws-blocks/create-blocks-app --help
 
 ## Related Packages
 
-- [blocks](../blocks/README.md) - Core runtime and Building Blocks
+- [blocks](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#readme) - Core runtime and Building Blocks
 
 ## License
 

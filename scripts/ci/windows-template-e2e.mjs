@@ -134,7 +134,8 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    runTeardown('npm', ['run', 'destroy'], inApp);
+    // `blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    runTeardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 
   if (teardownFailures.length > 0) {
