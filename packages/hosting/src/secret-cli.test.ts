@@ -2,8 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { describe, it } from 'node:test';
-import { forceDeleteWarning, runValueCli } from './secret-cli.js';
+import { afterEach, describe, it, mock } from 'node:test';
+import { forceDeleteWarning, runValueCli, ValueCliUsageError } from './secret-cli.js';
+
+afterEach(() => mock.restoreAll());
+
+/** Stops a forced delete at its warning, before any store call: proves the confirmation passed. */
+function stopAtForceWarning(): void {
+	mock.method(console, 'warn', () => {
+		throw new Error('reached the forced delete');
+	});
+}
 
 // argv parsing + validation only (no live SSM/Secrets Manager).
 
@@ -135,5 +144,32 @@ void describe('removeValue --force safeguards (PR #850 review, S3)', () => {
 
 	void it('--yes is parsed as a flag, not taken as the key', async () => {
 		await assert.rejects(runValueCli(['remove', '--force', '--yes'], { kind: 'secret' }), /Usage: .*remove <KEY>/);
+	});
+});
+
+void describe('runValueCli() — interactive / yes options', () => {
+	void it('`yes: true` confirms `remove --force` as --yes does', async () => {
+		stopAtForceWarning();
+		await assert.rejects(
+			runValueCli(['remove', 'DB_PASSWORD', '--force'], { kind: 'secret', yes: true }),
+			/reached the forced delete/,
+		);
+	});
+
+	void it('key-only set with `interactive: false` refuses the prompt with a ValueCliUsageError', async () => {
+		await assert.rejects(
+			runValueCli(['set', 'ONLY_KEY'], { kind: 'secret', interactive: false }),
+			(e: unknown) => e instanceof ValueCliUsageError && /cannot prompt/.test(e.message),
+		);
+	});
+
+	void it('usage failures are ValueCliUsageError instances', async () => {
+		for (const argv of [['frobnicate'], ['set'], ['remove'], ['set', '--stage'], ['remove', 'K', '--force']]) {
+			await assert.rejects(
+				runValueCli(argv, { kind: 'secret' }),
+				(e: unknown) => e instanceof ValueCliUsageError,
+				argv.join(' '),
+			);
+		}
 	});
 });
