@@ -162,53 +162,81 @@ describe('run environment', () => {
 	});
 });
 
-describe('signals sent to the CLI while a child runs', () => {
+// On Windows, child.kill() ends the child without running its handlers.
+// These tests signal a real child process, so they run on the real clock: fake
+// timers cannot advance it. The grace period is shortened to keep them quick, and
+// the waits check that a signal did not arrive, which has no event to await.
+describe('signals sent to the CLI while a child runs', { skip: process.platform === 'win32' }, () => {
+	const GRACE_MS = 300;
+
 	/**
-	 * Start a fake child that records the first signal it receives in a file and
-	 * exits; then deliver `signals` to the CLI's listeners, in order.
+	 * Start a fake child that appends each signal it receives to a log, and exits
+	 * 50 ms after a SIGTERM; with `exitOnSigint`, after a SIGINT too, as the dev
+	 * server and the sandbox clean up after a Ctrl-C. SIGINT is otherwise ignored.
 	 */
-	async function deliver(signals: NodeJS.Signals[], sigintReachedChild: boolean) {
+	async function start(options: { exitOnSigint?: boolean } = {}) {
 		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-signals-'));
 		const log = join(dir, 'signals.log');
 		const ready = join(dir, 'ready');
 		const script = `
-const { writeFileSync } = require('node:fs');
+const { appendFileSync, writeFileSync } = require('node:fs');
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 	process.on(signal, () => {
-		writeFileSync(${JSON.stringify(log)}, signal);
-		process.exit(0);
+		appendFileSync(${JSON.stringify(log)}, signal + '\\n');
+		if (signal === 'SIGTERM' || (signal === 'SIGINT' && ${options.exitOnSigint === true})) {
+			setTimeout(() => process.exit(0), 50);
+		}
 	});
 }
-writeFileSync(${JSON.stringify(ready)}, '');
+writeFileSync(${JSON.stringify(ready)}, String(process.pid));
 setInterval(() => {}, 1000);
 `;
-		const spawn = createSpawnChild({ sigintReachedChild: () => sigintReachedChild });
+		const spawn = createSpawnChild({ sigintGraceMs: GRACE_MS });
 		const running = spawn({ command: process.execPath, args: ['-e', script], cwd: dir, env: process.env });
 		// A real child process: poll for the file it writes once its handlers are installed.
-		while (!existsSync(ready)) await sleep(10);
-		for (const signal of signals) process.emit(signal);
-		const result = await running;
-		return { result, received: readFileSync(log, 'utf-8') };
+		while (!existsSync(ready) || readFileSync(ready, 'utf-8') === '') await sleep(10);
+		const received = () => (existsSync(log) ? readFileSync(log, 'utf-8').trim().split('\n') : []);
+		return { running, pid: Number(readFileSync(ready, 'utf-8')), received };
 	}
 
-	it('forwards a SIGINT sent to the CLI alone, and still reports the interruption', async () => {
-		const { result, received } = await deliver(['SIGINT'], false);
-		assert.strictEqual(received, 'SIGINT');
+	it('forwards one SIGINT after the grace period to a child that is still running', async () => {
+		const child = await start();
+		// A SIGINT sent to the CLI's PID alone, repeated: nothing reaches the child before the grace period.
+		process.emit('SIGINT');
+		process.emit('SIGINT');
+		await sleep(GRACE_MS / 2);
+		assert.deepStrictEqual(child.received(), []);
+		while (child.received().length === 0) await sleep(10);
+		await sleep(GRACE_MS * 2);
+		process.emit('SIGINT');
+		await sleep(GRACE_MS * 2);
+		assert.deepStrictEqual(child.received(), ['SIGINT'], 'exactly one SIGINT is forwarded');
+		process.emit('SIGTERM');
+		const result = await child.running;
 		assert.strictEqual(result.interrupted, true);
+		assert.deepStrictEqual(child.received(), ['SIGINT', 'SIGTERM']);
 	});
 
-	it('does not repeat a Ctrl-C that already reached the child', async () => {
-		// The SIGTERM after it stops the child; had the SIGINT been forwarded, the child would record it first.
-		const { result, received } = await deliver(['SIGINT', 'SIGTERM'], true);
-		assert.strictEqual(received, 'SIGTERM');
+	it('forwards nothing to a child that the Ctrl-C reached, which exits within the grace period', async () => {
+		const child = await start({ exitOnSigint: true });
+		// A Ctrl-C in the terminal signals the whole process group: the CLI and the child.
+		process.emit('SIGINT');
+		process.kill(child.pid, 'SIGINT');
+		const result = await child.running;
+		await sleep(GRACE_MS * 2);
 		assert.strictEqual(result.interrupted, true);
+		assert.deepStrictEqual(child.received(), ['SIGINT'], 'only the Ctrl-C itself');
 	});
 
 	it('forwards SIGTERM, and SIGHUP as SIGTERM, which tsx passes on', async () => {
-		assert.strictEqual((await deliver(['SIGTERM'], false)).received, 'SIGTERM');
-		const hangup = await deliver(['SIGHUP'], false);
-		assert.strictEqual(hangup.received, 'SIGTERM');
-		assert.strictEqual(hangup.result.interrupted, false);
+		const term = await start();
+		process.emit('SIGTERM');
+		assert.strictEqual((await term.running).interrupted, false);
+		assert.deepStrictEqual(term.received(), ['SIGTERM']);
+		const hangup = await start();
+		process.emit('SIGHUP');
+		assert.strictEqual((await hangup.running).interrupted, false);
+		assert.deepStrictEqual(hangup.received(), ['SIGTERM']);
 	});
 });
 
