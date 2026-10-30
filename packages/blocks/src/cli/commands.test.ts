@@ -230,6 +230,52 @@ describe('lifecycle commands', () => {
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
 	});
 
+	it('forwards --telemetry-file to every runner as core reads it, in either form and position', async () => {
+		const root = fixtureApp();
+		const file = join(root, 'events.json');
+		for (const argv of [
+			['dev', '--telemetry-file=events.json'],
+			['dev', '--telemetry-file', 'events.json'],
+			['--telemetry-file', file, 'dev'],
+		]) {
+			const run = await runCli(argv, { cwd: root });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.deepStrictEqual(run.spawned[0].args.slice(-1), [`--telemetry-file=${file}`], argv.join(' '));
+		}
+		const deploy = await runCli(['deploy', '--wait-live', '--telemetry-file=events.json'], { cwd: root, env: AWS_ENV });
+		assert.strictEqual(deploy.code, 0, deploy.stderr);
+		assert.deepStrictEqual(deploy.spawned[0].args.slice(-2), ['--wait-live', `--telemetry-file=${file}`]);
+		const sandbox = await runCli(['sandbox', 'destroy', '--telemetry-file=events.json'], { cwd: root, env: AWS_ENV });
+		assert.strictEqual(sandbox.code, 0, sandbox.stderr);
+		assert.deepStrictEqual(sandbox.spawned[0].args.slice(-1), [`--telemetry-file=${file}`]);
+		// Without the flag, no runner gets one.
+		const plain = await runCli(['dev'], { cwd: root });
+		assert.ok(!plain.spawned[0].args.some((arg) => arg.startsWith('--telemetry-file')));
+	});
+
+	it('runs "sandbox --deploy-only", the old script flag, as "sandbox deploy"', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['sandbox', '--deploy-only'], { cwd: root, env: AWS_ENV });
+		// The fake runner records no deploy result, so the deploy-only path exits 1 after it ran.
+		const options = runnerOptions(run.spawned[0], 'sandbox') as { deployOnly: boolean };
+		assert.strictEqual(options.deployOnly, true, run.stderr);
+		assert.strictEqual(run.spawned[0].terminateOnHangup, false);
+	});
+
+	it('exports a configured dev host as BLOCKS_DEV_HOST, which opts /realtime into it', async () => {
+		const root = fixtureApp({ blocks: { dev: { host: 'mybox.example.com' } } });
+		const run = await runCli(['dev', '--no-frontend'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.strictEqual(run.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
+		const flagged = await runCli(['dev', '--host', '0.0.0.0'], { cwd: root });
+		assert.strictEqual(flagged.spawned[0].env.BLOCKS_DEV_HOST, '0.0.0.0');
+		const sandbox = await runCli(['sandbox'], { cwd: root, env: AWS_ENV });
+		assert.strictEqual(sandbox.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
+		// Without a host, the inherited environment decides, as core's dev server does.
+		const plain = await runCli(['dev'], { cwd: fixtureApp(), env: { BLOCKS_DEV_HOST: 'other.example.com' } });
+		assert.strictEqual(plain.spawned[0].env.BLOCKS_DEV_HOST, 'other.example.com');
+	});
+
 	it('maps child exit codes: 2 stays a usage error, others become 1, SIGINT 130', async () => {
 		const cwd = fixtureApp();
 		for (const [result, expected] of [

@@ -124,6 +124,27 @@ interface RunnerRun extends Pick<SpawnSpec, 'terminateOnHangup'>, Pick<RunnerLau
 }
 
 /**
+ * The `--telemetry-file` argument that core's telemetry client reads from the
+ * runner's argv, absolute because the runner runs from the project root.
+ */
+function telemetryArgs(ctx: Context): string[] {
+	const file = ctx.globals.telemetryFile;
+	return file === undefined ? [] : [`--telemetry-file=${resolve(ctx.deps.cwd, file)}`];
+}
+
+/**
+ * The environment of the dev server runner. An explicit host also opts the
+ * local realtime WebSocket into that host's origins, which it reads from
+ * `BLOCKS_DEV_HOST`; a loopback host adds nothing, as loopback is always allowed.
+ */
+function devServerEnv(options: { backendPath: string; host?: string }): NodeJS.ProcessEnv {
+	return {
+		[DEV_OPTIONS_ENV]: JSON.stringify(options),
+		...(options.host === undefined ? {} : { BLOCKS_DEV_HOST: options.host }),
+	};
+}
+
+/**
  * Run a lifecycle runner with the app's `tsx`, from the project root (see
  * {@link runnerArgs}). The runner's client generation (core's deploy and
  * sandbox) loads the same `tsx`.
@@ -137,7 +158,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		args: runnerArgs(root, runnerPath(run.runner), {
 			watch: run.watch,
 			conditions: run.conditions,
-			args: [...options, ...(run.args ?? [])],
+			args: [...options, ...(run.args ?? []), ...telemetryArgs(ctx)],
 		}),
 		cwd: root,
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
@@ -276,7 +297,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		runner: 'dev-server',
 		operation: 'blocks dev',
 		watch: true,
-		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath, ...devConfig }) },
+		env: devServerEnv({ backendPath, ...devConfig }),
 		terminateOnHangup: true,
 	});
 }
@@ -336,7 +357,7 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		runner: 'sandbox',
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
 		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
-		env: { [DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }) },
+		env: devServerEnv({ backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not stopped by the CLI on a hangup,
 		// but core's sandbox deploy does not defer SIGHUP: a hangup of the whole process group ends it.
 		terminateOnHangup: !deployOnly,

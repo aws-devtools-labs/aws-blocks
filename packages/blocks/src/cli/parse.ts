@@ -18,6 +18,7 @@ import {
 	type AliasSpec,
 	COMMANDS,
 	type CommandSpec,
+	FLAG_ALIASES,
 	type FlagSpec,
 	type FlagValues,
 	findCommand,
@@ -39,6 +40,8 @@ export interface Globals {
 	cwd?: string;
 	/** A dotted path into the JSON result; its value prints raw. */
 	query?: string;
+	/** Where core also writes the telemetry events; forwarded to the runners. */
+	telemetryFile?: string;
 }
 
 export interface ParsedInvocation {
@@ -163,6 +166,7 @@ function toGlobals(values: FlagValues): Globals {
 		region: text('region'),
 		cwd: text('cwd'),
 		query: text('query'),
+		telemetryFile: text('telemetry-file'),
 	};
 }
 
@@ -281,9 +285,22 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		});
 	}
 
-	const { command, alias } = match;
-	const tail = [...(alias?.args ?? []), ...rest.slice(used)];
-	const aliasName = alias?.name.join(' ');
+	let { command } = match;
+	let tail = [...(match.alias?.args ?? []), ...rest.slice(used)];
+	let aliasName = match.alias?.name.join(' ');
+	// A flag alias counts only before `--`: after it, the token is the user's argument.
+	const end = tail.includes('--') ? tail.indexOf('--') : tail.length;
+	const flagAlias = FLAG_ALIASES.find(
+		(spec) => spec.command.join(' ') === command.path.join(' ') && tail.slice(0, end).includes(`--${spec.flag}`),
+	);
+	if (flagAlias) {
+		const target = findCommand(flagAlias.target);
+		if (!target) throw new Error(`flag alias --${flagAlias.flag} targets an unknown command`);
+		const at = tail.indexOf(`--${flagAlias.flag}`);
+		tail = [...tail.slice(0, at), ...tail.slice(at + 1)];
+		aliasName = `${command.path.join(' ')} --${flagAlias.flag}`;
+		command = target;
+	}
 
 	let parsed: ParsedInvocation;
 	if (command.passthrough) {

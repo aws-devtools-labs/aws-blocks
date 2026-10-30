@@ -97,6 +97,16 @@ export interface AliasSpec {
 	args?: readonly string[];
 }
 
+/** A hidden flag spelling of another command: `blocks sandbox --deploy-only` runs `blocks sandbox deploy`. */
+export interface FlagAliasSpec {
+	/** The command the flag is given to. */
+	command: readonly string[];
+	/** The flag, without `--`. It takes no value. */
+	flag: string;
+	/** The canonical path it runs. */
+	target: readonly string[];
+}
+
 /** Options accepted at every level. `-v` is `--verbose`; `--version` is long-only. */
 export const GLOBAL_FLAGS: readonly FlagSpec[] = [
 	{ name: 'help', short: 'h', type: 'boolean', description: 'Show help for the current command level' },
@@ -125,6 +135,12 @@ export const GLOBAL_FLAGS: readonly FlagSpec[] = [
 	{ name: 'profile', type: 'string', value: 'name', description: 'AWS profile; sets AWS_PROFILE for the run' },
 	{ name: 'region', type: 'string', value: 'region', description: 'AWS Region; sets AWS_REGION for the run' },
 	{ name: 'cwd', short: 'C', type: 'string', value: 'dir', description: 'Run as if started in <dir>' },
+	{
+		name: 'telemetry-file',
+		type: 'string',
+		value: 'path',
+		description: "Also write the run's telemetry events to <path>",
+	},
 ];
 
 const STAGE_HELP =
@@ -477,6 +493,11 @@ export const ALIASES: readonly AliasSpec[] = [
 	{ name: ['typegen'], target: ['generate', 'types'] },
 	{ name: ['generate-client'], target: ['generate', 'client'] },
 	{ name: ['spec'], target: ['generate', 'spec'] },
+];
+
+/** Hidden flag aliases, for the flags of the scripts that the npm scripts ran before the CLI. */
+export const FLAG_ALIASES: readonly FlagAliasSpec[] = [
+	{ command: ['sandbox'], flag: 'deploy-only', target: ['sandbox', 'deploy'] },
 ];
 
 /** The canonical command for a path, if any. */
