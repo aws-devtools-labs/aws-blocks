@@ -160,7 +160,7 @@ describe('blocks migrate', () => {
 		const backend = writeApp('backend@1aeebe50');
 		const run = await runCli(['migrate'], { cwd: backend });
 		assert.strictEqual(run.code, 0, run.stderr);
-		assert.deepStrictEqual(readPkg(backend).blocks, { dev: { port: 3001 } });
+		assert.deepStrictEqual(readPkg(backend).blocks, { dev: { port: 3001, frontend: false } });
 		assert.strictEqual(readPkg(backend).scripts.dev, 'blocks dev');
 		// sandbox-id.ts is imported by index.cdk.ts and is not a lifecycle wrapper: left alone.
 		assert.deepStrictEqual(scriptsDir(backend), ['sandbox-id.ts']);
@@ -182,7 +182,7 @@ describe('blocks migrate', () => {
 		assert.strictEqual(pkg.scripts['blocks:dev'], 'blocks dev');
 		assert.strictEqual(pkg.scripts['blocks:stop'], 'blocks dev stop');
 		assert.match(pkg.scripts['blocks:generate-client'], /tsx aws-blocks\/scripts\/generate-client\.ts$/);
-		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001 } });
+		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } });
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
 	});
 
@@ -281,7 +281,7 @@ describe('blocks migrate', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(snapshot(root), before);
 		const result = JSON.parse(run.stdout);
-		assert.deepStrictEqual(result.devConfig, { port: 3001 });
+		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false });
 		assert.deepStrictEqual(result.changed, ['package.json']);
 		assert.strictEqual(readPkg(root).blocks, undefined, 'package.json has no blocks.dev yet');
 	});

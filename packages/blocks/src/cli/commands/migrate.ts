@@ -26,7 +26,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, posix as posixPath, relative } from 'node:path';
-import type { DevConfig } from '../config.js';
+import type { DevPackageConfig } from '../config.js';
 import type { Context } from '../context.js';
 import { CliError, ExitCode } from '../errors.js';
 import type { CommandInput } from '../registry.js';
@@ -83,12 +83,16 @@ export const GENERATED_WRAPPERS: Readonly<Record<WrapperFile, readonly string[]>
 };
 
 /** The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`. */
-export type MigratedDevConfig = Pick<DevConfig, 'port' | 'frontendCommand' | 'frontendPort'>;
+export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'>;
 
-/** The `startDevServer` options of each generated `server.ts`, as `package.json#blocks.dev`. */
+/**
+ * The `startDevServer` options of each generated `server.ts`, as `package.json#blocks.dev`.
+ * A backend-only `server.ts` passed no frontend, so it ran none whatever the app installed:
+ * `"frontend": false` keeps that.
+ */
 export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
-	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001 },
-	'08368ac37a213cd51b519c6e36f31b0c278185661c2d72cc7ebe1255f8ac5ec7': { port: 3001 },
+	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false },
+	'08368ac37a213cd51b519c6e36f31b0c278185661c2d72cc7ebe1255f8ac5ec7': { port: 3001, frontend: false },
 	dec68f268cc8295cae77c9a3fa073dff55e429dbfb5aeeee60facf081edb8b21: {
 		frontendCommand: 'npx vite --port 3100 --strictPort',
 		frontendPort: 3100,
