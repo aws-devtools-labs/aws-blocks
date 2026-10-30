@@ -431,14 +431,14 @@ const END_MARKER = '// <!-- END:generated-block-exports -->';
 export function insertBetweenMarkers(content: string, entry: string): string {
 	let text = content;
 	if (!text.includes(BEGIN_MARKER)) {
-		const trimmed = text.replace(/\s*$/, '');
+		const trimmed = text.trimEnd();
 		text = `${trimmed}\n\n${BEGIN_MARKER}\n${END_MARKER}\n`;
 	}
 	const begin = text.indexOf(BEGIN_MARKER) + BEGIN_MARKER.length;
 	const end = text.indexOf(END_MARKER);
 	const region = text.slice(begin, end);
 	if (region.includes(entry.trim())) return text; // already wired — idempotent
-	const updated = `${region.replace(/\s*$/, '')}\n${entry}\n`;
+	const updated = `${region.trimEnd()}\n${entry}\n`;
 	return text.slice(0, begin) + updated + text.slice(end);
 }
 

@@ -76,6 +76,7 @@ import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
+import { assertScanFilterValue } from './scan-filter.js';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
@@ -630,6 +631,22 @@ export function toCognitoApiError(e: unknown): ApiError {
 	return new ApiError('Unknown error', 500);
 }
 
+/**
+ * Map an AdminUserFilter to a Cognito ListUsers `Filter` expression. Cognito
+ * uses `^=` for prefix and `=` for exact match, with the value in double
+ * quotes. A value containing `\` or `"` is refused (see
+ * {@link assertScanFilterValue}), so it can't close the quotes.
+ *
+ * @throws ApiError 400 `AuthCognitoErrors.InvalidParameter` for such a value.
+ * @internal
+ */
+export function toCognitoFilter(filter?: AdminUserFilter): string | undefined {
+	if (!filter) return undefined;
+	assertScanFilterValue(filter);
+	const op = filter.match === 'startsWith' ? '^=' : '=';
+	return `${filter.attribute} ${op} "${filter.value}"`;
+}
+
 function asApiError(e: unknown): never {
 	throw toCognitoApiError(e);
 }
@@ -811,15 +828,6 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				attributes,
 			};
 		};
-		// Map an AdminUserFilter to a Cognito ListUsers Filter expression.
-		// Cognito uses `^=` for prefix and `=` for exact match, value quoted.
-		const toCognitoFilter = (filter?: AdminUserFilter): string | undefined => {
-			if (!filter) return undefined;
-			const op = filter.match === 'startsWith' ? '^=' : '=';
-			const escaped = filter.value.replace(/"/g, '\\"');
-			return `${filter.attribute} ${op} "${escaped}"`;
-		};
-
 		return {
 			// ── GroupAdmin ───────────────────────────────────────────────────
 			addUserToGroup: async (username, group) => {
