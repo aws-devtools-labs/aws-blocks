@@ -518,8 +518,9 @@ export function mergeRegistry(entries: Array<[string, { version: string; count: 
  */
 export function computeScopeFullId(scope: { id: string; parent?: ScopeParent }): string {
   if (scope.parent) {
-    if ('fullId' in scope.parent && scope.parent.fullId) {
-      return `${scope.parent.fullId}-${scope.id}`;
+    const parentFullId = 'fullId' in scope.parent ? scope.parent.fullId : undefined;
+    if (parentFullId) {
+      return `${parentFullId}-${scope.id}`;
     }
     if ('id' in scope.parent && scope.parent.id) {
       return `${scope.parent.id}-${scope.id}`;
