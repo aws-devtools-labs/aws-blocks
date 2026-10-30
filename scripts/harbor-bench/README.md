@@ -219,10 +219,12 @@ model credentials and use the network until the session expires.
 
 The human approval is enforced by the workflow, not by IAM. Both roles trust the
 `:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
-runs on `main` and references `harbor-bench` can assume them. Today only this workflow does, every
-job that uses `harbor-bench` needs the `approval` job, and `scripts/ci/harbor-approval-gate.test.mjs`
-checks both on every PR. Changes to `main` go through reviewed pull requests, so a new
-`harbor-bench` reference needs that review instead of a per-run approval.
+runs on `main` and references `harbor-bench` can assume them. Today only this workflow does, and
+every job in it that uses `harbor-bench` needs the `approval` job. `scripts/ci/harbor-approval-gate.test.mjs`
+checks both on every PR: it fails if any other workflow file mentions `harbor-bench`, though not if
+the name is assembled at runtime from parts. Changes to `main` go through reviewed pull requests
+(repository admins can bypass that review), so a new `harbor-bench` reference needs that review
+instead of a per-run approval.
 
 ## Local verification
 

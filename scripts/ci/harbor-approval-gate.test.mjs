@@ -4,21 +4,28 @@
 // Tests for the Harbor agent check's approval gate (.github/workflows/harbor-agent-check.yml).
 // Model and trace credentials come from the `harbor-bench` environment, which has no required
 // reviewers of its own: the single `approval` job on `harbor-bench-approval` is the only human
-// gate, and the IAM roles cannot see it. So the workflow itself must guarantee that:
-//   - there is exactly one approval job, and it cannot fan out, skip or succeed without approval;
-//   - every job that uses `harbor-bench` needs it directly;
+// gate, and the IAM roles cannot see it. So the workflows themselves must guarantee that:
+//   - no workflow other than harbor-agent-check.yml mentions `harbor-bench` at all (a raw-text
+//     check, so it also catches an `environment: ${{ … }}` expression whose values name it);
+//   - harbor-agent-check.yml has exactly one approval job, which cannot fan out, skip or succeed
+//     without approval;
+//   - every job there that uses `harbor-bench` needs it directly;
 //   - none of those jobs runs when the approval is rejected or skipped (no always()/failure()).
+// It does not catch a name assembled at runtime from parts (e.g. 'harbor-' + 'bench').
 //
 // Run: node --test scripts/ci/harbor-approval-gate.test.mjs
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 
-const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/harbor-agent-check.yml', import.meta.url));
-const jobs = Object.entries(parse(readFileSync(WORKFLOW, 'utf8')).jobs);
+const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
+const GATED = 'harbor-agent-check.yml';
+const jobs = Object.entries(parse(readFileSync(join(WORKFLOWS, GATED), 'utf8')).jobs);
+const otherWorkflows = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f) && f !== GATED);
 
 const environmentOf = (job) => (typeof job.environment === 'object' ? job.environment?.name : job.environment);
 const needsOf = (job) => [job.needs ?? []].flat();
@@ -29,6 +36,16 @@ const approvals = jobs.filter(([, job]) => environmentOf(job) === 'harbor-bench-
 const credentialed = jobs.filter(([, job]) => environmentOf(job) === 'harbor-bench');
 
 describe('Harbor approval gate', () => {
+	it('keeps harbor-bench out of every other workflow', () => {
+		assert.ok(otherWorkflows.length > 0, 'expected other workflow files to scan');
+		for (const file of otherWorkflows) {
+			assert.ok(
+				!readFileSync(join(WORKFLOWS, file), 'utf8').includes('harbor-bench'),
+				`${file} mentions harbor-bench; only ${GATED} may use it, behind its approval job`,
+			);
+		}
+	});
+
 	it('has exactly one approval job, which cannot fan out, skip or succeed on error', () => {
 		assert.equal(approvals.length, 1, 'expected one job on the harbor-bench-approval environment');
 		const [, gate] = approvals[0];
