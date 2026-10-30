@@ -36,7 +36,7 @@ No SNS topics for bounce/complaint handling, no SES templates, no dedicated IP p
 	  Body:      Thanks for signing up.
 	```
 - Emails are also written to `.bb-data/{scope.fullId}/emails.json` as a JSON array for programmatic inspection. Each entry includes `to`, `subject`, `body`, `html` (if provided), `from`, `messageId`, and `timestamp` (ISO 8601).
-- `sendBatch()` appends all messages to the same file in a single write.
+- `sendBatch()` calls `send()` once per message, so each message is appended to the same file in its own write.
 - Mock validates email address format (basic RFC 5322 check) and throws `InvalidInputException` for malformed addresses.
 
 ## Input Validation (mock and AWS)

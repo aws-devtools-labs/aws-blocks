@@ -64,7 +64,7 @@ await agent.stream(message, { conversationId, userId });
 const channel = await agent.getChannel(conversationId); // too late!
 ```
 
-The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
+The `useChat` hook (see [Client Hook](#client-hook--usechat-deprecated)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
 
 ### Authorization (caller responsibility)
 
