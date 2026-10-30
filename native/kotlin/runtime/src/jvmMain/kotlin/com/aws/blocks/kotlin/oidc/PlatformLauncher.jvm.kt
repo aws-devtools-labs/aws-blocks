@@ -9,19 +9,24 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal actual fun createPlatformLauncher(): OidcPlatformLauncher = JvmOidcLauncher()
 
+// Long enough for a token exchange, short enough that a caller that stopped running does not
+// hold the browser indefinitely.
+internal val DEFAULT_OUTCOME_TIMEOUT: Duration = 30.seconds
+
 internal class JvmOidcLauncher(
     private val browserOpener: BrowserOpener = SystemBrowserOpener,
     private val timeout: Duration = 5.minutes,
+    private val outcomeTimeout: Duration = DEFAULT_OUTCOME_TIMEOUT,
 ) : OidcPlatformLauncher {
     /**
      * The relay target is a loopback address bound here, so [configuredRelayTo] is unused:
@@ -30,7 +35,8 @@ internal class JvmOidcLauncher(
     override suspend fun openSession(
         configuredRelayTo: String,
         options: OidcSignInOptions,
-    ): OidcRedirectSession = JvmLoopbackSession(browserOpener, timeout, options.platformOptions)
+    ): OidcRedirectSession =
+        JvmLoopbackSession(browserOpener, timeout, options.platformOptions, outcomeTimeout)
 }
 
 /**
@@ -44,15 +50,20 @@ internal class JvmLoopbackSession(
     private val browserOpener: BrowserOpener,
     private val timeout: Duration,
     private val options: OidcSignInPlatformOptions = OidcSignInPlatformOptions(),
+    private val outcomeTimeout: Duration = DEFAULT_OUTCOME_TIMEOUT,
 ) : OidcRedirectSession {
 
     private val redirect = CompletableDeferred<String>()
 
-    /** Filled by [reportOutcome] once the caller knows whether the sign-in actually worked. */
+    /**
+     * Filled by [reportOutcome] once the caller knows whether the sign-in actually worked.
+     * A [CompletableFuture] rather than a `Deferred`, because the request handler reads it
+     * from one of the server's own threads, outside any coroutine.
+     */
     private val outcome = CompletableFuture<OidcSignInOutcome>()
 
-    /** Opened once the browser has been given its response, so [close] cannot cut it short. */
-    private val responded = CountDownLatch(1)
+    /** Completed once the browser has its response, so [close] cannot cut it short. */
+    private val responded = CompletableDeferred<Unit>()
 
     private val executor = Executors.newSingleThreadExecutor()
     private val server: HttpServer =
@@ -75,11 +86,12 @@ internal class JvmLoopbackSession(
             )
     }
 
-    override fun reportOutcome(outcome: OidcSignInOutcome) {
+    override suspend fun reportOutcome(outcome: OidcSignInOutcome) {
         this.outcome.complete(outcome)
         // The handler is still holding the browser's connection open; stop(0) in close()
-        // would drop it mid-response.
-        responded.await(RESPOND_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        // would drop it mid-response. Suspending rather than blocking leaves the caller's
+        // thread free, which matters when that thread is a UI one.
+        withTimeoutOrNull(RESPOND_TIMEOUT) { responded.await() }
     }
 
     override fun close() {
@@ -111,7 +123,7 @@ internal class JvmLoopbackSession(
         try {
             serve(exchange, outcomeForDisplay())
         } finally {
-            responded.countDown()
+            responded.complete(Unit)
         }
     }
 
@@ -121,9 +133,13 @@ internal class JvmLoopbackSession(
      * Falling back to the callback query would be wrong for a `code` that fails validation,
      * so the fallback only applies when no outcome arrives at all, which means the caller
      * stopped running.
+     *
+     * The fallback can also be reached by a caller that is still running but slower than
+     * [outcomeTimeout]: the browser is then shown a bare failure page even though `signIn`
+     * goes on to return a user.
      */
     private fun outcomeForDisplay(): OidcSignInOutcome =
-        runCatching { outcome.get(OUTCOME_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+        runCatching { outcome.get(outcomeTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS) }
             .getOrElse { OidcSignInOutcome.Failed(null, null) }
 
     private fun serve(exchange: HttpExchange, outcome: OidcSignInOutcome) {
@@ -203,9 +219,8 @@ internal class JvmLoopbackSession(
         const val HTTP_NOT_FOUND = 404
         const val NO_BODY = -1L
 
-        // Long enough for a token exchange, short enough that a caller that stopped running
-        // does not hold the browser indefinitely.
-        const val OUTCOME_TIMEOUT_SECONDS = 30L
-        const val RESPOND_TIMEOUT_SECONDS = 10L
+        // Writing a small response to a local socket is near-instant; this only bounds the
+        // wait for a browser that stopped reading.
+        val RESPOND_TIMEOUT = 10.seconds
     }
 }

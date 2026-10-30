@@ -56,7 +56,7 @@ private class RedirectFollowingLauncher : OidcPlatformLauncher {
                 }
             }
 
-            override fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+            override suspend fun reportOutcome(outcome: OidcSignInOutcome) = Unit
 
             override fun close() = Unit
         }

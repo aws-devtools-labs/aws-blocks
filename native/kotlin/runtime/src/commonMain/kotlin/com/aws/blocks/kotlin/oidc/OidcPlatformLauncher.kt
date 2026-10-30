@@ -43,8 +43,11 @@ interface OidcRedirectSession {
      *
      * Returns once the user has been shown the outcome, so [close] cannot interrupt it.
      * Called at most once, and not at all if the attempt never reached a redirect.
+     *
+     * Suspends rather than blocks: a caller may be running on a UI dispatcher, where
+     * occupying the thread until the browser has its response would freeze the window.
      */
-    fun reportOutcome(outcome: OidcSignInOutcome)
+    suspend fun reportOutcome(outcome: OidcSignInOutcome)
 
     /** Releases whatever [relayTo] reserved. Called exactly once per session. */
     fun close()
@@ -59,8 +62,9 @@ sealed interface OidcSignInOutcome {
 
     /**
      * The attempt failed. [error] and [description] carry the identity provider's values
-     * when it reported the failure, and short codes of our own when the callback or the
-     * exchange was rejected locally.
+     * when it reported the failure, and short codes of our own otherwise: `invalid_callback`
+     * for a callback we rejected, `exchange_failed` for a code we could not exchange, and
+     * `cancelled` for a caller that stopped waiting.
      */
     data class Failed(val error: String?, val description: String?) : OidcSignInOutcome
 }
