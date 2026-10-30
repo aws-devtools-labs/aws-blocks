@@ -222,7 +222,7 @@ const unsubscribe = onAuthChange(authApi, (user) => {
 // Later: unsubscribe();
 ```
 
-`onAuthChange` calls the callback immediately with the current user, then again on every change. The user is typed by the API you pass: with `Auth`'s `authApi` it is that block's `AuthStateUser` (`groups`, `attributes`, `userSub`), so `user?.groups` needs no cast; with a plain `AuthStateApi` it is an `AuthUser`. `AuthUserOf<typeof authApi>` names it.
+`onAuthChange` calls the callback immediately with the current user, then again on every change. It ends where the auth-state store does: another tab's sign-in or sign-out reaches it at once, and the store's refetch for it corrects it if the session changed again in between. If that refetch fails, the broadcast stands. Each `authApi` with an `onAuthChange` subscriber sends one `getAuthState()` per broadcast from another tab. The user is typed by the API you pass: with `Auth`'s `authApi` it is that block's `AuthStateUser` (`groups`, `attributes`, `userSub`), so `user?.groups` needs no cast; with a plain `AuthStateApi` it is an `AuthUser`. `AuthUserOf<typeof authApi>` names it.
 
 ## Custom auth UI: `submitAuthAction`
 
@@ -283,7 +283,8 @@ function getAuthStateSnapshot<A extends AuthStateApi<never>>(api: A): AuthState<
 ```
 
 - `getAuthStateSnapshot` reads without a network call. It returns `null` until the first `getAuthState()` lands (`null` means "not yet known", not "signed out"), and always on the server. The object keeps its identity until the state changes.
-- `subscribeAuthState` starts that first `getAuthState()` if needed (one shared request, however many subscribers), and then calls `listener` on every change: every non-retriable `submitAuthAction` result, mid-flow steps included, and a sign-in or sign-out in another tab (one refetch per `authApi`). It never calls `listener` synchronously, and it returns an unsubscribe function you can call more than once.
+- `subscribeAuthState` starts that first `getAuthState()` if needed (one shared request, however many subscribers), and then calls `listener` whenever what it shows changes: a non-retriable `submitAuthAction` result it takes, mid-flow steps included (a late result its ordering drops does not fire), and a sign-in or sign-out in another tab (one refetch per `authApi`). It never calls `listener` synchronously, and it returns an unsubscribe function you can call more than once.
+- Answers that arrive out of order are ordered by the session cookie they reflect: a late refetch or hydration never replaces a newer sign-in or sign-out, another tab's sign-out does not cancel this tab's MFA step, and a failed request never empties the store. When the answers conflict — an MFA step while the store still shows a user whose session may have timed out — the store re-reads the session once before it changes what it shows. The rule is in [DESIGN.md](./DESIGN.md#ordering-answers).
 
 Use the store when you render the auth *flow* (challenge steps, errors). Use `onAuthChange` when you only care about *who* is signed in.
 
