@@ -34,7 +34,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct, IDependable } from 'constructs';
-import type { AuthOptions } from '../types.js';
+import type { AuthOptions, ProviderSecretRef } from '../types.js';
 import { RPC_PREFIX, resolvedBackendApiUrl } from './api-url.js';
 import { federationConfigKeys, federationRedirectPaths } from './contract.js';
 import {
@@ -179,6 +179,60 @@ export function validateHostedUiFederation(scope: BuildingBlockScope, options: A
 	return idpRegistrations(options);
 }
 
+/** Set by `@aws-blocks/bb-secret`'s CDK layer on a stack-managed `Secret` (see there). */
+const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
+
+/** Every hosted-UI provider secret in `options`, with the option path that names it. */
+function hostedUiProviderSecrets(options: AuthOptions): { what: string; ref: ProviderSecretRef }[] {
+	const out: { what: string; ref: ProviderSecretRef }[] = [];
+	for (const [id, p] of Object.entries(options.socialProviders ?? {})) {
+		if (!p) continue;
+		if ('privateKey' in p) out.push({ what: `socialProviders.${id}.privateKey`, ref: p.privateKey });
+		if ('clientSecret' in p) out.push({ what: `socialProviders.${id}.clientSecret`, ref: p.clientSecret });
+	}
+	for (const [id, p] of Object.entries(options.oidcProviders ?? {})) {
+		if (p?.federateVia === 'cognito' && p.clientSecret) {
+			out.push({ what: `oidcProviders.${id}.clientSecret`, ref: p.clientSecret });
+		}
+	}
+	return out;
+}
+
+/**
+ * Whether the stack-managed Secrets Manager secret behind a `Secret` gets a
+ * value when it is created (`generate: true`), read from the flag the `Secret`
+ * block's CDK layer sets (`Symbol.for('blocks:SecretHasInitialValue')`).
+ * `undefined` when `ref` is not a stack-managed `Secret` (an `AppSetting`, or
+ * one wrapping `Secret.fromExisting()`).
+ */
+function managedSecretHasInitialValue(ref: ProviderSecretRef): boolean | undefined {
+	const flag: unknown = Reflect.get(ref, SECRET_HAS_INITIAL_VALUE);
+	return typeof flag === 'boolean' ? flag : undefined;
+}
+
+/**
+ * Warn when a hosted-UI provider secret is a stack-managed `Secret` created
+ * with no value: the deploy-time registration reads it in the same deploy that
+ * creates it, so the first deploy fails — and a retained (named) secret then
+ * makes the next deploy fail with "already exists".
+ */
+function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: AuthOptions): void {
+	for (const { what, ref } of hostedUiProviderSecrets(options)) {
+		if (managedSecretHasInitialValue(ref) !== false) continue;
+		cdk.Annotations.of(scope).addWarningV2(
+			'@aws-blocks/bb-auth:ProviderSecretWithoutValue',
+			`Auth '${scope.fullId}': ${what} is the Secret '${ref.fullId}', which this stack creates with no value. ` +
+				'The provider is registered with Cognito during the same deploy, so the first deploy fails reading it. ' +
+				'Give the Secret `generate: true` (a placeholder value; set the real one after the deploy, e.g. ' +
+				'`npm run secret -- set <KEY> --prefix <prefix>` for a `name` of `<prefix>/<KEY>`), or wrap a secret that ' +
+				'already has a value with `Secret.fromExisting(arn)`. If a deploy already failed and the retained secret ' +
+				'now makes the next one fail with "already exists": set its value (`npm run secret -- set …`) and wrap it ' +
+				'with `Secret.fromExisting(arn)`, or delete the retained secret (`aws secretsmanager delete-secret ' +
+				'--secret-id <name> --force-delete-without-recovery`) and deploy again with `generate: true`.',
+		);
+	}
+}
+
 /**
  * Provision the domain, the hosted-UI app client and every IdP registration on
  * `pool`, and register the federation config keys. Call only when
@@ -191,6 +245,7 @@ export function provisionHostedUiFederation(
 ): HostedUiFederation {
 	const registrations = validateHostedUiFederation(scope, options);
 	const stack = cdk.Stack.of(scope);
+	warnOnValuelessProviderSecrets(scope, options);
 
 	// ── Domain — create-only (replace-only + globally unique) ────────────────
 	const domainPrefix = resolveDomainPrefix(scope.fullId, options);
@@ -231,6 +286,11 @@ export function provisionHostedUiFederation(
 				ProviderType: r.providerType,
 				ProviderDetails: r.details,
 				SecretDetails: r.secretDetails,
+				// Only when a provider secret is a `Secret`: an AppSetting-only
+				// registration keeps exactly the properties it had before.
+				...(Object.keys(r.secretsManagerDetails).length > 0
+					? { SecretsManagerDetails: r.secretsManagerDetails }
+					: {}),
 				AttributeMapping: r.attributeMapping,
 				// The secret values live in SSM and are read at deploy time, so a
 				// rotation (an out-of-band SecureString write) changes no property
@@ -295,7 +355,8 @@ const REGISTRATION_LAMBDA = {
 
 /**
  * The deploy-time registration Lambda + `Provider`, ported from `AuthOIDC`'s
- * deployed approach. It reads each secret's SecureString by name and calls
+ * deployed approach. It reads each secret's SecureString by name (or a
+ * `Secret`'s Secrets Manager value by ARN) and calls
  * `Create/Update/DeleteIdentityProvider`, so the secret never appears in the
  * template. Returns the provider's service token.
  */
@@ -330,17 +391,36 @@ function registrationServiceToken(
 	const parameterArns = [...new Set(registrations.flatMap((r) => Object.values(r.secretDetails)))].map((name) =>
 		stack.formatArn({ service: 'ssm', resource: 'parameter', resourceName: name.replace(/^\//, '') }),
 	);
-	fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: parameterArns }));
-	// SecureString decryption goes through KMS via SSM. `kms:ViaService` covers
-	// the default `aws/ssm` key and a customer-managed key (whose own key policy
-	// must also allow this role).
-	fn.addToRolePolicy(
-		new iam.PolicyStatement({
-			actions: ['kms:Decrypt'],
-			resources: ['*'],
-			conditions: { StringEquals: { 'kms:ViaService': `ssm.${stack.region}.amazonaws.com` } },
-		}),
-	);
+	if (parameterArns.length > 0) {
+		fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: parameterArns }));
+		// SecureString decryption goes through KMS via SSM. `kms:ViaService` covers
+		// the default `aws/ssm` key and a customer-managed key (whose own key policy
+		// must also allow this role).
+		fn.addToRolePolicy(
+			new iam.PolicyStatement({
+				actions: ['kms:Decrypt'],
+				resources: ['*'],
+				conditions: { StringEquals: { 'kms:ViaService': `ssm.${stack.region}.amazonaws.com` } },
+			}),
+		);
+	}
+	// Provider secrets given as a `Secret`: read exactly those secrets, by ARN.
+	// Decryption goes through KMS via Secrets Manager, the same way: the default
+	// `aws/secretsmanager` key, or a customer-managed key whose own key policy
+	// must also allow this role.
+	const secretArns = [...new Set(registrations.flatMap((r) => Object.values(r.secretsManagerDetails)))];
+	if (secretArns.length > 0) {
+		fn.addToRolePolicy(
+			new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: secretArns }),
+		);
+		fn.addToRolePolicy(
+			new iam.PolicyStatement({
+				actions: ['kms:Decrypt'],
+				resources: ['*'],
+				conditions: { StringEquals: { 'kms:ViaService': `secretsmanager.${stack.region}.amazonaws.com` } },
+			}),
+		);
+	}
 	const provider = new cr.Provider(scope, 'idp-registration-provider', {
 		onEventHandler: fn,
 		logGroup: new logs.LogGroup(scope, 'idp-registration-provider-logs', {

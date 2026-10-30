@@ -208,28 +208,38 @@ The hook works the same locally and deployed, and `requireRole` sees the new gro
 
 ### Social sign-in: the client secret and the callback URL
 
-A provider secret is an `AppSetting` with `secret: true`, never a string. Create the SecureString yourself and reference it, so you set its value:
+A provider secret is a reference, never a string: a `Secret` (AWS Secrets Manager), or an `AppSetting` created with `secret: true` (an SSM SecureString). Either works for any provider; this app uses one of each:
 
 ```ts
 // aws-blocks/index.ts
-import { AppSetting, Auth, Scope } from '@aws-blocks/blocks';
+import { AppSetting, Auth, Scope, Secret } from '@aws-blocks/blocks';
 
 const scope = new Scope('my-app');
-const googleSecret = AppSetting.fromExisting(scope, 'google-secret', {
-  name: '/my-app/google-client-secret',
+
+// A Secret, set with `npm run secret` (step 1).
+const googleSecret = new Secret(scope, 'google-client-secret', {
+  name: 'my-app/GOOGLE_CLIENT_SECRET',
+  generate: true, // a placeholder value, so the first deploy can register the provider
+});
+// An SSM SecureString you create yourself.
+const facebookSecret = AppSetting.fromExisting(scope, 'facebook-secret', {
+  name: '/my-app/facebook-client-secret',
   secret: true,
 });
 
 const auth = new Auth(scope, 'auth', {
   socialProviders: {
     google: { clientId: 'your-client-id.apps.googleusercontent.com', clientSecret: googleSecret },
+    facebook: { clientId: 'your-facebook-app-id', clientSecret: facebookSecret },
   },
   hostedUi: { domainPrefix: 'my-app-auth' }, // fixes the callback URL before the first deploy
 });
 export const authApi = auth.createApi();
 ```
 
-1. **Set the secret value** before the first deploy, in the account and Region you deploy to: `aws ssm put-parameter --name /my-app/google-client-secret --type SecureString --value '<client secret>'`. To rotate it, run the same command with `--overwrite` and deploy again: each deploy re-registers the provider with the current value. (`npm run secret` writes AWS Secrets Manager, which `Auth` does not read.) With `new AppSetting(scope, 'google-secret', { secret: true })` instead, the deploy creates the parameter, at `/<fullId>`, with a random value you then overwrite the same way.
+1. **Set the secret values**, in the account and Region you deploy to. Each deploy re-registers the providers with the current values, so to rotate a secret, set the new value and deploy again.
+   - **`Secret`:** deploy once — it creates `my-app/GOOGLE_CLIENT_SECRET` with the `generate: true` placeholder — then run `npm run secret -- set GOOGLE_CLIENT_SECRET --prefix my-app` (it prompts for the value; `--value-stdin` reads it from a pipe; add `--region <region>` if your shell's default Region differs) and deploy again. Without `generate: true` the first deploy fails, because the secret has no value yet; synth warns about it (`@aws-blocks/bb-auth:ProviderSecretWithoutValue`). If that deploy already failed and the retained secret now makes the next one fail with "already exists", set its value with `npm run secret` and wrap it with `Secret.fromExisting('<secret ARN>')`, or delete it (`aws secretsmanager delete-secret --secret-id my-app/GOOGLE_CLIENT_SECRET --force-delete-without-recovery`) and deploy again with `generate: true`. Without an explicit `name`, the secret is named after the block's `fullId`; set it with `aws secretsmanager put-secret-value` instead. For a secret that already exists, wrap it: `new Secret(scope, 'google-client-secret', { secret: Secret.fromExisting('<secret ARN>') })`. The deploy-time provider registration is granted read access to exactly this secret (`secretsmanager:GetSecretValue` on its ARN, plus `kms:Decrypt` via Secrets Manager). Like every `Secret` your app declares, it is also readable by the app's execution role, so your API code could read it too.
+   - **`AppSetting`:** before the first deploy, `aws ssm put-parameter --name /my-app/facebook-client-secret --type SecureString --value '<client secret>'`; to rotate, run it again with `--overwrite`. With `new AppSetting(scope, 'facebook-secret', { secret: true })` instead, the deploy creates the parameter, at `/<fullId>`, with a random value you then overwrite the same way.
 2. **Register the callback URL** with the provider. Google calls it an *authorized redirect URI*: `https://my-app-auth.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML). Without `hostedUi.domainPrefix` the prefix is derived from the block's `fullId`; read it from the `UserPoolDomain` resource in the synthesized template. `hostedUi.domainPrefix` is create-only: choose it before the first deploy.
 3. **Test on a sandbox** (`npm run sandbox`). Locally the Google button answers `501`, because Cognito managed login needs a deployed user pool.
 
@@ -305,7 +315,7 @@ MAU = monthly active user. Prices are from [Amazon Cognito pricing](https://aws.
 
 **How to choose.** Start with email + password: it is the default, needs no identity-provider account, runs fully offline, and is the only option where `Auth` itself enforces MFA and passkeys. Add `socialProviders` for consumer sign-in — those users cost the same as password users, but their sign-in only works on a deployed stack. For a workforce IdP or any other OIDC provider, keep the default `federateVia: 'direct'`: there is no Cognito charge, `stubIdp()` lets you test offline, and public PKCE-only clients work. Switch a provider to `federateVia: 'cognito'` only when you need its users in your user pool — Cognito groups, `auth.admin` or Cognito-issued tokens for them — and accept the 50-free-MAU meter and the client-secret requirement; it adds no MFA, device tracking or adaptive authentication, because Cognito leaves all authentication of federated users to their IdP. Use `samlProviders` only for an IdP that does not speak OIDC. If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
 
-All five in one block (provider secrets are `AppSetting` references, never strings):
+All five in one block (provider secrets are `AppSetting` or `Secret` references, never strings):
 
 ```typescript
 import { AppSetting, Auth, Scope } from '@aws-blocks/blocks';
@@ -342,7 +352,7 @@ const auth = new Auth(scope, 'auth', {
 - Directly federated sign-in works, locally and deployed: any `oidcProviders` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives `emailPassword: false` apps an offline sign-in.
 - On AWS, social, SAML and `federateVia: 'cognito'` providers sign in through Cognito managed login: the sign-in button goes straight to the provider (PKCE, Cognito-issued tokens verified against your user pool), and the user becomes an ordinary user-pool user — `requireRole()` reads their Cognito groups and `auth.admin` manages them like email + password users. Sign-out also ends the managed-login session, so the next sign-in asks the provider again. MFA for these users is the provider's: Cognito never challenges a federated user, so enforce MFA at your IdP. Locally (`npm run dev`) these providers answer sign-in with an actionable `501` — managed login needs a deployed user pool; use a direct provider or `stubIdp()` for offline sign-in.
 - Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`, as with `AuthOIDC`: the guards accept a directly federated provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews) or a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }`, access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth-d6c--bearerts).
-- The CDK layer provisions the same resources as `AuthCognito` (same construct ids, so an `AuthCognito` app that switches keeps its user pool and sessions), creates no Cognito resources for a direct-OIDC-only configuration, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For social, SAML and `federateVia: 'cognito'` providers it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
+- The CDK layer provisions the same resources as `AuthCognito` (same construct ids, so an `AuthCognito` app that switches keeps its user pool and sessions), creates no Cognito resources for a direct-OIDC-only configuration, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For social, SAML and `federateVia: 'cognito'` providers it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
 - The CDK layer refuses user-pool changes Cognito cannot apply to an existing pool (sign-in attributes, username case sensitivity, required attributes, changing or removing a custom attribute): at synth, against a baseline file it writes to `aws-blocks/baselines/` (commit that file), and again at deploy, before the pool is updated. The synth check also refuses a change that would remove the pool — including renaming or deleting the `Auth` block, which would make CloudFormation delete the pool and every user in it ([details](./DESIGN.md#renaming-or-removing-an-auth-block)) — once a committed baseline records the pool. A block's first synth has nothing to compare against: if it records no pool, synth only warns. Moving from `AuthCognito`? Deploy the codemod's output unchanged first ([MIGRATION.md](./MIGRATION.md#before-every-deploy-the-checklist)). Re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<block fullId>`. The baseline advances when you synthesize, not when you deploy, so reverting a change you synthesized but never deployed is refused too; the error then gives the re-baseline command for that case. See [DESIGN.md](./DESIGN.md#immutability-guard-q5).
 
 ## Usage
@@ -400,7 +410,7 @@ A directly federated user's `userId` is `` `${issuer}:${sub}` `` (the same as `A
 
 For a provider federated through Cognito (social, SAML, `federateVia: 'cognito'`) the CDK layer registers the callback and sign-out URLs on the Cognito app client for you; in the IdP's console, register the Cognito domain's `https://<domain>/oauth2/idpresponse` (`/saml2/idpresponse` for SAML) instead.
 
-Provider secrets are `AppSetting` references created with `secret: true` (at the default name, with an explicit `name`, or via `AppSetting.fromExisting`), never strings. The RPC surface stays the two methods the sign-in UI uses (`getAuthState` / `setAuthState`), via `auth.createApi()`. Its `setAuthState` input is typed by the block's options (`AuthActionInputOf<O>`), so a frontend call to an action the options turn off, such as `signIn` on `emailPassword: false`, is a compile error.
+Provider secrets are `AppSetting` references created with `secret: true` (at the default name, with an explicit `name`, or via `AppSetting.fromExisting`), or string-valued `Secret` references (Secrets Manager, set with `npm run secret`; see [the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)), never strings. The RPC surface stays the two methods the sign-in UI uses (`getAuthState` / `setAuthState`), via `auth.createApi()`. Its `setAuthState` input is typed by the block's options (`AuthActionInputOf<O>`), so a frontend call to an action the options turn off, such as `signIn` on `emailPassword: false`, is a compile error.
 
 The option groups and the method surface are documented in the JSDoc of the exported `AuthOptions` and `AuthShape` types.
 

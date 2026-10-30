@@ -189,6 +189,12 @@ The Blocks app **creates** the secret (empty/random) when you deploy, so the val
 
 Without an explicit `name`, the secret name is derived from the scope tree; find it in the settings resource group, the console, or `aws secretsmanager list-secrets`.
 
+With a `name` made of a prefix and an upper-case key, `npm run secret` sets the value too: for `name: 'my-app/STRIPE_KEY'`, run `npm run secret -- set STRIPE_KEY --prefix my-app` once the secret exists (it prompts for the value, or reads it from a pipe with `--value-stdin`).
+
+### As an `Auth` provider secret
+
+A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a social provider, or an OIDC provider with `federateVia: 'cognito'`, the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-blocks/bb-auth`).
+
 ### Rotating & removing
 
 - **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change on its next cold start — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
