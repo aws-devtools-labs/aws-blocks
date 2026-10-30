@@ -33,9 +33,14 @@ export async function main(argv: readonly string[], deps: CliDeps = processDeps(
 	}
 
 	const { command, globals } = parsed;
-	if (globals.version && !command) {
+	// --version is a global flag: after a command it still only prints the version, and never runs the command.
+	if (globals.version) {
 		const version = blocksVersion();
-		ctx.out.result({ version }, version);
+		try {
+			ctx.out.result({ version }, version);
+		} catch (error) {
+			return report(error);
+		}
 		return ExitCode.Ok;
 	}
 	if (!command) {

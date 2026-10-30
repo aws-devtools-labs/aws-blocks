@@ -141,7 +141,7 @@ export class Context {
 		if (this.globals.profile) this.env.AWS_PROFILE = this.globals.profile;
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// Help and --version never use it, so a stray AWS_REGION does not hide them.
-		if (parsed.command && !this.globals.help) {
+		if (parsed.command && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(
 					`option --region must be an AWS Region code such as us-east-1, not ${JSON.stringify(this.globals.region)}.`,
