@@ -381,6 +381,11 @@ function guidanceLines(source: CredentialSource, failure: CredentialFailure, log
 export interface CredentialFailureMessageOptions {
 	/** The npm script name, used in the message (for example `sandbox` or `deploy`). */
 	command: string;
+	/**
+	 * How the user runs the command, when it is not an npm script (for example `blocks whoami`).
+	 * Default: `npm run <command>`.
+	 */
+	invocation?: string;
 	/** The SDK error name. The message includes it for debugging. */
 	errorName: string;
 	failure: CredentialFailure;
@@ -400,6 +405,7 @@ export interface CredentialFailureMessageOptions {
  */
 export async function credentialFailureMessage({
 	command,
+	invocation = `npm run ${command}`,
 	errorName,
 	failure,
 	env = process.env,
@@ -423,8 +429,8 @@ export async function credentialFailureMessage({
 		];
 	}
 	return [
-		`AWS credentials could not be verified for \`npm run ${command}\` (${errorName}).`,
+		`AWS credentials could not be verified for \`${invocation}\` (${errorName}).`,
 		...lines.map((line) => `  ${line}`),
-		`Then re-run \`npm run ${command}\`.`,
+		`Then re-run \`${invocation}\`.`,
 	].join('\n');
 }

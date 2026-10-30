@@ -103,3 +103,47 @@ test('pull refuses (exit 1) in a non-TTY context and does NOT run headless off S
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('--help and -h print the verb usage and exit 0 without touching any database', () => {
+  // A dir with no migrations/ and an external-DB env var: running any verb would
+  // exit 1 (missing dir, external guard, or no TTY). Help must short-circuit all of it.
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  const env = { SUPABASE_DB_URL: 'postgresql://postgres.ref:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres' };
+  try {
+    const cases: [string[], RegExp][] = [
+      [['migrate', '--help'], /Usage: bb-data migrate \[dir\]/],
+      [['migrate', './nowhere', '--url', 'postgres://u:p@h/db', '-h'], /Usage: bb-data migrate/],
+      [['status', '-h'], /Usage: bb-data status \[dir\]/],
+      [['generate-types', 'out.ts', '--help'], /Usage: bb-data generate-types \[output\]/],
+      [['pull', './out', '--help'], /Usage: bb-data pull \[output-dir\]/],
+      [['--help'], /Commands:\n {2}pull/],
+      [['-h', 'migrate'], /Usage: bb-data migrate/],
+    ];
+    for (const [args, usage] of cases) {
+      const r = runCli(args, dir, env);
+      assert.strictEqual(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
+      assert.match(r.stdout, usage, args.join(' '));
+      assert.match(r.stdout, /--help/, `${args.join(' ')} lists -h, --help`);
+    }
+    assert.match(runCli(['migrate', '--help'], dir).stdout, /--url <conn>[\s\S]*--stage <name>[\s\S]*--regenerate-types/);
+    assert.strictEqual(existsSync(join(dir, '.bb-data')), false, 'no local database was opened');
+    assert.strictEqual(existsSync(join(dir, 'out.ts')), false);
+    assert.strictEqual(existsSync(join(dir, 'out')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('without --help, an unknown verb still prints the overview and a missing migrations dir still exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    const unknown = runCli(['nope'], dir);
+    assert.strictEqual(unknown.status, 0);
+    assert.match(unknown.stdout, /bb-data CLI/);
+    const missing = runCli(['migrate', './nowhere'], dir);
+    assert.strictEqual(missing.status, 1);
+    assert.match(missing.stderr, /Migrations directory not found: \.\/nowhere/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

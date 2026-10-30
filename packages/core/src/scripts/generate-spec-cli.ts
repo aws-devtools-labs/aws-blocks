@@ -26,6 +26,7 @@
 
 import { resolve, dirname, join } from 'node:path';
 import { writeSpec, type FoundationLoader } from './generate-spec.js';
+import { log } from './log.js';
 import { readNativeDeclarations } from './read-native-declarations.js';
 
 /** Pick a loader based on the file extension. `.ts` / `.tsx` use tsx; everything else uses Node's native `import()`. */
@@ -75,9 +76,11 @@ async function main() {
 		outputArg ?? join(dirname(backendPath), 'blocks.spec.json')
 	);
 
-	console.log('📝 Generating OpenRPC spec...');
-	console.log('   backend:', backendPath);
-	console.log('   output: ', outputPath);
+	// Progress goes through the scripts' logger, so `BLOCKS_LOG_STREAM=stderr`
+	// moves it off stdout; the `✅` result line stays on stdout.
+	log.progress('📝 Generating OpenRPC spec...');
+	log.detail('   backend:', backendPath);
+	log.detail('   output: ', outputPath);
 
 	try {
 		const loader = await selectLoader(backendPath);
@@ -87,7 +90,7 @@ async function main() {
 		// the line is diffable between runs rather than readdir-ordered.
 		if (nativeDeclarations.length > 0) {
 			const declarers = nativeDeclarations.map((source) => source.sourcePackage).sort();
-			console.log('   native declarations:', declarers.join(', '));
+			log.detail('   native declarations:', declarers.join(', '));
 		}
 		await writeSpec(backendPath, outputPath, loader, { nativeDeclarations });
 		console.log('✅ OpenRPC spec written to', outputPath);

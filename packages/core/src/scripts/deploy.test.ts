@@ -1,5 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 // Imported through `./deploy.js` ON PURPOSE: the helper is defined in
@@ -214,5 +218,80 @@ describe('makeInvalidationProbe — maps the SDK result to a pure outcome', () =
     };
     const probe = makeInvalidationProbe(client, cmd, 'DIST', 'INV');
     assert.strictEqual(await probe(1000), 'pending');
+  });
+});
+
+describe('deploy — onDeployed', () => {
+  // deploy() itself, in a fresh process. Only the steps that reach AWS or spawn
+  // CDK are replaced; the fake CDK writes outputs.json, as `cdk deploy` does.
+  const scripts = new URL('./', import.meta.url).href;
+  const fixture = `
+import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mock } from 'node:test';
+
+const scripts = ${JSON.stringify(scripts)};
+const moduleUrl = (name) => new URL(name + '.js', scripts).href;
+const outputsFile = '.blocks-sandbox/outputs.json';
+const prod = {
+  ApiUrl: 'https://prod.execute-api.us-east-1.amazonaws.com/',
+  HostingHostingUrl1A2B3C4D: 'https://d111.cloudfront.net',
+  HostingHostingBuildId8EDD8441: 'build-1',
+};
+const events = [];
+// Imports are dynamic: mock.module applies only to modules imported after it.
+const replace = async (url, overrides) => {
+  const real = await import(url);
+  mock.module(url, { namedExports: { ...real, ...overrides } });
+};
+await replace(moduleUrl('preflight-credentials'), { assertAwsCredentials: async () => {} });
+await replace(moduleUrl('ensure-secrets'), {
+  ensureSecrets: async () => ({ created: [], updated: [] }),
+  loadProductionEnv: () => {},
+});
+await replace(moduleUrl('external-migrations-step'), { applyExternalMigrations: async () => {} });
+await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });
+await replace(new URL('../telemetry/trackCommand.js', scripts).href, { trackCommand: async (_name, fn) => fn() });
+await replace(moduleUrl('deploy-stream'), {
+  runStreaming: async () => {
+    mkdirSync('.blocks-sandbox', { recursive: true });
+    writeFileSync(outputsFile, JSON.stringify({ 'demo-prod-monitoring': { AlarmTopic: 'arn:topic' }, 'demo-prod': prod }));
+  },
+});
+await replace(moduleUrl('wait-live'), {
+  waitForLiveBuild: async () => {
+    events.push('wait');
+    // A sandbox deploy of the same app rewrites the file with only its own stack.
+    writeFileSync(outputsFile, JSON.stringify({ 'demo-jdoe': { ApiUrl: 'https://sandbox.example/' } }));
+    return { live: true, attempts: 1, elapsedMs: 0, reason: 'live' };
+  },
+});
+const { deploy } = await import(moduleUrl('deploy'));
+await deploy({
+  cdkAppPath: 'unused',
+  projectRoot: process.cwd(),
+  waitLive: true,
+  waitLiveTimeoutSec: 5,
+  onDeployed: (deployed) => events.push(deployed),
+});
+assert.deepEqual(events, [
+  { stack: 'demo-prod', apiUrl: prod.ApiUrl, hostingUrl: prod.HostingHostingUrl1A2B3C4D },
+  'wait',
+]);
+`;
+
+  it('reports the stack outputs it read before the liveness wait, which a sandbox deploy can overwrite', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-on-deployed-'));
+    try {
+      execFileSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture], {
+        cwd: dir,
+        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 15_000,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

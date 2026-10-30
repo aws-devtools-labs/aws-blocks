@@ -14,9 +14,11 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
-import { runSync, spawnCommand } from './run-command.js';
+import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
+import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
+import { log } from './log.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -205,10 +207,10 @@ export async function startSandbox(options: SandboxOptions) {
   // projectRoot below — so the written name matches the name resolved at synth.
   const secrets = await ensureSecrets('sandbox', process.cwd());
   if (secrets.created.length > 0) {
-    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
   }
   if (secrets.updated.length > 0) {
-    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
+    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
   }
 
   // Apply external-database migrations to the sandbox database before
@@ -224,7 +226,7 @@ export async function startSandbox(options: SandboxOptions) {
   // in-process import of `index.ts` would load every block's local mock.
   const backendDefPath = resolve(join(dirname(resolve(backendPath)), 'index.ts'));
   const clientPath = join(dirname(backendDefPath), 'client.js');
-  console.log('📝 Generating client code...');
+  log.progress('📝 Generating client code...');
   try {
     await generateDeployClient(backendDefPath, clientPath);
   } catch (error) {
@@ -241,8 +243,12 @@ export async function startSandbox(options: SandboxOptions) {
   // Framework resolves in the cdk synth child; it writes the value here so the
   // parent can attach it to the sandbox telemetry event.
   const frameworkSink = createFrameworkSink();
-  console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+  log.progress("🚀 Deploying to AWS...");
+  log.detail("   (This may take a few minutes on first deploy)");
+
+  // At BLOCKS_LOG_LEVEL=quiet|normal the synth + deploy output is condensed and
+  // retained; the failure path below prints it.
+  const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy' });
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
@@ -253,25 +259,25 @@ export async function startSandbox(options: SandboxOptions) {
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
-    runSync("npm", buildSandboxSynthArgs(argOptions), { stdio: "inherit", env: cdkEnv });
+    await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
 
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
     // deployed has one and already exists — or can't be inspected (fail closed).
     const expressUnsafe = await findExpressUnsafeStacks(stacksWithExpressUnsafeResources(assemblyDir));
     if (expressUnsafe.length > 0) {
-      console.log(
+      log.progress(
         `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} has a Lambda Web Function endpoint, ` +
           "which Express Mode can't update. Deploying with full stabilization + rollback instead.",
       );
     }
 
-    runSync(
+    await cdkOutput.run(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
       buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
-      { stdio: "inherit", env: cdkEnv },
+      { env: cdkEnv },
     );
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
@@ -281,6 +287,7 @@ export async function startSandbox(options: SandboxOptions) {
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
+    cdkOutput.printRetained();
     console.error("\n❌ Deployment failed.");
     console.error(sandboxFailureRecoveryHint());
     throw error;
@@ -329,8 +336,8 @@ export async function startSandbox(options: SandboxOptions) {
     return apiUrl;
   }
 
-  console.log("\n👀 Starting CDK watch mode...");
-  console.log("🌐 Starting local dev server (proxying to AWS)...");
+  log.progress("\n👀 Starting CDK watch mode...");
+  log.progress("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
   const cdkWatch = spawnCommand("npx", [
@@ -350,15 +357,9 @@ export async function startSandbox(options: SandboxOptions) {
     env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
   });
 
-  cdkWatch.stdout?.on("data", (data) => {
-    const str = data.toString().trim();
-    if (!str.match(/\[(START|END|REPORT|INIT_START)\s+RequestId:/)) {
-      console.log(`[CDK Watch] ${str}`);
-    }
-  });
-  cdkWatch.stderr?.on("data", (data) => {
-    console.error(`[CDK Watch] ${data.toString().trim()}`);
-  });
+  // Unchanged relay at the default level; condensed and retained (printed when
+  // a watch deploy fails) at BLOCKS_LOG_LEVEL=quiet|normal.
+  attachCdkWatchOutput(cdkWatch, { stopping: () => cleaningUp });
 
   const devServerSpawn = buildDevServerSpawn(devCommand);
 
@@ -382,9 +383,9 @@ export async function startSandbox(options: SandboxOptions) {
   const cleanup = async () => {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
-    console.log("\n\n🛑 Stopping local processes...");
-    console.log("   (AWS resources are still running)");
-    console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
+    log.progress("\n\n🛑 Stopping local processes...");
+    log.progress("   (AWS resources are still running)");
+    log.progress("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
     // Reap BOTH child trees the way the dev server reaps Vite — a process-group
     // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
     // kill() that signals only the npx/shell parent and orphans the real
@@ -576,7 +577,7 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
 			// resolved by hand. Log loudly with the first error code — this is the
 			// kind of silent skip that leaks a stack, so make it visible in CI output.
 			const first = res.Errors[0];
-			console.warn(
+			log.warn(
 				`  ⚠️  ${bucket}: ${res.Errors.length} object(s) could NOT be deleted ` +
 					`(e.g. ${first.Key}: ${first.Code}). This bucket will block stack teardown ` +
 					`until cleared manually.`,
@@ -662,12 +663,14 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 				try {
 					await emptyBucket(s3, b);
 				} catch (e) {
-					console.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+					log.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+					log.debugError(e);
 				}
 			}
 		}
 	} catch (e) {
-		console.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+		log.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+		log.debugError(e);
 	}
 }
 
@@ -680,7 +683,7 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 export function listDestroyedStacks(assemblyDir: string): AssemblyStack[] {
 	const stacks = topLevelStacks(assemblyDir);
 	if (stacks.length === 0) {
-		console.warn(
+		log.warn(
 			`  ⚠️  could not read the synthesized stacks in ${assemblyDir}; skipping bucket-emptying and the throttle and ` +
 				'Lambda@Edge checks',
 		);
@@ -871,8 +874,14 @@ export async function edgeStacksBlockedByReplicas(
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
 export interface DestroyRetryDeps {
-	/** Run one `cdk destroy` attempt; throws on failure. */
-	runDestroy: () => void;
+	/** Run one `cdk destroy` attempt; throws (or rejects) on failure. */
+	runDestroy: () => void | Promise<void>;
+	/**
+	 * Print the CDK output retained while it was hidden by `BLOCKS_LOG_LEVEL`
+	 * (see `cdk-output.ts`). Called once, just before the destroy finally fails.
+	 * Default: nothing to print.
+	 */
+	printRetainedOutput?: () => void;
 	/** Resolve the app's stacks, by stack name and Region (for bucket enumeration). */
 	listStacks: () => AssemblyStack[];
 	/** Empty the given stacks' versioned S3 buckets. */
@@ -959,7 +968,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	for (let attempt = 0; ; attempt++) {
 		const attemptStartedAt = now();
 		try {
-			deps.runDestroy();
+			await deps.runDestroy();
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
@@ -969,6 +978,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			if (!stacks?.length) stacks = deps.listStacks();
 			const edgeBlocked = await edgeStacksBlocked(deps, stacks, attemptStartedAt);
 			if (edgeBlocked.length > 0) {
+				deps.printRetainedOutput?.();
 				console.error(
 					`\n❌ ${edgeBlocked.join(', ')} can't be deleted yet: CloudFront still holds replicas of its Lambda@Edge ` +
 						'function, which take a few hours to clear after the distribution is deleted, so retrying now cannot ' +
@@ -981,9 +991,10 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			try {
 				throttled = await isThrottled(stacks, attemptStartedAt, previousFailureAt);
 			} catch (e) {
-				console.warn(
+				log.warn(
 					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
 				);
+				log.debugError(e);
 			}
 			let delayMs: number | undefined;
 			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
@@ -994,6 +1005,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				delayMs = retryDelays[ordinaryRetries];
 			}
 			if (delayMs === undefined) {
+				deps.printRetainedOutput?.();
 				console.error('\n❌ Destroy failed after retries.');
 				if (throttled) {
 					console.error(
@@ -1010,19 +1022,19 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				throw error;
 			}
 			if (stacks.length > 0) {
-				console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+				log.progress('\n🧹 Emptying versioned S3 buckets before retry...');
 				await deps.emptyBuckets(stacks);
 			}
 			const delaySec = Math.round(delayMs / 1000);
 			if (throttled) {
 				throttleRetries++;
-				console.log(
+				log.progress(
 					`\n⏳ Stack deletion was throttled by AWS (API rate limit). Retrying in ${delaySec}s ` +
 						`(throttle retry ${throttleRetries}; backing off for up to ${Math.round(budgetMs / 60_000)} min)...`,
 				);
 			} else {
 				ordinaryRetries++;
-				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+				log.progress(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
 			}
 			await deps.sleep(delayMs);
 		}
@@ -1048,7 +1060,7 @@ const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
 
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
-    console.log("🗑️  Destroying sandbox...");
+    log.progress("🗑️  Destroying sandbox...");
 
     // Fail fast on a missing/expired credential BEFORE the retry loop: a
     // credential error is deterministic and retrying only burns the backoff.
@@ -1102,8 +1114,12 @@ export function sandboxDestroyDeps(
     // so an unquoted path containing a space would split.
     "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
   ];
+  // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
+  // the retry loop prints it once the destroy finally fails.
+  const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: cdkEnv }),
+    printRetainedOutput: () => cdkOutput.printRetained(),
     listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),
     emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
     isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),
