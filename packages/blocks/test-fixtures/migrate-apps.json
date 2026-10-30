@@ -1,0 +1,275 @@
+{
+	"_comment": "Generated apps from create-blocks-app templates in git history, for the blocks migrate tests. <template>@<commit>: aws-blocks/scripts/, index.cdk.ts, cdk.json and package.json of that template at that commit (amplify: the scripts create-blocks-app added).",
+	"default@0ab6b047": {
+		"template": "default",
+		"commit": "0ab6b047",
+		"packageJson": {
+			"name": "blocks-app",
+			"version": "0.1.0",
+			"type": "module",
+			"blocksTemplate": "default",
+			"blocksTemplateDescription": "Vite + lit-html frontend with auth, DynamoDB, and realtime (safe default)",
+			"engines": {
+				"node": ">=22.0.0"
+			},
+			"workspaces": [
+				"aws-blocks"
+			],
+			"scripts": {
+				"typecheck": "tsc --noEmit",
+				"spec": "blocks-generate-spec",
+				"dev:server": "tsx watch aws-blocks/scripts/server.ts",
+				"dev": "tsx watch aws-blocks/scripts/server.ts",
+				"dev:stop": "tsx aws-blocks/scripts/stop.ts",
+				"sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+				"sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
+				"sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+				"sandbox:console": "tsx aws-blocks/scripts/console.ts",
+				"cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+				"prebuild": "blocks-generate-client",
+				"build": "tsc && vite build",
+				"preview": "vite preview",
+				"deploy": "tsx aws-blocks/scripts/deploy.ts",
+				"secret": "tsx aws-blocks/scripts/secret.ts",
+				"typegen": "tsx aws-blocks/scripts/typegen.ts",
+				"destroy": "tsx aws-blocks/scripts/destroy.ts",
+				"test:e2e": "tsx -C browser test/e2e.test.ts",
+				"vendorize": "blocks-vendorize"
+			},
+			"dependencies": {
+				"@aws-blocks/blocks": "*",
+				"@aws-blocks/hosting": "*",
+				"lit-html": "^3.3.3",
+				"zod": "^4.6.7"
+			},
+			"devDependencies": {
+				"@types/node": "^20.19.43",
+				"typescript": "^5.9.3",
+				"vite": "^6.4.4",
+				"tsx": "^4.23.15",
+				"esbuild": "^0.28.2",
+				"aws-cdk": "^2.1145.0",
+				"aws-cdk-lib": "^2.273.0",
+				"constructs": "^10.8.1"
+			}
+		},
+		"files": {
+			"aws-blocks/index.cdk.ts": "import * as cdk from 'aws-cdk-lib';\n\nimport { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nimport { getStackName } from '@aws-blocks/blocks/scripts';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nconst app = new cdk.App();\n\nconst sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';\nconst projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();\n\nconst stackName = getStackName({ sandbox: sandboxMode, projectRoot });\nexport const blocksStack = await BlocksStack.create(app, stackName, {\n  backendHandlerPath: join(__dirname, 'index.handler.ts'),\n  backendCDKPath: join(__dirname, 'index.ts'),\n  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n});\n\n// Add static site hosting only when deploying (not in sandbox mode)\nif (!sandboxMode) {\n  new Hosting(blocksStack, 'Hosting', {\n    root: join(__dirname, '..'),\n    buildCommand: 'npm run build',\n    buildOutputDir: 'dist',\n    api: blocksStack\n  });\n}\n",
+			"aws-blocks/scripts/cleanup.ts": "#!/usr/bin/env node\nimport { execSync } from 'node:child_process';\n\nconsole.log('\ud83e\uddf9 Cleaning up Blocks processes...');\n\nconst ports = [3000, 3001, 3002, 3003];\nfor (const port of ports) {\n  try {\n    const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8' }).trim().split('\\n');\n    for (const pid of pids) {\n      try { execSync(`kill ${pid}`); console.log(`\u2713 Killed process ${pid} on port ${port}`); } catch {}\n    }\n  } catch {}\n}\nconsole.log('\u2713 Cleanup complete');\n",
+			"aws-blocks/scripts/console.ts": "import { openConsole } from '@aws-blocks/blocks/scripts';\nimport { join, dirname } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nopenConsole({ \n  outputsFile: join(__dirname, '..', '..', '.blocks-sandbox', 'outputs.json')\n});",
+			"aws-blocks/scripts/deploy.ts": "import { deploy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndeploy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/destroy.ts": "import { destroy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/sandbox-destroy.ts": "import { destroySandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroySandbox(join(__dirname, '..', \"index.cdk.ts\"));\n",
+			"aws-blocks/scripts/sandbox.ts": "import { startSandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\n// `npm run sandbox:deploy` passes --deploy-only: deploy once, write the config\n// and client, then exit instead of starting CDK watch and the dev server.\nstartSandbox({\n  deployOnly: process.argv.includes('--deploy-only'),\n  backendPath: join(__dirname, '..', 'index.cdk.ts'),\n  devCommand: 'npx tsx watch aws-blocks/scripts/server.ts',\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/secret.ts": "import { runSecretCli } from '@aws-blocks/blocks/scripts';\n\n// `npm run secret -- set STRIPE_KEY sk_live_...`\n// `npm run secret -- list`\n// `npm run secret -- remove STRIPE_KEY`\nrunSecretCli(process.argv.slice(2)).catch((error) => {\n  console.error(error instanceof Error ? error.message : error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/server.ts": "import { startDevServer } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartDevServer({\n  backendPath: join(__dirname, '..', 'index.ts'),\n  frontendCommand: 'npx vite --port 3100 --strictPort',\n  frontendPort: 3100,\n});\n",
+			"aws-blocks/scripts/stop.ts": "import { runStopCli } from '@aws-blocks/blocks/scripts';\n\n// Stop the local dev server this app started (`npm run dev`). SIGTERMs the\n// recorded `tsx watch` supervisor by PID \u2014 never a name match like `pkill -f\n// tsx`, which would also kill your own shell. Pass `--port <n>` for a non-\n// default port.\nawait runStopCli();\n",
+			"aws-blocks/scripts/typegen.ts": "import { runTypegenCli } from '@aws-blocks/blocks/scripts';\n\n// Generate .blocks/hosting-values.d.ts so getSecret()/getConfig() autocomplete your\n// declared secret()/config() keys and reject typos \u2014 no call-site change.\n// `npm run typegen`            \u2014 regenerate\n// `npm run typegen -- --check` \u2014 CI: fail if stale\nrunTypegenCli(process.argv.slice(2))\n  .then((code) => process.exit(code))\n  .catch((error) => {\n    console.error(error instanceof Error ? error.message : error);\n    process.exit(1);\n  });\n",
+			"cdk.json": "{\n  \"app\": \"npx tsx -C cdk aws-blocks/index.cdk.ts\",\n  \"context\": {\n    \"@aws-blocks/bb-data:encryptStorageByDefault\": true\n  },\n  \"watch\": {\n    \"include\": [\n      \"**\"\n    ],\n    \"exclude\": [\n      \"README.md\",\n      \"cdk*.json\",\n      \"**/*.d.ts\",\n      \"node_modules/**\",\n      \".blocks-sandbox/**\",\n      \"dist/**\",\n      \"*.log\",\n      \"*.tsbuildinfo\"\n    ]\n  }\n}\n"
+		}
+	},
+	"api-only@0ab6b047": {
+		"template": "api-only",
+		"commit": "0ab6b047",
+		"packageJson": {
+			"name": "blocks-api-only-app",
+			"version": "0.1.0",
+			"type": "module",
+			"blocksTemplate": "api-only",
+			"blocksTemplateDescription": "Headless JSON API service \u2014 public health check + auth-gated CRUD, no frontend (build for a mobile/CLI/3rd-party client)",
+			"engines": {
+				"node": ">=22.0.0"
+			},
+			"workspaces": [
+				"aws-blocks"
+			],
+			"scripts": {
+				"build": "npm run typecheck",
+				"typecheck": "tsc --noEmit",
+				"spec": "blocks-generate-spec",
+				"prebuild": "blocks-generate-client",
+				"dev": "tsx watch aws-blocks/scripts/server.ts",
+				"dev:stop": "tsx aws-blocks/scripts/stop.ts",
+				"sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+				"sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
+				"sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+				"sandbox:console": "tsx aws-blocks/scripts/console.ts",
+				"cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+				"deploy": "tsx aws-blocks/scripts/deploy.ts",
+				"secret": "tsx aws-blocks/scripts/secret.ts",
+				"typegen": "tsx aws-blocks/scripts/typegen.ts",
+				"destroy": "tsx aws-blocks/scripts/destroy.ts",
+				"test:e2e": "tsx -C browser test/e2e.test.ts",
+				"vendorize": "blocks-vendorize"
+			},
+			"dependencies": {
+				"@aws-blocks/blocks": "*",
+				"zod": "^4.6.7"
+			},
+			"devDependencies": {
+				"@types/node": "^20.19.43",
+				"typescript": "^5.9.3",
+				"tsx": "^4.23.15",
+				"esbuild": "^0.28.2",
+				"aws-cdk": "^2.1145.0",
+				"aws-cdk-lib": "2.274.0",
+				"constructs": "^10.8.1"
+			}
+		},
+		"files": {
+			"aws-blocks/index.cdk.ts": "import * as cdk from 'aws-cdk-lib';\n\nimport { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nimport { getStackName } from '@aws-blocks/blocks/scripts';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nconst app = new cdk.App();\n\nconst sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';\nconst projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();\n\nconst stackName = getStackName({ sandbox: sandboxMode, projectRoot });\nexport const blocksStack = await BlocksStack.create(app, stackName, {\n  backendHandlerPath: join(__dirname, 'index.handler.ts'),\n  backendCDKPath: join(__dirname, 'index.ts'),\n  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n});\n",
+			"aws-blocks/scripts/cleanup.ts": "#!/usr/bin/env node\nimport { execSync } from 'node:child_process';\n\nconsole.log('\ud83e\uddf9 Cleaning up Blocks processes...');\n\nconst ports = [3001, 3002, 3003];\nfor (const port of ports) {\n  try {\n    const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8' }).trim().split('\\n');\n    for (const pid of pids) {\n      try {\n        execSync(`kill ${pid}`);\n        console.log(`\u2713 Killed process ${pid} on port ${port}`);\n      } catch (err) {\n        console.warn(`\u26a0 Could not kill process ${pid} on port ${port}:`, err instanceof Error ? err.message : err);\n      }\n    }\n  } catch {}\n}\nconsole.log('\u2713 Cleanup complete');\n",
+			"aws-blocks/scripts/console.ts": "import { openConsole } from '@aws-blocks/blocks/scripts';\nimport { join, dirname } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nopenConsole({ \n  outputsFile: join(__dirname, '..', '..', '.blocks-sandbox', 'outputs.json')\n});",
+			"aws-blocks/scripts/deploy.ts": "import { deploy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndeploy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/destroy.ts": "import { destroy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/sandbox-destroy.ts": "import { destroySandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroySandbox(join(__dirname, '..', \"index.cdk.ts\"));\n",
+			"aws-blocks/scripts/sandbox.ts": "import { startSandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\n// `npm run sandbox:deploy` passes --deploy-only: deploy once, write the config\n// and client, then exit instead of starting CDK watch and the dev server.\nstartSandbox({\n  deployOnly: process.argv.includes('--deploy-only'),\n  backendPath: join(__dirname, '..', 'index.cdk.ts'),\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/secret.ts": "import { runSecretCli } from '@aws-blocks/blocks/scripts';\n\n// `npm run secret -- set STRIPE_KEY sk_live_...`\n// `npm run secret -- list`\n// `npm run secret -- remove STRIPE_KEY`\nrunSecretCli(process.argv.slice(2)).catch((error) => {\n  console.error(error instanceof Error ? error.message : error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/server.ts": "import { startDevServer } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartDevServer({\n  backendPath: join(__dirname, '..', 'index.ts'),\n  port: 3001\n});\n",
+			"aws-blocks/scripts/stop.ts": "import { runStopCli } from '@aws-blocks/blocks/scripts';\n\n// Stop the local dev server this app started (`npm run dev`). SIGTERMs the\n// recorded `tsx watch` supervisor by PID \u2014 never a name match like `pkill -f\n// tsx`, which would also kill your own shell. Pass `--port <n>` for a non-\n// default port.\nawait runStopCli();\n",
+			"aws-blocks/scripts/typegen.ts": "import { runTypegenCli } from '@aws-blocks/blocks/scripts';\n\n// Generate .blocks/hosting-values.d.ts so getSecret()/getConfig() autocomplete your\n// declared secret()/config() keys and reject typos \u2014 no call-site change.\n// `npm run typegen`            \u2014 regenerate\n// `npm run typegen -- --check` \u2014 CI: fail if stale\nrunTypegenCli(process.argv.slice(2))\n  .then((code) => process.exit(code))\n  .catch((error) => {\n    console.error(error instanceof Error ? error.message : error);\n    process.exit(1);\n  });\n",
+			"cdk.json": "{\n  \"app\": \"npx tsx -C cdk aws-blocks/index.cdk.ts\",\n  \"context\": {\n    \"@aws-blocks/bb-data:encryptStorageByDefault\": true\n  },\n  \"watch\": {\n    \"include\": [\n      \"**\"\n    ],\n    \"exclude\": [\n      \"README.md\",\n      \"cdk*.json\",\n      \"**/*.d.ts\",\n      \"node_modules/**\",\n      \".blocks-sandbox/**\",\n      \"dist/**\",\n      \"*.log\",\n      \"*.tsbuildinfo\"\n    ]\n  }\n}\n"
+		}
+	},
+	"nextjs@0ac38793": {
+		"template": "nextjs",
+		"commit": "0ac38793",
+		"packageJson": {
+			"name": "blocks-nextjs-app",
+			"version": "0.1.0",
+			"type": "module",
+			"blocksTemplate": "nextjs",
+			"blocksTemplateDescription": "Next.js 16 App Router with Server + Client Components calling Blocks",
+			"engines": {
+				"node": ">=22.0.0"
+			},
+			"workspaces": [
+				"aws-blocks"
+			],
+			"scripts": {
+				"typecheck": "tsc --noEmit",
+				"spec": "blocks-generate-spec",
+				"dev:server": "tsx watch aws-blocks/scripts/server.ts",
+				"dev": "tsx watch aws-blocks/scripts/server.ts",
+				"sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+				"sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+				"sandbox:console": "tsx aws-blocks/scripts/console.ts",
+				"cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+				"build": "next build",
+				"start": "next start",
+				"deploy": "tsx aws-blocks/scripts/deploy.ts",
+				"destroy": "tsx aws-blocks/scripts/destroy.ts",
+				"test:e2e": "tsx -C browser test/e2e.test.ts",
+				"vendorize": "blocks-vendorize"
+			},
+			"dependencies": {
+				"@aws-blocks/blocks": "*",
+				"next": "^16.0.0",
+				"react": "^19.0.0",
+				"react-dom": "^19.0.0"
+			},
+			"devDependencies": {
+				"@types/node": "^20.0.0",
+				"@types/react": "^19.0.0",
+				"@types/react-dom": "^19.0.0",
+				"typescript": "^5.3.0",
+				"tsx": "^4.7.0",
+				"esbuild": "^0.27.1",
+				"aws-cdk-lib": "^2.257.0",
+				"constructs": "^10.6.0"
+			}
+		},
+		"files": {
+			"aws-blocks/index.cdk.ts": "import * as cdk from 'aws-cdk-lib';\n\nimport { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nimport { getStackName } from '@aws-blocks/blocks/scripts';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nconst app = new cdk.App();\n\nconst sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';\nconst projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();\n\nconst stackName = getStackName({ sandbox: sandboxMode, projectRoot });\nexport const blocksStack = await BlocksStack.create(app, stackName, {\n  backendHandlerPath: join(__dirname, 'index.handler.ts'),\n  backendCDKPath: join(__dirname, 'index.ts'),\n  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n});\n\n// Add Next.js SSR hosting only when deploying (not in sandbox mode)\nif (!sandboxMode) {\n  new Hosting(blocksStack, 'Hosting', {\n    root: join(__dirname, '..'),\n    buildCommand: 'npm run build',\n    framework: 'nextjs',\n    api: blocksStack,\n    compute: {\n      memorySize: 1024,\n      timeout: 30,\n    },\n  });\n}\n",
+			"aws-blocks/scripts/cleanup.ts": "#!/usr/bin/env node\nimport { execSync } from 'node:child_process';\n\nconsole.log('\ud83e\uddf9 Cleaning up Blocks processes...');\n\nconst ports = [3000, 3001, 3002, 3003];\nfor (const port of ports) {\n  try {\n    const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8' }).trim().split('\\n');\n    for (const pid of pids) {\n      try { execSync(`kill ${pid}`); console.log(`\u2713 Killed process ${pid} on port ${port}`); } catch {}\n    }\n  } catch {}\n}\nconsole.log('\u2713 Cleanup complete');\n",
+			"aws-blocks/scripts/console.ts": "import { openConsole } from '@aws-blocks/blocks/scripts';\nimport { join, dirname } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nopenConsole({ \n  outputsFile: join(__dirname, '..', '..', '.blocks-sandbox', 'outputs.json')\n});\n",
+			"aws-blocks/scripts/deploy.ts": "import { deploy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndeploy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/destroy.ts": "import { destroy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/sandbox-destroy.ts": "import { destroySandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroySandbox(join(__dirname, '..', \"index.cdk.ts\"));\n",
+			"aws-blocks/scripts/sandbox.ts": "import { startSandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartSandbox({\n  backendPath: join(__dirname, '..', 'index.cdk.ts'),\n  devCommand: 'npx tsx watch aws-blocks/scripts/server.ts',\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/server.ts": "import { startDevServer } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartDevServer({\n  backendPath: join(__dirname, '..', 'index.ts'),\n  frontendCommand: 'npx next dev --port 3100',\n  frontendPort: 3100,\n});\n",
+			"cdk.json": "{\n  \"app\": \"npx tsx -C cdk aws-blocks/index.cdk.ts\",\n  \"watch\": {\n    \"include\": [\n      \"**\"\n    ],\n    \"exclude\": [\n      \"README.md\",\n      \"cdk*.json\",\n      \"**/*.d.ts\",\n      \"node_modules/**\",\n      \".blocks-sandbox/**\",\n      \".next/**\",\n      \"*.log\",\n      \"*.tsbuildinfo\"\n    ]\n  }\n}\n"
+		}
+	},
+	"backend@1aeebe50": {
+		"template": "backend",
+		"commit": "1aeebe50",
+		"packageJson": {
+			"name": "blocks-backend-app",
+			"version": "0.1.0",
+			"type": "module",
+			"blocksTemplate": "backend",
+			"engines": {
+				"node": ">=22.0.0"
+			},
+			"workspaces": [
+				"aws-blocks"
+			],
+			"scripts": {
+				"typecheck": "tsc --noEmit",
+				"spec": "blocks-generate-spec",
+				"dev": "tsx watch aws-blocks/scripts/server.ts",
+				"sandbox": "tsx aws-blocks/scripts/sandbox.ts",
+				"sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
+				"sandbox:console": "tsx aws-blocks/scripts/console.ts",
+				"cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+				"deploy": "tsx aws-blocks/scripts/deploy.ts",
+				"destroy": "tsx aws-blocks/scripts/destroy.ts",
+				"test:e2e": "tsx -C browser test/e2e.test.ts",
+				"vendorize": "blocks-vendorize"
+			},
+			"dependencies": {
+				"@aws-blocks/blocks": "*"
+			},
+			"devDependencies": {
+				"@types/node": "^20.0.0",
+				"typescript": "^5.3.0",
+				"tsx": "^4.7.0",
+				"esbuild": "^0.27.1",
+				"aws-cdk-lib": "2.257.0",
+				"constructs": "^10.6.0"
+			}
+		},
+		"files": {
+			"aws-blocks/index.cdk.ts": "import * as cdk from 'aws-cdk-lib';\nimport { RemovalPolicies, Mixins } from 'aws-cdk-lib';\n\nimport { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nimport { getSandboxId } from './scripts/sandbox-id.js';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nconst app = new cdk.App();\n\nconst sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';\nconst projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();\n\nconst stackName = sandboxMode ? `my-blocks-stack-${getSandboxId(projectRoot)}` : 'my-blocks-stack-prod';\nexport const blocksStack = await BlocksStack.create(app, stackName, {\n  backendHandlerPath: join(__dirname, 'index.handler.ts'),\n  backendCDKPath: join(__dirname, 'index.ts')\n});\n\nif (sandboxMode) {\n  // Make all resources deletable so sandbox:destroy can clean up the entire stack.\n  // This overrides removal policies and deletion protection (e.g. RDS) for every\n  // resource in the stack, including any you add below.\n  // Remove these lines if you want to manage teardown behavior yourself.\n  RemovalPolicies.of(blocksStack).destroy();\n  Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());\n\n  // Tell the runtime that cookies need cross-domain attributes (frontend on\n  // localhost, API on API Gateway \u2014 different registrable domains).\n  blocksStack.handler.addEnvironment('BLOCKS_SANDBOX', 'true');}\n",
+			"aws-blocks/scripts/cleanup.ts": "#!/usr/bin/env node\nimport { execSync } from 'node:child_process';\n\nconsole.log('\ud83e\uddf9 Cleaning up Blocks processes...');\n\nconst ports = [3001, 3002, 3003];\nfor (const port of ports) {\n  try {\n    const pids = execSync(`lsof -ti:${port}`, { encoding: 'utf-8' }).trim().split('\\n');\n    for (const pid of pids) {\n      try { execSync(`kill ${pid}`); console.log(`\u2713 Killed process ${pid} on port ${port}`); } catch {}\n    }\n  } catch {}\n}\nconsole.log('\u2713 Cleanup complete');\n",
+			"aws-blocks/scripts/console.ts": "import { openConsole } from '@aws-blocks/blocks/scripts';\nimport { join, dirname } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nopenConsole({ \n  outputsFile: join(__dirname, '..', '..', '.blocks-sandbox', 'outputs.json')\n});",
+			"aws-blocks/scripts/deploy.ts": "import { deploy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndeploy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/destroy.ts": "import { destroy } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroy({\n  cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),\n  projectRoot: join(__dirname, '..', '..')\n}).catch((error) => {\n  console.error(error);\n  process.exit(1);\n});\n",
+			"aws-blocks/scripts/sandbox-destroy.ts": "import { destroySandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\ndestroySandbox(join(__dirname, '..', \"index.cdk.ts\"));\n",
+			"aws-blocks/scripts/sandbox-id.ts": "import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';\nimport { join } from 'node:path';\nimport { execSync } from 'node:child_process';\n\nfunction getUsername(): string {\n  try {\n    return execSync('git config user.name', { encoding: 'utf-8' }).trim();\n  } catch {\n    return process.env.USER || process.env.USERNAME || 'user';\n  }\n}\n\nfunction generateRandomId(): string {\n  return Math.random().toString(36).substring(2, 8);\n}\n\nexport function getSandboxId(projectRoot: string): string {\n  const sandboxIdPath = join(projectRoot, '.blocks-sandbox', 'sandbox-id.txt');\n  \n  if (existsSync(sandboxIdPath)) {\n    return readFileSync(sandboxIdPath, 'utf-8').trim();\n  }\n  \n  const username = getUsername().toLowerCase().replace(/[^a-z0-9]/g, '');\n  const randomId = generateRandomId();\n  const sandboxId = `${username}-${randomId}`;\n  \n  const dir = join(projectRoot, '.blocks-sandbox');\n  if (!existsSync(dir)) {\n    mkdirSync(dir, { recursive: true });\n  }\n  \n  writeFileSync(sandboxIdPath, sandboxId);\n  \n  return sandboxId;\n}\n",
+			"aws-blocks/scripts/sandbox.ts": "import { startSandbox } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartSandbox({\n  backendPath: join(__dirname, '..', 'index.cdk.ts')\n});\n",
+			"aws-blocks/scripts/server.ts": "import { startDevServer } from '@aws-blocks/blocks/scripts';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartDevServer({\n  backendPath: join(__dirname, '..', 'index.ts'),\n  port: 3001\n});\n",
+			"cdk.json": "{\n  \"app\": \"npx tsx -C cdk aws-blocks/index.cdk.ts\",\n  \"watch\": {\n    \"include\": [\n      \"**\"\n    ],\n    \"exclude\": [\n      \"README.md\",\n      \"cdk*.json\",\n      \"**/*.d.ts\",\n      \"node_modules/**\",\n      \".blocks-sandbox/**\",\n      \"dist/**\",\n      \"*.log\",\n      \"*.tsbuildinfo\"\n    ]\n  }\n}\n"
+		}
+	},
+	"amplify@0ab6b047": {
+		"template": "amplify",
+		"commit": "0ab6b047",
+		"packageJson": {
+			"name": "amplify-app",
+			"version": "1.0.0",
+			"workspaces": [
+				"aws-blocks"
+			],
+			"scripts": {
+				"dev": "vite",
+				"sandbox": "cross-env NODE_OPTIONS=\"--conditions=cdk\" AMPLIFY_SANDBOX=true npx ampx sandbox",
+				"sandbox:delete": "cross-env NODE_OPTIONS=\"--conditions=cdk\" npx ampx sandbox delete --yes",
+				"blocks:dev": "tsx watch aws-blocks/scripts/server.ts",
+				"blocks:stop": "tsx aws-blocks/scripts/stop.ts",
+				"blocks:generate-client": "cross-env NODE_OPTIONS=\"--conditions=aws-runtime\" tsx aws-blocks/scripts/generate-client.ts"
+			},
+			"dependencies": {
+				"@aws-blocks/blocks": "*",
+				"vite": "*"
+			}
+		},
+		"files": {
+			"aws-blocks/index.cdk.ts": "/**\n * Blocks CDK entry point for Amplify Gen 2 integration.\n *\n * This file is imported by amplify/blocks.ts to wire Blocks into the Amplify backend.\n * It is NOT a standalone CDK app \u2014 Amplify's `ampx` CLI orchestrates synthesis.\n */\nimport { BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';\nimport { fileURLToPath } from 'node:url';\nimport { dirname, join } from 'node:path';\nimport type { Stack } from 'aws-cdk-lib';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\n/**\n * Create the Blocks backend on the given CDK stack.\n * Called from amplify/blocks.ts with the stack Amplify provides.\n */\nexport async function createBlocksBackend(stack: Stack, sandboxMode: boolean) {\n  // Propagate sandbox mode via CDK context so Building Blocks (e.g. DistributedDatabase)\n  // can detect it and disable deletion protection / set DESTROY removal policy.\n  if (sandboxMode) {\n    stack.node.setContext('sandboxMode', 'true');\n  }\n\n  // Amplify synthesizes via `ampx` and has no cdk.json, so set the bb-data\n  // storage-encryption opt-in flag here instead \u2014 mirroring the\n  // `@aws-blocks/bb-data:encryptStorageByDefault` entry in the create-blocks-app\n  // cdk.json templates, so a new Amplify project encrypts Database storage by\n  // default. Set unconditionally (not only in sandbox) so production deploys get it too.\n  stack.node.setContext('@aws-blocks/bb-data:encryptStorageByDefault', true);\n\n  const blocks = await BlocksBackend.create(stack, 'blocks', {\n    backendHandlerPath: join(__dirname, 'index.handler.ts'),\n    backendCDKPath: join(__dirname, 'index.ts'),\n    defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n  });\n\n  return blocks;\n}\n",
+			"aws-blocks/scripts/generate-client.ts": "/**\n * Regenerates aws-blocks/client.js from the backend exports.\n *\n * Run: npm run blocks:generate-client\n *\n * Uses generateClientCode() to discover ApiNamespace exports,\n * then injects the Amplify auth middleware and URL configuration.\n */\nimport { mkdirSync, writeFileSync } from 'node:fs';\nimport { dirname, join, resolve } from 'node:path';\nimport { generateClientCode } from '@aws-blocks/blocks/scripts';\n\nconst awsBlocksDir = resolve(dirname(new URL(import.meta.url).pathname), '..');\nconst foundationPath = join(awsBlocksDir, 'index.ts');\nconst clientPath = join(awsBlocksDir, 'client.js');\n\n// Generate the standard client code (namespace discovery + proxy exports)\nlet code = await generateClientCode(foundationPath);\n\n// Inject URL option into all ApiNamespaceClient calls\n// Standard: __BLOCKS_ApiNamespaceClient__('name')\n// Amplify:  __BLOCKS_ApiNamespaceClient__('name', { url: BLOCKS_API_URL })\ncode = code.replace(\n\t/__BLOCKS_ApiNamespaceClient__\\('([^']+)'\\)/g,\n\t\"__BLOCKS_ApiNamespaceClient__('$1', { url: BLOCKS_API_URL })\",\n);\n\n// Replace the auto-generated header and imports with Amplify-specific preamble\nconst importLine = \"import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';\";\nconst codeFromImports = code.slice(code.indexOf(importLine));\n\nconst preamble = `// ============================================================\n// AUTO-GENERATED FILE \u2014 DO NOT EDIT\n//\n// Regenerate with: npm run blocks:generate-client\n// ============================================================\n\nimport { fetchAuthSession } from 'aws-amplify/auth';\nimport { registerMiddleware } from '@aws-blocks/blocks/client';\nimport outputs from '../amplify_outputs.json';\n\nconst BLOCKS_API_URL = outputs.custom?.blocks_api_url;\nif (!BLOCKS_API_URL) {\n  throw new Error('Blocks API URL not found in amplify_outputs.json. Did you deploy the backend?');\n}\n\n// Attach Cognito bearer token to every Blocks API call\nregisterMiddleware({\n  async onRequest(req) {\n    const session = await fetchAuthSession();\n    const token = session.tokens?.idToken?.toString();\n    if (token) req.headers['Authorization'] = \\`Bearer \\${token}\\`;\n    return req;\n  }\n});\n\n`;\n\nmkdirSync(dirname(clientPath), { recursive: true });\nwriteFileSync(clientPath, preamble + codeFromImports);\nconsole.log(`\u2705 Generated ${clientPath}`);\n",
+			"aws-blocks/scripts/server.ts": "import { dirname, join } from 'node:path';\nimport { fileURLToPath } from 'node:url';\nimport { startDevServer } from '@aws-blocks/blocks/scripts';\n\nconst __dirname = dirname(fileURLToPath(import.meta.url));\n\nstartDevServer({\n\tbackendPath: join(__dirname, '..', 'index.ts'),\n\tport: 3001,\n});\n",
+			"aws-blocks/scripts/stop.ts": "import { runStopCli } from '@aws-blocks/blocks/scripts';\n\n// Stop the local Blocks dev server this app started (`npm run blocks:dev`).\n// SIGTERMs the recorded `tsx watch` supervisor by PID \u2014 never a name match like\n// `pkill -f tsx`, which would also kill your own shell. The Amplify overlay's\n// dev server binds :3001; pass `--port <n>` to override.\nawait runStopCli(process.argv.slice(2).length ? process.argv.slice(2) : ['--port', '3001']);\n"
+		}
+	}
+}
