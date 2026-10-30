@@ -134,13 +134,14 @@ type CachedRead = { raw: string | null; fetchedAt: number };
  * @example
  * ```typescript
  * // Opaque string secret
- * const stripeKey = new Secret(scope, 'stripe-api-key');
+ * const stripeKey = new Secret(scope, 'stripe-api-key', { allowRuntimeWrite: true });
  * await stripeKey.put('sk_live_...');
  * const key = await stripeKey.get(); // string | null
  *
  * // Typed JSON secret with schema validation
  * const dbConfig = new Secret(scope, 'db-config', {
  *   schema: z.object({ host: z.string(), port: z.number() }),
+ *   allowRuntimeWrite: true,
  * });
  * await dbConfig.put({ host: 'db.internal', port: 5432 });
  * const config = await dbConfig.get(); // { host: string; port: number } | null
@@ -182,6 +183,7 @@ class SecretImpl<T = string> extends Scope {
 	 *
 	 * @example
 	 * ```typescript
+	 * const stripeKey = new Secret(scope, 'stripe-api-key', { allowRuntimeWrite: true });
 	 * await stripeKey.put('sk_live_new_value');
 	 * ```
 	 */
