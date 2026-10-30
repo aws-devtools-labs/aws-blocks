@@ -73,9 +73,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<GetEventResult> getEvent({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.getEvent', params);
     return GetEventResult.fromJson(result as Map<String, dynamic>);
   }

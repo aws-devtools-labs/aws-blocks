@@ -170,9 +170,9 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<DoActionResult> doAction({required ApiDoActionInput input}) async {
-    final params = <String, dynamic>{
-      'input': input.toJson(),
-    };
+    final params = <dynamic>[
+      input.toJson(),
+    ];
     final result = await _client.call('api.doAction', params);
     return DoActionResult.fromJson(result as Map<String, dynamic>);
   }

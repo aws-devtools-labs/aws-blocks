@@ -215,17 +215,17 @@ class ApiApi {
   ApiApi(this._client);
 
   Future<Map<String, UpdateAttributesResult?>> updateAttributes({required Map<String, String> attributes}) async {
-    final params = <String, dynamic>{
-      'attributes': attributes,
-    };
+    final params = <dynamic>[
+      attributes,
+    ];
     final result = await _client.call('api.updateAttributes', params);
     return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v == null ? null : UpdateAttributesResult.fromJson(v as Map<String, dynamic>)));
   }
 
   Future<GetNotificationResult?> getNotification({required String id}) async {
-    final params = <String, dynamic>{
-      'id': id,
-    };
+    final params = <dynamic>[
+      id,
+    ];
     final result = await _client.call('api.getNotification', params);
     return result == null ? null : GetNotificationResult.fromJson(result as Map<String, dynamic>);
   }

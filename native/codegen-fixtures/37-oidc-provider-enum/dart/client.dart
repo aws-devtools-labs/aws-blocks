@@ -17,7 +17,7 @@ class AuthApi {
   AuthApi(this._client);
 
   Future<OidcClient> getClient() async {
-    final result = await _client.call('auth.getClient', <String, dynamic>{});
+    final result = await _client.call('auth.getClient', const <dynamic>[]);
     return OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore);
   }
 }
@@ -28,7 +28,7 @@ class LegacyAuthApi {
   LegacyAuthApi(this._client);
 
   Future<OidcClient> getClient() async {
-    final result = await _client.call('legacyAuth.getClient', <String, dynamic>{});
+    final result = await _client.call('legacyAuth.getClient', const <dynamic>[]);
     return OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore);
   }
 }
