@@ -17,7 +17,7 @@
 
 import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
@@ -1798,6 +1798,78 @@ export interface RequireAuthOptions {
 	fresh?: boolean;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Deny-by-default API namespaces (`protect`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The method map an API handler returns: the same shape an `ApiNamespace`
+ * handler returns (`{ async listNotes() { … }, … }`).
+ */
+export type ApiMethods = Record<string, (...args: any[]) => any>;
+
+/**
+ * Makes a method name that is in both `public` and `methods` a compile error:
+ * each such name must be `never` in `methods`.
+ */
+export type NoSharedMethodNames<P extends ApiMethods, M extends ApiMethods> = {
+	// `[P][P extends unknown ? 0 : never]` is `P`, written so TypeScript doesn't infer `P` from here.
+	[K in keyof M & keyof [P][P extends unknown ? 0 : never]]: never;
+};
+
+/**
+ * The two method factories of {@link AuthShape.protect}.
+ *
+ * @typeParam P - The public methods.
+ * @typeParam M - The protected methods.
+ * @typeParam O - The `Auth` block's options, which type `user`.
+ */
+export interface ProtectHandlers<P extends ApiMethods, M extends ApiMethods, O extends AuthOptions = AuthOptions> {
+	/**
+	 * Methods anyone may call, with no session — for example a health check or a
+	 * public listing. Runs as an `ApiNamespace` handler does: per request, with
+	 * no check. Call `auth.getCurrentUser(context)` in a method for an optional
+	 * user. Omit when every method needs a signed-in user.
+	 */
+	public?: (context: BlocksContext) => P;
+	/**
+	 * The protected methods. Runs only after the session check has passed, once
+	 * per call, with the signed-in user (typed by this block's options) — so
+	 * nothing in it, the factory body included, runs for an anonymous caller.
+	 * A name may not also be one of the `public` methods: a compile error. In
+	 * untyped code that defines one anyway, a call to that name runs the public
+	 * method, and the clash is reported only when another protected method is
+	 * called (see `protect`).
+	 */
+	methods: (context: BlocksContext, user: AuthenticatedUser<O>) => M & NoSharedMethodNames<P, M>;
+}
+
+/**
+ * The client-facing type of a namespace {@link AuthShape.protect} returns:
+ * every method, async. The same mapping `new ApiNamespace(...)` returns, so
+ * the frontend imports and calls it exactly like any other namespace.
+ */
+export type ProtectedApi<T extends ApiMethods> = {
+	[K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
+};
+
+/**
+ * Options for {@link AuthShape.protect}: the `ApiNamespace` options (such as
+ * `compute`), plus the group every protected method requires.
+ *
+ * @typeParam O - The `Auth` block's options; `role` may name only its declared `users.groups`.
+ */
+export interface ProtectOptions<O extends AuthOptions = AuthOptions> extends ApiNamespaceOptions {
+	/**
+	 * Require membership of this group (one of `users.groups`) for every
+	 * protected method, as `requireRole(context, role)` does: a caller with no
+	 * session gets 401 `NotAuthenticatedException` first, and a signed-in user
+	 * outside the group 403 `NotAuthorizedException`. Omit to require only a
+	 * signed-in user (`requireAuth(context)`). Public methods are unaffected.
+	 */
+	role?: GroupOf<O>;
+}
+
 /** Options for `getAuthSession`. */
 export interface GetAuthSessionOptions {
 	/** Refresh the tokens even if the access token has not expired yet. */
@@ -2651,6 +2723,26 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 	 */
 	createApi(): AuthStateApiOf<O>;
 
+	/**
+	 * Define an API namespace that is deny by default: its `methods` run only
+	 * after the session check, and only its `public` methods are callable
+	 * without a signed-in user. Use it instead of `new ApiNamespace(...)` so a
+	 * forgotten (or un-awaited) `requireAuth` can't leave a method open.
+	 *
+	 * A protected call with no valid session fails with 401
+	 * `NotAuthenticatedException` before `methods` is called (with `role`, a
+	 * signed-in user outside the group gets 403 `NotAuthorizedException`). An
+	 * anonymous call to a name that isn't a public method gets the same 401,
+	 * whether or not the method exists. See {@link ProtectHandlers} and
+	 * {@link ProtectOptions}.
+	 */
+	protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(
+		scope: ScopeParent,
+		name: string,
+		handlers: ProtectHandlers<P, M, O>,
+		options?: ProtectOptions<O>,
+	): ProtectedApi<P & M>;
+
 	// ── Federated sign-in ───────────────────────────────────────────────────
 
 	/**
@@ -3061,7 +3153,11 @@ export interface AuthClientEnvironment {
 	/** Send a request (`fetch`). The client passes `credentials: 'include'` where the session cookie must travel. */
 	fetch(input: string, init?: RequestInit): Promise<Response>;
 	/** Holds the pending sign-in (CSRF value, PKCE verifier) between the two page loads. */
-	storage: { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void };
+	storage: {
+		getItem(key: string): string | null;
+		setItem(key: string, value: string): void;
+		removeItem(key: string): void;
+	};
 	/** The current page URL. */
 	currentUrl(): string;
 	/** Navigate the page (`location.assign`). */

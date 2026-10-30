@@ -47,8 +47,12 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
   (`updateEmail`, `confirmAttribute`, …).
 - **Session management** — `changePassword`, `listDevices`,
   `forgetCurrentDevice`, `signOutEverywhere`.
+- **Deny by default** — `api` is defined with `auth.protect(scope, 'api', {
+  public, methods })`: its `methods` run only after the session check, with the
+  signed-in `user`, and a signed-out call to anything but a `public` method
+  (`ping`, `getLastCode`) gets 401 `NotAuthenticatedException`.
 - **DistributedTable** — per-user todos keyed by `userSub` (stable for the
-  user's lifetime), gated by `auth.requireAuth(context)`.
+  user's lifetime), in `auth.protect`'s `methods`.
 
 ⚠️ Decide `users.signInWith`, `users.caseSensitive`, required attributes and custom attributes before
 your first deploy: Cognito can't change them on an existing user pool. Full

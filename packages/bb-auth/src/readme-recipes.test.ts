@@ -50,7 +50,7 @@ describe('README recipes compile', () => {
 
 	test('the recipes the README promises are there', () => {
 		const titles = recipes.map((r) => r.title);
-		for (const want of [/^MFA/, /^Roles/, /first admin/, /^Social sign-in/]) {
+		for (const want of [/^Protect every method/, /^MFA/, /^Roles/, /first admin/, /^Social sign-in/]) {
 			assert.ok(
 				titles.some((t) => want.test(t)),
 				`a recipe matching ${want} (have: ${titles.join(' | ')})`,

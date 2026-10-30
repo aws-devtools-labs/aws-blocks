@@ -122,8 +122,8 @@ async function refreshTodos() {
   // subsequent showError() mutates it in place (reliably announced).
   if (errorDiv) showMessage(errorDiv, '', 'idle');
 
-  // Rely on the server to decide "are you signed in?" — `listTodos` goes through
-  // `auth.requireAuth` and throws 401 otherwise. The frontend `currentUser`
+  // Rely on the server to decide "are you signed in?" — `listTodos` is a
+  // protected method (`auth.protect`) and throws 401 otherwise. The frontend `currentUser`
   // cache races with the state-machine transition, so checking it here can
   // swallow valid sign-in states.
   try {

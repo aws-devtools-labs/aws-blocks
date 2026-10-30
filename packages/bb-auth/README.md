@@ -8,7 +8,77 @@ Import it from `@aws-blocks/blocks` (or `@aws-blocks/bb-auth`), and its UI helpe
 
 ## Recipes
 
-Each recipe is a complete `aws-blocks/index.ts` (and, where the browser takes part, its frontend), and each compiles as written. Every guard is awaited: an API method is public until `await auth.requireAuth(context)` or `await auth.requireRole(context, …)` returns, and a guard that is not awaited protects nothing.
+Each recipe is a complete `aws-blocks/index.ts` (and, where the browser takes part, its frontend), and each compiles as written. Every guard is awaited: an API method is public until `await auth.requireAuth(context)` or `await auth.requireRole(context, …)` returns, and a guard that is not awaited protects nothing. To make that mistake impossible, define the namespace with `auth.protect` ([first recipe](#protect-every-method)).
+
+### Protect every method
+
+A method of `new ApiNamespace(...)` is public until it awaits a guard, so a forgotten guard, or one called without `await`, serves the data to anyone, and nothing warns you. Define the namespace with `auth.protect` instead. It takes two method factories: `methods`, which runs only after the session check and gets the signed-in user, and `public` (optional), for methods anyone may call.
+
+```ts
+// aws-blocks/index.ts
+import { Auth, KVStore, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  users: { groups: ['admin'] },
+  admin: {},
+});
+const notes = new KVStore(scope, 'notes');
+export const authApi = auth.createApi();
+
+export const notesApi = auth.protect(scope, 'notesApi', {
+  // Anyone can call these: no session check, no user.
+  public: (context) => ({
+    async health() {
+      return { ok: true };
+    },
+  }),
+  // Runs only after the session check, once per call, with the signed-in user —
+  // typed by this block's options: no guard to write, no cast.
+  methods: (context, user) => ({
+    async addNote(text: string) {
+      await notes.put(`${user.userSub}:${crypto.randomUUID()}`, text);
+    },
+    async myGroups() {
+      return user.groups; // ('admin')[]
+    },
+  }),
+});
+
+// With `role`, every protected method also requires the group, as `requireRole` does.
+export const adminApi = auth.protect(scope, 'adminApi', {
+  methods: () => ({
+    async listUsers() {
+      return Array.fromAsync(auth.admin.scan(), (u) => u.username);
+    },
+  }),
+}, { role: 'admin' });
+```
+
+The frontend calls every method, public and protected, like any other namespace:
+
+```ts
+// src/main.ts
+import { AuthErrors, isAuthError } from '@aws-blocks/blocks';
+import { notesApi } from 'aws-blocks';
+
+await notesApi.health(); // works signed out
+try {
+  await notesApi.addNote('hello');
+} catch (e) {
+  if (isAuthError(e, AuthErrors.NotAuthenticated)) {
+    // signed out: show the sign-in UI
+  }
+}
+```
+
+- **A protected call** checks the session first, with `requireAuth(context)` (or `requireRole(context, role)`), so sessions, bearer tokens (`allowBearerAuth`) and live group reads work exactly as they do there, locally and on AWS. Only then does `protect` call `methods`, once, so nothing in it — the factory body included — runs for a caller who fails the check. No valid session: 401 `NotAuthenticatedException`. With `role`, a signed-in user outside the group: 403 `NotAuthorizedException`.
+- **An anonymous call to a name that isn't public** gets the same 401, whether or not the method exists, so a signed-out caller can't list your protected methods. A signed-in caller gets "method not found" for a name `methods` doesn't define.
+- **A public method** runs exactly as in a plain `ApiNamespace`. It has no `user`; call `auth.getCurrentUser(context)` in it for an optional one.
+- **A name can't be in both** `public` and `methods`: that is a compile error (and an error at runtime for untyped JavaScript).
+- The `ApiNamespace` options, such as `compute`, go in the last argument, next to `role`. You can still call `requireRole` inside a protected method for a stricter check on one method.
+
+A lint rule is not a substitute. Biome's `noFloatingPromises` (a nursery rule) does not flag an un-awaited `auth.requireAuth(context)` or `auth.requireRole(context, …)`, because Biome does not infer their return types from the package. typescript-eslint's type-aware `no-floating-promises` does flag it, but only where you have set it up. `protect` doesn't depend on either.
 
 ### MFA with an authenticator app (TOTP)
 
@@ -79,7 +149,7 @@ export const adminApi = new ApiNamespace(scope, 'adminApi', (context) => ({
 }));
 ```
 
-`requireRole` reads the user's groups live from the user pool, so a group change applies at the user's next request, not at their next sign-in.
+`requireRole` reads the user's groups live from the user pool, so a group change applies at the user's next request, not at their next sign-in. To require the group on every method of a namespace, use `auth.protect(scope, 'adminApi', { methods }, { role: 'admin' })` instead ([Protect every method](#protect-every-method)).
 
 ### The first admin
 
@@ -263,6 +333,7 @@ const auth = new Auth(scope, 'auth', {
 
 - The compiler rejects calls your configuration does not support (see [Mode gates](#mode-gates)).
 - The session layer, the guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, `signOut`) and the `createApi()` state machine work the same for every sign-in method, and existing `AuthCognito` sessions are accepted.
+- `auth.protect(...)` defines an API namespace that is deny by default: its `methods` run only after the session check (and the group check, with `role`), and only its `public` methods are callable without a session ([Protect every method](#protect-every-method)).
 - **Locally** (`npm run dev`, tests), email + password works end to end with no AWS account: sign-up with an emailed code, sign-in and its challenges, password reset, MFA (TOTP / SMS / email), devices, user attributes, `deleteUser`, passkeys, and the opt-in `auth.admin` surface. The local user pool lives in `.bb-data/<fullId>/state.json` — the same file `AuthCognito`'s mock writes, so local users survive the switch.
 - On AWS, email + password runs against Amazon Cognito: sign-up and confirmation (with automatic sign-in after the emailed code), sign-in with every challenge `AuthCognito` supports (MFA, new-password-required, `USER_AUTH` choice-based and passwordless sign-in, passkey sign-in), password reset and change, token refresh, live group reads for `requireRole`, global sign-out and passkey management, user attributes, `deleteUser`, authenticator-app (TOTP) setup and MFA preferences, devices, and the opt-in `auth.admin` surface. `rememberDevice` throws a `501` on AWS, as it did in `AuthCognito` ([why](./DESIGN.md#known-gaps-documented-not-built)).
 - Directly federated sign-in works, locally and deployed: any `oidcProviders` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives `emailPassword: false` apps an offline sign-in.

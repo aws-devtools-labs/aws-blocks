@@ -530,6 +530,9 @@ for (const { name, files } of [...bbEntries, umbrellaEntry]) {
 const SYNTH_SAFE_METHODS = new Set([
 	// Synth-time wiring: `createApi()` builds the RPC namespace the backend module exports.
 	'Auth.prototype.createApi',
+	// Synth-time wiring: `protect()` builds the RPC namespace the backend module exports
+	// (its methods are `synthGuard`ed; see the bb-auth CDK test).
+	'Auth.prototype.protect',
 	// Synth-time config: sets an environment variable on the Lambda function.
 	'LambdaCompute.prototype.setEnv',
 	// Synth-time config: adds an env var to the Fargate container definition.
