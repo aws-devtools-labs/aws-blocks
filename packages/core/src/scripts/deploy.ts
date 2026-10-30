@@ -28,6 +28,22 @@ export interface DeployOptions {
   waitLive?: boolean;
   /** Overall budget for the liveness wait, in seconds. Defaults to 180. */
   waitLiveTimeoutSec?: number;
+  /**
+   * Called with the outputs of the deployed stack as soon as the deploy has read
+   * them from `.blocks-sandbox/outputs.json`, before the liveness wait. A launcher
+   * that reports the result records them here: a sandbox deploy of the same app
+   * rewrites that file with only its own stack, and can do so during the wait.
+   */
+  onDeployed?: (deployed: DeployedStack) => void;
+}
+
+/** The stack a production deploy deployed, from the outputs it read. */
+export interface DeployedStack {
+  /** The stack whose outputs carry `ApiUrl`. */
+  stack: string;
+  apiUrl: string;
+  /** The frontend URL, when the stack hosts a frontend. */
+  hostingUrl?: string;
 }
 
 /** Default liveness-wait budget (seconds). */
@@ -327,8 +343,8 @@ export async function deploy(options: DeployOptions) {
     // — the main Blocks stack, which also holds the Hosting outputs — rather
     // than relying on the write order of the outputs file. Falls back to the
     // first group so a single-stack app is unchanged.
-    const stackGroups = Object.values(outputs) as Record<string, string>[];
-    const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+    const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
+    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME
@@ -342,6 +358,7 @@ export async function deploy(options: DeployOptions) {
     if (!apiUrl) {
       throw new Error('Could not find API URL in CDK outputs');
     }
+    options.onDeployed?.({ stack, apiUrl, hostingUrl });
     
     // Write config.json with API endpoint
     const config: Record<string, string> = { apiUrl, environment: 'production' };
