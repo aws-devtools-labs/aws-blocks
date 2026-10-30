@@ -31,7 +31,8 @@
   },
   "blocks": {
     "dev": {
-      "port": 3001
+      "port": 3001,
+      "frontend": false
     }
   },
   "dependencies": {
