@@ -13,4 +13,4 @@ fix(blocks): `blocks` output streams, non-interactive runs and usage errors
 - `--telemetry-file <path>` (or `--telemetry-file=<path>`) is a global option. The CLI passes it, as an absolute path, to the lifecycle runners, where core's telemetry client reads it, so `npm run dev -- --telemetry-file=/tmp/events.json` captures events as it did with the scripts.
 - `blocks sandbox --deploy-only` runs `blocks sandbox deploy`, as a hidden alias of the old script flag.
 - `package.json` `"blocks": { "dev": { "frontend": false } }` runs the backend only, as `--no-frontend` does, even when `vite` or `next` is installed. It cannot be combined with `frontendCommand` or `frontendPort`.
-- A `--host` or `blocks.dev.host` is also exported to the dev server as `BLOCKS_DEV_HOST`, so the local realtime WebSocket (`/realtime`) accepts that host's origins, as it does for a `BLOCKS_DEV_HOST` you set yourself.
+- A `--host` or `blocks.dev.host` is also exported to the dev server as `BLOCKS_DEV_HOST`, so the local realtime WebSocket (`/realtime`) accepts that host's origins, as it does for a `BLOCKS_DEV_HOST` you set yourself; a `BLOCKS_DEV_HOST` already in the environment is kept.

@@ -276,6 +276,17 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(plain.spawned[0].env.BLOCKS_DEV_HOST, 'other.example.com');
 	});
 
+	it('keeps an inherited BLOCKS_DEV_HOST over --host, and exports the host when none is inherited', async () => {
+		const root = fixtureApp();
+		const inherited = await runCli(['dev', '--host', '0.0.0.0'], { cwd: root, env: { BLOCKS_DEV_HOST: 'mybox.example.com' } });
+		assert.strictEqual(inherited.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
+		const configured = fixtureApp({ blocks: { dev: { host: '0.0.0.0' } } });
+		const sandbox = await runCli(['sandbox'], { cwd: configured, env: { ...AWS_ENV, BLOCKS_DEV_HOST: 'mybox.example.com' } });
+		assert.strictEqual(sandbox.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
+		const fresh = await runCli(['dev', '--host', '0.0.0.0'], { cwd: root, env: {} });
+		assert.strictEqual(fresh.spawned[0].env.BLOCKS_DEV_HOST, '0.0.0.0');
+	});
+
 	it('maps child exit codes: 2 stays a usage error, others become 1, SIGINT 130', async () => {
 		const cwd = fixtureApp();
 		for (const [result, expected] of [
