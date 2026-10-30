@@ -354,6 +354,39 @@ describe('attachCdkWatchOutput — synth failure inside watch', () => {
     await sleep(60);
     assert.strictEqual(err.text(), '');
   });
+
+  for (const file of ['error-handler.ts', 'HttpError.ts']) {
+    it(`does not dump a successful cycle for a file named like an error (${file})`, async () => {
+      mock.method(console, 'log', () => {});
+      mock.method(console, 'error', () => {});
+      const err = collectingSink();
+      const child = fakeWatch();
+      attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 20 });
+      child.out.write(`Detected change to 'aws-blocks/${file}' (type: change). Triggering 'cdk deploy'\n`);
+      // A real hotswap is silent for seconds before its ✅; well past the idle window.
+      await sleep(60);
+      child.out.write(' ✅  MyStack\n');
+      await sleep(5);
+      assert.strictEqual(err.text(), '');
+    });
+  }
+
+  it('does not treat a queued change during a failed cycle as a new cycle', async () => {
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+    const err = collectingSink();
+    const child = fakeWatch();
+    attachCdkWatchOutput(child, { level: 'quiet', stderr: err, failureIdleMs: 40 });
+    child.err.write(SYNTH_CRASH.join('\n') + '\n');
+    await sleep(5);
+    child.out.write(
+      "Detected change to 'aws-blocks/HttpError.ts' (type: change) while 'cdk deploy' is still running. Will queue for another deployment after this one finishes\n",
+    );
+    await sleep(5);
+    assert.strictEqual(err.text(), '', 'a queued change does not dump early');
+    await sleep(80);
+    assert.match(err.text(), /cdk watch output \(4 lines/);
+  });
 });
 
 describe('createCdkOutput — a descendant holding the pipes', { skip: process.platform === 'win32' ? 'POSIX shell' : false }, () => {

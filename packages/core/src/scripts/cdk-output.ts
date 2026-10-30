@@ -420,8 +420,16 @@ const LAMBDA_PLATFORM_LINE = /\[(START|END|REPORT|INIT_START)\s+RequestId:/;
 /** `cdk watch` progress lines worth showing at `normal` (besides failures): change detection, hotswaps, outcomes. */
 const WATCH_PROGRESS_LINE = /Detected change|hotswap|Deployment time|^\s*✅/i;
 
-/** CDK's own markers for the start of a watch deploy cycle. */
-const WATCH_CYCLE_START_LINE = /Detected change|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
+/**
+ * CDK's own markers for the start of a watch deploy cycle. A change detected
+ * while a deploy is running is only queued (it starts a cycle later through
+ * "Invoking 'cdk deploy' again"), so it is not a start.
+ */
+const WATCH_CYCLE_START_LINE =
+  /Detected change(?!.*while 'cdk deploy' is still running)|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
+
+/** CDK's own watch lines (cycle starts and queued changes); they name a file, never a failure. */
+const WATCH_OWN_LINE = /Detected change|Triggering initial 'cdk deploy'|Invoking 'cdk deploy' again/;
 
 /** A watch deploy cycle that succeeded. */
 const WATCH_CYCLE_DONE_LINE = /^\s*✅|✨\s+(Deployment|Total) time:/;
@@ -499,12 +507,13 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
     const assembler = createLineAssembler();
     const handle = (line: string): void => {
       if (line.trim() === '' || LAMBDA_PLATFORM_LINE.test(line) || NOISE_LINE.test(line)) return;
+      const ownLine = WATCH_OWN_LINE.test(line);
       if (WATCH_CYCLE_START_LINE.test(line)) {
         if (cycleFailed) dump();
         inCycle = true;
       }
       ring.push(line);
-      if (level === 'normal' && (WATCH_PROGRESS_LINE.test(line) || isCdkFailureLine(line))) {
+      if (level === 'normal' && (WATCH_PROGRESS_LINE.test(line) || (!ownLine && isCdkFailureLine(line)))) {
         if (from === 'stderr') console.error(`[CDK Watch] ${line.trim()}`);
         else (progressToStderr() ? console.error : console.log)(`[CDK Watch] ${line.trim()}`);
       }
@@ -516,7 +525,7 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
         clearIdle();
         cycleFailed = false;
         inCycle = false;
-      } else if (inCycle && isCdkFailureLine(line)) {
+      } else if (inCycle && !ownLine && isCdkFailureLine(line)) {
         cycleFailed = true;
       }
       if (cycleFailed) {
