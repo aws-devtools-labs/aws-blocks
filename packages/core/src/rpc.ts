@@ -101,9 +101,24 @@ export function encodeRpcRequest(apiNamespace: string, method: string, args: unk
  * Decode a JSON-RPC 2.0 response body.
  *
  * Returns the `result` on success, or throws an `ApiError` on error.
+ *
+ * A body that is not a JSON-RPC 2.0 envelope (`jsonrpc !== '2.0'`) — e.g. a
+ * gateway answering on its own with `{"message":"Too Many Requests"}` — also
+ * throws an `ApiError`. Its status is `httpStatus` when that is not a 2xx,
+ * else 502 (a success status with no envelope is an upstream fault); its
+ * message is the body's string `message` when present, else `HTTP <status>`.
+ * Pass `undefined` as `body` when the response text was not valid JSON.
+ *
+ * @param body The parsed response body.
+ * @param httpStatus The HTTP status of the response, if known.
  */
-export function decodeRpcResponse(body: unknown): unknown {
+export function decodeRpcResponse(body: unknown, httpStatus?: number): unknown {
   const rpc = body as any;
+  if (rpc === null || typeof rpc !== 'object' || rpc.jsonrpc !== VERSION) {
+    const status = httpStatus !== undefined && (httpStatus < 200 || httpStatus > 299) ? httpStatus : 502;
+    const message = typeof rpc?.message === 'string' && rpc.message ? rpc.message : `HTTP ${status}`;
+    throw new ApiError(message, status);
+  }
   if (rpc.error) {
     const { code, message, data } = rpc.error;
     // Application error codes use the HTTP status directly (e.g. 409).

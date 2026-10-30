@@ -274,7 +274,7 @@ How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC m
 }}
 ```
 
-The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`.
+The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`. A response that is not a JSON-RPC envelope, such as a gateway's own `429 {"message":"Too Many Requests"}` or an HTML error page, also rejects with an `ApiError`: `status` is the HTTP status (`502` if that status was 2xx) and `message` is the body's `message` when present, else `HTTP <status>`.
 
 #### `hasAuthError(state, name)`
 
