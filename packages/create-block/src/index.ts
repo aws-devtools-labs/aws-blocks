@@ -42,7 +42,10 @@ export function normalizeClassName(raw: string): string {
 }
 
 /** Validate an npm scope (the part after `@`, before `/`). */
-export function validateScope(scope: string, label = '--scope'): { ok: true } | { ok: false; reason: string } {
+export function validateScope(
+	scope: string,
+	label = '--scope',
+): { ok: true } | { ok: false; reason: string } {
 	if (!/^[a-z0-9][a-z0-9._-]*$/.test(scope)) {
 		return {
 			ok: false,
@@ -916,6 +919,15 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	return 0;
 }
 
+/**
+ * Quote a path for a copy-pasteable POSIX shell command. Paths made only of safe characters print
+ * as-is; anything else (spaces, `;`, `$`, quotes, ...) is single-quoted so the shell treats it literally.
+ */
+function shellQuotePath(path: string): string {
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(path)) return path;
+	return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
 function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
@@ -929,7 +941,7 @@ function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): voi
 		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
 		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
-		console.log(`  1. cd ${targetRel} && npm run build && npm test`);
+		console.log(`  1. cd ${shellQuotePath(targetRel)} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);
 	}
 }

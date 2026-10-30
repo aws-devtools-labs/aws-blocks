@@ -371,4 +371,18 @@ describe('run() integration — external mode next steps', () => {
 	test('cd line names the default folder without --dir', async () => {
 		assert.strictEqual(await nextStepsCd([]), '  1. cd bb-widget && npm run build && npm test');
 	});
+
+	test('cd line shell-quotes a --dir target with spaces', async () => {
+		assert.strictEqual(
+			await nextStepsCd(['--dir', 'custom dir']),
+			"  1. cd 'custom dir' && npm run build && npm test",
+		);
+	});
+
+	test('cd line shell-quotes shell metacharacters and single quotes literally', async () => {
+		assert.strictEqual(
+			await nextStepsCd(['--dir', "x;$(id)'y"]),
+			`  1. cd 'x;$(id)'\\''y' && npm run build && npm test`,
+		);
+	});
 });
