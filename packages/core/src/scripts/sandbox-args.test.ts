@@ -76,6 +76,12 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(custom, '--context'), 'projectRoot=/other');
   });
 
+  it('prints one line per CloudFormation event, since startSandbox reads the stderr it writes to', () => {
+    // The progress bar redraws itself for the terminal's size, which a piped
+    // stderr does not have; event lines are what CDK prints without a terminal.
+    assert.strictEqual(valueAfter(args, '--progress'), 'events');
+  });
+
   it('does NOT leak express mode into the production deploy path', () => {
     // A production deploy must keep a reviewable change set and full
     // stabilization with rollback: neither `--express` nor `--method direct`

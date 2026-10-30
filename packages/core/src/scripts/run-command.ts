@@ -35,6 +35,34 @@ export function runSync(
   }
 }
 
+/**
+ * {@link runSync} for a command whose stderr the caller reads: stdin and stdout
+ * are inherited as in `runSync`, and each chunk of stderr goes to `onStderr` as
+ * it arrives (UTF-8, never split inside a character). Resolves once the command
+ * has exited and its stderr has ended; rejects with the same errors as `runSync`.
+ * The command runs in this process's process group, as with `runSync`, so a
+ * Ctrl-C in the terminal reaches it the same way.
+ */
+export function runPipingStderr(
+  command: string,
+  args: string[],
+  options: Omit<SpawnOptions, 'stdio'>,
+  onStderr: (chunk: string) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { ...options, stdio: ['inherit', 'inherit', 'pipe'] });
+    child.stderr?.setEncoding('utf-8');
+    child.stderr?.on('data', onStderr);
+    child.once('error', reject);
+    // 'close' follows the exit and the end of stderr, so every chunk has been handled.
+    child.once('close', (code, signal) => {
+      if (signal) reject(new Error(`${command} was terminated by signal ${signal}`));
+      else if (typeof code === 'number' && code !== 0) reject(new Error(`${command} ${args.join(' ')} exited with code ${code}`));
+      else resolve();
+    });
+  });
+}
+
 /** Spawn a long-running command and return the `ChildProcess` (e.g. `cdk watch`). */
 export function spawnCommand(
   command: string,

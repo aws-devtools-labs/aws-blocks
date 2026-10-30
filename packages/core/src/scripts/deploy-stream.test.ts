@@ -20,6 +20,10 @@ import {
   describeConvergingResource,
   createResourceTracker,
   extractHostingUrlFromLine,
+  createDenialMonitor,
+  formatDenialNotice,
+  type CdkOutputStream,
+  type DenialMonitor,
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
@@ -1310,5 +1314,500 @@ describe('extractHostingUrlFromLine — surface the URL early', () => {
   it('returns null for an unrelated line', (t: TestContext) => {
     t.assert.strictEqual(extractHostingUrlFromLine('📡 API URL: https://api.example.com'), null);
     t.assert.strictEqual(extractHostingUrlFromLine('CREATE_COMPLETE'), null);
+  });
+});
+
+// ── authorization failures in the CDK output ────────────────────────────────
+// Shapes from a real `cdk deploy --ci --progress events` run that an SCP stopped
+// (identifiers replaced with documented example values). CloudFormation events
+// go to stdout; the CDK CLI's error block goes to stderr, hard-wrapped mid-phrase.
+const EXEC_ROLE = 'arn:aws:sts::123456789012:assumed-role/cdk-hnb659fds-cfn-exec-role-123456789012-us-east-1/AWSCloudFormation';
+const SCP_ARN = 'arn:aws:organizations::777788889999:policy/o-exampleorgid/service_control_policy/p-examplepolicyid123';
+const APIGW_SCP_FAILED =
+  `my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::ApiGateway::RestApi             | DefaultCompute/API (DefaultComputeAPI5E5CE44A) ` +
+  `Resource handler returned message: "User: ${EXEC_ROLE} is not authorized to perform: apigateway:POST on resource: ` +
+  `arn:aws:apigateway:us-east-1::/restapis with an explicit deny in a service control policy: ${SCP_ARN} ` +
+  '(Service: ApiGateway, Status Code: 403, Request ID: 11111111-2222-3333-4444-555555555555) (SDK Attempt Count: 1)" ' +
+  '(RequestToken: 66666666-7777-8888-9999-000000000000, HandlerErrorCode: GeneralServiceException)';
+const KMS_DENIED_FAILED =
+  `my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::KMS::Key                        | Hosting/Hosting/Monitoring/AlarmTopicKey (HostingMonitoringAlarmTopicKey7A846590) ` +
+  `Resource handler returned message: "Access denied for operation 'CreateKey'." (RequestToken: 66666666-7777-8888-9999-000000000000, HandlerErrorCode: AccessDenied)`;
+const CANCELLED_FAILED =
+  'my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::Lambda::LayerVersion            | BlocksConfigDeployment/AwsCliLayer (BlocksConfigDeploymentAwsCliLayerD22C54E8) Resource creation cancelled';
+const ORDINARY_FAILED =
+  'my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::S3::Bucket                      | BlocksConfigBucket (BlocksConfigBucket439874BD) Resource handler returned message: "my-app-bucket already exists (Service: S3, Status Code: 409)"';
+const STACK_ROLLBACK =
+  'my-app-prod |  0/72 | 7:46:46 PM | ROLLBACK_IN_PROGRESS    | AWS::CloudFormation::Stack           | my-app-prod The following resource(s) failed to create: [DefaultComputeAPI5E5CE44A, HostingMonitoringAlarmTopicKey7A846590]';
+const PROD_EVENTS = [
+  'my-app-prod: creating CloudFormation changeset...',
+  'my-app-prod |  0/72 | 7:46:32 PM | CREATE_IN_PROGRESS      | AWS::CloudFormation::Stack           | my-app-prod User Initiated',
+  'my-app-prod |  0/72 | 7:46:35 PM | CREATE_IN_PROGRESS      | AWS::ApiGateway::RestApi             | DefaultCompute/API (DefaultComputeAPI5E5CE44A) ',
+];
+const ROLLBACK_EVENTS = [
+  STACK_ROLLBACK,
+  'my-app-prod |  0/72 | 7:46:47 PM | DELETE_IN_PROGRESS      | AWS::S3::Bucket                      | BlocksConfigBucket (BlocksConfigBucket439874BD) ',
+  'my-app-prod | 22/72 | 7:49:00 PM | ROLLBACK_COMPLETE       | AWS::CloudFormation::Stack           | my-app-prod ',
+];
+const WRAPPED_DEPLOYMENT_ERROR = [
+  '❌  my-app-prod failed to deploy',
+  '‣ DeploymentError: Resource updates failed:',
+  'my-app-prod/DefaultCompute/API/Resource  (AWS::ApiGateway::RestApi DefaultComputeAPI5E5CE44A)',
+  '  Resource handler returned message: "User:',
+  `  ${EXEC_ROLE} is not`,
+  '  authorized to perform: apigateway:POST on resource: arn:aws:apigateway:us-east-1::/restapis with an explicit deny in a',
+  `  service control policy: ${SCP_ARN}`,
+  '  (Service: ApiGateway, Status Code: 403, Request ID: 11111111-2222-3333-4444-555555555555) (SDK Attempt Count: 1)"',
+  '  (RequestToken: 66666666-7777-8888-9999-000000000000, HandlerErrorCode: GeneralServiceException)',
+  'Source Location: ...aws-cdk-lib, BlocksStack.create in @aws-blocks/core...',
+  '',
+  '   (only the most recent 500 CloudTrail events in the window were checked)',
+  '   CloudTrail delivery can lag up to 15 minutes behind the failure; re-run `cdk diagnose` in a few minutes to check for additional control-plane errors (e.g. AccessDenied).',
+  '',
+];
+// An ordinary failure, followed by the same CDK notes that name AccessDenied as an example.
+const ORDINARY_DEPLOYMENT_ERROR = [
+  '❌  my-app-prod failed to deploy',
+  '‣ DeploymentError: Resource updates failed:',
+  'my-app-prod/BlocksConfigBucket/Resource  (AWS::S3::Bucket BlocksConfigBucket439874BD)',
+  '  Resource handler returned message: "my-app-bucket already exists (Service: S3, Status Code: 409)"',
+  '',
+  '   CloudTrail delivery can lag up to 15 minutes behind the failure; re-run `cdk diagnose` in a few minutes to check for additional',
+  '   control-plane errors (e.g. AccessDenied).',
+  'Could not query CloudTrail for control-plane errors: the lookup role is missing the `cloudtrail:LookupEvents` permission. Grant it to surface errors (e.g. AccessDenied) that resource logs may not show.',
+];
+
+/** Feed lines to a fresh monitor; returns each report with the index of the line that caused it. */
+function monitorTranscript(
+  lines: ReadonlyArray<string | [CdkOutputStream, string]>,
+): { reports: Array<{ kind: string; at: number }>; monitor: DenialMonitor } {
+  const reports: Array<{ kind: string; at: number }> = [];
+  let at = -1;
+  const monitor = createDenialMonitor((kind) => reports.push({ kind, at }));
+  for (const entry of lines) {
+    at += 1;
+    const [stream, line] = typeof entry === 'string' ? (['stdout', entry] as const) : entry;
+    monitor.observe(line, stream);
+  }
+  return { reports, monitor };
+}
+
+describe('createDenialMonitor — explain an authorization failure while CDK is still running', () => {
+  it('reports an explicit SCP deny at its CREATE_FAILED event, before the rollback, and only once', () => {
+    const lines = [...PROD_EVENTS, KMS_DENIED_FAILED, APIGW_SCP_FAILED, CANCELLED_FAILED, ...ROLLBACK_EVENTS];
+    const { reports } = monitorTranscript([
+      ...lines,
+      ...WRAPPED_DEPLOYMENT_ERROR.map((line): [CdkOutputStream, string] => ['stderr', line]),
+    ]);
+    // The KMS failure names no policy; the API Gateway one does. Only the explicit
+    // deny is reported, at its own event, not after rollback or in the final block.
+    assert.deepStrictEqual(reports, [{ kind: 'organization-policy', at: lines.indexOf(APIGW_SCP_FAILED) }]);
+  });
+
+  it('reports a denial without policy evidence once the stack fails, not at the resource event', () => {
+    const lines = [...PROD_EVENTS, KMS_DENIED_FAILED, CANCELLED_FAILED, ...ROLLBACK_EVENTS];
+    const { reports } = monitorTranscript(lines);
+    // Held until the stack-level failure, so that a later explicit deny of the same
+    // attempt is not preceded by advice to check IAM permissions.
+    assert.deepStrictEqual(reports, [{ kind: 'denied', at: lines.indexOf(STACK_ROLLBACK) }]);
+  });
+
+  it('reads the hard-wrapped DeploymentError block on stderr when no event named the deny', () => {
+    const { reports } = monitorTranscript(
+      WRAPPED_DEPLOYMENT_ERROR.map((line): [CdkOutputStream, string] => ['stderr', line]),
+    );
+    // The phrase completes on the line that starts "service control policy".
+    assert.deepStrictEqual(reports, [{ kind: 'organization-policy', at: 6 }]);
+  });
+
+  it('keeps each stream’s wrapped lines together while the other stream interleaves', () => {
+    const entries: Array<[CdkOutputStream, string]> = [];
+    for (const line of WRAPPED_DEPLOYMENT_ERROR) {
+      entries.push(['stderr', line]);
+      entries.push(['stdout', '⏳ [cdk deploy] still running after 2m 00s — CloudFormation is converging (pid 4242)']);
+    }
+    assert.deepStrictEqual(
+      monitorTranscript(entries).reports.map((r) => r.kind),
+      ['organization-policy'],
+    );
+  });
+
+  it('reads colored output and lines with CR redraws', () => {
+    const colored = APIGW_SCP_FAILED.replace('CREATE_FAILED', '\u001b[31mCREATE_FAILED\u001b[39m').replace(
+      'explicit deny',
+      '\u001b[1mexplicit deny\u001b[22m',
+    );
+    assert.deepStrictEqual(monitorTranscript([colored]).reports.map((r) => r.kind), ['organization-policy']);
+    const redrawn = `my-app-prod: deploying... [1/1]\r${APIGW_SCP_FAILED}`;
+    assert.deepStrictEqual(monitorTranscript([redrawn]).reports.map((r) => r.kind), ['organization-policy']);
+  });
+
+  it('reports nothing for an ordinary failure, even next to the CDK notes that mention AccessDenied', () => {
+    const { reports, monitor } = monitorTranscript([
+      ...PROD_EVENTS,
+      ORDINARY_FAILED,
+      ...ROLLBACK_EVENTS,
+      ...ORDINARY_DEPLOYMENT_ERROR.map((line): [CdkOutputStream, string] => ['stderr', line]),
+    ]);
+    monitor.failed();
+    assert.deepStrictEqual(reports, []);
+  });
+
+  it('ignores denial wording outside a failure: progress, app logs and successful events', () => {
+    const { reports, monitor } = monitorTranscript([
+      'my-app-prod |  1/72 | 7:46:40 PM | CREATE_COMPLETE         | AWS::IAM::Role                       | AccessDeniedHandlerRole',
+      ['stderr', '[/aws/lambda/my-app-handler] 10:00:00 AM AccessDeniedException: User is not authorized to perform: s3:GetObject'],
+      ['stderr', 'Bundling asset AccessDenied/Handler/Code/Stage...'],
+    ]);
+    monitor.failed();
+    assert.deepStrictEqual(reports, []);
+  });
+
+  it('ignores app log lines that look like deployment output', () => {
+    const appLog = `[/aws/lambda/handler] 10:00:00 AM ${APIGW_SCP_FAILED}`;
+    const { reports, monitor } = monitorTranscript([appLog, ['stderr', appLog]]);
+    monitor.failed();
+    assert.deepStrictEqual(reports, [], 'a logged event line is not a deploy failure');
+    // A logged "Invoking 'cdk deploy' again" does not start a new attempt either.
+    const { reports: once } = monitorTranscript([
+      APIGW_SCP_FAILED,
+      ['stderr', "[/aws/lambda/handler] 10:00:01 AM Invoking 'cdk deploy' again"],
+      APIGW_SCP_FAILED,
+    ]);
+    assert.deepStrictEqual(once.map((r) => r.kind), ['organization-policy']);
+  });
+
+  it('classifies only the reason of a failed event, not its type, logical ID or construct path', () => {
+    const { reports, monitor } = monitorTranscript([
+      'my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::S3::Bucket                      | AccessDenied (AccessDeniedABC12345) bucket already exists',
+      'my-app-prod |  0/72 | 7:46:36 PM | CREATE_FAILED           | AWS::S3::Bucket                      | Logs/AccessDeniedLogs (AccessDeniedLogs1A2B3C4D) Resource creation cancelled',
+    ]);
+    monitor.failed();
+    assert.deepStrictEqual(reports, []);
+  });
+
+  it('does not read the stack name in the CDK failure banner as evidence', () => {
+    const { reports, monitor } = monitorTranscript(
+      [
+        '❌  AccessDenied-prod failed to deploy',
+        '‣ ValidationError: Template format error: Unrecognized resource types: [AWS::Example::Thing]',
+        '',
+        '❌  AccessDenied-prod failed: ValidationError: Template format error',
+      ].map((line): [CdkOutputStream, string] => ['stderr', line]),
+    );
+    monitor.failed();
+    assert.deepStrictEqual(reports, []);
+    // An older CDK CLI puts the error on the banner line: that part is still read.
+    const { reports: older } = monitorTranscript([
+      ['stderr', `❌  AccessDenied-prod failed: AccessDenied: User: ${EXEC_ROLE} is not authorized to perform: cloudformation:CreateStack with an explicit deny in a service control policy`],
+    ]);
+    assert.deepStrictEqual(older.map((r) => r.kind), ['organization-policy']);
+  });
+
+  it('leaves resource headings and source locations of the error block out', () => {
+    const { reports, monitor } = monitorTranscript(
+      [
+        '❌  my-app-prod failed to deploy',
+        '‣ DeploymentError: Resource updates failed:',
+        'my-app-prod/AccessDenied/Resource  (AWS::S3::Bucket AccessDeniedABC12345)',
+        '  Resource handler returned message: "my-app-bucket already exists (Service: S3, Status Code: 409)"',
+        'Source Location: ...aws-cdk-lib, new AccessDenied in @aws-blocks/core...',
+        '                 <anonymous> (/home/user/AccessDenied/aws-blocks/index.cdk.ts:24:3)',
+        '',
+      ].map((line): [CdkOutputStream, string] => ['stderr', line]),
+    );
+    monitor.failed();
+    assert.deepStrictEqual(reports, []);
+  });
+
+  it('reports a pending denial when the caller learns that the deploy failed', () => {
+    const s3Denied = ORDINARY_FAILED.replace(
+      'my-app-bucket already exists (Service: S3, Status Code: 409)',
+      'Access Denied (Service: S3, Status Code: 403)',
+    );
+    const { reports, monitor } = monitorTranscript([s3Denied]);
+    assert.strictEqual(reports.length, 0, 'held: the attempt has not failed yet');
+    monitor.failed();
+    assert.deepStrictEqual(reports.map((r) => r.kind), ['denied']);
+    monitor.failed();
+    assert.strictEqual(reports.length, 1, 'once per attempt');
+  });
+
+  it('reports an explicit deny that follows a reported denial, then nothing more', () => {
+    const { reports } = monitorTranscript([
+      KMS_DENIED_FAILED,
+      STACK_ROLLBACK,
+      APIGW_SCP_FAILED,
+      APIGW_SCP_FAILED,
+      KMS_DENIED_FAILED,
+    ]);
+    assert.deepStrictEqual(reports.map((r) => r.kind), ['denied', 'organization-policy']);
+  });
+
+  it('reports once per `cdk watch` deployment, and again for the next one', () => {
+    const attempt = [
+      ['stderr', "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'"],
+      ['stderr', 'my-app-sandbox: deploying... [1/1]'],
+      ['stderr', APIGW_SCP_FAILED],
+      ['stderr', APIGW_SCP_FAILED],
+      ['stderr', '❌  my-app-sandbox failed to deploy'],
+      ['stderr', `‣ AccessDenied: User: ${EXEC_ROLE} is not authorized to perform: lambda:CreateFunction with an explicit deny in a service control policy`],
+    ] as Array<[CdkOutputStream, string]>;
+    const { reports } = monitorTranscript([
+      ['stderr', "Triggering initial 'cdk deploy'"],
+      ['stderr', 'my-app-sandbox: deploying... [1/1]'],
+      ...attempt,
+      ...attempt,
+      ['stderr', "Detected file changes during deployment. Invoking 'cdk deploy' again"],
+      ['stderr', APIGW_SCP_FAILED],
+    ]);
+    assert.deepStrictEqual(reports.map((r) => r.kind), ['organization-policy', 'organization-policy', 'organization-policy']);
+  });
+
+  it('does not read an expired token in `cdk watch` as a denial, and still reports a later one', () => {
+    const { reports } = monitorTranscript([
+      ['stderr', "Triggering initial 'cdk deploy'"],
+      ['stderr', '❌  my-app-sandbox failed to deploy'],
+      ['stderr', '‣ ExpiredToken: The security token included in the request is expired'],
+      ['stderr', "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'"],
+      ['stderr', '❌  my-app-sandbox failed to deploy'],
+      ['stderr', '‣ ExpiredTokenException: The security token included in the request is expired'],
+      ['stderr', "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'"],
+      ['stderr', APIGW_SCP_FAILED],
+    ]);
+    assert.deepStrictEqual(reports, [{ kind: 'organization-policy', at: 7 }]);
+  });
+});
+
+describe('createDenialMonitor — credential failures in the CDK output', () => {
+  /** Feed stderr lines; returns the denial kinds and the credential failures reported. */
+  const credentialTranscript = (lines: string[]) => {
+    const denials: string[] = [];
+    const credentials: string[] = [];
+    const monitor = createDenialMonitor((kind) => denials.push(kind), {
+      onCredentialFailure: ({ errorName, failure }) => credentials.push(`${errorName} ${failure}`),
+    });
+    for (const line of lines) monitor.observe(line, 'stderr');
+    monitor.failed();
+    return { denials, credentials };
+  };
+
+  // Shapes from the CDK CLI 2.1146 bundle and the AWS SDK credential providers it bundles.
+  for (const [name, lines, expected] of [
+    ['an error block cause', ['❌  my-app-prod failed to deploy', '‣ ExpiredToken: The security token included in the request is expired'], 'ExpiredToken expired'],
+    ['a failed asset upload', ['my-app-sandbox: fail: The security token included in the request is expired'], 'ExpiredToken expired'],
+    ['a failed role assumption', ['my-app-sandbox: fail: Assuming role failed: ExpiredToken'], 'ExpiredToken expired'],
+    // The aws login provider wraps a refresh that its sign-in service denied; the
+    // recovery is to sign in again, not an IAM change.
+    [
+      'a denied aws login refresh in a failed asset upload',
+      ['my-app-sandbox: fail: Failed to refresh token: AccessDeniedException: Access denied. Please re-authenticate using `aws login`'],
+      'CredentialsProviderError expired',
+    ],
+    [
+      'a denied aws login refresh in the error block, wrapped',
+      [
+        '❌  my-app-prod failed to deploy',
+        '‣ CredentialsProviderError: Failed to refresh token: AccessDeniedException: User is not authorized to perform this',
+        '  operation. Please re-authenticate using `aws login`',
+        '',
+      ],
+      'CredentialsProviderError expired',
+    ],
+    ['an invalid token', ['my-app-sandbox: fail: The security token included in the request is invalid.'], 'InvalidClientTokenId rejected'],
+    ['an unrecognized client', ['❌  my-app-prod failed to deploy', '‣ UnrecognizedClientException: The security token included in the request is invalid.'], 'UnrecognizedClientException rejected'],
+    [
+      'an expired IAM Identity Center session',
+      ['my-app-sandbox: fail: The SSO session associated with this profile has expired. To refresh this SSO session run aws sso login with the corresponding profile.'],
+      'CredentialsProviderError expired',
+    ],
+    [
+      'an expired SSO token',
+      ['❌  my-app-prod failed to deploy', "‣ TokenProviderError: Token is expired. To refresh this SSO session run 'aws sso login' with the corresponding profile."],
+      'TokenProviderError expired',
+    ],
+    ['an expired aws login session', ['my-app-sandbox: fail: Your session has expired. Please reauthenticate.'], 'CredentialsProviderError expired'],
+    [
+      'a failed aws login refresh',
+      ['my-app-sandbox: fail: Failed to refresh token: Error: network. Please re-authenticate using aws login'],
+      'CredentialsProviderError expired',
+    ],
+  ] as const) {
+    it(`reports ${name}, and no denial`, () => {
+      assert.deepStrictEqual(credentialTranscript([...lines]), { denials: [], credentials: [expected] });
+    });
+  }
+
+  it('reports once per attempt, again after a new watch deployment, and not from app logs', () => {
+    const expired = 'my-app-sandbox: fail: The security token included in the request is expired';
+    assert.deepStrictEqual(
+      credentialTranscript([
+        "Triggering initial 'cdk deploy'",
+        '[/aws/lambda/handler] 10:00:00 AM ExpiredToken: The security token included in the request is expired',
+        expired,
+        expired,
+        "Detected change to 'aws-blocks/index.ts' (type: change). Triggering 'cdk deploy'",
+        expired,
+      ]).credentials,
+      ['ExpiredToken expired', 'ExpiredToken expired'],
+    );
+  });
+
+  it('does not give a denial credential guidance, and reports a failed asset upload that AWS denied', () => {
+    const result = credentialTranscript([
+      `my-app-sandbox: fail: User: ${EXEC_ROLE} is not authorized to perform: s3:PutObject with an explicit deny in a service control policy`,
+    ]);
+    assert.deepStrictEqual(result, { denials: ['organization-policy'], credentials: [] });
+  });
+
+  it('gives no credential guidance for a name or a code that is not a credential error', () => {
+    const collision =
+      'my-app-prod |  0/9 | 7:46:36 PM | CREATE_FAILED           | AWS::DynamoDB::Table                 | Tokens (TokensTable1A2B3C4D) ' +
+      'Resource handler returned message: "Resource of type AWS::DynamoDB::Table with identifier ExpiredToken already exists"';
+    assert.deepStrictEqual(credentialTranscript([collision]), { denials: [], credentials: [] });
+    assert.deepStrictEqual(
+      credentialTranscript(["my-app-sandbox: fail: ENOENT: no such file or directory, open '/app/ExpiredToken/asset.zip'"]),
+      { denials: [], credentials: [] },
+    );
+    // EC2 also returns RequestExpired for a clock that is more than 15 minutes off.
+    assert.deepStrictEqual(
+      credentialTranscript(['❌  my-app-prod failed to deploy', '‣ RequestExpired: Request has expired.']),
+      { denials: [], credentials: [] },
+    );
+  });
+
+  it('keeps an ordinary resource denial a denial', () => {
+    const s3Denied =
+      'my-app-prod |  0/9 | 7:46:36 PM | CREATE_FAILED           | AWS::S3::Bucket                      | Assets (Assets1A2B3C4D) ' +
+      'Resource handler returned message: "Access Denied (Service: S3, Status Code: 403)"';
+    assert.deepStrictEqual(credentialTranscript([s3Denied]), { denials: ['denied'], credentials: [] });
+  });
+
+  it('lets an explicit deny win over the aws login sign-in instruction that wraps it', () => {
+    // Signing in again cannot get past an Organizations policy.
+    const wrapped =
+      'my-app-sandbox: fail: Failed to refresh token: AccessDeniedException: User: ' +
+      `${EXEC_ROLE} is not authorized to perform: signin:CreateOAuth2Token with an explicit deny in a service control policy. ` +
+      'Please re-authenticate using `aws login`';
+    assert.deepStrictEqual(credentialTranscript([wrapped]), { denials: ['organization-policy'], credentials: [] });
+  });
+
+  it('reports only the explicit deny of an error block whose earlier cause is a sign-in instruction', () => {
+    const result = credentialTranscript([
+      '❌  my-app-prod failed to deploy',
+      '‣ CredentialsProviderError: Failed to refresh token: TimeoutError: timed out. Please re-authenticate using `aws login`',
+      `‣ AccessDenied: User: ${EXEC_ROLE} is not authorized to perform: cloudformation:CreateStack with an explicit deny`,
+      '  in a resource control policy',
+      '',
+    ]);
+    assert.deepStrictEqual(result, { denials: ['organization-policy'], credentials: [] });
+  });
+});
+
+describe('formatDenialNotice — what the deploy commands print', () => {
+  it('names the command and adds the guidance, without details from the failure', () => {
+    const notice = formatDenialNotice('organization-policy', 'deploy');
+    assert.match(notice, /`npm run deploy`/);
+    assert.match(notice, /AWS Organizations policy/);
+    assert.match(notice, /Signing in again or adding IAM permissions does not change that/);
+    assert.doesNotMatch(notice, /arn:|\d{12}|o-[a-z0-9]{10}|p-[a-z0-9]{8}/);
+    assert.doesNotMatch(notice, /limit|budget|spend|destroy|retry|try again/i);
+    assert.match(formatDenialNotice('denied', 'sandbox'), /`npm run sandbox`[\s\S]*permissions/);
+  });
+});
+
+describe('runStreaming — onDenial', () => {
+  const noSignals = (): SignalRegistry => new EventEmitter() as unknown as SignalRegistry;
+
+  it('reports an explicit deny split across chunks while the child still runs', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-denial-'));
+    try {
+      const gate = join(dir, 'seen-by-parent');
+      const script = join(dir, 'deny.mjs');
+      const half = Math.floor(APIGW_SCP_FAILED.length / 2);
+      // The event line arrives in two chunks, split inside the explicit-deny phrase's
+      // line, and the child then waits: the report must not wait for the exit.
+      writeFileSync(
+        script,
+        `import { existsSync } from 'node:fs';\n` +
+          `const line = ${JSON.stringify(APIGW_SCP_FAILED)};\n` +
+          `process.stdout.write(line.slice(0, ${half}));\n` +
+          // A real pause between the writes, in the child, so that the pipe delivers two chunks.
+          `setTimeout(() => process.stdout.write(line.slice(${half}) + '\\r\\n'), 100);\n` +
+          `const wait = () => existsSync(${JSON.stringify(gate)}) ? done() : setTimeout(wait, 25);\n` +
+          `const done = () => { process.stderr.write(${JSON.stringify(WRAPPED_DEPLOYMENT_ERROR.join('\n'))}); process.exitCode = 1; };\n` +
+          `wait();\n`,
+      );
+      const stdout = collectingSink();
+      const stderr = collectingSink();
+      const kinds: string[] = [];
+      const run = runStreaming(process.execPath, [script], {
+        stdout,
+        stderr,
+        heartbeatMs: 0,
+        signalTarget: noSignals(),
+        onDenial: (kind) => kinds.push(kind),
+      });
+      assert.ok(await waitFor(() => kinds.length > 0, 15_000), 'reported while the child is alive');
+      assert.deepStrictEqual(kinds, ['organization-policy']);
+      writeFileSync(gate, 'go');
+      await assert.rejects(run, (error: unknown) => error instanceof DeployProcessError && error.exitCode === 1);
+      assert.deepStrictEqual(kinds, ['organization-policy'], 'the final error block does not repeat it');
+      // The output itself is relayed as before: whole lines, unchanged.
+      assert.strictEqual(stdout.text(), `${APIGW_SCP_FAILED}\n`);
+      // The block ends with a newline, so nothing is added to it.
+      assert.strictEqual(stderr.text(), WRAPPED_DEPLOYMENT_ERROR.join('\n'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a trailing stderr line without a newline', { timeout: 30_000 }, async () => {
+    const kinds: string[] = [];
+    const script = `process.stderr.write('❌  my-app-prod failed to deploy\\n‣ AccessDenied: ' + ${JSON.stringify(
+      `User: ${EXEC_ROLE} is not authorized to perform: cloudformation:CreateStack with an explicit deny in a resource control policy`,
+    )}); process.exitCode = 1;`;
+    await assert.rejects(
+      runStreaming(process.execPath, ['-e', script], {
+        stdout: collectingSink(),
+        stderr: collectingSink(),
+        heartbeatMs: 0,
+        signalTarget: noSignals(),
+        onDenial: (kind) => kinds.push(kind),
+      }),
+      DeployProcessError,
+    );
+    assert.deepStrictEqual(kinds, ['organization-policy']);
+  });
+
+  it('reports a denial without policy evidence when the deploy exits non-zero', { timeout: 30_000 }, async () => {
+    const kinds: string[] = [];
+    await assert.rejects(
+      runStreaming(process.execPath, ['-e', `console.log(${JSON.stringify(KMS_DENIED_FAILED)}); process.exitCode = 2;`], {
+        stdout: collectingSink(),
+        stderr: collectingSink(),
+        heartbeatMs: 0,
+        signalTarget: noSignals(),
+        onDenial: (kind) => kinds.push(kind),
+      }),
+      (error: unknown) => error instanceof DeployProcessError && error.exitCode === 2,
+    );
+    assert.deepStrictEqual(kinds, ['denied']);
+  });
+
+  it('reports nothing for an ordinary failure or a successful deploy', { timeout: 30_000 }, async () => {
+    const kinds: string[] = [];
+    const options = {
+      stdout: collectingSink(),
+      stderr: collectingSink(),
+      heartbeatMs: 0,
+      signalTarget: noSignals(),
+      onDenial: (kind: string) => kinds.push(kind),
+    };
+    const failing = [ORDINARY_FAILED, STACK_ROLLBACK].map((l) => `console.log(${JSON.stringify(l)});`).join('') +
+      ORDINARY_DEPLOYMENT_ERROR.map((l) => `console.error(${JSON.stringify(l)});`).join('') +
+      'process.exitCode = 1;';
+    await assert.rejects(runStreaming(process.execPath, ['-e', failing], options), DeployProcessError);
+    await runStreaming(process.execPath, ['-e', `console.log(${JSON.stringify(PROD_EVENTS[1])});`], options);
+    assert.deepStrictEqual(kinds, []);
   });
 });
