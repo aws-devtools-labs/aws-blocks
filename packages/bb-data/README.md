@@ -347,6 +347,13 @@ the transaction should continue.
 - **Engine:** PGlite (WASM PostgreSQL) — full Postgres compatibility
 - **Storage:** `.bb-data/{fullId}/` — persists across restarts, wipe with `rm -rf .bb-data`
 - **Migrations:** Run automatically on first query
+- **Transactions:** PGlite has one connection. Overlapping transactions run one at a time, from begin through commit or rollback; ordinary queries wait for the active transaction too. A failed transaction cannot commit or roll back another operation's writes.
+
+Inside a `db.transaction(async (tx) => ...)` or Kysely transaction callback,
+use the supplied `tx`/`trx` object for database work. Awaiting a query on the
+parent database, or starting and awaiting another transaction on it, waits for
+the current transaction to finish and therefore deadlocks locally. Local
+serialization does not simulate Aurora's concurrent sessions or lock conflicts.
 
 ### Local vs. AWS: column types
 

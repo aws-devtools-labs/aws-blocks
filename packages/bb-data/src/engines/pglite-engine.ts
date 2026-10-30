@@ -10,7 +10,7 @@ import {
   type DatabaseEngine,
   type TransactionHandle,
 } from '@aws-blocks/data-common';
-import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
+import { closeOnProcessExit, pgliteUnrefTimersExtension, PgliteTransaction } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors, wrapError, reTagged, requestError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
@@ -133,10 +133,15 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
  * DatabaseEngine implementation using PGlite (WASM PostgreSQL).
  * Used for local development. Data persists in the specified directory.
  *
- * Limitation: PGlite runs in a single connection. Concurrent calls to
+ * Historical limitation (before #904): PGlite runs in a single connection. Concurrent calls to
  * `beginTransaction()` will interleave on the same connection. This is
  * acceptable for single-threaded local dev servers but must not be used
  * in multi-request concurrent environments.
+ *
+ * Since the fix for #904, the limitation above is handled by PGlite's
+ * transaction API: concurrent transactions and ordinary queries wait for the
+ * active transaction to finish. Within a callback, use its transaction object;
+ * awaiting the parent database there would wait on the callback itself.
  *
  * Process lifetime: the engine never keeps the Node.js process alive by itself
  * (PGlite's emulated timers are `unref()`'d), and once the event loop has
@@ -274,36 +279,51 @@ export class PGliteEngine implements DatabaseEngine {
 
   async beginTransaction(): Promise<TransactionHandle> {
     try {
-      await this.ensureReady();
-      await this.db.query('BEGIN');
-      return { active: true };
+      const db = await this.ensureReady();
+      return await PgliteTransaction.begin(this, db);
     } catch (e) {
       translateError(e);
     }
   }
 
-  async commitTransaction(_handle: TransactionHandle): Promise<void> {
+  private transactionHandle(handle: TransactionHandle): PgliteTransaction {
+    if (!(handle instanceof PgliteTransaction) || handle.owner !== this) {
+      throw new Error('Invalid transaction handle for this engine');
+    }
+    return handle;
+  }
+
+  async commitTransaction(handle: TransactionHandle): Promise<void> {
     try {
-      await this.db.query('COMMIT');
+      await this.transactionHandle(handle).commit();
     } catch (e) {
       translateError(e);
     }
   }
 
-  async rollbackTransaction(_handle: TransactionHandle): Promise<void> {
+  async rollbackTransaction(handle: TransactionHandle): Promise<void> {
     try {
-      await this.db.query('ROLLBACK');
+      await this.transactionHandle(handle).rollback();
     } catch (e) {
       translateError(e);
     }
   }
 
-  async queryInTransaction<T>(_handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
-    return this.query<T>(sql, params);
+  async queryInTransaction<T>(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<T[]> {
+    try {
+      return (await this.transactionHandle(handle).query<T>(sql, params)).rows;
+    } catch (e) {
+      translateError(e);
+    }
   }
 
-  async executeInTransaction(_handle: TransactionHandle, sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
-    return this.execute(sql, params);
+  async executeInTransaction(handle: TransactionHandle, sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
+    try {
+      const result = await this.transactionHandle(handle).query(sql, params);
+      return { rowCount: result.affectedRows ?? 0 };
+    } catch (e) {
+      translateError(e);
+    }
   }
 
   async destroy(): Promise<void> {
