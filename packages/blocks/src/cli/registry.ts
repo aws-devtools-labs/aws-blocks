@@ -9,6 +9,7 @@
  * is an edit here; the parser and the help read only this table.
  */
 
+import { migrate } from './commands/migrate.js';
 import * as commands from './commands.js';
 import type { Context } from './context.js';
 
@@ -470,6 +471,37 @@ export const COMMANDS: readonly CommandSpec[] = [
 		passthrough: true,
 		examples: [{ command: 'blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
 		handler: commands.vendorize,
+	},
+	{
+		path: ['migrate'],
+		group: 'Project',
+		summary: 'Move an app from aws-blocks/scripts wrappers to blocks commands',
+		description:
+			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the blocks\n' +
+			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
+			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
+			'generated server.ts move to package.json "blocks.dev". Generated wrappers that nothing uses any\n' +
+			'more are deleted; a customized wrapper is never deleted, only reported.\n' +
+			'It refuses a git working tree with uncommitted changes unless you pass --force.\n' +
+			'Exit code 1 means customized items remain for you to finish by hand; it is not a crash.',
+		flags: [
+			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
+			{
+				name: 'force',
+				type: 'boolean',
+				description: 'Run even when the git working tree has uncommitted changes',
+			},
+		],
+		json: ['changed', 'removed', 'kept', 'scriptsRewritten', 'devConfig'],
+		examples: [
+			{ command: 'blocks migrate --dry-run', description: 'Show what would change' },
+			{ command: 'blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
+			{
+				command: 'blocks migrate --output json',
+				description: 'Print {changed, removed, kept, scriptsRewritten, devConfig}',
+			},
+		],
+		handler: migrate,
 	},
 	{
 		path: ['help'],

@@ -239,6 +239,7 @@ npx --no -- blocks --version
 | | `blocks generate types [--check]` | Generate secret/config key types; `--check` exits 1 when stale |
 | Data and blocks | `blocks db <migrate\|status\|generate-types\|pull> [args...]` | Data block operations, forwarded unchanged to the `bb-data` CLI |
 | Project | `blocks vendorize <package> [--force]` | Copy a Building Block into the app for customization |
+| | `blocks migrate [--dry-run] [--force]` | Move an app from `aws-blocks/scripts/*.ts` wrappers to `blocks` commands |
 | | `blocks help [command...]` | Help |
 
 The npm-script spellings also work as hidden aliases: `dev:stop`, `sandbox:deploy`, `sandbox:destroy`, `sandbox:console`, `console`, `typegen`, `generate-client`, `spec`, `cleanup` (`dev stop --all`), and `sandbox --deploy-only` (`sandbox deploy`). `db`, `secret`, `config` and `vendorize` forward every token after their name unchanged, so put global options before the command name. The exception is `-h`/`--help`: anywhere after one of these commands it shows help and never runs the tool with your arguments. For a verb of the tool (`blocks db pull ./out --help`, `blocks help secret remove KEY`), only `<verb> --help` reaches the tool, which prints that verb's usage.
@@ -286,6 +287,25 @@ Errors print as `Error: <what failed>`, then where it failed and a `Try:` line w
 `port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort` (default `3100`). `host` sets the interface to bind (default `127.0.0.1`); a `host` you set (or `--host`) is also exported to the dev server as `BLOCKS_DEV_HOST` (unless `BLOCKS_DEV_HOST` is already set, which then wins), which opts the local realtime WebSocket (`/realtime`) into that host's origins. Without `frontendCommand`, the frontend is detected from the app's dependencies and started on `frontendPort`: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>`, `vite` runs `npx vite --port <frontendPort> --strictPort`, and neither runs the backend only. `"frontend": false` runs the backend only even when `next` or `vite` is installed, as `--no-frontend` does; it cannot be combined with `frontendCommand` or `frontendPort`. A `frontendCommand` you set must listen on `frontendPort` itself. Flags override both: `npm run dev -- --port 4000` serves the app on http://localhost:4000.
 
 The lifecycle commands run the app's TypeScript with `tsx`, as the generated npm scripts' wrappers did. The CLI runs its runners and client generation (`blocks generate client`, and the client step of `blocks deploy` and `blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `blocks dev` runs under `tsx watch`, which restarts it on a change; the other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `blocks deploy` and `blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
+
+### Migrating an app from `aws-blocks/scripts`
+
+Apps that create-blocks-app scaffolded before the CLI ran lifecycle wrappers in `aws-blocks/scripts/*.ts` (`"deploy": "tsx aws-blocks/scripts/deploy.ts"`). New apps call the CLI from the same npm scripts instead (`"deploy": "blocks deploy"`). `blocks migrate` moves an existing app over:
+
+```bash
+npx --no -- blocks migrate --dry-run   # print the plan; write nothing
+npx --no -- blocks migrate             # rewrite the scripts and delete the generated wrappers
+```
+
+- A wrapper (`server.ts`, `stop.ts`, `sandbox.ts`, `sandbox-destroy.ts`, `console.ts`, `cleanup.ts`, `deploy.ts`, `destroy.ts`, `secret.ts`, `typegen.ts`, and the Amplify overlay's `server.ts` and `stop.ts`) counts as generated when it matches, ignoring whitespace, a version that a create-blocks-app template shipped. Any other content is customized.
+- A script is rewritten only when its value is exactly the generated command and the wrapper it runs is generated: `tsx watch aws-blocks/scripts/server.ts` becomes `blocks dev`, `tsx aws-blocks/scripts/sandbox.ts --deploy-only` becomes `blocks sandbox deploy`, `tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts` becomes `blocks sandbox destroy`, and so on. A generated `sandbox.ts` starts `server.ts` as the sandbox's dev server, so when `server.ts` is customized, the `sandbox` and `sandbox:deploy` scripts are kept and reported too: `blocks sandbox` would bypass the custom server. Every other script is left alone.
+- The `port`, `frontendCommand` and `frontendPort` of a generated `server.ts` move to `package.json#blocks.dev`, unless `blocks.dev` already exists.
+- A generated wrapper is deleted once no script and no file under `aws-blocks/` uses it. A customized wrapper is never deleted; it is reported with its script, which keeps running it. The Amplify overlay's `generate-client.ts` and files migrate does not know are left alone.
+- In a git repository it refuses a working tree with uncommitted changes (exit 1, with a `Try:` hint), so you can review the result with `git diff` and undo it; `--force` skips the check. `--dry-run` writes nothing.
+- `--output json` prints `{changed, removed, kept: [{file, reason}], scriptsRewritten: {name: {from, to}}, devConfig}`. `devConfig` is the `blocks.dev` config (`{port?, frontendCommand?, frontendPort?}`) that migrate added to `package.json`, or with `--dry-run` would add, and `null` when it adds none.
+- It exits 0 when the app is fully migrated or there is nothing to do, and 1 when customized items remain for you to finish by hand. Exit 1 is a report, not a crash: everything else was migrated, and running it again is safe.
+
+Two commands behave differently after the migration: `npm run destroy` asks for confirmation (`npm run destroy -- --yes` in CI), and `npm run cleanup` stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
 
 ## Testing
 
