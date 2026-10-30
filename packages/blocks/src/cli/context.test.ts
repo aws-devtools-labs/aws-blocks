@@ -5,14 +5,38 @@ import assert from 'node:assert';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { resolveDevConfig } from './config.js';
-import { createSpawnChild, findProjectRoot, isCi, logLevelFor } from './context.js';
+import { createSpawnChild, findProjectRoot, isCi, logLevelFor, PromptInterrupted, promptLine } from './context.js';
 import { CliError } from './errors.js';
 import { parseArgv } from './parse.js';
 import { shellQuote } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
+
+describe('the confirmation prompt', () => {
+	const ask = () => {
+		const input = new PassThrough();
+		const answer = promptLine('Delete? [y/N] ', { input, output: new PassThrough(), terminal: true });
+		return { input, answer };
+	};
+
+	it('resolves with the line typed', async () => {
+		const { input, answer } = ask();
+		input.write('yes\r');
+		assert.strictEqual(await answer, 'yes');
+	});
+
+	it('rejects with PromptInterrupted on Ctrl-C and at the end of the input', async () => {
+		const ctrlC = ask();
+		ctrlC.input.write('\x03');
+		await assert.rejects(ctrlC.answer, PromptInterrupted);
+		const eof = ask();
+		eof.input.end();
+		await assert.rejects(eof.answer, PromptInterrupted);
+	});
+});
 
 describe('project root detection', () => {
 	it('walks up to the package.json that has an aws-blocks/ directory', () => {

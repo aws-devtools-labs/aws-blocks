@@ -13,8 +13,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { resolveDevConfig } from './config.js';
-import { blocksVersion, type ChildResult, type Context } from './context.js';
-import { CliError, ExitCode, exitCodeForChild, UsageError } from './errors.js';
+import { blocksVersion, type ChildResult, type Context, PromptInterrupted } from './context.js';
+import { CliError, ExitCode, type ExitCodeValue, exitCodeForChild, UsageError } from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
 import { suggest } from './parse.js';
 import { ALIASES, COMMANDS, type CommandInput, type CommandSpec, findCommand } from './registry.js';
@@ -128,17 +128,36 @@ function requireFile(path: string, what: string, hint?: string): string {
 	return path;
 }
 
-/** Ask for confirmation. Without a terminal, require `--yes` (exit 2). */
-async function confirm(ctx: Context, question: string, yesCommand: string, where: string[]): Promise<boolean> {
-	if (ctx.globals.yes) return true;
+/**
+ * Ask for confirmation. Without a terminal, require `--yes` (exit 2).
+ *
+ * @returns `undefined` to go ahead; otherwise the exit code to return, after a
+ * message that nothing was deleted: 1 when declined, 130 on Ctrl-C at the prompt.
+ */
+async function confirm(
+	ctx: Context,
+	question: string,
+	yesCommand: string,
+	where: string[],
+): Promise<ExitCodeValue | undefined> {
+	if (ctx.globals.yes) return undefined;
 	if (!ctx.interactive) {
 		throw new UsageError('confirmation required, and this run cannot prompt (no TTY, --no-input or CI).', {
 			where,
 			hint: yesCommand,
 		});
 	}
-	const answer = await ctx.deps.prompt(`${question} [y/N] `);
-	return /^y(es)?$/i.test(answer.trim());
+	let answer: string;
+	try {
+		answer = await ctx.deps.prompt(`${question} [y/N] `);
+	} catch (error) {
+		if (!(error instanceof PromptInterrupted)) throw error;
+		ctx.out.progress('\nInterrupted; nothing was deleted.');
+		return ExitCode.Interrupted;
+	}
+	if (/^y(es)?$/i.test(answer.trim())) return undefined;
+	ctx.out.progress('Cancelled; nothing was deleted.');
+	return ExitCode.Failure;
 }
 
 /** The production stack name; a CLI error when `.blocks/config.json` is missing. */
@@ -339,10 +358,10 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	ctx.out.progress(`Deleting your sandbox stack ${stack ?? '(no sandbox id on this machine)'}; ${label}.`);
 	ctx.out.progress('The production stack is not affected.');
 	// A sandbox is disposable, and scripts run `sandbox destroy` unattended: ask only in a terminal.
-	if (ctx.interactive && !(await confirm(ctx, 'Delete the sandbox stack?', 'blocks sandbox destroy --yes', where))) {
-		ctx.out.progress('Cancelled; nothing was deleted.');
-		return ExitCode.Failure;
-	}
+	const declined = ctx.interactive
+		? await confirm(ctx, 'Delete the sandbox stack?', 'blocks sandbox destroy --yes', where)
+		: undefined;
+	if (declined !== undefined) return declined;
 	return runRunner(ctx, {
 		runner: 'sandbox-destroy',
 		operation: 'blocks sandbox destroy',
@@ -398,10 +417,8 @@ export async function destroy(ctx: Context): Promise<number> {
 	const { label } = await targetLabel(ctx, root);
 	const where = [`stack: ${stack} (production)`, label, `project: ${root}`];
 	ctx.out.progress(`This deletes the production stack ${stack}; ${label}; project ${root}.`);
-	if (!(await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where))) {
-		ctx.out.progress('Cancelled; nothing was deleted.');
-		return ExitCode.Failure;
-	}
+	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where);
+	if (declined !== undefined) return declined;
 	return runRunner(ctx, {
 		runner: 'destroy',
 		operation: 'blocks destroy',

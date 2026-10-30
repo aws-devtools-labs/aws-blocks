@@ -46,7 +46,7 @@ export interface CliDeps {
 	/** The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it for the run. */
 	env: NodeJS.ProcessEnv;
 	cwd: string;
-	/** Ask a question on stderr and read one line from stdin. */
+	/** Ask a question on stderr and read one line from stdin; rejects with {@link PromptInterrupted} on Ctrl-C. */
 	prompt(question: string): Promise<string>;
 	spawn: SpawnFn;
 	/** Change the working directory, for the core functions that run in this process. */
@@ -280,11 +280,40 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 
 export const spawnChild: SpawnFn = createSpawnChild();
 
-/** Ask on stderr and read one line from stdin. */
-export function promptLine(question: string): Promise<string> {
-	const rl = createInterface({ input: process.stdin, output: process.stderr });
-	return new Promise((resolvePromise) => {
+/** The prompt ended without an answer: Ctrl-C, or the end of the input. */
+export class PromptInterrupted extends Error {
+	constructor() {
+		super('the prompt was interrupted');
+		this.name = 'PromptInterrupted';
+	}
+}
+
+export interface PromptStreams {
+	input: NodeJS.ReadableStream;
+	output: NodeJS.WritableStream;
+	/** Treat the streams as a terminal (Ctrl-C handling). Default: whether `output` is a TTY. */
+	terminal?: boolean;
+}
+
+/**
+ * Ask on stderr and read one line from stdin.
+ *
+ * @throws {PromptInterrupted} On Ctrl-C at the prompt, or the end of the input before an answer.
+ */
+export function promptLine(
+	question: string,
+	streams: PromptStreams = { input: process.stdin, output: process.stderr },
+): Promise<string> {
+	const rl = createInterface(streams);
+	return new Promise((resolvePromise, reject) => {
+		let answered = false;
+		// In a terminal, readline reads Ctrl-C as a key, so the process gets no SIGINT.
+		rl.on('SIGINT', () => rl.close());
+		rl.on('close', () => {
+			if (!answered) reject(new PromptInterrupted());
+		});
 		rl.question(question, (answer) => {
+			answered = true;
 			rl.close();
 			resolvePromise(answer);
 		});

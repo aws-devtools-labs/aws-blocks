@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as realCore from '@aws-blocks/core/scripts';
-import type { ChildResult, CliDeps, CoreScripts, SpawnSpec } from './context.js';
+import { type ChildResult, type CliDeps, type CoreScripts, PromptInterrupted, type SpawnSpec } from './context.js';
 import { main } from './main.js';
 
 export interface FakeRun {
@@ -23,7 +23,8 @@ export interface FakeOptions {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
 	stdinIsTTY?: boolean;
-	answer?: string;
+	/** The prompt's answer; `null` interrupts the prompt, as Ctrl-C does. */
+	answer?: string | null;
 	/** Called for each child; return its result. Default: exit 0. */
 	onSpawn?: (spec: SpawnSpec) => Partial<ChildResult> | undefined;
 	core?: Partial<CoreScripts>;
@@ -56,6 +57,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		cwd: options.cwd,
 		prompt: async (question) => {
 			run.prompts.push(question);
+			if (options.answer === null) throw new PromptInterrupted();
 			return options.answer ?? '';
 		},
 		spawn: async (spec) => {
