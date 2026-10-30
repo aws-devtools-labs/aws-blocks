@@ -172,7 +172,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 
 `npm run deploy` does the whole deploy in one command. A first production deploy can take 10+ minutes — longer than many shell command timeouts — so run it in the background (your harness's background-process feature, or `npm run deploy > deploy.log 2>&1 &`) and let it finish. The same applies to a first `npm run sandbox:deploy`.
 
-If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script.
+If `npm run sandbox` or `npm run deploy` stops with `AWS credentials could not be verified`, the message names the profile, the deployment Region and the command that fixes it, such as `aws login --profile <name>` or `aws sso login --profile <name>`. Signing in opens a browser and needs the user: ask the user before you run the command, then re-run the npm script. If the message first lists `aws configure set region <region> --profile <name>`, that command changes the user's AWS config: include it when you ask, and run it before the sign-in.
 
 If either command stops with `CDK is not bootstrapped in Region <region> of account <account-id>`, the message includes the command that fixes it: `npx cdk bootstrap aws://<account-id>/<region> --app=`, run from the project directory. Bootstrapping is needed once per account and Region, takes a few minutes, and creates IAM roles and other resources in the user's account: ask the user before you run it, then re-run the npm script.
 
