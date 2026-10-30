@@ -626,6 +626,22 @@ describe('create-blocks-app auto-detection', () => {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  it('rewrites @aws-blocks/* placeholders to file: paths when run from the monorepo', () => {
+    // The published-registry path (caret ranges) is covered by published-layout.test.ts.
+    const packagesDir = join(__dirname, '../..');
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-file-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.dependencies['@aws-blocks/blocks'], `file:${packagesDir}/blocks`);
+      assert.strictEqual(pkg.dependencies['@aws-blocks/hosting'], `file:${packagesDir}/hosting`);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 describe('create-blocks-app scaffold allowlist safety', () => {

@@ -33,6 +33,12 @@ const OTHER_SIBLING = "@aws-blocks/bb-kv-store";
 // In the workspace but not re-exported by the umbrella, so releasing it alone
 // must never trigger the umbrella requirement.
 const NON_SIBLING = "@aws-blocks/create-blocks-app";
+// The CLI stamps UMBRELLA and OTHER_SIBLING (its devDependencies in the
+// fixture) into scaffolded apps; SIBLING is not stamped.
+const SCAFFOLDER = NON_SIBLING;
+const STAMPED = UMBRELLA;
+const OTHER_STAMPED = OTHER_SIBLING;
+const NOT_STAMPED = SIBLING;
 
 // Keeps the fixture repo free of the host's git config (signing hooks, aliases,
 // templates) so the tests behave the same on a laptop and on a runner.
@@ -97,7 +103,9 @@ function baseRepo(t, files = {}) {
 		}),
 		"packages/core/package.json": pkgJson(SIBLING),
 		"packages/bb-kv-store/package.json": pkgJson(OTHER_SIBLING),
-		"packages/create-blocks-app/package.json": pkgJson(NON_SIBLING),
+		"packages/create-blocks-app/package.json": pkgJson(NON_SIBLING, {
+			devDependencies: { [STAMPED]: "^0.1.0", [OTHER_STAMPED]: "^0.1.0", typescript: "^5.0.0" },
+		}),
 		".changeset/config.json": `${JSON.stringify({ changelog: "@changesets/cli/changelog" }, null, 2)}\n`,
 		".changeset/README.md": "# Changesets\n",
 		...files,
@@ -481,6 +489,181 @@ describe("verify-coverage", () => {
 	});
 });
 
+describe("verify-scaffolder: a new release line for a stamped package needs a CLI release", () => {
+	it("fails when this PR moves a stamped package to a new line and nothing releases the CLI", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, { ".changeset/break-kv.md": changeset({ [OTHER_STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /stamps into new apps to a new release line/);
+		assert.match(output, /@aws-blocks\/bb-kv-store/);
+		assert.match(output, /"@aws-blocks\/create-blocks-app": patch/);
+	});
+
+	it("passes on a patch to a stamped package, which the caret range already admits", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, { ".changeset/fix-blocks.md": changeset({ [STAMPED]: "patch" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+		assert.match(output, /No changeset here moves/);
+	});
+
+	it("passes when the same changeset releases the CLI too", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			".changeset/break-blocks.md": changeset({ [STAMPED]: "minor", [SCAFFOLDER]: "patch" }),
+		});
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+		assert.match(output, /released alongside them/);
+	});
+
+	it("passes when a changeset already pending on main releases the CLI", (t) => {
+		const dir = baseRepo(t, { ".changeset/pending-cli.md": changeset({ [SCAFFOLDER]: "patch" }) });
+		commitPr(dir, { ".changeset/break-blocks.md": changeset({ [STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("passes on a minor for a stamped package already past 1.0, which the caret admits", (t) => {
+		const dir = baseRepo(t, { "packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED, { version: "1.2.0" }) });
+		commitPr(dir, { ".changeset/kv-feature.md": changeset({ [OTHER_STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("passes on a new line for a package the CLI does not stamp", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, { ".changeset/break-core.md": changeset({ [NOT_STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("does not fail an unrelated PR for a line move someone else left pending", (t) => {
+		const dir = baseRepo(t, { ".changeset/someone-elses-break.md": changeset({ [STAMPED]: "minor" }) });
+		commitPr(dir, { "README.md": "# fixture\n" });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+});
+
+describe("verify-scaffolder: withdrawing the CLI entry", () => {
+	it("fails when the PR deletes the only changeset that released the CLI while a line move is pending", (t) => {
+		const dir = baseRepo(t, {
+			".changeset/break-blocks.md": changeset({ [STAMPED]: "minor" }),
+			".changeset/cli.md": changeset({ [SCAFFOLDER]: "patch" }),
+		});
+		commitPr(dir, { ".changeset/cli.md": null });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /removes the @aws-blocks\/create-blocks-app entry/);
+		assert.match(output, /\.changeset\/cli\.md/);
+		assert.match(output, /@aws-blocks\/blocks/);
+	});
+
+	it("passes when the withdrawal leaves no line move pending (a revert)", (t) => {
+		const dir = baseRepo(t, {
+			".changeset/break-blocks.md": changeset({ [STAMPED]: "minor", [SCAFFOLDER]: "patch" }),
+		});
+		commitPr(dir, { ".changeset/break-blocks.md": null });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+});
+
+describe("verify-scaffolder: the release PR, read from the version diff", () => {
+	it("fails when a stamped package moves to a new line and the CLI keeps its version", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"packages/blocks/package.json": pkgJson(UMBRELLA, {
+				version: "0.2.0",
+				dependencies: { [SIBLING]: "^0.1.0", [OTHER_SIBLING]: "^0.1.0" },
+			}),
+		});
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /move to a new release line, but @aws-blocks\/create-blocks-app keeps its version/);
+		assert.match(output, /@aws-blocks\/blocks {2}0\.1\.0 -> 0\.2\.0/);
+	});
+
+	it("passes when the CLI is released in the same batch", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED, { version: "0.2.0" }),
+			"packages/create-blocks-app/package.json": pkgJson(SCAFFOLDER, {
+				version: "0.1.1",
+				devDependencies: { [STAMPED]: "^0.1.0", [OTHER_STAMPED]: "^0.2.0" },
+			}),
+		});
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+		assert.match(output, /released alongside them/);
+	});
+
+	it("passes on a patch release of a stamped package without a CLI release", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, { "packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED, { version: "0.1.1" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("skips a stamped package that did not exist at the merge base", (t) => {
+		const dir = baseRepo(t);
+		commitPr(dir, {
+			"packages/bb-new/package.json": pkgJson("@aws-blocks/bb-new", { version: "0.3.0" }),
+			"packages/create-blocks-app/package.json": pkgJson(SCAFFOLDER, {
+				devDependencies: { [STAMPED]: "^0.1.0", [OTHER_STAMPED]: "^0.1.0", "@aws-blocks/bb-new": "^0.3.0" },
+			}),
+		});
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 0, output);
+	});
+
+	it("fails loudly when a stamped package.json cannot be parsed at the merge base", (t) => {
+		const dir = baseRepo(t, { "packages/bb-kv-store/package.json": "{ not json" });
+		commitPr(dir, { "packages/bb-kv-store/package.json": pkgJson(OTHER_STAMPED) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /Cannot parse packages\/bb-kv-store\/package\.json at the merge base/);
+	});
+});
+
+describe("verify-scaffolder: fails loudly instead of asserting nothing", () => {
+	it("fails when the CLI declares no @aws-blocks/* devDependencies", (t) => {
+		const dir = baseRepo(t, {
+			"packages/create-blocks-app/package.json": pkgJson(SCAFFOLDER, { devDependencies: { typescript: "^5.0.0" } }),
+		});
+		commitPr(dir, { ".changeset/break-blocks.md": changeset({ [STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /declares no @aws-blocks\/\* devDependencies/);
+	});
+
+	it("fails when the CLI package.json cannot be parsed", (t) => {
+		const dir = baseRepo(t, { "packages/create-blocks-app/package.json": "{ not json" });
+		commitPr(dir, { ".changeset/break-blocks.md": changeset({ [STAMPED]: "minor" }) });
+
+		const { status, output } = guard(dir, "verify-scaffolder");
+		assert.equal(status, 1, output);
+		assert.match(output, /Cannot parse @aws-blocks\/create-blocks-app's package\.json/);
+	});
+});
+
 describe("block-major", () => {
 	it("fails on a major bump", (t) => {
 		const dir = baseRepo(t);
@@ -716,6 +899,16 @@ describe("cli", () => {
 		const { status, output } = guard(dir, "verify-everything");
 		assert.equal(status, 2, output);
 		assert.match(output, /Unknown command: verify-everything/);
+	});
+});
+
+describe("the real create-blocks-app package.json", () => {
+	// verify-scaffolder fails loudly on an empty stamp list, so the real CLI
+	// must declare the packages it stamps.
+	it("declares the @aws-blocks/* packages it stamps as devDependencies", () => {
+		const raw = readFileSync(join(REPO_ROOT, "packages", "create-blocks-app", "package.json"), "utf-8");
+		const stamped = Object.keys(JSON.parse(raw).devDependencies ?? {}).filter((name) => name.startsWith("@aws-blocks/"));
+		assert.ok(stamped.includes(UMBRELLA), `expected ${UMBRELLA} among ${stamped.join(", ")}`);
 	});
 });
 

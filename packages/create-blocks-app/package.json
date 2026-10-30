@@ -32,6 +32,9 @@
     "ci-info": "^4.4.0"
   },
   "devDependencies": {
+    "@aws-blocks/bb-kv-store": "^0.3.1",
+    "@aws-blocks/blocks": "^0.8.0",
+    "@aws-blocks/hosting": "^0.4.1",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3"
   },
