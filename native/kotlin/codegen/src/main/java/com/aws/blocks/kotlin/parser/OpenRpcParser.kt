@@ -37,8 +37,18 @@ class OpenRpcParseException(message: String) : CodegenException(message)
  * - `type: string` + `enum` → [com.aws.blocks.kotlin.model.TypeRef.UnionLiteral]
  * - `type: array` + `items` → [com.aws.blocks.kotlin.model.TypeRef.ArrayType]
  * - `type: object` + `properties` → [com.aws.blocks.kotlin.model.TypeRef.InlineObject]
+ * - `type: object` with no properties and no `additionalProperties` (any object) →
+ *   [com.aws.blocks.kotlin.model.TypeRef.MapType] of unknown values (`Map<String, JsonElement>`)
+ * - a `$ref` to a schema while that schema is being parsed (a self-referencing or mutually
+ *   recursive type) → [com.aws.blocks.kotlin.model.TypeRef.RecursiveSchemaRef]
  */
 object OpenRpcParser {
+
+    /**
+     * The component schemas being parsed on this thread, outermost first: a `$ref` to one of them
+     * is a reference back to a type already being described, not another copy of it to expand.
+     */
+    private val refsInProgress: ThreadLocal<MutableSet<String>> = ThreadLocal.withInitial { mutableSetOf() }
 
     fun parse(jsonContent: String): RpcModel {
         val root = try {
@@ -419,7 +429,7 @@ object OpenRpcParser {
                     val fields = prefixItemsEl.jsonArray.mapIndexed { i, itemSchema ->
                         Field(name = "item$i", type = resolveSchema(itemSchema.jsonObject, components), required = true)
                     }
-                    return TypeRef.InlineObject(fields)
+                    return TypeRef.InlineObject(fields, positional = true)
                 }
 
                 // Check for tuple: array-form items (older JSON Schema drafts)
@@ -428,7 +438,7 @@ object OpenRpcParser {
                     val fields = itemsElement.mapIndexed { i, itemSchema ->
                         Field(name = "item$i", type = resolveSchema(itemSchema.jsonObject, components), required = true)
                     }
-                    return TypeRef.InlineObject(fields)
+                    return TypeRef.InlineObject(fields, positional = true)
                 }
 
                 // Normal array
@@ -443,6 +453,13 @@ object OpenRpcParser {
                 // Record pattern: additionalProperties present but no meaningful properties
                 if (properties.isEmpty() && additionalProperties != null) {
                     return TypeRef.MapType(resolveSchema(additionalProperties, components))
+                }
+
+                // Any object (`{ "type": "object" }`, as the spec generator describes `object`, `{}` or an
+                // interface with no data properties): a map of unknown values, so the client keeps its
+                // fields. A data class with no properties doesn't compile.
+                if (properties.isEmpty()) {
+                    return TypeRef.MapType(TypeRef.Primitive("unknown"))
                 }
 
                 val required = schema["required"]?.jsonArray
@@ -477,9 +494,20 @@ object OpenRpcParser {
         val schemaObj = components[schemaName]?.jsonObject
             ?: throw OpenRpcParseException("Unresolved \$ref: $ref")
 
+        // A reference to a schema being parsed (a type that holds itself, directly or through
+        // another): refer back to it rather than expand it again, which never ends.
+        val inProgress = refsInProgress.get()
+        if (schemaName in inProgress) return TypeRef.RecursiveSchemaRef(schemaName)
+        inProgress.add(schemaName)
+        val resolved = try {
+            resolveSchema(schemaObj, components)
+        } finally {
+            inProgress.remove(schemaName)
+        }
+
         // An object schema becomes a named type and an enum a named enum. Any other schema (a
         // primitive, array, map, nullable, union or transferable) is used as the type it declares.
-        return when (val resolved = resolveSchema(schemaObj, components)) {
+        return when (resolved) {
             is TypeRef.InlineObject -> {
                 val schemaDescription = schemaObj["description"]?.jsonPrimitive?.contentOrNull
                 TypeRef.SchemaRef(schemaName = schemaName, resolved = resolved, description = schemaDescription)

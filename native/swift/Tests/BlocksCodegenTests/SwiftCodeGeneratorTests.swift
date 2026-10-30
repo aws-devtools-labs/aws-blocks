@@ -64,6 +64,53 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         XCTAssertTrue(all.contains("case priority"))
     }
 
+    // MARK: - Void Methods
+
+    /// A method with no result discards what `execute` returns rather than binding an unused `let`, which warns
+    /// and fails an app's build that treats warnings as errors.
+    private let voidMethodsSpec = """
+    {
+        "openrpc": "1.3.2",
+        "info": { "title": "test", "version": "1.0.0" },
+        "methods": [
+            { "name": "api.ping", "params": [], "result": { "name": "PingResult", "schema": { "type": "null" } } },
+            {
+                "name": "api.remember",
+                "params": [{ "name": "note", "required": true, "schema": { "type": "string" } }],
+                "result": { "name": "RememberResult", "schema": { "type": "null" } }
+            },
+            { "name": "api.count", "params": [], "result": { "name": "CountResult", "schema": { "type": "integer" } } }
+        ]
+    }
+    """
+
+    func testVoidMethodDiscardsTheResult() throws {
+        let output = try generate(from: voidMethodsSpec)
+        for name in ["ping", "remember"] {
+            let start = try XCTUnwrap(output.api.range(of: "func \(name)("), "func \(name)")
+            let body = output.api[start.lowerBound...].prefix { $0 != "}" }
+            XCTAssertTrue(body.contains("-> Void {"), String(body))
+            XCTAssertTrue(body.contains("_ = try await client.execute(request)"), String(body))
+            XCTAssertFalse(body.contains("let result"), String(body))
+        }
+        // A method with a result still binds and decodes it.
+        XCTAssertTrue(output.api.contains("let result = try await client.execute(request)"))
+    }
+
+    #if os(macOS)
+    func testVoidMethodCompilesWithWarningsAsErrors() throws {
+        let output = try generate(from: voidMethodsSpec)
+        try typecheckConsumer(
+            models: output.models, api: output.api,
+            consumer: """
+            import Generated
+            func use(_ api: Api) async throws { try await api.ping(); try await api.remember(note: "n") }
+            """,
+            moduleFlags: ["-warnings-as-errors"]
+        )
+    }
+    #endif
+
     // MARK: - Format Types
 
     func testGeneratesUUIDType() throws {

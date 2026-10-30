@@ -160,7 +160,16 @@ data class RpcModel(
 /** A reference to a type, which can be primitive, inline, union, array, nullable, or imported. */
 sealed interface TypeRef {
     data class Primitive(val tsType: String, val constraints: Constraints = Constraints.EMPTY) : TypeRef
-    data class InlineObject(val fields: List<Field>, val additionalProperties: TypeRef? = null) : TypeRef
+    /**
+     * An object with named fields. [positional] marks a tuple (`prefixItems`, or array-form
+     * `items`): its fields are `item0`, `item1`, …, and on the wire it is a JSON array of their
+     * values, in order, not an object.
+     */
+    data class InlineObject(
+        val fields: List<Field>,
+        val additionalProperties: TypeRef? = null,
+        val positional: Boolean = false,
+    ) : TypeRef
     /**
      * A string (or boolean) enum. [schemaName] is the component schema it was reached through by
      * a `${'$'}ref`, which makes it one named enum shared by every use; it is null for an inline enum.
@@ -178,6 +187,13 @@ sealed interface TypeRef {
     data class Nullable(val inner: TypeRef) : TypeRef
     data class Union(val members: List<TypeRef>) : TypeRef
     data class SchemaRef(val schemaName: String, val resolved: InlineObject, val description: String? = null) : TypeRef
+    /**
+     * A `${'$'}ref` to the component schema [schemaName] from inside that schema's own definition (a
+     * self-referencing type, `TreeNode.children: [TreeNode]`, or one of mutually recursive types). It
+     * names the type the enclosing [SchemaRef] declares rather than describing it again. A schema
+     * that declares no named type (a recursive union or array) is an unknown value there.
+     */
+    data class RecursiveSchemaRef(val schemaName: String) : TypeRef
     data class Transferable(val transferableName: String, val typeArgs: List<TypeRef>) : TypeRef
     data class ObjectWithOneOf(val fields: List<Field>, val oneOf: List<TypeRef>) : TypeRef
 }

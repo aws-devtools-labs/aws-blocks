@@ -1031,9 +1031,13 @@ class DartCodeGenerator {
         return '$n.fromJson($v as Map<String, dynamic>${_clientArg(t, s)})';
       case TupleType(items: final items):
         final list = '($v as List<dynamic>)';
+        // An optional element (`[string, number?]`) may be missing from a
+        // shorter array (`["c"]`): it is null then, not a RangeError.
         final fields = [
           for (var i = 0; i < items.length; i++)
-            _decode('$list[$i]', items[i], s),
+            _unalias(items[i], s.allTypes) is NullableType
+                ? _decode('($list.length > $i ? $list[$i] : null)', items[i], s)
+                : _decode('$list[$i]', items[i], s),
         ];
         return '(${fields.join(', ')})';
       case TransferableType():

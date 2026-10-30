@@ -326,13 +326,22 @@ This produces:
 ### Spread/rest params
 
 ```ts
-// ⚠️ Rest params emit a single "args" param with unknown type
+// ✅ A rest param typed as a tuple is one param per element: `item`, then optional `options`
 async tablePut(...args: Parameters<typeof table.put>) {
   await table.put(...args);
 }
+
+// ⚠️ A rest param typed as a plain array stays one array param, with a warning
+async tag(name: string, ...labels: string[]) { ... }
 ```
 
-The spec emitter sees one param named `args`. Prefer explicit params.
+The server calls a method with its params spread, so a rest param typed as a tuple (`...args: [id: string, count?: number]`, or `Parameters<typeof f>`) is described as one positional param per element. Each is named by its tuple label (`f`'s parameter names), otherwise `arg0`, `arg1`, and so on, and is optional where the element is. A rest element inside the tuple (`[level: string, ...string[]]`) can't be described: the params stop before it, with a warning.
+
+A rest param typed as a plain array (`...labels: string[]`) is described as one array param, and spec generation warns: a native client sends the labels as one nested array, so the method receives that array as its only `labels` argument. Declare it as an array param (`labels: string[]`) instead.
+
+### Tuples
+
+A tuple (`[number, string]`) is described with `prefixItems`, `minItems` and `maxItems`, and is a JSON array on the wire. Swift and Kotlin generate a type with properties `item0`, `item1`, and so on. Dart generates a record (`(num, String)`), and a one-element tuple (`[number]`) as a `List`. An optional element (`[string, number?]`) is nullable, and is `null` when the array leaves it out.
 
 ### `as any` type casts
 

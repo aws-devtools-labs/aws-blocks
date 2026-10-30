@@ -285,8 +285,11 @@ public struct SwiftCodeGenerator {
         let isOpen = additionalPropertiesType != nil
         let hasEmbedded = embeddedUnion != nil
         let hasOptionalFields = fields.contains { !$0.required || swiftTypeNameNoEmit($0.type).hasSuffix("?") }
+        let isTuple = isTupleRecord(fields) && !isOpen && !hasEmbedded
 
-        if !isOpen && !hasEmbedded && (needsCodingKeys || hasOptionalFields) {
+        if isTuple {
+            lines.append(contentsOf: tupleCodableLines(fields: fields).map { $0.isEmpty ? $0 : indent + $0 })
+        } else if !isOpen && !hasEmbedded && (needsCodingKeys || hasOptionalFields) {
             lines.append("")
             emitDeclaration("CodingKeys", line: "\(indent)    enum CodingKeys: String, CodingKey {", lines: &lines)
             for field in fields {
@@ -296,7 +299,7 @@ public struct SwiftCodeGenerator {
             lines.append("\(indent)    }")
         }
 
-        if !isOpen && !hasEmbedded && hasOptionalFields {
+        if !isTuple && !isOpen && !hasEmbedded && hasOptionalFields {
             lines.append("")
             lines.append("\(indent)    public func encode(to encoder: Encoder) throws {")
             lines.append("\(indent)        var c = encoder.container(keyedBy: CodingKeys.self)")
@@ -892,6 +895,8 @@ public struct SwiftCodeGenerator {
             body.append(contentsOf: openRecordLines(
                 fields: fields, additionalPropertiesType: additionalPropertiesType, excludedKeys: excludedKeys
             ))
+        } else if isTupleRecord(fields) {
+            body.append(contentsOf: tupleCodableLines(fields: fields))
         } else {
             let hasOptionals = fields.contains { !$0.required || swiftTypeNameNoEmit($0.type).hasSuffix("?") }
             if needsCodingKeys || hasOptionals {
@@ -1359,8 +1364,14 @@ public struct SwiftCodeGenerator {
         // Build request
         lines.append(contentsOf: requestLines(operation, names: names, methodLiteral: methodLiteral))
 
-        // Execute and deserialize
-        lines.append("        let \(result) = try await \(client).execute(\(request))")
+        // Execute and deserialize. A `Void` method has no result to read, so it discards it: an unused `let`
+        // warns, and an app built with warnings as errors would fail to compile its generated client.
+        let discardsResult = !isTransferable && returnType == "Void"
+        if discardsResult {
+            lines.append("        _ = try await \(client).execute(\(request))")
+        } else {
+            lines.append("        let \(result) = try await \(client).execute(\(request))")
+        }
 
         // An optional (nullable) transferable result returns nil for a null body; every other result throws.
         let nullResult = transferable?.optional == true
@@ -1374,7 +1385,7 @@ public struct SwiftCodeGenerator {
                     nullResult: nullResult, methodLiteral: methodLiteral
                 ))
             }
-        } else if returnType == "Void" {
+        } else if discardsResult {
             // No return needed
         } else {
             // A result holding an OIDC client or a date at any depth decodes with the client's decoder, which

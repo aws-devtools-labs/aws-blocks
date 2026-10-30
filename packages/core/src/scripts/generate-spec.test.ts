@@ -614,3 +614,49 @@ describe('generateSpec — one component per type name', () => {
 		assert.match(warned[0], /`Comment` nests itself at `Comment\.replies`/);
 	});
 });
+
+describe('generateSpec — tuples', () => {
+	const NS_MOCK = `
+		interface ApiNamespaceConstructor { new <T>(scope: any, name: string, handler: (ctx: any) => T): T; }
+		const ApiNamespace: ApiNamespaceConstructor = class {} as any;
+	`;
+
+	it('describes a tuple with prefixItems, hoisting a named element type to a component', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-test-'));
+		writeTsconfig(dir);
+		writeFileSync(
+			join(dir, 'index.ts'),
+			`${NS_MOCK}
+			interface Point { x: number; y: number }
+			type Kind = { kind: 'a'; a: string } | { kind: 'b'; b: number };
+			export const api = new ApiNamespace(null, 'api', () => ({
+				async between(range: [number, number]): Promise<[Point, Point]> { return [{ x: 0, y: 0 }, { x: 1, y: 1 }]; },
+				async tagged(): Promise<[string, Kind]> { return ['', { kind: 'a', a: '' }]; },
+			}));`,
+		);
+		const api = new ApiNamespace(null as any, 'api', () => ({ between: async () => null, tagged: async () => null }));
+		let doc: any;
+		try {
+			doc = await generateSpec(join(dir, 'index.ts'), async () => ({ api }) as Record<string, unknown>);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		const between = doc.methods.find((m: any) => m.name === 'api.between');
+		assert.deepStrictEqual(between.params[0].schema, {
+			type: 'array',
+			prefixItems: [{ type: 'number' }, { type: 'number' }],
+			minItems: 2,
+			maxItems: 2,
+		});
+		assert.deepStrictEqual(between.result.schema, {
+			type: 'array',
+			prefixItems: [{ $ref: '#/components/schemas/Point' }, { $ref: '#/components/schemas/Point' }],
+			minItems: 2,
+			maxItems: 2,
+		});
+		assert.ok(doc.components.schemas.Point, 'the named element type is a component');
+		assert.ok(!JSON.stringify(doc).includes('"length"'), 'no tuple is described as an object with a length');
+		const tagged = doc.methods.find((m: any) => m.name === 'api.tagged');
+		assert.strictEqual(tagged.result.schema.prefixItems[1].oneOf.length, 2);
+	});
+});

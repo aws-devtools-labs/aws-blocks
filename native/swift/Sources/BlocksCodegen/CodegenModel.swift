@@ -396,13 +396,19 @@ struct ResolvedField {
     /// `default` value from the spec, encoded as raw JSON. Emitted as a Swift
     /// literal default when present (string / number / boolean / null only).
     let defaultValue: String?
+    /// An element of a tuple (see `Field.positional`): its record is a JSON array on the wire.
+    let positional: Bool
 
-    init(name: String, type: ResolvedType, required: Bool, description: String? = nil, defaultValue: String? = nil) {
+    init(
+        name: String, type: ResolvedType, required: Bool, description: String? = nil, defaultValue: String? = nil,
+        positional: Bool = false
+    ) {
         self.name = name
         self.type = type
         self.required = required
         self.description = description
         self.defaultValue = defaultValue
+        self.positional = positional
     }
 }
 

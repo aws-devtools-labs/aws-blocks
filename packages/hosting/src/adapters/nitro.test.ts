@@ -434,6 +434,28 @@ void describe('nitroAdapter — IPX baseURL plumbing', () => {
     );
   });
 
+  void it('trims every trailing slash on user baseURL, in linear time', () => {
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    const ipxPattern = (baseURL: string): { pattern: string | undefined; ms: number } => {
+      writeMinimalNitroOutput(tmpDir);
+      writeNuxtConfig(tmpDir, `export default defineNuxtConfig({ runtimeConfig: { ipx: { baseURL: '${baseURL}' } } });`);
+      const started = performance.now();
+      const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+      const ms = performance.now() - started;
+      return { pattern: manifest.routes.find((r) => r.target === 'image-optimization')?.pattern, ms };
+    };
+    ipxPattern('/img/'); // warm up
+    assert.strictEqual(ipxPattern('/img-cdn///').pattern, '/img-cdn/*');
+    const short = ipxPattern(`/img/x${'/'.repeat(3)}`);
+    // A run of slashes followed by another character is the input that makes `/\/+$/` backtrack:
+    // quadratic, seconds for this length, where a linear scan costs about what `short` does.
+    const long = ipxPattern(`/img${'/'.repeat(100_000)}x${'/'.repeat(3)}`);
+    assert.strictEqual(long.pattern, `/img${'/'.repeat(100_000)}x/*`);
+    // Relative to this machine's own short call, so a slow CI runner keeps its headroom.
+    const limit = Math.max(10 * short.ms, 500);
+    assert.ok(long.ms < limit, `trimming baseURL must be linear: ${long.ms.toFixed(1)} ms (limit ${limit.toFixed(1)} ms)`);
+  });
+
   void it('falls back to /_ipx when nuxt.config has no runtimeConfig.ipx.baseURL', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, {

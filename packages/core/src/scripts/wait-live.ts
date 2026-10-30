@@ -139,8 +139,15 @@ export interface WaitForLiveResult {
  * it only defeats intermediary/browser caches on the polling client.
  */
 export function buildProbeUrl(hostingUrl: string, now: number): string {
-  const base = hostingUrl.replace(/\/+$/, '');
+  const base = withoutTrailingSlashes(hostingUrl);
   return `${base}${CONFIG_PROBE_PATH}?_blocks_live=${now}`;
+}
+
+/** `url` without its trailing slashes: a linear scan, so a long run of `/` costs no regex backtracking. */
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
 }
 
 /**

@@ -104,6 +104,31 @@ describe('buildProbeUrl', () => {
     assert.ok(u.startsWith(`https://d123.cloudfront.net${CONFIG_PROBE_PATH}?`));
     assert.ok(!u.includes('.net//'));
   });
+
+  it('strips every trailing slash, and keeps slashes that are not trailing', () => {
+    assert.strictEqual(buildProbeUrl('https://d123.cloudfront.net///', 1), `https://d123.cloudfront.net${CONFIG_PROBE_PATH}?_blocks_live=1`);
+    assert.strictEqual(buildProbeUrl('https://d.net//a//', 1), `https://d.net//a${CONFIG_PROBE_PATH}?_blocks_live=1`);
+    assert.strictEqual(buildProbeUrl('', 1), `${CONFIG_PROBE_PATH}?_blocks_live=1`);
+  });
+
+  it('trims in linear time, so a long run of slashes before another character does not stall it', () => {
+    const timed = (url: string): number => {
+      const started = performance.now();
+      buildProbeUrl(url, 1);
+      return performance.now() - started;
+    };
+    timed('https://d.net/'); // warm up
+    const short = timed(`https://d.net/x${'/'.repeat(3)}`);
+    // A run of slashes followed by another character is the input that makes `/\/+$/` backtrack:
+    // quadratic, seconds for this length, where a linear scan takes about as long as `short`.
+    const started = performance.now();
+    const url = buildProbeUrl(`https://d.net${'/'.repeat(100_000)}x${'/'.repeat(3)}`, 1);
+    const long = performance.now() - started;
+    assert.strictEqual(url, `https://d.net${'/'.repeat(100_000)}x${CONFIG_PROBE_PATH}?_blocks_live=1`);
+    // Relative to this machine's own short call, so a slow CI runner keeps its headroom.
+    const limit = Math.max(10 * short, 250);
+    assert.ok(long < limit, `trimming the URL must be linear: ${long.toFixed(1)} ms (limit ${limit.toFixed(1)} ms)`);
+  });
 });
 
 describe('waitForLiveBuild', () => {
