@@ -9,6 +9,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { isBlocksError, isWireSafeError } from '@aws-blocks/core';
 import { assertValidKey } from './validation.js';
 
 describe('assertValidKey rejects invalid keys with a ValidationFailed error', () => {
@@ -54,6 +55,24 @@ describe('assertValidKey accepts legitimate keys', () => {
 	]) {
 		test(`accepts ${JSON.stringify(key)}`, () => {
 			assert.doesNotThrow(() => assertValidKey(key));
+		});
+	}
+});
+
+describe('assertValidKey errors are wire-safe', () => {
+	for (const key of ['a//b', '../x']) {
+		test(`rejects ${JSON.stringify(key)} with a branded error the RPC sanitizer keeps`, () => {
+			let caught: unknown;
+			try {
+				assertValidKey(key);
+			} catch (e) {
+				caught = e;
+			}
+			assert.ok(caught instanceof Error);
+			assert.strictEqual(caught.name, 'ValidationFailed');
+			assert.match(caught.message, /^ValidationFailed: /);
+			assert.ok(isWireSafeError(caught), 'ValidationFailed must be branded so name/message cross the RPC wire');
+			assert.ok(isBlocksError(caught, 'ValidationFailed'));
 		});
 	}
 });
