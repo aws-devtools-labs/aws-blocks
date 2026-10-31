@@ -19,6 +19,8 @@ export interface FakeRun {
 	prompts: string[];
 	/** The run's environment, after the CLI set AWS_PROFILE, AWS_REGION and the log level on it. */
 	env: NodeJS.ProcessEnv;
+	/** The process argv that in-process core functions read: `node`, `blocks`, then the run's argv. */
+	argv: string[];
 }
 
 export interface FakeOptions {
@@ -58,6 +60,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		chdirs: [],
 		prompts: [],
 		env: { HOME: options.cwd, ...options.env },
+		argv: ['node', 'blocks', ...argv],
 	};
 	const deps: CliDeps = {
 		stdout: { write: (chunk: string) => (run.stdout += chunk) },
@@ -75,6 +78,7 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 			return { code: 0, signal: null, interrupted: false, ...options.onSpawn?.(spec) };
 		},
 		chdir: (dir) => run.chdirs.push(dir),
+		argv: run.argv,
 		core: async () => ({ ...realCore, ...NO_AWS, ...options.core }),
 	};
 	run.code = await main(argv, deps);

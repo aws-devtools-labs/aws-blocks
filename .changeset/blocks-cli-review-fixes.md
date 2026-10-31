@@ -26,3 +26,4 @@ fix(blocks): `blocks` output streams, non-interactive runs and usage errors
 - `blocks generate types` rejects `--check` with `--watch`, and an empty `--out`, `--include` or `--module`, as usage errors (exit 2), instead of passing them to typegen, which failed with exit 1 or wrote an invalid `declare module ""`.
 - `blocks generate client <foundation> <output>` and `blocks generate spec <backend> [output]` run outside an app, as `blocks-generate-client` and `blocks-generate-spec` did; only their default paths need one.
 - A typo of a hidden alias suggests the canonical command: `blocks consol` suggests `sandbox console`, `blocks typegn` suggests `generate types`.
+- A relative `--telemetry-file` is resolved from the directory you run the command in for the commands that run core in the CLI process too (`blocks sandbox console`), instead of from the project root.

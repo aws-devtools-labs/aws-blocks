@@ -393,6 +393,26 @@ describe('lifecycle commands', () => {
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
 	});
 
+	it('makes --telemetry-file absolute in the argv that in-process core functions read', async () => {
+		const root = fixtureApp();
+		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
+		const core = { telemetry: async () => {} };
+		for (const [argv, expected] of [
+			[
+				['-C', root, '--telemetry-file', 'rel.json', 'telemetry'],
+				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'telemetry'],
+			],
+			[
+				['-C', root, 'telemetry', '--telemetry-file=rel.json'],
+				['-C', root, 'telemetry', `--telemetry-file=${join(shell, 'rel.json')}`],
+			],
+		] as const) {
+			const run = await runCli([...argv], { cwd: shell, core });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.deepStrictEqual(run.argv, ['node', 'blocks', ...expected]);
+		}
+	});
+
 	it('forwards --telemetry-file to every runner as core reads it, in either form and position', async () => {
 		const root = fixtureApp();
 		const file = join(root, 'events.json');

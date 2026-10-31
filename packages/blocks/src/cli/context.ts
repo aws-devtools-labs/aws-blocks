@@ -72,6 +72,11 @@ export interface CliDeps {
 	/** Change the working directory, for the core functions that run in this process. */
 	chdir(dir: string): void;
 	/**
+	 * The process argv, which the core functions that run in this process read
+	 * `--telemetry-file` from. The CLI makes that path absolute in place.
+	 */
+	argv: string[];
+	/**
 	 * Load `@aws-blocks/core/scripts`. A seam rather than a static import, so that
 	 * `blocks --help` and usage errors do not load core, and tests can replace it.
 	 */
@@ -218,6 +223,16 @@ export class Context {
 		// Core's progress, the CDK milestones and raw CDK output go to stderr; results
 		// (BLOCKS_DEPLOYED, the final URLs, the deployment target) stay on stdout.
 		this.env.BLOCKS_LOG_STREAM = 'stderr';
+		// Core's in-process commands (sandbox console) read --telemetry-file from the
+		// process argv after enterRoot() changed directory: make it absolute first.
+		if (this.globals.telemetryFile !== undefined) {
+			const file = resolve(deps.cwd, this.globals.telemetryFile);
+			const end = deps.argv.includes('--') ? deps.argv.indexOf('--') : deps.argv.length;
+			for (let i = 0; i < end; i++) {
+				if (deps.argv[i].startsWith('--telemetry-file=')) deps.argv[i] = `--telemetry-file=${file}`;
+				else if (deps.argv[i] === '--telemetry-file' && i + 1 < end) deps.argv[++i] = file;
+			}
+		}
 	}
 
 	/** The project root, if the command runs inside an AWS Blocks app. */
@@ -372,6 +387,7 @@ export function processDeps(): CliDeps {
 		prompt: promptLine,
 		spawn: spawnChild,
 		chdir: (dir) => process.chdir(dir),
+		argv: process.argv,
 		core: () => import('@aws-blocks/core/scripts'),
 	};
 }
