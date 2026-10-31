@@ -133,7 +133,7 @@ describe('blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'server.ts', 'typegen.ts']);
 	});
 
-	it('ignores dependencies, build output, tool state, binary and oversized files', async () => {
+	it('outside git, skips dependencies, build output, tool state, binary and oversized files', async () => {
 		const mention = 'npx tsx aws-blocks/scripts/deploy.ts\n';
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			for (const dir of [
@@ -141,6 +141,7 @@ describe('blocks migrate references', () => {
 				'.git',
 				'cdk.out',
 				'dist',
+				'build-temp/aws-blocks/scripts',
 				'.blocks-sandbox',
 				'packages/x/node_modules',
 			])
@@ -158,10 +159,46 @@ describe('blocks migrate references', () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['README.md'] = '```json\n{ "dev:server": "tsx watch aws-blocks/scripts/server.ts" }\n```\n';
 			app.files['docs/deploy.mdx'] = 'Run `npx tsx aws-blocks/scripts/deploy.ts`.\n';
+			app.files['.cursor/rules/x.mdc'] = 'Destroy with `npx tsx aws-blocks/scripts/destroy.ts`.\n';
 		});
 		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.deepStrictEqual(scriptsDir(root), []);
+	});
+
+	it('in a git work tree, does not count gitignored build output or logs as a use', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['.gitignore'] = 'node_modules/\nbuild-temp/\n*.log\n';
+			// What `npm run build` (tsc, outDir build-temp) leaves in a default-template app.
+			app.files['build-temp/aws-blocks/scripts/sandbox.js'] =
+				"export const options = { devCommand: 'npx tsx watch aws-blocks/scripts/server.ts' };\n";
+			// What `npm run deploy > deploy.log 2>&1 &` leaves.
+			app.files['deploy.log'] = '> tsx aws-blocks/scripts/deploy.ts\n';
+		});
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stdout);
+		assert.deepStrictEqual(JSON.parse(run.stdout).kept, []);
+		assert.deepStrictEqual(scriptsDir(root), []);
+	});
+
+	it('in a git work tree, counts a tracked file under any directory name as a use', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['tools/build/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
+		});
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stdout);
+		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(
+			kept.map((k) => [k.file, k.reason]),
+			[['aws-blocks/scripts/deploy.ts', 'generated, but still used by tools/build/release.sh']],
+		);
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
 	});
 
 	it('does not follow symbolic links', {

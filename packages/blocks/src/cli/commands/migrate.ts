@@ -25,7 +25,16 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+	existsSync,
+	lstatSync,
+	readdirSync,
+	readFileSync,
+	rmdirSync,
+	rmSync,
+	type Stats,
+	writeFileSync,
+} from 'node:fs';
 import { join, posix as posixPath, relative } from 'node:path';
 import type { DevPackageConfig } from '../config.js';
 import type { Context } from '../context.js';
@@ -245,7 +254,10 @@ function findWrappers(root: string): Wrapper[] {
 	return wrappers;
 }
 
-/** Directories that hold no app source: dependencies, version control, build output, tool state and caches. */
+/**
+ * Outside git: directories that hold no app source (dependencies, version
+ * control, build output, tool state and caches), skipped at any depth.
+ */
 const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 	'node_modules',
 	'.git',
@@ -253,6 +265,7 @@ const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 	'.svn',
 	'dist',
 	'build',
+	'build-temp',
 	'coverage',
 	'cdk.out',
 	'.blocks-sandbox',
@@ -271,36 +284,62 @@ const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 /** Larger files are data or generated output, not something that runs a wrapper. */
 const MAX_SCANNED_BYTES = 1024 * 1024;
 
-/** Markdown docs: prose that names a wrapper does not run it (the backend template's README shows a wrapper script). */
-const DOC_FILE = /\.mdx?$/i;
+/** Markdown docs and editor rules: prose that names a wrapper does not run it (the backend template's README shows a wrapper script). */
+const DOC_FILE = /\.(md|mdx|mdc)$/i;
+
+/** A file that names at least one wrapper, and the project paths of the wrappers it names. */
+interface WrapperUser {
+	path: string;
+	uses: ReadonlySet<string>;
+}
 
 /**
- * Every app file that might use a wrapper: each regular text file under the
- * project root other than Markdown docs, dot directories included (`.github`,
- * `.vscode`), so shell scripts, Dockerfiles and CI workflows count. Skipped:
- * the {@link SKIPPED_DIRS}, `*.md` and `*.mdx` files, files over
- * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root `package.json`
- * (its scripts are checked after the rewrite) and symbolic links, which are not
- * followed. Nothing above the project root is read.
+ * Every app file that names one of `wrappers`. In a git work tree the files
+ * are the ones git lists for the project directory: tracked files and
+ * untracked files that are not ignored, under any directory name. Outside git,
+ * every file under the project root, dot directories included (`.github`,
+ * `.vscode`), other than the {@link SKIPPED_DIRS}. Either way, shell scripts,
+ * Dockerfiles and CI workflows count; `*.md`, `*.mdx` and `*.mdc` files, files
+ * over {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
+ * `package.json` (its scripts are checked after the rewrite) and symbolic
+ * links, which are not followed, do not. Each file is read once, and only the
+ * wrappers it names are kept. Nothing above the project root is read.
  */
-function referencingSources(root: string): { path: string; text: string }[] {
-	const sources: { path: string; text: string }[] = [];
+function wrapperUsers(root: string, wrappers: readonly Wrapper[]): WrapperUser[] {
+	const users: WrapperUser[] = [];
+	const scan = (rel: string): void => {
+		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
+		const path = join(root, rel);
+		let stats: Stats;
+		try {
+			stats = lstatSync(path);
+		} catch {
+			return; // A tracked file deleted from the work tree.
+		}
+		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return;
+		const bytes = readFileSync(path);
+		if (bytes.includes(0)) return;
+		const text = bytes.toString('utf-8');
+		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w.path)).map((w) => w.path));
+		if (uses.size > 0) users.push({ path: rel, uses });
+	};
+	const files = gitFiles(root);
+	if (files) {
+		for (const rel of files) scan(rel);
+		return users;
+	}
 	const walk = (dir: string): void => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const path = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (!SKIPPED_DIRS.has(entry.name)) walk(path);
-				continue;
+			} else if (entry.isFile()) {
+				scan(posix(relative(root, path)));
 			}
-			if (!entry.isFile() || DOC_FILE.test(entry.name)) continue;
-			const rel = posix(relative(root, path));
-			if (rel === 'package.json' || statSync(path).size > MAX_SCANNED_BYTES) continue;
-			const bytes = readFileSync(path);
-			if (!bytes.includes(0)) sources.push({ path: rel, text: bytes.toString('utf-8') });
 		}
 	};
 	walk(root);
-	return sources;
+	return users;
 }
 
 const SOURCE_EXTENSION = /\.[cm]?[jt]sx?$/;
@@ -324,10 +363,15 @@ function refersTo(text: string, sourcePath: string, wrapperPath: string): boolea
 	return false;
 }
 
+/** True when `root` is in a git work tree and git runs. */
+function inGitWorkTree(root: string): boolean {
+	const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf-8' });
+	return !inside.error && inside.status === 0 && inside.stdout.trim() === 'true';
+}
+
 /** `git status --porcelain` for the project, or `null` outside a git work tree (or without git). */
 function gitStatus(root: string): string | null {
-	const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf-8' });
-	if (inside.error || inside.status !== 0 || inside.stdout.trim() !== 'true') return null;
+	if (!inGitWorkTree(root)) return null;
 	const status = spawnSync('git', ['status', '--porcelain', '--', '.'], { cwd: root, encoding: 'utf-8' });
 	if (status.error || status.status !== 0) {
 		throw new CliError(`git status failed in ${root}: ${status.stderr || status.error?.message}`.trim());
@@ -335,7 +379,26 @@ function gitStatus(root: string): string | null {
 	return status.stdout;
 }
 
-/** Plan the migration of `root`. Pure apart from reading files. */
+/**
+ * The project's tracked files and its untracked files that git does not
+ * ignore, relative to `root` with `/` separators, or `null` outside a git work
+ * tree (or without git).
+ */
+function gitFiles(root: string): string[] | null {
+	if (!inGitWorkTree(root)) return null;
+	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
+		cwd: root,
+		encoding: 'utf-8',
+		maxBuffer: Number.POSITIVE_INFINITY,
+	});
+	if (list.error || list.status !== 0) {
+		throw new CliError(`git ls-files failed in ${root}: ${list.stderr || list.error?.message}`.trim());
+	}
+	// An unmerged path is listed once per stage.
+	return [...new Set(list.stdout.split('\0').filter((path) => path !== ''))];
+}
+
+/** Plan the migration of `root`. Pure apart from reading files and listing them with git. */
 export function planMigration(root: string): { result: MigrateResult; pkg: PackageJson } {
 	// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
 	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
@@ -411,20 +474,18 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 			});
 		}
 	}
-	const allSources = referencingSources(root);
+	const namers = wrapperUsers(root, wrappers);
 	let changed = true;
 	while (changed) {
 		changed = false;
 		// A wrapper that is going to be deleted uses nothing.
-		const sources = allSources.filter((source) => !candidates.has(source.path));
+		const sources = namers.filter((namer) => !candidates.has(namer.path));
 		for (const wrapper of wrappers) {
 			if (!candidates.has(wrapper.path)) continue;
 			const scriptUsers = Object.entries(scripts)
 				.filter(([, value]) => refersTo(value, 'package.json', wrapper.path))
 				.map(([name]) => `script "${name}"`);
-			const fileUsers = sources
-				.filter((source) => refersTo(source.text, source.path, wrapper.path))
-				.map((source) => source.path);
+			const fileUsers = sources.filter((source) => source.uses.has(wrapper.path)).map((source) => source.path);
 			// A wrapper that stays (customized, or kept above) still starts its runtime dependencies.
 			const runtimeUsers = wrappers
 				.filter(

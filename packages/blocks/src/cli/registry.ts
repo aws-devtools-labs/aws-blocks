@@ -481,8 +481,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
 			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
-			'text file other than Markdown docs in the app directory uses any more are deleted; a customized\n' +
-			'wrapper is never deleted, only reported.\n' +
+			'app file other than Markdown docs uses any more are deleted; a customized wrapper is never\n' +
+			'deleted, only reported. In a git repository the app files are the tracked and not-ignored ones;\n' +
+			'outside git, the files under the app directory other than node_modules and build output.\n' +
 			'It refuses a git working tree with uncommitted changes unless you pass --force.\n' +
 			'Exit code 1 means kept items remain for you to finish by hand; it is not a crash.',
 		flags: [
