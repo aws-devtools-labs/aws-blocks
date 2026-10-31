@@ -401,6 +401,11 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			break;
 		}
 		case 'list': {
+			if (args.length > 0) {
+				throw new ValueCliUsageError(
+					`Unexpected argument ${JSON.stringify(args[0])}: ${label} list takes no arguments.`,
+				);
+			}
 			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage, region: effRegion });
 			const scope = effStage ? ` (stage '${effStage}')` : '';
 			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${label} set <KEY> <value>`);
@@ -412,11 +417,16 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		}
 		case 'remove':
 		case 'rm': {
-			const [key] = args;
+			const [key, ...extra] = args;
 			if (!key)
 				throw new ValueCliUsageError(
 					`Usage: ${label} remove <KEY> [--force --yes] [--stage <name>] [--region <name>]`,
 				);
+			if (extra.length > 0) {
+				throw new ValueCliUsageError(
+					`Unexpected argument ${JSON.stringify(extra[0])}: ${label} remove takes one KEY.`,
+				);
+			}
 			// Every forced secret delete needs --yes: a stage name can't tell production
 			// apart reliably (`prod-us-east-1`, `prd`, `live`, …), and there is no undo.
 			if (force && kind === 'secret' && !yes) {
@@ -437,6 +447,16 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 	}
 }
 
+/** The options {@link runValueCli} reads; anything else that starts with `-` is refused. */
+const VALUE_CLI_OPTIONS = '--stage, --value-stdin, --prefix, --region, --force, --yes';
+
+/**
+ * Split argv into the options and the positionals. After `--`, every token is
+ * a positional, so a config value can start with `-` (`set KEY -- -1`).
+ *
+ * @throws {ValueCliUsageError} On an unknown option: it would otherwise become
+ * part of a value, or be ignored by `list` and `remove`.
+ */
 function extractFlags(argv: string[]): {
 	stage?: string;
 	valueStdin: boolean;
@@ -455,6 +475,10 @@ function extractFlags(argv: string[]): {
 	let yes = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
+		if (arg === '--') {
+			positional.push(...argv.slice(i + 1));
+			break;
+		}
 		if (arg === '--force') {
 			force = true;
 		} else if (arg === '--yes' || arg === '-y') {
@@ -480,6 +504,10 @@ function extractFlags(argv: string[]): {
 			}
 		} else if (arg.startsWith('--region=')) {
 			region = arg.slice('--region='.length);
+		} else if (arg.startsWith('-') && arg !== '-') {
+			throw new ValueCliUsageError(
+				`Unknown option ${JSON.stringify(arg)}. The options are ${VALUE_CLI_OPTIONS}; to pass a value that starts with "-", put it after "--" or use --value-stdin.`,
+			);
 		} else {
 			positional.push(arg);
 		}

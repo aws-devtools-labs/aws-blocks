@@ -93,6 +93,39 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 	void it('rejects an unknown subcommand', async () => {
 		await assert.rejects(runValueCli(['frobnicate'], { kind: 'secret' }), /Unknown subcommand/);
 	});
+
+	void it('refuses an unknown option before any store call, instead of taking it as part of the value', async () => {
+		for (const argv of [
+			['set', 'K', 'value', '--profile', 'p'],
+			['set', 'K', 'v', '--output', 'json'],
+			['list', '--no-input'],
+			['remove', 'K', '-q'],
+		]) {
+			await assert.rejects(
+				runValueCli(argv, { kind: 'config', label: 'blocks config' }),
+				(e: unknown) => e instanceof ValueCliUsageError && /^Unknown option "-/.test(e.message),
+				argv.join(' '),
+			);
+		}
+	});
+
+	void it('refuses an extra argument to list or remove before any store call', async () => {
+		await assert.rejects(
+			runValueCli(['list', 'extra'], { kind: 'secret', label: 'blocks secret' }),
+			(e: unknown) =>
+				e instanceof ValueCliUsageError && /"extra": blocks secret list takes no arguments/.test(e.message),
+		);
+		await assert.rejects(
+			runValueCli(['remove', 'K', 'extra'], { kind: 'config', label: 'blocks config' }),
+			(e: unknown) =>
+				e instanceof ValueCliUsageError && /"extra": blocks config remove takes one KEY/.test(e.message),
+		);
+	});
+
+	void it('takes every token after -- as a positional, so a value can start with "-"', async () => {
+		// The key check runs before any store call: "-1" reached it as the key, not as an option.
+		await assert.rejects(runValueCli(['set', '--', '-1', 'v'], { kind: 'config' }), /Invalid key "-1"/);
+	});
 });
 
 void describe('runValueCli() — kind from argv (single-bin style)', () => {
