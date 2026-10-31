@@ -136,7 +136,7 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
 2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
 3. For faster iteration, keep one dev server running and rerun tests against it:
-   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev &`.
+   - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the running server.
    - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
@@ -179,7 +179,7 @@ If either command stops with `CDK is not bootstrapped in Region <region> of acco
 
 Before deploying, both commands print `Deployment target: <credentials>, Region <region>`, where the credentials are for example `AWS profile <name>` or `access keys in AWS_ACCESS_KEY_ID`, then the account name and plan. When the credentials are the AWS-managed role of the new AWS sign-up experience, a link to `https://settings.aws.com/billing` follows; other accounts get no link. The deploy does not pause: if the credentials or Region are not the ones the user expects, stop the command (Ctrl-C) and ask. `Account name: not available` or `Account plan: not available` is not an error: the deploy continues. Never change a spend limit yourself. When the output has the billing link, give it to the user, and ask them to verify in AWS Settings that the project they manage matches the CLI deployment target. If the user signs in with `aws login`, the profile Region must be set to the project's Region before sign-in (`aws configure set region <region> --profile <name>`); after changing it, they run `aws login` again.
 
-On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`). Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
+On success `npm run deploy` prints one machine-readable line last — `BLOCKS_DEPLOYED url=<frontend> api=<backend>` (a backend-only app omits `url=`); with the background redirect above, look for it in `deploy.log`. Wait for that line — it confirms the deploy finished and gives the URLs, so there's no need to poll CloudFormation or hunt the URL out of the streamed output.
 
 `npm run sandbox:deploy` prints `BLOCKS_DEPLOYED api=<backend>` too. The typed client (`aws-blocks/client.js`) is generated before the deploy and `.blocks-sandbox/config.json` is written before the line, so once you see it the app is ready to run against the sandbox. To get the API URL alone in a script, run `npx --no -- blocks sandbox deploy --query apiUrl`.
 

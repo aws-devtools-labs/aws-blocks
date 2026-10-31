@@ -266,6 +266,23 @@ describe('create-blocks-app template metadata', () => {
     }
   });
 
+  it('AGENTS.md backgrounds long-running scripts into a log file that every template ignores', () => {
+    // A background `npm run dev &` without a redirect dies at its next log line once
+    // the agent's shell closes; the log it writes instead must not be committed.
+    const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
+    const recipes = guide.match(/`npm run [^`]*&`/g) ?? [];
+    assert.ok(recipes.some((recipe) => recipe.startsWith('`npm run dev ')), 'AGENTS.md has a background dev recipe');
+    for (const recipe of recipes) assert.match(recipe, / > [\w.-]+\.log 2>&1 &`$/, recipe);
+    const templatesDir = join(__dirname, '..', 'templates');
+    const missing: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const gitignorePath = join(templatesDir, entry.name, 'gitignore');
+      if (!entry.isDirectory() || !existsSync(gitignorePath)) continue;
+      if (!readFileSync(gitignorePath, 'utf-8').split('\n').includes('*.log')) missing.push(entry.name);
+    }
+    assert.deepStrictEqual(missing, []);
+  });
+
   it('every HTML template declares a UTF-8 charset', () => {
     // Without it, a host that sends `Content-Type: text/html` with no charset
     // (S3, most static servers) makes the browser decode the page as

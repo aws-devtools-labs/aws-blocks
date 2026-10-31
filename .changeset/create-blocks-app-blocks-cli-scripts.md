@@ -12,3 +12,7 @@ The dev server settings that `server.ts` used to hard-code are now in `package.j
 Three behaviours change with the CLI. `npm run destroy` now asks before it deletes the production stack, and without a terminal it needs `npm run destroy -- --yes`. `npm run sandbox:destroy` now asks before it deletes the sandbox stack when it runs in a terminal; `npm run sandbox:destroy -- --yes` skips the question, and without a terminal it runs without asking, as before. `npm run cleanup` now stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
 
 The scaffolded `AGENTS.md` describes the Blocks CLI (`--output json`, `--query`, `--yes` and the exit codes) and no longer says that `sandbox:deploy` generates the client after the deploy. The `@aws-blocks/core` README now shows how to set the dev server host with `blocks dev --host` or `package.json#blocks.dev.host`, and says that only `BLOCKS_DEV_HOST` opts the local `/realtime` WebSocket into another host; the CLI sets it from that host.
+
+Also in the scaffolded apps:
+
+- `AGENTS.md` backgrounds the dev server with `npm run dev > dev.log 2>&1 &`: without the redirect, a background dev server stops at its next log line once the shell that started it closes. Every template's `.gitignore` now ignores `*.log`, so `dev.log` and `deploy.log` are not committed.
