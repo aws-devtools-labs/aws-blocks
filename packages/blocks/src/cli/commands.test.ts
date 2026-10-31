@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,13 @@ function runnerOptions(spec: SpawnSpec, runner: RunnerName): unknown {
 	const at = spec.args.indexOf(runnerPath(runner));
 	assert.ok(at > 0, `${runner} runner was spawned: ${spec.args.join(' ')}`);
 	return JSON.parse(spec.args[at + 1]);
+}
+
+/** Record a sandbox id in `root`, as the first `blocks sandbox` does; returns `root`. */
+function withSandboxId(root: string): string {
+	mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+	writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
+	return root;
 }
 
 describe('passthrough commands', () => {
@@ -363,7 +370,7 @@ describe('lifecycle commands', () => {
 	});
 
 	it('runs sandbox destroy under --conditions=cdk without a prompt when not interactive', async () => {
-		const root = fixtureApp();
+		const root = withSandboxId(fixtureApp());
 		const run = await runCli(['sandbox', 'destroy'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
@@ -378,6 +385,19 @@ describe('lifecycle commands', () => {
 		});
 		assert.match(run.stderr, /production stack is not affected/);
 		assert.deepStrictEqual(run.prompts, []);
+	});
+
+	it('deletes nothing and creates no sandbox id when this machine has none', async () => {
+		const root = fixtureApp();
+		for (const argv of [['sandbox', 'destroy'], ['sandbox', 'destroy', '--yes']]) {
+			const run = await runCli(argv, { cwd: root, env: AWS_ENV, stdinIsTTY: true });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.deepStrictEqual(run.spawned, []);
+			assert.deepStrictEqual(run.prompts, []);
+			assert.match(run.stdout, /^No sandbox on this machine \(\.blocks-sandbox\/sandbox-id\.txt is missing\); nothing to delete\./);
+			assert.doesNotMatch(run.stdout, /destroyed/);
+			assert.ok(!existsSync(join(root, '.blocks-sandbox', 'sandbox-id.txt')));
+		}
 	});
 
 	it('forwards --wait-live as core reads it from argv', async () => {
@@ -441,7 +461,7 @@ describe('lifecycle commands', () => {
 	});
 
 	it('forwards --telemetry-file to every runner as core reads it, in either form and position', async () => {
-		const root = fixtureApp();
+		const root = withSandboxId(fixtureApp());
 		const file = join(root, 'events.json');
 		for (const argv of [
 			['dev', '--telemetry-file=events.json'],
@@ -535,7 +555,7 @@ describe('lifecycle commands', () => {
 	});
 
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
-		const cwd = fixtureApp();
+		const cwd = withSandboxId(fixtureApp());
 		for (const [argv, longRunning] of [
 			[['dev'], true],
 			[['sandbox'], true],
@@ -676,7 +696,7 @@ describe('destroy safety', () => {
 	});
 
 	it('exits 130 and deletes nothing on Ctrl-C at the destroy and sandbox destroy prompts', async () => {
-		const cwd = fixtureApp();
+		const cwd = withSandboxId(fixtureApp());
 		for (const argv of [['destroy'], ['sandbox', 'destroy']]) {
 			const run = await runCli(argv, { cwd, env: AWS_ENV, stdinIsTTY: true, answer: null });
 			assert.strictEqual(run.code, 130, argv.join(' '));
@@ -686,11 +706,18 @@ describe('destroy safety', () => {
 		}
 	});
 
-	it('runs with --yes and no prompt', async () => {
-		const run = await runCli(['destroy', '--yes'], { cwd: fixtureApp(), env: AWS_ENV });
+	it('runs with --yes and no prompt, naming the stack it expects to delete', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(run.prompts, []);
 		assert.strictEqual(run.spawned.length, 1);
+		// Core reports "nothing to delete" when this stack does not exist.
+		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'destroy'), {
+			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			projectRoot: root,
+			stackName: 'demo-prod',
+		});
 	});
 
 	it('names environment access keys that override AWS_PROFILE, and warns even with --quiet', async () => {

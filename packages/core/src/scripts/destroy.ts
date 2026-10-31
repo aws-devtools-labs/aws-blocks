@@ -4,6 +4,7 @@
 import { loadProductionEnv } from './ensure-secrets.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
@@ -13,6 +14,57 @@ import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDes
 export interface DestroyOptions {
   cdkAppPath: string;
   projectRoot: string;
+  /**
+   * The production stack the caller expects to delete, for example `<stackId>-prod`.
+   * When set, a stack that does not exist in the target account and Region is
+   * reported as "nothing to delete" instead of running `cdk destroy`, which
+   * treats a missing stack as a successful no-op.
+   */
+  stackName?: string;
+}
+
+/** The slice of a CloudFormation client that {@link stackExists} needs. */
+export interface DescribeStacksClient {
+  send(command: unknown): Promise<unknown>;
+}
+
+/**
+ * Whether CloudFormation has a stack named `stackName`: `false` only for the
+ * `ValidationError` "Stack with id … does not exist"; `undefined` when the
+ * request fails otherwise (for example AccessDenied), so the caller goes on and
+ * `cdk destroy` reports any real error.
+ */
+export async function stackExists(
+  cfn: DescribeStacksClient,
+  describeStacks: (stackName: string) => unknown,
+  stackName: string,
+): Promise<boolean | undefined> {
+  try {
+    await cfn.send(describeStacks(stackName));
+    return true;
+  } catch (error) {
+    const { name, message } = error instanceof Error ? error : { name: '', message: String(error) };
+    return name === 'ValidationError' && /does not exist/.test(message) ? false : undefined;
+  }
+}
+
+/**
+ * Look up `stackName` with the credentials and Region CDK destroys with (see
+ * `assertAwsCredentials`): CDK uses environment access keys before AWS_PROFILE,
+ * and SDK clients do not read `cdk.json`. `undefined` without a Region.
+ */
+async function productionStackExists(projectRoot: string, stackName: string): Promise<boolean | undefined> {
+  const { region, profile } = await resolveDeploymentTarget({ projectRoot });
+  if (!region) return undefined;
+  // Loaded only when a destroy runs, like the other SDK clients of the scripts.
+  const { CloudFormationClient, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+  const credentials = profile ? undefined : environmentAccessKeys();
+  const cfn = new CloudFormationClient({ region, profile, ...(credentials ? { credentials } : {}), maxAttempts: 2 });
+  try {
+    return await stackExists(cfn, (StackName) => new DescribeStacksCommand({ StackName }), stackName);
+  } finally {
+    cfn.destroy();
+  }
 }
 
 /**
@@ -58,6 +110,12 @@ export async function destroy(options: DestroyOptions) {
     // retry loop is for transient teardown blockers (bucket-blocked delete,
     // DeleteRestApi 429 throttle, ENI detach), never auth.
     await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot, accountDetails: false });
+
+    if (options.stackName && (await productionStackExists(options.projectRoot, options.stackName)) === false) {
+      const { region } = await resolveDeploymentTarget({ projectRoot: options.projectRoot });
+      console.log(`\nℹ️  There is no stack ${options.stackName} in Region ${region}; nothing to delete.`);
+      return;
+    }
 
     const cdkEnv = {
       ...process.env,

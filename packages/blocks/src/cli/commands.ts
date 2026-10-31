@@ -401,10 +401,24 @@ export function sandboxDeploy(ctx: Context): Promise<number> {
 export async function sandboxDestroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
-	const stack = await sandboxStack(ctx, root);
+	if (!existsSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'))) {
+		// The CDK app would create a sandbox id, and `cdk destroy` of a stack that does not exist succeeds.
+		ctx.out.text(
+			'No sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing); nothing to delete.\n' +
+				'A sandbox deployed from another clone or before a `git clean` keeps running: delete its stack in the AWS console.',
+		);
+		return ExitCode.Ok;
+	}
+	const core = await ctx.core();
+	let stack: string;
+	try {
+		stack = core.getStackName({ sandbox: true, projectRoot: root });
+	} catch (error) {
+		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
+	}
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'sandbox'));
-	const where = [`stack: ${stack ?? '(no sandbox id on this machine)'}`, label, `project: ${root}`];
-	ctx.out.progress(`Deleting your sandbox stack ${stack ?? '(no sandbox id on this machine)'}; ${label}.`);
+	const where = [`stack: ${stack}`, label, `project: ${root}`];
+	ctx.out.progress(`Deleting your sandbox stack ${stack}; ${label}.`);
 	ctx.out.progress('The production stack is not affected.');
 	// A sandbox is disposable, and scripts run `sandbox destroy` unattended: ask only in a terminal.
 	const declined = ctx.interactive
@@ -472,7 +486,7 @@ export async function destroy(ctx: Context): Promise<number> {
 	return runRunner(ctx, {
 		runner: 'destroy',
 		operation: 'blocks destroy',
-		options: { cdkAppPath, projectRoot: root },
+		options: { cdkAppPath, projectRoot: root, stackName: stack },
 		where,
 	});
 }

@@ -3,11 +3,15 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { buildSandboxDeployArgs } from './sandbox.js';
+import { stackExists } from './destroy.js';
 
 // The sandbox destroy must select the same stacks the sandbox deploy creates.
 // (The production destroy follows in a separate change, together with its
@@ -111,5 +115,75 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     } finally {
       rmSync(join(root, '.env.production'), { force: true });
     }
+  });
+});
+
+describe('the production destroy of a stack that does not exist', { skip }, () => {
+  /** Loopback STS and CloudFormation: GetCallerIdentity succeeds; DescribeStacks knows only `live-prod`. */
+  let server: Server;
+  let endpoint: string;
+  before(async () => {
+    server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        const params = new URLSearchParams(body);
+        res.setHeader('content-type', 'text/xml');
+        if (params.get('Action') === 'GetCallerIdentity') {
+          res.end('<GetCallerIdentityResponse><GetCallerIdentityResult><Arn>arn:aws:iam::111111111111:user/u</Arn><Account>111111111111</Account></GetCallerIdentityResult></GetCallerIdentityResponse>');
+        } else if (params.get('StackName') === 'live-prod') {
+          res.end('<DescribeStacksResponse><DescribeStacksResult><Stacks><member><StackName>live-prod</StackName><StackStatus>UPDATE_COMPLETE</StackStatus><CreationTime>2026-01-01T00:00:00Z</CreationTime></member></Stacks></DescribeStacksResult></DescribeStacksResponse>');
+        } else {
+          res.statusCode = 400;
+          res.end(`<ErrorResponse><Error><Type>Sender</Type><Code>ValidationError</Code><Message>Stack with id ${params.get('StackName')} does not exist</Message></Error></ErrorResponse>`);
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  /** Run the production destroy in a child; the server must keep answering, so not execFileSync. */
+  async function runDestroy(stackName: string): Promise<{ stdout: string; cdkRan: boolean }> {
+    rmSync(argvLog, { force: true });
+    const moduleUrl = new URL('./destroy.js', import.meta.url).href;
+    const options = JSON.stringify({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: root, stackName });
+    const script = `const mod = await import(${JSON.stringify(moduleUrl)}); await mod.destroy(${options});`;
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      env: {
+        PATH: join(root, 'bin'),
+        HOME: root,
+        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        AWS_REGION: 'us-east-1',
+        AWS_ACCESS_KEY_ID: 'AKIDTEST',
+        AWS_SECRET_ACCESS_KEY: 'secret',
+        AWS_ENDPOINT_URL_STS: endpoint,
+        AWS_ENDPOINT_URL_CLOUDFORMATION: endpoint,
+      },
+      timeout: 60_000,
+    });
+    return { stdout, cdkRan: existsSync(argvLog) };
+  }
+
+  it('says there is nothing to delete, and runs no cdk destroy', async () => {
+    const missing = await runDestroy('gone-prod');
+    assert.match(missing.stdout, /There is no stack gone-prod in Region us-east-1; nothing to delete\./);
+    assert.doesNotMatch(missing.stdout, /destroyed/);
+    assert.strictEqual(missing.cdkRan, false);
+    const live = await runDestroy('live-prod');
+    assert.strictEqual(live.cdkRan, true);
+    assert.match(live.stdout, /Production stack destroyed/);
+  });
+
+  it('reads only "does not exist" as a missing stack', async () => {
+    const failing = (error: Error) => ({ send: async () => Promise.reject(error) });
+    const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+    const describe = (name: string) => name;
+    assert.strictEqual(await stackExists({ send: async () => ({}) }, describe, 's'), true);
+    assert.strictEqual(await stackExists(failing(named('ValidationError', 'Stack with id s does not exist')), describe, 's'), false);
+    assert.strictEqual(await stackExists(failing(named('AccessDenied', 'not authorized')), describe, 's'), undefined);
+    assert.strictEqual(await stackExists(failing(named('ValidationError', 'Rate exceeded')), describe, 's'), undefined);
   });
 });
