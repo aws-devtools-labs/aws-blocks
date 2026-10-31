@@ -482,16 +482,19 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
 			'app file other than Markdown docs uses any more are deleted; a customized wrapper is never\n' +
-			'deleted, only reported. In a git repository the app files are the tracked and not-ignored ones;\n' +
-			'outside git, the files under the app directory other than node_modules and build output.\n' +
-			'It refuses a git working tree with uncommitted changes unless you pass --force.\n' +
+			'deleted, only reported. In a git repository the app files are the tracked and not-ignored ones,\n' +
+			'and the files of a submodule or nested repository inside the app; outside git, or where git does\n' +
+			'not track the app, the files under the app directory other than node_modules and build output.\n' +
+			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +
+			'does not track (a parent repository ignores its directory), since git could not undo the\n' +
+			'changes, and a repository that git fails to read.\n' +
 			'Exit code 1 means kept items remain for you to finish by hand; it is not a crash.',
 		flags: [
 			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
 			{
 				name: 'force',
 				type: 'boolean',
-				description: 'Run even when the git working tree has uncommitted changes',
+				description: 'Run even with uncommitted changes, or where git does not track the app or fails to read it',
 			},
 		],
 		json: ['changed', 'removed', 'kept', 'scriptsRewritten', 'devConfig'],
