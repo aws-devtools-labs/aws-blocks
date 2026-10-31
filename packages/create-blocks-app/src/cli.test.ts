@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
@@ -9,6 +9,18 @@ import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
+
+/**
+ * The dev server settings that `blocks dev` resolves for an app, from the built
+ * `@aws-blocks/blocks` CLI in this repository: what the scaffolded `blocks.dev` does.
+ */
+async function resolvedDevConfig(root: string): Promise<{ frontendCommand?: string; port?: number; source: string }> {
+  // A runtime path, not a static import: `@aws-blocks/blocks` exports no `cli/config`, and
+  // create-blocks-app does not depend on it, so the test loads the sibling package's build.
+  const config = pathToFileURL(join(__dirname, '../../blocks/dist/cli/config.js')).href;
+  const { resolveDevConfig } = await import(config);
+  return resolveDevConfig(root);
+}
 
 function run(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
   try {
@@ -160,23 +172,75 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
   });
 
-  it('every deployable template has a one-shot sandbox:deploy script', () => {
-    // `npm run sandbox` keeps watching and never exits, so scripts and CI need
-    // a variant that deploys once and returns: the same sandbox script with
-    // --deploy-only.
+  it('every deployable template runs its lifecycle scripts through the blocks CLI', () => {
+    // The npm script names stay the same; each one is a thin alias of a `blocks`
+    // command, so no template ships aws-blocks/scripts/*.ts wrappers any more.
+    // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses.
+    const expected: Record<string, string> = {
+      dev: 'blocks dev',
+      'dev:server': 'blocks dev',
+      'dev:stop': 'blocks dev stop',
+      sandbox: 'blocks sandbox',
+      'sandbox:deploy': 'blocks sandbox deploy',
+      'sandbox:destroy': 'blocks sandbox destroy',
+      'sandbox:console': 'blocks sandbox console',
+      cleanup: 'blocks dev stop --all',
+      deploy: 'blocks deploy',
+      destroy: 'blocks destroy',
+      secret: 'blocks secret',
+      typegen: 'blocks generate types',
+      spec: 'blocks generate spec',
+      vendorize: 'blocks vendorize',
+    };
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];
     for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const pkgPath = join(templatesDir, entry.name, 'package.json');
       if (!existsSync(pkgPath)) continue;
-      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      const scripts: Record<string, string> = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
       if (!scripts.sandbox) continue;
-      if (scripts['sandbox:deploy'] !== `${scripts.sandbox} --deploy-only`) {
-        problems.push(`${entry.name}: "sandbox:deploy" should be "${scripts.sandbox} --deploy-only"`);
+      for (const name of ['dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:destroy', 'deploy', 'destroy']) {
+        if (!(name in scripts)) problems.push(`${entry.name}: missing "${name}"`);
+      }
+      for (const [name, value] of Object.entries(scripts)) {
+        if (name in expected && value !== expected[name]) {
+          problems.push(`${entry.name}: "${name}" should be "${expected[name]}", not "${value}"`);
+        }
+        if (value.includes('aws-blocks/scripts')) problems.push(`${entry.name}: "${name}" still runs ${value}`);
+      }
+      if (existsSync(join(templatesDir, entry.name, 'aws-blocks', 'scripts'))) {
+        problems.push(`${entry.name}: still ships aws-blocks/scripts/`);
       }
     }
     assert.deepStrictEqual(problems, []);
+  });
+
+  it('every deployable template sets its dev server in package.json "blocks.dev"', () => {
+    // `blocks dev` and the sandbox's dev server read these settings; they replace
+    // the options the removed aws-blocks/scripts/server.ts passed to startDevServer.
+    const vite = { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 };
+    const expected: Record<string, unknown> = {
+      'api-only': { port: 3001, frontend: false },
+      backend: { port: 3001, frontend: false },
+      sql: { port: 3001, frontend: false },
+      nextjs: { frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100', frontendPort: 3100 },
+      'auth-cognito': vite,
+      bare: vite,
+      default: vite,
+      demo: vite,
+      react: vite,
+    };
+    const templatesDir = join(__dirname, '..', 'templates');
+    const actual: Record<string, unknown> = {};
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (pkg.scripts?.sandbox) actual[entry.name] = pkg.blocks?.dev;
+    }
+    assert.deepStrictEqual(actual, expected);
   });
 
   it('every HTML template declares a UTF-8 charset', () => {
@@ -209,39 +273,11 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
   });
 
-  it('every template sandbox script forwards --deploy-only to startSandbox and exits', () => {
-    // Run each template's real aws-blocks/scripts/sandbox.ts against a stubbed
-    // `@aws-blocks/blocks/scripts` that records the options it receives. The
-    // stub resolves at once for deployOnly and never resolves otherwise (like
-    // watch mode), so a script that drops the flag would also hang until the
-    // timeout. The script uses no TypeScript-only syntax, so plain node runs it.
-    const templatesDir = join(__dirname, '..', 'templates');
-    const problems: string[] = [];
-    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const scriptPath = join(templatesDir, entry.name, 'aws-blocks', 'scripts', 'sandbox.ts');
-      if (!existsSync(scriptPath)) continue;
-      const dir = mkdtempSync(join(tmpdir(), `cba-sandbox-${entry.name}-`));
-      try {
-        const stubDir = join(dir, 'node_modules', '@aws-blocks', 'blocks');
-        mkdirSync(stubDir, { recursive: true });
-        writeFileSync(join(stubDir, 'package.json'), JSON.stringify({ name: '@aws-blocks/blocks', type: 'module', exports: { './scripts': './scripts.js' } }));
-        writeFileSync(
-          join(stubDir, 'scripts.js'),
-          'export async function startSandbox(o) { console.log("deployOnly=" + JSON.stringify(o.deployOnly)); if (!o.deployOnly) await new Promise(() => setInterval(() => {}, 1000)); return "https://api.example"; }\n',
-        );
-        mkdirSync(join(dir, 'aws-blocks', 'scripts'), { recursive: true });
-        const runnable = join(dir, 'aws-blocks', 'scripts', 'sandbox.mjs');
-        writeFileSync(runnable, readFileSync(scriptPath, 'utf-8'));
-        const stdout = execFileSync(process.execPath, [runnable, '--deploy-only'], { cwd: dir, encoding: 'utf-8', timeout: 15000 });
-        if (!stdout.includes('deployOnly=true')) problems.push(`${entry.name}: startSandbox did not get deployOnly: true (${stdout.trim()})`);
-      } catch (err: any) {
-        problems.push(`${entry.name}: ${err.signal === 'SIGTERM' ? 'did not exit (deployOnly not forwarded)' : err.message}`);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    }
-    assert.deepStrictEqual(problems, []);
+  it('the amplify overlay keeps only the generator the blocks CLI does not cover', () => {
+    // `blocks generate client` writes the standard client; the overlay's client
+    // needs an Amplify preamble (auth middleware, API URL from amplify_outputs.json).
+    const scriptsDir = join(__dirname, '..', 'templates', 'amplify', 'aws-blocks', 'scripts');
+    assert.deepStrictEqual(readdirSync(scriptsDir), ['generate-client.ts']);
   });
 });
 
@@ -301,10 +337,14 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('detects Amplify Gen 2 project over plain project', () => {
+  it('detects Amplify Gen 2 project over plain project, and keeps its Blocks dev server backend-only', async () => {
     const tmpDir = join(__dirname, '../.test-autodetect-amplify');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
-    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));
+    // An Amplify app usually has its own frontend dependency, which `blocks dev` would otherwise start.
+    writeFileSync(
+      join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'amplify-app', version: '1.0.0', devDependencies: { vite: '*', next: '*' } }),
+    );
     writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
@@ -312,14 +352,18 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
       assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
       const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      const serverPath = join(tmpDir, 'aws-blocks', 'scripts', 'server.ts');
       const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
       const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
-      assert.strictEqual(packageJson.scripts['blocks:dev'], 'tsx watch aws-blocks/scripts/server.ts');
-      assert.strictEqual(packageJson.scripts['blocks:stop'], 'tsx aws-blocks/scripts/stop.ts');
-      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
-      assert.ok(existsSync(serverPath));
-      assert.match(readFileSync(serverPath, 'utf-8'), /startDevServer/);
+      assert.strictEqual(packageJson.scripts['blocks:dev'], 'blocks dev');
+      assert.strictEqual(packageJson.scripts['blocks:stop'], 'blocks dev stop');
+      // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
+      // even with vite and next installed: the Amplify app runs its own frontend.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      const dev = await resolvedDevConfig(tmpDir);
+      assert.strictEqual(dev.frontendCommand, undefined);
+      assert.strictEqual(dev.port, 3001);
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
       assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
@@ -562,11 +606,34 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['.', '--template', 'nextjs', '-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
-      assert.match(serverContent, /next dev/, 'nextjs template should start the Next.js dev server');
-      assert.ok(!serverContent.includes('vite'), 'nextjs template should not start a Vite dev server');
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      const frontendCommand: string = pkg.blocks?.dev?.frontendCommand ?? '';
+      assert.match(frontendCommand, /next dev/, 'nextjs template should start the Next.js dev server');
+      assert.ok(!frontendCommand.includes('vite'), 'nextjs template should not start a Vite dev server');
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('keeps a backend-only template backend-only in an existing Vite or Next.js project', async () => {
+    for (const template of ['backend', 'api-only', 'sql']) {
+      const tmpDir = join(__dirname, `../.test-existing-backend-only-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(
+        join(tmpDir, 'package.json'),
+        JSON.stringify({ name: 'my-web-app', version: '1.0.0', dependencies: { next: '*' }, devDependencies: { vite: '*' } }),
+      );
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+        assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } }, template);
+        const dev = await resolvedDevConfig(tmpDir);
+        assert.strictEqual(dev.frontendCommand, undefined, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
     }
   });
 
@@ -577,12 +644,26 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['.', '-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
-      assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
       // The existing-project path must also wire the sanctioned stop command.
       const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      assert.strictEqual(pkg.scripts['dev:stop'], 'tsx aws-blocks/scripts/stop.ts');
-      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'scripts', 'stop.ts')));
+      assert.match(pkg.blocks?.dev?.frontendCommand ?? '', /vite/, 'default template should start the Vite dev server');
+      assert.strictEqual(pkg.scripts['dev:server'], 'blocks dev');
+      assert.strictEqual(pkg.scripts['dev:stop'], 'blocks dev stop');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('keeps an existing project\'s own "blocks.dev" settings', () => {
+    const tmpDir = join(__dirname, '../.test-existing-blocks-dev');
+    mkdirSync(tmpDir, { recursive: true });
+    const own = { port: 4000, frontendCommand: 'npx astro dev --port 4100', frontendPort: 4100 };
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-astro-app', version: '1.0.0', blocks: { dev: own } }));
+    try {
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.deepStrictEqual(pkg.blocks, { dev: own });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -605,7 +686,7 @@ describe('create-blocks-app auto-detection', () => {
       const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
       // Only deployable templates (those with a sandbox lifecycle) are expected
       // to carry vendorize; e.g. the amplify template has no sandbox/deploy.
-      if (scripts.sandbox && scripts.vendorize !== 'blocks-vendorize') {
+      if (scripts.sandbox && scripts.vendorize !== 'blocks vendorize') {
         missing.push(name);
       }
     }

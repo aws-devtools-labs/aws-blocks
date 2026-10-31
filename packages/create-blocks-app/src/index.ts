@@ -125,6 +125,7 @@ async function copySharedResources(targetDir: string): Promise<void> {
  * - Adding "aws-blocks" to workspaces (array or Yarn Classic object format)
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
+ * - Adding the `blocks` CLI settings (`package.json#blocks`) when the project has none
  * - Patching .gitignore
  * - Monorepo detection and file: path rewriting
  * - Running npm install
@@ -133,10 +134,12 @@ async function addBlocksWorkspace(targetDir: string, options: {
   devDeps: Record<string, string>;
   deps: Record<string, string>;
   scripts: Record<string, string>;
+  /** `package.json#blocks`, read by the `blocks` CLI (for example `{ dev: { port: 3001 } }`). */
+  blocksConfig?: Record<string, unknown>;
   gitignoreEntries: string[];
   skipInstall?: boolean;
 }): Promise<void> {
-  const { devDeps, deps, scripts, gitignoreEntries, skipInstall } = options;
+  const { devDeps, deps, scripts, blocksConfig, gitignoreEntries, skipInstall } = options;
 
   // Modify package.json
   const pkgPath = join(targetDir, 'package.json');
@@ -181,6 +184,14 @@ async function addBlocksWorkspace(targetDir: string, options: {
   if (!pkg.scripts) pkg.scripts = {};
   for (const [name, cmd] of Object.entries(scripts)) {
     if (!pkg.scripts[name]) pkg.scripts[name] = cmd;
+  }
+
+  // Add the `blocks` CLI settings, without overriding any the project already has
+  if (blocksConfig) {
+    if (!pkg.blocks || typeof pkg.blocks !== 'object') pkg.blocks = {};
+    for (const [key, value] of Object.entries(blocksConfig)) {
+      if (pkg.blocks[key] === undefined) pkg.blocks[key] = value;
+    }
   }
 
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
@@ -403,6 +414,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   }
   console.log(`  npm run dev`);
   console.log(`\nThen open http://localhost:3000`);
+  console.log(`\nEvery npm script calls the blocks CLI; run \`npx --no -- blocks --help\` to see all commands.`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 
@@ -495,10 +507,15 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     scripts: {
       'sandbox': 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox',
       'sandbox:delete': 'cross-env NODE_OPTIONS="--conditions=cdk" npx ampx sandbox delete --yes',
-      'blocks:dev': 'tsx watch aws-blocks/scripts/server.ts',
-      'blocks:stop': 'tsx aws-blocks/scripts/stop.ts',
+      'blocks:dev': 'blocks dev',
+      'blocks:stop': 'blocks dev stop',
+      // The CLI's `blocks generate client` has no Amplify preamble (auth middleware and
+      // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
     },
+    // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
+    // so `"frontend": false` stops `blocks dev` from detecting the app's vite or next.
+    blocksConfig: { dev: { port: 3001, frontend: false } },
     gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
   });
@@ -611,9 +628,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the requested template so framework-specific files
-  // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
-  // user's project.
+  // 1. Copy aws-blocks/ from the requested template. The template's
+  // `package.json#blocks.dev` (below) carries its frontend dev server — `next dev`
+  // vs `vite` — so `blocks dev` matches the user's project.
   const templateDir = join(__dirname, '../templates', templateName);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
@@ -658,14 +675,15 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
     },
     scripts: {
-      'sandbox': 'tsx aws-blocks/scripts/sandbox.ts',
-      'sandbox:destroy': 'tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts',
-      'sandbox:console': 'tsx aws-blocks/scripts/console.ts',
-      'deploy': 'tsx aws-blocks/scripts/deploy.ts',
-      'destroy': 'tsx aws-blocks/scripts/destroy.ts',
-      'dev:server': 'tsx watch aws-blocks/scripts/server.ts',
-      'dev:stop': 'tsx aws-blocks/scripts/stop.ts',
+      'sandbox': 'blocks sandbox',
+      'sandbox:destroy': 'blocks sandbox destroy',
+      'sandbox:console': 'blocks sandbox console',
+      'deploy': 'blocks deploy',
+      'destroy': 'blocks destroy',
+      'dev:server': 'blocks dev',
+      'dev:stop': 'blocks dev stop',
     },
+    blocksConfig: templatePkg.blocks,
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
   });
@@ -674,6 +692,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('Next steps:');
   console.log('  npm run sandbox         # Deploy backend to your AWS sandbox');
   console.log('  npm run dev:server      # Run local dev server');
+  console.log('  npx --no -- blocks --help  # Every command of the blocks CLI (--no: never install from npm)');
   console.log('');
   console.log('Import your API in frontend code:');
   console.log('  import { api } from \'aws-blocks\'');

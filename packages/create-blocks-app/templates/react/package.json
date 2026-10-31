@@ -12,24 +12,30 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spec": "blocks-generate-spec",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "spec": "blocks generate spec",
+    "dev:server": "blocks dev",
+    "dev": "blocks dev",
+    "dev:stop": "blocks dev stop",
+    "sandbox": "blocks sandbox",
+    "sandbox:deploy": "blocks sandbox deploy",
+    "sandbox:destroy": "blocks sandbox destroy",
+    "sandbox:console": "blocks sandbox console",
+    "cleanup": "blocks dev stop --all",
     "prebuild": "blocks-generate-client",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "secret": "tsx aws-blocks/scripts/secret.ts",
-    "typegen": "tsx aws-blocks/scripts/typegen.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "deploy": "blocks deploy",
+    "secret": "blocks secret",
+    "typegen": "blocks generate types",
+    "destroy": "blocks destroy",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "vendorize": "blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "frontendCommand": "npx vite --port 3100 --strictPort",
+      "frontendPort": 3100
+    }
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

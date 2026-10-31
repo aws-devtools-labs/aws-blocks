@@ -44,13 +44,21 @@ building an API for a client, not learning from an empty backend.
 ```bash
 npm run typecheck   # Check TypeScript types (run after code changes)
 npm run dev         # Local dev server on http://localhost:3001 (long-running)
+npm run dev:stop    # Stop the dev server this app started
 npm run sandbox     # Deploy to AWS sandbox
 npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
-npm run sandbox:destroy  # Tear down the AWS sandbox stack
-npm run destroy          # Tear down the production stack
+npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
+npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
+npm run secret -- set KEY # Set a secret (also list, remove KEY)
+npm run typegen          # Regenerate secret/config key types (-- --check in CI)
 ```
+
+Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
+The dev server settings (port, frontend command) are in `package.json` under `"blocks": { "dev": … }`.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ### RPC endpoint (local dev)
 

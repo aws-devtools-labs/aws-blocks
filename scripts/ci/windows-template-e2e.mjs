@@ -39,10 +39,17 @@ const teardownFailures = [];
  */
 function runTeardown(cmd, args, opts = {}) {
   console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? ROOT})`);
+  let failure;
   try {
-    runSpawn(cmd, args, opts, ROOT, { log: false });
+    // runSpawn returns the spawnSync result and does not throw on a failed command.
+    const r = runSpawn(cmd, args, opts, ROOT, { log: false });
+    if (r.error) failure = r.error.message;
+    else if (r.status !== 0) failure = r.status === null ? `signal ${r.signal}` : `exit code ${r.status}`;
   } catch (e) {
-    const failure = `${cmd} ${args.join(' ')}: ${e?.message ?? e}`;
+    failure = e?.message ?? String(e);
+  }
+  if (failure !== undefined) {
+    failure = `${cmd} ${args.join(' ')}: ${failure}`;
     teardownFailures.push(failure);
     console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
   }
@@ -134,7 +141,8 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    runTeardown('npm', ['run', 'destroy'], inApp);
+    // `blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    runTeardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 
   if (teardownFailures.length > 0) {
