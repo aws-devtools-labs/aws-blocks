@@ -696,7 +696,8 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
   await addBlocksWorkspace(targetDir, {
-    deps: { '@aws-blocks/blocks': '*' },
+    // The copied aws-blocks/ backend validates its API input with zod, at the template's version.
+    deps: { '@aws-blocks/blocks': '*', ...(templatePkg.dependencies?.zod && { zod: templatePkg.dependencies.zod }) },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',

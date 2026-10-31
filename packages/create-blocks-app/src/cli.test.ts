@@ -738,6 +738,34 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('declares zod when the backend it adds to an existing project imports it', () => {
+    // Otherwise `import { z } from 'zod'` resolves only when some other package happens to hoist zod.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const importsZod = (dir: string) =>
+      readdirSync(dir, { recursive: true, encoding: 'utf-8' })
+        .filter((file) => file.endsWith('.ts'))
+        .some((file) => /from 'zod'/.test(readFileSync(join(dir, file), 'utf-8')));
+    const checked: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const backendDir = join(templatesDir, entry.name, 'aws-blocks');
+      if (!entry.isDirectory() || entry.name === 'amplify' || !existsSync(backendDir) || !importsZod(backendDir)) continue;
+      const tmpDir = join(__dirname, `../.test-existing-zod-${entry.name}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-app', version: '1.0.0' }));
+      try {
+        const result = run(['.', '--template', entry.name, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const zod = JSON.parse(readFileSync(join(templatesDir, entry.name, 'package.json'), 'utf-8')).dependencies?.zod;
+        assert.ok(zod, `${entry.name} imports zod without declaring it`);
+        assert.strictEqual(JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8')).dependencies?.zod, zod, entry.name);
+        checked.push(entry.name);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+    assert.ok(checked.includes('default'), `checked: ${checked.join(', ')}`);
+  });
+
   it('defaults to the default template when no --template is given for an existing project', () => {
     const tmpDir = join(__dirname, '../.test-existing-default-template');
     mkdirSync(tmpDir, { recursive: true });
