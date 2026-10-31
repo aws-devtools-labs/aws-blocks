@@ -8,11 +8,9 @@
  */
 
 import { type DevServerOptions, startDevServer } from '@aws-blocks/core/scripts';
+import { exitWithError } from './fail.js';
 import { DEV_OPTIONS_ENV } from './launch.js';
 
 const options = JSON.parse(process.env[DEV_OPTIONS_ENV] ?? '{}') as DevServerOptions;
 
-startDevServer(options).catch((error) => {
-	console.error(error);
-	process.exit(1);
-});
+startDevServer(options).catch(exitWithError);

@@ -10,6 +10,10 @@
  *       <where: command, stack, account/Region when relevant>
  *     Try: <next step, when known>
  *     Run with --verbose for the full tool output, or --debug for a stack trace.
+ *
+ * The last line names only what would add something: `--verbose` after a
+ * lifecycle runner (core prints more at that level), `--debug` when there is a
+ * stack trace to show.
  */
 
 /** Process exit codes. */
@@ -35,6 +39,11 @@ export interface CliErrorDetails {
 	exitCode?: ExitCodeValue;
 	/** The underlying error, printed with `--debug`. */
 	cause?: unknown;
+	/**
+	 * A lifecycle runner failed: its output is core's, which `--verbose` extends,
+	 * and it printed its own stack trace with `--debug`.
+	 */
+	runner?: boolean;
 }
 
 /** An error the CLI reports in its own format. */
@@ -43,6 +52,7 @@ export class CliError extends Error {
 	readonly hint?: string;
 	readonly exitCode: ExitCodeValue;
 	readonly underlying?: unknown;
+	readonly runner: boolean;
 
 	constructor(message: string, details: CliErrorDetails = {}) {
 		super(message);
@@ -52,6 +62,7 @@ export class CliError extends Error {
 		this.exitCode = details.exitCode ?? ExitCode.Failure;
 		// Kept off `cause` so that a serialized error never carries it.
 		this.underlying = details.cause;
+		this.runner = details.runner === true;
 	}
 }
 
@@ -79,15 +90,20 @@ export function formatError(error: unknown, options: FormatErrorOptions): string
 	for (const where of cli?.where ?? []) lines.push(`  ${where}`);
 	if (cli?.hint) lines.push(`Try: ${cli.hint}`);
 	const usage = cli?.exitCode === ExitCode.Usage;
+	// The stack of what went wrong: the underlying error's, else the error's own,
+	// except for a usage error (nothing broke) or a runner (it printed its own).
+	const source = cli ? (cli.underlying ?? (usage || cli.runner ? undefined : cli)) : error;
+	const stack = source instanceof Error ? source.stack : undefined;
 	if (options.debug) {
-		const source = cli ? cli.underlying : error;
-		if (source instanceof Error && source.stack) lines.push(source.stack);
-	} else if (!usage) {
+		if (stack) lines.push(stack);
+	} else if (cli?.runner) {
 		lines.push(
 			options.verbose
 				? 'Run with --debug for a stack trace.'
 				: 'Run with --verbose for the full tool output, or --debug for a stack trace.',
 		);
+	} else if (!usage && (!cli || cli.underlying instanceof Error)) {
+		lines.push('Run with --debug for a stack trace.');
 	}
 	return `${lines.join('\n')}\n`;
 }

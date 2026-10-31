@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as core from '@aws-blocks/core/scripts';
+import { exitWithError } from './fail.js';
 import { type DeployedOutputs, recordLastDeploy } from './last-deploy.js';
 
 const options = JSON.parse(process.argv[2]) as core.SandboxOptions;
@@ -19,8 +20,7 @@ let apiUrl: string | undefined;
 try {
 	apiUrl = await core.startSandbox(options);
 } catch (error) {
-	console.error(error);
-	process.exit(1);
+	exitWithError(error);
 }
 if (options.deployOnly && apiUrl && !process.exitCode) {
 	try {

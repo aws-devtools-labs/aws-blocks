@@ -383,7 +383,10 @@ describe('lifecycle commands', () => {
 			assert.strictEqual(run.code, expected, JSON.stringify(result));
 		}
 		const failed = await runCli(['vendorize', 'x'], { cwd, onSpawn: () => ({ code: 7 }) });
-		assert.match(failed.stderr, /^Error: blocks vendorize failed \(exit code 7\)\.\n {2}project: /);
+		assert.match(
+			failed.stderr,
+			/^Error: blocks vendorize failed: blocks-vendorize exited with code 7; its output is above\.\n {2}project: /,
+		);
 	});
 
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
@@ -605,7 +608,7 @@ describe('verbose echo', () => {
 			{ cwd: fixtureApp() },
 		);
 		assert.strictEqual(run.code, 0, run.stderr);
-		assert.match(run.stderr, /> .*migrate postgres:\/\/admin:\*\*\*@db\.example\.com\/app --url \*\*\*/);
+		assert.match(run.stderr, /> .*migrate 'postgres:\/\/admin:\*\*\*@db\.example\.com\/app' --url '\*\*\*'/);
 		assert.doesNotMatch(run.stderr, /hunter2|u:pw/);
 		// The child still gets the real arguments.
 		assert.deepStrictEqual(run.spawned[0].args.slice(-3), [
@@ -613,6 +616,74 @@ describe('verbose echo', () => {
 			'--url',
 			'postgres://u:pw@h/db',
 		]);
+	});
+
+	it('quotes the words of the echoed command line that a shell would split', async () => {
+		const root = join(fixtureApp(), 'app x');
+		mkdirSync(join(root, 'aws-blocks'), { recursive: true });
+		writeFileSync(join(root, 'package.json'), '{}');
+		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
+		const run = await runCli(['-v', 'generate', 'spec'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const options = JSON.stringify({
+			backendPath: join(root, 'aws-blocks', 'index.ts'),
+			outputPath: join(root, 'aws-blocks', 'blocks.spec.json'),
+		});
+		assert.ok(run.stderr.includes(` '${options}'`), run.stderr);
+		assert.doesNotMatch(run.stderr, / \{"backendPath"/);
+	});
+});
+
+describe('error format', () => {
+	it('offers --verbose only after a runner, and --debug only when there is a stack trace', async () => {
+		const root = fixtureApp();
+		const runner = await runCli(['deploy'], { cwd: root, env: AWS_ENV, onSpawn: () => ({ code: 1 }) });
+		assert.strictEqual(runner.code, 1);
+		assert.match(
+			runner.stderr,
+			/\nError: blocks deploy failed \(exit code 1\)\.\n(.*\n)*Run with --verbose for the full tool output, or --debug for a stack trace\.\n$/,
+		);
+		// A tool such as bb-data printed its own error; the CLI names it, and --verbose adds nothing.
+		const tool = await runCli(['db', 'status'], { cwd: root, onSpawn: () => ({ code: 1 }) });
+		assert.strictEqual(tool.code, 1);
+		assert.strictEqual(
+			tool.stderr,
+			`Error: blocks db status failed: bb-data exited with code 1; its output is above.\n  project: ${root}\n`,
+		);
+		// An error the CLI raised itself: no hint, and --debug shows where it came from.
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		const plain = await runCli(['generate', 'spec'], { cwd: outside });
+		assert.strictEqual(plain.code, 1);
+		assert.doesNotMatch(plain.stderr, /Run with/);
+		const debug = await runCli(['generate', 'spec', '--debug'], { cwd: outside });
+		assert.match(debug.stderr, /^Error: not inside an AWS Blocks app[\s\S]*\n {4}at /);
+		// An underlying error has a stack to show.
+		const cause = await runCli(['secret', 'list'], {
+			cwd: root,
+			core: {
+				runSecretCli: async () => {
+					throw new Error('AccessDenied');
+				},
+			},
+		});
+		assert.match(cause.stderr, /^Error: AccessDenied\nRun with --debug for a stack trace\.\n$/);
+	});
+
+	it('prints a runner error without its stack trace, unless --debug', () => {
+		const fail = pathToFileURL(fileURLToPath(new URL('./runners/fail.js', import.meta.url))).href;
+		const script = `import { exitWithError } from ${JSON.stringify(fail)}; exitWithError(new Error('boom'));`;
+		for (const [level, stack] of [
+			['normal', false],
+			['debug', true],
+		] as const) {
+			const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+				env: { ...process.env, BLOCKS_LOG_LEVEL: level },
+				encoding: 'utf-8',
+			});
+			assert.strictEqual(child.status, 1, child.stderr);
+			assert.match(child.stderr, /^❌ boom\n/);
+			assert.strictEqual(/\n {4}at /.test(child.stderr), stack, child.stderr);
+		}
 	});
 });
 

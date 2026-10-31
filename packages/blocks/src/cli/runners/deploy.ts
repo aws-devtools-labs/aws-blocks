@@ -9,6 +9,7 @@
  */
 
 import * as core from '@aws-blocks/core/scripts';
+import { exitWithError } from './fail.js';
 import { type DeployedOutputs, recordLastDeploy } from './last-deploy.js';
 
 const options = JSON.parse(process.argv[2]) as core.DeployOptions;
@@ -25,8 +26,7 @@ try {
 		},
 	});
 } catch (error) {
-	console.error(error);
-	process.exit(1);
+	exitWithError(error);
 }
 if (!process.exitCode && deployed) {
 	await recordLastDeploy(projectRoot, 'production', deployed, 'blocks deploy', core).catch((error: unknown) => {

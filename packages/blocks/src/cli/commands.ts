@@ -51,6 +51,11 @@ import {
 
 interface ChildRun extends Pick<SpawnSpec, 'longRunning'> {
 	operation: string;
+	/**
+	 * The tool, for a child that is not a lifecycle runner (`bb-data`): its own
+	 * output explains a failure, and `--verbose` adds nothing to it. Absent for a runner.
+	 */
+	tool?: string;
 	command: string;
 	args: string[];
 	cwd: string;
@@ -77,7 +82,11 @@ export function redactArgs(args: readonly string[]): string[] {
  */
 async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	if (ctx.logLevel === 'verbose' || ctx.logLevel === 'debug') {
-		ctx.out.progress(`> ${redactArgs([run.command, ...run.args]).join(' ')}`);
+		// Copy-pasteable into a POSIX shell: a word with a space, a quote or JSON is quoted.
+		const words = redactArgs([run.command, ...run.args]).map((word) =>
+			/^[\w@%+=:,./-]+$/.test(word) ? word : shellQuote(word, 'linux'),
+		);
+		ctx.out.progress(`> ${words.join(' ')}`);
 	}
 	let result: ChildResult;
 	try {
@@ -103,11 +112,16 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		return code;
 	}
 	if (code !== ExitCode.Ok) {
+		const where = run.where ?? [`project: ${run.cwd}`];
+		if (run.tool) {
+			const ended = result.code === null ? `ended on ${result.signal}` : `exited with code ${result.code}`;
+			throw new CliError(`${run.operation} failed: ${run.tool} ${ended}; its output is above.`, {
+				where,
+				exitCode: code,
+			});
+		}
 		const detail = result.code === null ? `signal ${result.signal}` : `exit code ${result.code}`;
-		throw new CliError(`${run.operation} failed (${detail}).`, {
-			where: run.where ?? [`project: ${run.cwd}`],
-			exitCode: code,
-		});
+		throw new CliError(`${run.operation} failed (${detail}).`, { where, exitCode: code, runner: true });
 	}
 	return code;
 }
@@ -592,6 +606,7 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	const root = ctx.requireRoot();
 	return runChild(ctx, {
 		operation: 'blocks generate client',
+		tool: 'blocks-generate-client',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
 		cwd: root,
@@ -685,6 +700,7 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	if (!cli) throw new CliError('cannot find the bb-data CLI of @aws-blocks/bb-data.', { hint: 'npm install' });
 	return runChild(ctx, {
 		operation: `blocks db ${input.passthrough[0]}`,
+		tool: 'bb-data',
 		command: process.execPath,
 		args: [cli, ...input.passthrough],
 		cwd: root,
@@ -714,6 +730,7 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	return runChild(ctx, {
 		operation: 'blocks vendorize',
+		tool: 'blocks-vendorize',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'vendorize.js'), ...input.passthrough],
 		cwd: root,

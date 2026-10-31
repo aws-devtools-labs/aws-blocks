@@ -4,10 +4,8 @@
 /** Runs with the `tsx` loader, started by `blocks destroy` after the confirmation. */
 
 import { type DestroyOptions, destroy } from '@aws-blocks/core/scripts';
+import { exitWithError } from './fail.js';
 
 const options = JSON.parse(process.argv[2]) as DestroyOptions;
 
-destroy(options).catch((error) => {
-	console.error(error);
-	process.exit(1);
-});
+destroy(options).catch(exitWithError);
