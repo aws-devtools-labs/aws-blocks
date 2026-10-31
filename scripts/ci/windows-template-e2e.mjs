@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { isWin, killTree, runOrThrow, runSpawn, httpUp, startRegistry } from './_proc.mjs';
 
+import { makeProductionDeployDisposable } from './_scaffold-teardown.mjs';
+
 const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
 
@@ -107,6 +109,11 @@ async function main() {
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
 
   const inApp = { cwd: app, env };
+  // The production preset retains the config access-log bucket on destroy (by
+  // design, for customers). Make the production deploy below fully deletable,
+  // keeping its other defaults, so this CI stack leaves nothing behind. Done up
+  // front so a template change fails the run before anything is deployed.
+  makeProductionDeployDisposable(join(app, 'aws-blocks', 'index.cdk.ts'));
 
   // Phase 1: dev — ready when config.json's bound port answers HTTP.
   {
