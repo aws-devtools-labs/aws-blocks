@@ -271,13 +271,17 @@ const SKIPPED_DIRS: ReadonlySet<string> = new Set([
 /** Larger files are data or generated output, not something that runs a wrapper. */
 const MAX_SCANNED_BYTES = 1024 * 1024;
 
+/** Markdown docs: prose that names a wrapper does not run it (the backend template's README shows a wrapper script). */
+const DOC_FILE = /\.mdx?$/i;
+
 /**
  * Every app file that might use a wrapper: each regular text file under the
- * project root, dot directories included (`.github`, `.vscode`), so shell
- * scripts, Dockerfiles and CI workflows count. Skipped: the {@link SKIPPED_DIRS},
- * files over {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
- * `package.json` (its scripts are checked after the rewrite) and symbolic links,
- * which are not followed. Nothing above the project root is read.
+ * project root other than Markdown docs, dot directories included (`.github`,
+ * `.vscode`), so shell scripts, Dockerfiles and CI workflows count. Skipped:
+ * the {@link SKIPPED_DIRS}, `*.md` and `*.mdx` files, files over
+ * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root `package.json`
+ * (its scripts are checked after the rewrite) and symbolic links, which are not
+ * followed. Nothing above the project root is read.
  */
 function referencingSources(root: string): { path: string; text: string }[] {
 	const sources: { path: string; text: string }[] = [];
@@ -288,7 +292,7 @@ function referencingSources(root: string): { path: string; text: string }[] {
 				if (!SKIPPED_DIRS.has(entry.name)) walk(path);
 				continue;
 			}
-			if (!entry.isFile()) continue;
+			if (!entry.isFile() || DOC_FILE.test(entry.name)) continue;
 			const rel = posix(relative(root, path));
 			if (rel === 'package.json' || statSync(path).size > MAX_SCANNED_BYTES) continue;
 			const bytes = readFileSync(path);

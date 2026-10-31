@@ -153,6 +153,17 @@ describe('blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
+	it('does not count a Markdown doc that names a wrapper as a use', async () => {
+		// The backend template's README shows `"dev:server": "tsx watch aws-blocks/scripts/server.ts"`.
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['README.md'] = '```json\n{ "dev:server": "tsx watch aws-blocks/scripts/server.ts" }\n```\n';
+			app.files['docs/deploy.mdx'] = 'Run `npx tsx aws-blocks/scripts/deploy.ts`.\n';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stdout);
+		assert.deepStrictEqual(scriptsDir(root), []);
+	});
+
 	it('does not follow symbolic links', {
 		skip: process.platform === 'win32' && 'symlinks need privileges',
 	}, async () => {
