@@ -744,14 +744,19 @@ export async function whoami(ctx: Context): Promise<number> {
 /**
  * Run an in-process tool. Its usage errors (hosting's `ValueCliUsageError`:
  * missing key, unknown subcommand, a prompt or confirmation the run cannot
- * give) exit 2; any other error exits 1.
+ * give) exit 2; Ctrl-C or Ctrl-D at its prompt (`ValueCliInterruptedError`)
+ * exits 130; any other error exits 1.
  */
-async function inProcess(run: () => Promise<void>): Promise<number> {
+async function inProcess(ctx: Context, run: () => Promise<void>): Promise<number> {
 	try {
 		await run();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (error instanceof Error && error.name === 'ValueCliUsageError') throw new UsageError(message);
+		if (error instanceof Error && error.name === 'ValueCliInterruptedError') {
+			ctx.out.progress('Interrupted; nothing was set.');
+			return ExitCode.Interrupted;
+		}
 		throw new CliError(message, { cause: error });
 	}
 	return typeof process.exitCode === 'number' && process.exitCode !== 0 ? ExitCode.Failure : ExitCode.Ok;
@@ -766,13 +771,13 @@ export async function secret(ctx: Context, input: CommandInput): Promise<number>
 	// A verb's help works outside an app too, with the default store prefix.
 	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
-	return inProcess(() => core.runSecretCli(input.passthrough, valueCliOptions(ctx)));
+	return inProcess(ctx, () => core.runSecretCli(input.passthrough, valueCliOptions(ctx)));
 }
 
 export async function config(ctx: Context, input: CommandInput): Promise<number> {
 	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
-	return inProcess(() => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
+	return inProcess(ctx, () => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
 }
 
 export async function telemetry(ctx: Context, input: CommandInput): Promise<number> {
@@ -802,7 +807,7 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 	ctx.deps.chdir(root ?? ctx.startDir);
 	const core = await ctx.core();
 	const argv = ['node', 'blocks', `--${action}`, ...(global ? ['--global'] : [])];
-	return inProcess(() => core.telemetry({ argv }));
+	return inProcess(ctx, () => core.telemetry({ argv }));
 }
 
 // ── Generate ─────────────────────────────────────────────────────────────────

@@ -1820,3 +1820,20 @@ describe('blocks dev stop', () => {
 		);
 	});
 });
+
+describe('blocks secret and config', () => {
+	it('exits 130 on Ctrl-C or Ctrl-D at the hidden prompt, with no error', async () => {
+		const run = await runCli(['secret', 'set', 'ZZ_CTRL'], {
+			cwd: fixtureApp(),
+			core: {
+				runSecretCli: async () => {
+					throw Object.assign(new Error('The prompt was interrupted; nothing was set.'), {
+						name: 'ValueCliInterruptedError',
+					});
+				},
+			},
+		});
+		assert.strictEqual(run.code, 130);
+		assert.strictEqual(run.stderr, 'Interrupted; nothing was set.\n');
+	});
+});
