@@ -29,7 +29,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-	existsSync,
 	lstatSync,
 	readdirSync,
 	readFileSync,
@@ -238,15 +237,28 @@ function posix(path: string): string {
 	return path.split('\\').join('/');
 }
 
+/**
+ * `read()`, or `undefined` when the file is gone: another `blocks migrate`
+ * run (or the user) can delete a wrapper while this one plans.
+ */
+function unlessGone<T>(read: () => T): T | undefined {
+	try {
+		return read();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+		throw error;
+	}
+}
+
 /** Generated and customized wrappers present in the app. */
 function findWrappers(root: string): Wrapper[] {
 	const dir = join(root, SCRIPTS_DIR);
-	if (!existsSync(dir)) return [];
 	const wrappers: Wrapper[] = [];
 	for (const file of Object.keys(GENERATED_WRAPPERS) as WrapperFile[]) {
 		const path = join(dir, file);
-		if (!existsSync(path)) continue;
-		const hash = sourceHash(readFileSync(path, 'utf-8'));
+		const text = unlessGone(() => readFileSync(path, 'utf-8'));
+		if (text === undefined) continue;
+		const hash = sourceHash(text);
 		wrappers.push({
 			file,
 			path: posix(relative(root, path)),
@@ -341,7 +353,7 @@ function wrapperUsers(
 ): WrapperUser[] {
 	const users: WrapperUser[] = [];
 	const walk = (dir: string): void => {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		for (const entry of unlessGone(() => readdirSync(dir, { withFileTypes: true })) ?? []) {
 			const path = join(dir, entry.name);
 			if (entry.isDirectory()) {
 				if (!SKIPPED_DIRS.has(entry.name)) walk(path);
@@ -363,8 +375,8 @@ function wrapperUsers(
 			return undefined;
 		}
 		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return undefined;
-		const bytes = readFileSync(path);
-		return bytes.includes(0) ? undefined : bytes.toString('utf-8');
+		const bytes = unlessGone(() => readFileSync(path));
+		return bytes === undefined || bytes.includes(0) ? undefined : bytes.toString('utf-8');
 	};
 	const scan = (rel: string): void => {
 		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
@@ -692,11 +704,7 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 
 /** Remove `dir` when it is empty; a directory that is already gone is fine. */
 function removeIfEmpty(dir: string): void {
-	try {
-		if (readdirSync(dir).length === 0) rmdirSync(dir);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-	}
+	if (unlessGone(() => readdirSync(dir))?.length === 0) unlessGone(() => rmdirSync(dir));
 }
 
 /**
