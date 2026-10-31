@@ -19,7 +19,7 @@
  * - A generated wrapper is deleted once nothing references it any more.
  *
  * Exit codes: 0 when the app is fully migrated (or there was nothing to do);
- * 1 when customized items remain for the user to finish by hand. Exit 1 is a
+ * 1 when kept items remain for the user to finish by hand. Exit 1 is a
  * report, not a crash: everything that could be migrated was migrated.
  */
 
