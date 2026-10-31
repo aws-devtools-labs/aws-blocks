@@ -41,13 +41,35 @@ describe('getStackId', () => {
     mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), '{bad json');
     assert.throws(() => getStackId(tmpDir), (error: Error) => {
-      assert.match(error.message, /^\.blocks\/config\.json is not valid JSON \(.+\): fix .*config\.json\.$/);
+      assert.match(error.message, /^\.blocks\/config\.json could not be read: invalid JSON \(.+\)\. Fix .*config\.json so/);
       assert.doesNotMatch(error.message, /not found/);
       return true;
     });
-    writeFileSync(join(tmpDir, '.blocks', 'config.json'), 'null');
-    assert.throws(() => getStackId(tmpDir), /not found or missing stackId/);
   });
+
+  it('reads stackId from a config with a UTF-8 BOM', () => {
+    tmpDir = join(tmpdir(), `stack-id-test-bom-${Date.now()}`);
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), '\uFEFF{\n  "stackId": "test-bom123"\n}\n');
+    assert.strictEqual(getStackId(tmpDir), 'test-bom123');
+  });
+
+  for (const [label, content] of [
+    ['invalid JSON', '{ "stackId": "test-abc123", }'],
+    ['a top-level array', '["test-abc123"]'],
+    ['a top-level null', 'null'],
+  ] as const) {
+    it(`throws a parse error, not "not found", when the config is ${label}`, () => {
+      tmpDir = join(tmpdir(), `stack-id-test-invalid-${Date.now()}`);
+      mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+      writeFileSync(join(tmpDir, '.blocks', 'config.json'), content);
+      assert.throws(() => getStackId(tmpDir), (err: Error) => {
+        assert.match(err.message, /\.blocks\/config\.json could not be read/);
+        assert.doesNotMatch(err.message, /not found/);
+        return true;
+      });
+    });
+  }
 });
 
 describe('getSandboxId', () => {

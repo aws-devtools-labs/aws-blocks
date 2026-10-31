@@ -12,27 +12,32 @@
  */
 
 import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/scripts';
-import { blocksConfigPrefix } from '../secret-naming.js';
+import { blocksCliPrefix } from '../secret-naming.js';
 
 /** Set (create or overwrite) a Blocks config value. */
-export function setConfig(key: string, value: string, opts: { stage?: string } = {}): Promise<void> {
-	return setValue('config', key, value, { prefix: blocksConfigPrefix(), ...opts });
+export async function setConfig(key: string, value: string, opts: { stage?: string } = {}): Promise<void> {
+	return setValue('config', key, value, { prefix: blocksCliPrefix('config', 'setConfig()'), ...opts });
 }
 
 /** List Blocks config keys (names only). */
-export function listConfig(opts: { stage?: string } = {}): Promise<string[]> {
-	return listValues('config', { prefix: blocksConfigPrefix(), ...opts });
+export async function listConfig(opts: { stage?: string } = {}): Promise<string[]> {
+	return listValues('config', { prefix: blocksCliPrefix('config', 'listConfig()'), ...opts });
 }
 
 /** Remove a Blocks config value. */
-export function removeConfig(key: string, opts: { stage?: string } = {}): Promise<boolean> {
-	return removeValue('config', key, { prefix: blocksConfigPrefix(), ...opts });
+export async function removeConfig(key: string, opts: { stage?: string } = {}): Promise<boolean> {
+	return removeValue('config', key, { prefix: blocksCliPrefix('config', 'removeConfig()'), ...opts });
 }
 
 /**
  * CLI dispatcher for `cdk-blocks config <set|list|remove> …`. `interactive: false`
- * refuses prompts; a usage problem throws hosting's `ValueCliUsageError`.
+ * refuses prompts; a usage problem throws hosting's `ValueCliUsageError`. Warns
+ * on stderr when no `stackId` scopes the default namespace, and rejects when
+ * `.blocks/config.json` can't be parsed. An explicit `--prefix` skips the default
+ * namespace entirely.
  */
-export function runConfigCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
-	return runValueCli(argv, { kind: 'config', prefix: blocksConfigPrefix(), label: 'cdk-blocks config', ...options });
+export async function runConfigCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
+	const explicitPrefix = argv.some((arg) => arg === '--prefix' || arg.startsWith('--prefix='));
+	const prefix = explicitPrefix ? undefined : blocksCliPrefix('config', 'cdk-blocks config');
+	return runValueCli(argv, { kind: 'config', prefix, label: 'cdk-blocks config', ...options });
 }
