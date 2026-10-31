@@ -50,7 +50,7 @@ import {
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
-interface ChildRun extends Pick<SpawnSpec, 'longRunning'> {
+interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	operation: string;
 	/**
 	 * The tool, for a child that is not a lifecycle runner (`bb-data`): its own
@@ -113,6 +113,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			env: { ...ctx.env, ...run.env },
 			stdoutToStderr: ctx.out.format === 'json',
 			longRunning: run.longRunning,
+			watcher: run.watcher,
 		});
 	} catch (error) {
 		throw new CliError(
@@ -203,6 +204,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
 		longRunning: run.longRunning,
+		watcher: run.watch,
 	});
 }
 

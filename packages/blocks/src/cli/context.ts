@@ -7,10 +7,11 @@
  * the interactive/CI decision and the injectable process seams.
  */
 
-import { spawn as spawnProcess } from 'node:child_process';
+import { execFileSync, spawn as spawnProcess } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
 import { CliError, UsageError } from './errors.js';
@@ -29,12 +30,11 @@ export interface SpawnSpec {
 	stdoutToStderr?: boolean;
 	/**
 	 * The child runs until it is stopped: `blocks dev` and `blocks sandbox` in
-	 * watch mode. Its process group gets the SIGTERM or SIGHUP that a supervisor,
-	 * `timeout` or a closed terminal sends, so the CLI handles both as it does a
-	 * SIGINT: it waits, and forwards one SIGTERM (`tsx watch`, the dev server's
-	 * parent, passes on SIGTERM but not SIGHUP) only if the child is still
-	 * running after the grace period. A second SIGTERM makes `tsx watch` SIGKILL
-	 * the dev server before it stops its frontend.
+	 * watch mode. The CLI stops it at once on a SIGTERM or SIGHUP (a supervisor,
+	 * `timeout`, a closed terminal, `kill <pid>`), whether or not the signal also
+	 * reached the child's process group: it sends one SIGTERM, which the
+	 * sandbox runner's idempotent cleanup takes twice without harm. For a
+	 * {@link SpawnSpec.watcher} child the CLI signals the runner under it instead.
 	 *
 	 * Otherwise the CLI forwards a SIGTERM at once, and ignores SIGHUP, does not
 	 * forward it and waits for the child. Core's production deploy defers SIGHUP
@@ -43,6 +43,15 @@ export interface SpawnSpec {
 	 * reports that.
 	 */
 	longRunning?: boolean;
+	/**
+	 * The child is `tsx watch` (`blocks dev`). A second SIGTERM makes it SIGKILL
+	 * its runner, which then leaves the frontend running, so the CLI never sends
+	 * it one while the runner lives: it SIGTERMs the runner, which the group
+	 * signal may have reached already (the dev server's cleanup is idempotent
+	 * and keeps its listeners until it exits), and SIGTERMs `tsx watch` once the
+	 * runner is gone. With no runner, `tsx watch` exits 143 at once.
+	 */
+	watcher?: boolean;
 }
 
 export interface ChildResult {
@@ -287,8 +296,30 @@ export class Context {
 	}
 }
 
-/** How long the CLI waits after a SIGINT (or, for a long-running child, a SIGTERM or SIGHUP) for the child to exit before it forwards one. */
+/** How long the CLI waits after a SIGINT for the child to exit before it forwards one, and for a runner to stop before it signals its `tsx watch`. */
 export const STOP_GRACE_MS = 10_000;
+
+/** The pids of the children of `pid` (POSIX `ps`); none when `ps` fails. */
+function childPids(pid: number): number[] {
+	try {
+		return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8' })
+			.split('\n')
+			.map((line) => line.trim().split(/\s+/).map(Number))
+			.filter(([, parent]) => parent === pid)
+			.map(([child]) => child);
+	} catch {
+		return [];
+	}
+}
+
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 export interface SpawnChildOptions {
 	/** Default: {@link STOP_GRACE_MS}. */
@@ -307,8 +338,8 @@ export interface SpawnChildOptions {
  * one SIGINT. It never forwards one sooner, and never a second: on a second
  * SIGINT, `tsx watch` SIGKILLs the dev server before it cleans up.
  *
- * SIGTERM and SIGHUP follow {@link SpawnSpec.longRunning}: a long-running child
- * gets at most one forwarded signal, whichever of the three arrives first.
+ * SIGTERM and SIGHUP follow {@link SpawnSpec.longRunning} and
+ * {@link SpawnSpec.watcher}: a long-running child is stopped at once, once.
  * Otherwise SIGTERM is forwarded at once: core's deploy coalesces the duplicate
  * SIGTERM that a process-group signal and this forward produce, and treats the
  * first one as a warning.
@@ -323,21 +354,45 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 				stdio: ['inherit', spec.stdoutToStderr ? 2 : 'inherit', 'inherit'],
 			});
 			let interrupted = false;
+			let stopping = false;
+			let exited = false;
 			let escalation: NodeJS.Timeout | undefined;
 			const escalate = (signal: NodeJS.Signals) => {
-				escalation ??= setTimeout(() => child.kill(signal), graceMs);
+				escalation ??= setTimeout(() => {
+					if (!stopping) child.kill(signal);
+				}, graceMs);
 			};
 			const onInterrupt = () => {
 				interrupted = true;
 				escalate('SIGINT');
 			};
-			const onTerm = spec.longRunning ? () => escalate('SIGTERM') : () => child.kill('SIGTERM');
+			const stop = async () => {
+				if (stopping) return;
+				stopping = true;
+				if (!spec.watcher || child.pid === undefined) {
+					child.kill('SIGTERM');
+					return;
+				}
+				const runners = childPids(child.pid);
+				for (const pid of runners) {
+					try {
+						process.kill(pid, 'SIGTERM');
+					} catch {
+						// Already gone.
+					}
+				}
+				for (const deadline = Date.now() + graceMs; !exited && Date.now() < deadline && runners.some(isAlive); )
+					await sleep(25);
+				if (!exited) child.kill('SIGTERM');
+			};
+			const onTerm = spec.longRunning ? () => void stop() : () => child.kill('SIGTERM');
 			// Ignored unless the child is long-running; the listener keeps a hangup from ending the CLI.
 			const onHangup = spec.longRunning ? onTerm : () => {};
 			process.on('SIGINT', onInterrupt);
 			process.on('SIGTERM', onTerm);
 			process.on('SIGHUP', onHangup);
 			const cleanup = () => {
+				exited = true;
 				clearTimeout(escalation);
 				process.off('SIGINT', onInterrupt);
 				process.off('SIGTERM', onTerm);

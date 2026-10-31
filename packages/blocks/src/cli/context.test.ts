@@ -289,37 +289,41 @@ setInterval(() => {}, 1000);
 		assert.deepStrictEqual(term.received(), ['SIGTERM']);
 	});
 
-	it('forwards nothing to a long-running child that a SIGTERM to the process group reached', async () => {
+	it('sends one SIGTERM at once to a long-running child that a SIGTERM to the process group also reached', async () => {
 		const child = await start({ longRunning: true });
 		// A supervisor, `timeout` or CI signals the whole process group: the CLI and the child.
+		// The sandbox runner's cleanup is idempotent, so the duplicate is harmless.
 		process.emit('SIGTERM');
 		process.kill(child.pid, 'SIGTERM');
 		const result = await child.running;
 		await sleep(GRACE_MS * 2);
 		assert.strictEqual(result.interrupted, false);
-		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'only the group signal itself');
+		assert.deepStrictEqual(child.received(), ['SIGTERM', 'SIGTERM'], 'the group signal and one forward');
 	});
 
-	it('forwards one SIGTERM after the grace period to a long-running child that SIGTERM and SIGHUP to the CLI did not reach', async () => {
+	it('forwards one SIGTERM at once to a long-running child that SIGTERM and SIGHUP to the CLI did not reach', async () => {
 		const child = await start({ longRunning: true });
+		const started = Date.now();
 		process.emit('SIGHUP');
 		process.emit('SIGTERM');
 		process.emit('SIGTERM');
-		await sleep(GRACE_MS / 2);
-		assert.deepStrictEqual(child.received(), []);
 		const result = await child.running;
+		assert.ok(Date.now() - started < GRACE_MS, 'before the grace period');
 		assert.strictEqual(result.interrupted, false);
-		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'exactly one SIGTERM, which tsx passes on');
+		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'exactly one SIGTERM');
 	});
 
-	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
-		timeout: 60_000,
-	}, async () => {
+	/**
+	 * Start `blocks dev` in a process group of its own, with a frontend like `npx next dev`, send it
+	 * `signal` (to the group, or to the CLI's pid alone), and check that it and its frontend stop
+	 * within `withinMs`, leaving nothing running. Returns the CLI's exit code.
+	 */
+	async function stopDev(target: 'group' | 'pid', signal: NodeJS.Signals, withinMs: number): Promise<number | null> {
 		const root = mkdtempSync(join(tmpdir(), 'blocks-cli-dev-sigterm-'));
 		const [port, frontendPort] = await freePorts(2);
-		// A frontend like `npx next dev`: a leader that exits on SIGTERM at once, and the server under it,
-		// which closes its port at once but goes on (Next writes `.next`) for a moment, longer than the
-		// bound on the check below, so a dev server that does not wait for all of it fails the test.
+		// A leader that exits on SIGTERM at once, and the server under it, which closes its port at once
+		// but goes on (Next writes `.next`) for a moment, longer than the bound on the check below, so a
+		// dev server that does not wait for all of it fails the test.
 		writeFileSync(
 			join(root, 'frontend.cjs'),
 			[
@@ -341,13 +345,12 @@ setInterval(() => {}, 1000);
 			JSON.stringify({
 				name: 'dev-sigterm-app',
 				type: 'module',
-				blocks: { dev: { port, frontendCommand: 'node frontend.cjs', frontendPort } },
+				blocks: { dev: { port, frontendCommand: `node frontend.cjs ${frontendPort}`, frontendPort } },
 			}),
 		);
 		mkdirSync(join(root, 'aws-blocks'));
 		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
 		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
-		// Its own process group, so that the SIGTERM reaches the CLI, `tsx watch` and the dev server, as `timeout` sends it.
 		const cli = spawn(process.execPath, [bin, 'dev'], {
 			cwd: root,
 			detached: true,
@@ -373,19 +376,39 @@ setInterval(() => {}, 1000);
 				cli.pid,
 				'the dev server runs its frontend in a process group of its own',
 			);
-			process.kill(-(cli.pid ?? 0), 'SIGTERM');
-			await exited;
+			const started = Date.now();
+			process.kill(target === 'group' ? -(cli.pid ?? 0) : (cli.pid ?? 0), signal);
+			const [code] = await exited;
+			const took = Date.now() - started;
 			// The dev server waits until the group has drained, so it is gone by now. The bound allows only for
 			// reaping a member that the dev server's fallback SIGKILL ended; it is shorter than the server's stop.
 			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; )
 				await sleep(25);
 			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived blocks dev\n${output}`);
-			assert.doesNotMatch(output, /Force killing/);
+			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of blocks dev outlived it\n${output}`);
+			assert.doesNotMatch(output, /Force killing|Killing process/);
+			assert.ok(took <= withinMs, `stopped after ${took} ms, not within ${withinMs} ms\n${output}`);
+			return code as number | null;
 		} finally {
 			if (frontendGroup && isGroupRunning(frontendGroup)) process.kill(-frontendGroup, 'SIGKILL');
-			if (cli.exitCode === null && cli.signalCode === null) process.kill(-(cli.pid ?? 0), 'SIGKILL');
+			if (isGroupRunning(cli.pid ?? 0)) process.kill(-(cli.pid ?? 0), 'SIGKILL');
 			rmSync(root, { recursive: true, force: true, maxRetries: 5 });
 		}
+	}
+
+	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
+		timeout: 60_000,
+	}, async () => {
+		// As `timeout`, a supervisor or CI sends it: the CLI, `tsx watch` and the dev server all get it.
+		assert.strictEqual(await stopDev('group', 'SIGTERM', 3000), 0);
+	});
+
+	it('stops `blocks dev` and its frontend within 1.5 s on a SIGTERM or SIGHUP to its pid alone', {
+		timeout: 60_000,
+	}, async () => {
+		// As `kill <pid>`, an IDE's stop button or a harness that kills a background job sends it.
+		await stopDev('pid', 'SIGTERM', 1500);
+		await stopDev('pid', 'SIGHUP', 1500);
 	});
 
 	it('otherwise ignores SIGHUP and does not forward it, as core defers it during a deploy', async () => {
