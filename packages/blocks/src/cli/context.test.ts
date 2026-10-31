@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
@@ -194,12 +194,13 @@ async function isListening(port: number): Promise<boolean> {
 	}
 }
 
-function isRunning(pid: number): boolean {
+/** Whether any process of the group `pgid` is running, or exited and not yet reaped. */
+function isGroupRunning(pgid: number): boolean {
 	try {
-		process.kill(pid, 0);
+		process.kill(-pgid, 0);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM';
 	}
 }
 
@@ -309,7 +310,8 @@ setInterval(() => {}, 1000);
 		const root = mkdtempSync(join(tmpdir(), 'blocks-cli-dev-sigterm-'));
 		const [port, frontendPort] = await freePorts(2);
 		// A frontend like `npx next dev`: a leader that exits on SIGTERM at once, and the server under it,
-		// which closes its port at once but finishes writing (Next's `.next`) only a moment later.
+		// which closes its port at once but goes on (Next writes `.next`) for a moment, longer than the
+		// bound on the check below, so a dev server that does not wait for all of it fails the test.
 		writeFileSync(
 			join(root, 'frontend.cjs'),
 			[
@@ -318,9 +320,8 @@ setInterval(() => {}, 1000);
 				`const server = spawn(process.execPath, ['-e', ${JSON.stringify(
 					[
 						"const http = require('node:http');",
-						"const { writeFileSync } = require('node:fs');",
 						`const listener = http.createServer((req, res) => res.end('ok')).listen(${frontendPort}, '127.0.0.1');`,
-						"process.on('SIGTERM', () => { listener.close(); setTimeout(() => { writeFileSync('frontend.stopped', ''); process.exit(0); }, 500); });",
+						"process.on('SIGTERM', () => { listener.close(); setTimeout(() => process.exit(0), 500); });",
 					].join('\n'),
 				)}], { stdio: 'inherit' });`,
 				"writeFileSync('frontend.pids', process.pid + ' ' + server.pid);",
@@ -345,22 +346,24 @@ setInterval(() => {}, 1000);
 		cli.stderr.on('data', (chunk) => (output += chunk));
 		const exited = once(cli, 'close');
 		const pidsFile = join(root, 'frontend.pids');
-		let frontendPids: number[] = [];
+		let frontendGroup = 0;
 		try {
 			while (!(existsSync(pidsFile) && (await isListening(port)) && (await isListening(frontendPort)))) {
 				assert.strictEqual(cli.exitCode, null, output);
 				await sleep(100);
 			}
-			frontendPids = readFileSync(pidsFile, 'utf-8').split(' ').map(Number);
+			const serverPid = Number(readFileSync(pidsFile, 'utf-8').split(' ')[1]);
+			frontendGroup = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(serverPid)], { encoding: 'utf-8' }).trim());
+			assert.notStrictEqual(frontendGroup, cli.pid, 'the dev server runs its frontend in a process group of its own');
 			process.kill(-(cli.pid ?? 0), 'SIGTERM');
 			await exited;
-			assert.ok(existsSync(join(root, 'frontend.stopped')), `the frontend finished stopping before blocks dev exited\n${output}`);
-			// The frontend's processes have exited; an exited orphan is reaped by its new parent at once.
-			for (let i = 0; i < 20 && frontendPids.some(isRunning); i++) await sleep(50);
-			assert.deepStrictEqual(frontendPids.filter(isRunning), [], output);
+			// The dev server waits until the group has drained, so it is gone by now. The bound allows only for
+			// reaping a member that the dev server's fallback SIGKILL ended; it is shorter than the server's stop.
+			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; ) await sleep(25);
+			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived blocks dev\n${output}`);
 			assert.doesNotMatch(output, /Force killing/);
 		} finally {
-			for (const pid of frontendPids) if (isRunning(pid)) process.kill(pid, 'SIGKILL');
+			if (frontendGroup && isGroupRunning(frontendGroup)) process.kill(-frontendGroup, 'SIGKILL');
 			if (cli.exitCode === null && cli.signalCode === null) process.kill(-(cli.pid ?? 0), 'SIGKILL');
 			rmSync(root, { recursive: true, force: true, maxRetries: 5 });
 		}

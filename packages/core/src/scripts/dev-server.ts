@@ -1171,8 +1171,10 @@ export async function startDevServer(options: DevServerOptions) {
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
     stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
-    // Detach our own listeners so repeated signals can't pile up handlers.
-    for (const sig of signals) process.removeListener(sig, cleanup);
+    // Keep the listeners until we exit. A Ctrl-C or a group SIGTERM reaches us
+    // directly and again as `tsx watch` relays it; tsx's preflight exits the
+    // process on a signal that has no other listener, which would cut this
+    // cleanup short and leave the frontend running.
 
     // Kill the frontend process *group* and wait for the port to free before
     // we exit, so a tsx-watch restart can rebind `:3100` cleanly.
