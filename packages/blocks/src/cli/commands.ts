@@ -599,9 +599,18 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 	}
 	if (actions.size > 1) throw new UsageError(`choose one telemetry action, not ${[...actions].join(' and ')}.`);
 	const action = [...actions][0] ?? 'status';
-	if (ctx.findRoot()) ctx.enterRoot();
+	const root = ctx.findRoot();
+	const global = input.flags.global === true;
+	// A project setting needs a project: never write .blocks/config.json into a directory that is not an app.
+	if (!root && action !== 'status' && !global) {
+		throw new UsageError(`not inside an AWS Blocks app, so there is no project to ${action} telemetry for.`, {
+			hint: `blocks telemetry ${action} --global, or run it in your app directory`,
+		});
+	}
+	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
+	ctx.deps.chdir(root ?? ctx.startDir);
 	const core = await ctx.core();
-	const argv = ['node', 'blocks', `--${action}`, ...(input.flags.global === true ? ['--global'] : [])];
+	const argv = ['node', 'blocks', `--${action}`, ...(global ? ['--global'] : [])];
 	return inProcess(() => core.telemetry({ argv }));
 }
 

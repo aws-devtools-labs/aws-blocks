@@ -393,6 +393,33 @@ describe('lifecycle commands', () => {
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
 	});
 
+	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
+		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
+		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));
+		const seen: string[][] = [];
+		const core = {
+			telemetry: async (options?: { argv?: string[] }) => {
+				seen.push(options?.argv ?? []);
+			},
+		};
+		const disable = await runCli(['-C', other, 'telemetry', 'disable'], { cwd: shell, core });
+		assert.strictEqual(disable.code, 2);
+		assert.match(
+			disable.stderr,
+			/^Error: not inside an AWS Blocks app, so there is no project to disable telemetry for\./,
+		);
+		assert.deepStrictEqual(seen, []);
+		const status = await runCli(['-C', other, 'telemetry'], { cwd: shell, core });
+		assert.strictEqual(status.code, 0, status.stderr);
+		assert.deepStrictEqual(status.chdirs, [other]);
+		const global = await runCli(['telemetry', 'disable', '--global'], { cwd: shell, core });
+		assert.strictEqual(global.code, 0, global.stderr);
+		assert.deepStrictEqual(seen, [
+			['node', 'blocks', '--status'],
+			['node', 'blocks', '--disable', '--global'],
+		]);
+	});
+
 	it('makes --telemetry-file absolute in the argv that in-process core functions read', async () => {
 		const root = fixtureApp();
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
