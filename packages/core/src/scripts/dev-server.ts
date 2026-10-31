@@ -1352,10 +1352,18 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Cleanup ────────────────────────────────────────────────────────────
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  // `tsx watch` restarts us on a file change with a SIGTERM (and relays a
+  // SIGTERM stop the same way). The session goes on across a restart, so the
+  // pidfile stays: a `dev stop` run before the successor has booted must still
+  // find it. The successor takes it over (see evaluateSingleton), and `dev stop`
+  // removes it once the port is free. Every other signal ends the session.
+  const underTsxWatch = isTsxWatcher(pidCommand(process.ppid));
+  let keepPidfile = false;
   let cleaningUp = false;
-  const cleanup = async () => {
+  const cleanup = async (signal: NodeJS.Signals) => {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
+    keepPidfile = signal === 'SIGTERM' && underTsxWatch;
     isShuttingDown = true; // stop the supervisor from respawning the frontend
     log.progress('\nShutting down...');
 
@@ -1375,10 +1383,7 @@ export async function startDevServer(options: DevServerOptions) {
     if (typeof backend.__cleanup === 'function') {
       try { await backend.__cleanup(); } catch {}
     }
-    // Release the singleton pidfile so the next `npm run dev` isn't blocked by
-    // our own stale record (only removed if it still points at us — a hot-reload
-    // successor may already own it).
-    removeOwnPidfile();
+    if (!keepPidfile) removeOwnPidfile();
     frontendProxy?.close();
     frontendAgent?.destroy();
     apiProxy?.close();
@@ -1402,7 +1407,7 @@ export async function startDevServer(options: DevServerOptions) {
     frontendAgent?.destroy();
     // Release our singleton pidfile on any exit path (crash, uncaught exception)
     // that bypassed cleanup(), so it never lingers and blocks the next start.
-    removeOwnPidfile();
+    if (!keepPidfile) removeOwnPidfile();
     const child = frontendProcess;
     if (!child) return;
     killFrontendTree(child, 'SIGKILL');

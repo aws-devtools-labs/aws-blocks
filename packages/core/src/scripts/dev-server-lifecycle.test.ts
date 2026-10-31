@@ -15,7 +15,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DevServerOptions } from './dev-server.js';
+import { type DevServerOptions, devPidfilePath, stopDevServer } from './dev-server.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tsxCli = join(__dirname, '..', '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -183,5 +183,35 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.match(run.out.stderr, /could not listen on 127\.0\.0\.1:1: .*EACCES/);
     assert.match(readFileSync(failureFile, 'utf-8'), /EACCES/);
     assert.ok(!existsSync(join(dir, '.blocks-sandbox', 'dev-server.1.pid')), 'the failed start leaves no pidfile');
+  });
+
+  it('keeps its pidfile through a reload, so a dev stop right after an edit stops it', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    await waitFor('the server', () => serving(port), [dev]);
+    const pidfile = join(dir, devPidfilePath(port));
+    writeFileSync(join(dir, 'backend.ts'), "export const testApi = { ping: async () => 'pong' }; // edited\n");
+    // Watch the pidfile across the whole reload: until the new child serves, it must never be missing.
+    let missing = 0;
+    await waitFor('the reloaded server', async () => {
+      if (!existsSync(pidfile)) missing++;
+      return dev.out.stdout.split('local server running').length > 2 && (await serving(port));
+    }, [dev]);
+    assert.strictEqual(missing, 0, 'the pidfile was missing during the reload');
+
+    // And `dev stop` straight after another edit stops the whole session.
+    writeFileSync(join(dir, 'backend.ts'), "export const testApi = { ping: async () => 'pong' }; // edited again\n");
+    await waitFor('the reload to start', () => dev.out.stdout.split('Shutting down').length > 2, [dev]);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const result = await stopDevServer(port);
+      assert.strictEqual(result.stopped, true, JSON.stringify(result));
+    } finally {
+      process.chdir(cwd);
+    }
+    await waitFor('blocks dev to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
+    assert.strictEqual(await serving(port), false);
   });
 });
