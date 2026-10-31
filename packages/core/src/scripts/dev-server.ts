@@ -28,7 +28,14 @@ import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
-import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
+import {
+  KILL_GRACE_MS,
+  killFrontendTree,
+  terminateProcessTree,
+  findListenerPids,
+  killListenerTree,
+  waitForProcessGroupExit,
+} from './process-tree.js';
 import { isCuratedLevel, log, resolveLogLevel } from './log.js';
 
 function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
@@ -919,17 +926,27 @@ export async function startDevServer(options: DevServerOptions) {
    * Gracefully terminate the frontend tree and wait (bounded) for the port to
    * actually free before this process exits, so a `tsx watch` relaunch can
    * rebind `:3100` cleanly. SIGTERM the group, escalate to SIGKILL if it lingers
-   * (via the shared {@link terminateProcessTree}), then poll until `:3100` is
-   * released. tsx-watch gives us ~5s before it force-kills us, so this budget is
-   * safe. Crucially the port-free wait runs on *both* paths — including when the
-   * shell has already exited — so the post-exit branch no longer drops the
-   * "wait for the port to free" guarantee.
+   * (via the shared {@link terminateProcessTree}), wait for the rest of the
+   * group, then poll until `:3100` is released. tsx-watch gives us ~5s before it
+   * force-kills us, so this budget is safe. Crucially the port-free wait runs on
+   * *both* paths — including when the shell has already exited — so the
+   * post-exit branch no longer drops the "wait for the port to free" guarantee.
    */
   const terminateFrontend = async (child: ChildProcess | null): Promise<void> => {
     if (!child) return;
+    const graceMs = 1500;
+    const deadline = Date.now() + graceMs;
     // SIGTERM→SIGKILL the whole tree, reaping the detached Vite grandchild even
     // when the shell has already exited (post-exit group kill — see policy).
-    await terminateProcessTree(child, 1500);
+    await terminateProcessTree(child, graceMs);
+    // The shell, or `npx`, exits before the dev server under it, which closes its
+    // port first and can go on writing (Next's `.next`): stop only once the whole
+    // group has exited, within the same grace, then SIGKILL what is left of it.
+    // The group is alive when the wait gives up, so `-pid` is still ours.
+    if (child.pid && !(await waitForProcessGroupExit(child.pid, Math.max(0, deadline - Date.now())))) {
+      killFrontendTree(child, 'SIGKILL');
+      await waitForProcessGroupExit(child.pid, KILL_GRACE_MS);
+    }
     // Then wait (bounded) for `:3100` to be released. The old post-exit branch
     // returned right after SIGKILL with no port poll, so a relaunch could race
     // the kernel's socket teardown and hit `--strictPort` `EADDRINUSE`.
