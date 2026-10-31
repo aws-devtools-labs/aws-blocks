@@ -57,7 +57,7 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 curl -X POST http://localhost:3001/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
-# method = "<namespace>.<methodName>" (namespace = first arg of ApiNamespace); params = positional array.
+# method = "<namespace>.<methodName>" (namespace = the exported variable name in aws-blocks/index.ts: `export const api = …` → api); params = positional array.
 # Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```
 

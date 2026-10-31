@@ -406,16 +406,29 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
   }
   
+  // The local server port the template's `blocks dev` listens on: 3001 for the backend-only templates.
+  const devPort = templatePkg.blocks?.dev?.port ?? 3000;
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
-  console.log(`  cd ${targetDir}`);
+  console.log(`  cd ${quoteForShell(targetDir)}`);
   if (skipInstall) {
     console.log(`  npm install`);
   }
   console.log(`  npm run dev`);
-  console.log(`\nThen open http://localhost:3000`);
+  if (templatePkg.blocks?.dev?.frontend === false) {
+    console.log(`\nThe API then listens on http://localhost:${devPort}/aws-blocks/api (backend only; README.md has a curl example).`);
+  } else {
+    console.log(`\nThen open http://localhost:${devPort}`);
+  }
   console.log(`\nEvery npm script calls the blocks CLI; run \`npx --no -- blocks --help\` to see all commands.`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
+}
+
+/** `path` as one shell word that pastes into the user's shell: quoted when it has a space or another special character. */
+function quoteForShell(path: string): string {
+  if (/^[\w@%+=:,./\\-]+$/.test(path)) return path;
+  // cmd.exe and PowerShell take a double-quoted path; POSIX shells take a single-quoted one.
+  return process.platform === 'win32' ? `"${path}"` : `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
 // ─── Amplify Gen 2 integration ──────────────────────────────────────────────
@@ -541,7 +554,8 @@ function printMigrationInstructions() {
   console.log('   - Use BlocksStack.create() instead of BlocksBackend.create()');
   console.log('   - Import Amplify resources into the Blocks stack');
   console.log('');
-  console.log('2. Replace `npx ampx sandbox` with `npm run sandbox`');
+  console.log('2. Run the sandbox through Blocks: change the `sandbox` script (now `npx ampx sandbox`)');
+  console.log('   to `blocks sandbox`, then use `npm run sandbox`');
   console.log('   - Blocks sandbox uses CDK directly (no Amplify CLI dependency)');
   console.log('');
   console.log('3. Update amplify.yml to use CDK deploy directly:');
@@ -780,15 +794,14 @@ async function create() {
     if (args[i] === '--help' || args[i] === '-h') {
       await printUsage();
       process.exit(0);
-    } else if (args[i] === '--template') {
-      const value = args[i + 1];
+    } else if (args[i] === '--template' || args[i].startsWith('--template=')) {
+      const value = args[i] === '--template' ? args[++i] : args[i].slice('--template='.length);
       if (!value || value.startsWith('-')) {
         console.error('Error: Missing value for --template.');
         console.error(`Run with --help for usage information.`);
         process.exit(1);
       }
       templateName = value;
-      i++;
     } else if (args[i] === '--yes' || args[i] === '-y') {
       skipConfirm = true;
     } else if (args[i] === '--skip-install') {

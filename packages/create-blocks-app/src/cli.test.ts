@@ -114,6 +114,15 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.doesNotMatch(result.stderr, /ENOENT/);
   });
 
+  it('accepts the --template=<name> form', () => {
+    const unknown = run(['--template=does-not-exist']);
+    assert.strictEqual(unknown.exitCode, 1);
+    assert.match(unknown.stderr, /Unknown template "does-not-exist"/);
+    const empty = run(['--template=']);
+    assert.strictEqual(empty.exitCode, 1);
+    assert.match(empty.stderr, /Missing value for --template/);
+  });
+
   it('a template folder missing package.json is rejected as unknown, not crashed with ENOENT', () => {
     // Latent-bug guard: a folder under templates/ with no package.json is shown
     // in --help but excluded from validation, so selecting it fails cleanly
@@ -442,6 +451,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+      // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
+      assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
+      assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `blocks sandbox`/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -792,6 +804,25 @@ describe('create-blocks-app auto-detection', () => {
       assert.doesNotMatch(result.stdout, /Installing dependencies/);
       assert.match(result.stdout, /\n  npm install\n/);
       assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('prints next steps that paste into a shell, with the backend-only port', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-next-steps-'));
+    try {
+      const backend = join(tmpDir, 'my apps', 'api');
+      const result = run([backend, '--template=backend', '-y', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.ok(result.stdout.includes(`\n  cd '${backend}'\n`), result.stdout);
+      assert.match(result.stdout, /http:\/\/localhost:3001\/aws-blocks\/api/);
+      assert.doesNotMatch(result.stdout, /localhost:3000/);
+      const web = join(tmpDir, 'web');
+      const frontend = run([web, '--template', 'bare', '-y', '--skip-install']);
+      assert.strictEqual(frontend.exitCode, 0, frontend.stderr);
+      assert.ok(frontend.stdout.includes(`\n  cd ${web}\n`), frontend.stdout);
+      assert.match(frontend.stdout, /Then open http:\/\/localhost:3000\n/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
