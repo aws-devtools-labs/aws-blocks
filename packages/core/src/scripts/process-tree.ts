@@ -272,6 +272,30 @@ export function isProcessGroupAlive(
 }
 
 /**
+ * Wait — bounded — for every process in the detached group `pid` to exit;
+ * `true` once it has drained. A group outlives its leader when the leader
+ * exits first: `npx next dev` ends on SIGTERM before Next, which is still
+ * writing `.next`. On Windows, which has no process groups and whose
+ * `taskkill /T /F` reap ends the tree at once, there is nothing to wait for.
+ * Dependencies are injected for tests.
+ */
+export async function waitForProcessGroupExit(
+  pid: number,
+  timeoutMs: number,
+  platform: NodeJS.Platform = process.platform,
+  isGroupAlive: (pid: number) => boolean = isProcessGroupAlive,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<boolean> {
+  if (platform === 'win32') return true;
+  const deadline = Date.now() + timeoutMs;
+  while (isGroupAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(50);
+  }
+  return true;
+}
+
+/**
  * Terminate a child process *tree* and wait — bounded — for the child to exit,
  * escalating SIGTERM → SIGKILL. Reuses {@link killFrontendTree} so every
  * entrypoint reaps the same way (POSIX process-group kill / Windows `taskkill`)

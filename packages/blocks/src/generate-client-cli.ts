@@ -24,15 +24,16 @@
  * in a child process with `--conditions=aws-runtime`, so the emitted
  * `client.js` is correct regardless of how the hook itself was invoked.
  *
- * For a TypeScript foundation the worker is loaded with `--import tsx`. Like
- * `blocks-generate-spec`, tsx is expected from the consuming app's
- * devDependencies rather than bundled here, keeping the runtime path JS-only.
+ * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
+ * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
+ * depends on, by absolute URL, so that the worker finds it from any app.
  */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, isAbsolute } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -42,6 +43,18 @@ const outputPath = resolvePath(outputArg ?? './aws-blocks/client.js');
 
 function resolvePath(p: string): string {
 	return isAbsolute(p) ? p : resolve(process.cwd(), p);
+}
+
+/** The file URL of the `tsx` loader: the app's (cwd) own, else this package's dependency. */
+function resolveTsxLoader(): string | undefined {
+	for (const from of [resolve(process.cwd(), 'package.json'), import.meta.url]) {
+		try {
+			return pathToFileURL(createRequire(from).resolve('tsx')).href;
+		} catch {
+			// Not installed there; try the next location.
+		}
+	}
+	return undefined;
 }
 
 if (!existsSync(foundationPath)) {
@@ -56,11 +69,8 @@ const workerPath = require.resolve('@aws-blocks/core/scripts/generate-client-wor
 const nodeArgs = ['--conditions=aws-runtime'];
 
 if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
-	try {
-		// Resolve tsx from the app's context (cwd), matching blocks-generate-spec:
-		// the templates ship it as a devDependency, we don't bundle it.
-		createRequire(resolve(process.cwd(), 'package.json')).resolve('tsx');
-	} catch {
+	const loader = resolveTsxLoader();
+	if (!loader) {
 		console.error(
 			[
 				`blocks-generate-client: cannot load TypeScript entry "${foundationPath}" — \`tsx\` is not installed.`,
@@ -70,7 +80,7 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
 		);
 		process.exit(2);
 	}
-	nodeArgs.push('--import', 'tsx');
+	nodeArgs.push('--import', loader);
 }
 
 const result = spawnSync(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {

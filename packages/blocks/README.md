@@ -204,7 +204,88 @@ With verified credentials, `npm run sandbox` (including `npm run sandbox:deploy`
 
 Importing `@aws-blocks/blocks` through its default (Node) entry declares the default compute (`LambdaCompute`) so the CLI reports it in telemetry. It is folded in only when telemetry reads the registry, after the blocks the app constructed, and an app-constructed `LambdaCompute` takes precedence. The `cdk` and `browser` entries do not declare it.
 
-`npm run deploy` streams CloudFormation events to **stdout** as they happen, so `npm run deploy | tee deploy.log` shows live progress instead of going silent for minutes, and a deploy failure keeps its reason on **stderr** (that stays the place to grep for why a deploy failed). On POSIX the deploy also survives a stray reap: a single `SIGTERM`, or any `SIGHUP` — a closed terminal, a backgrounded `npm run deploy &` — logs a line and keeps streaming rather than abandoning a stack update CloudFormation is still applying. Press Ctrl-C, or send `SIGTERM` twice, to stop it. That signal resilience is POSIX-only: Windows has no process groups and no OS-delivered `SIGTERM`/`SIGHUP`, so there a kill on the process tree still ends the deploy.
+`npm run deploy` streams CloudFormation events as they happen, so `npm run deploy 2>&1 | tee deploy.log` shows live progress instead of going silent for minutes. Through the `blocks` CLI (`npx --no -- blocks deploy`), the events and other progress go to **stderr**, and stdout keeps the results: the deployment target line, the `BLOCKS_DEPLOYED` line and the final URLs. A deploy failure keeps its reason on **stderr** (that stays the place to grep for why a deploy failed). On POSIX the deploy also survives a stray reap: a single `SIGTERM`, or any `SIGHUP` — a closed terminal, a backgrounded `npm run deploy &` — logs a line and keeps streaming rather than abandoning a stack update CloudFormation is still applying. Press Ctrl-C, or send `SIGTERM` twice, to stop it. That signal resilience is POSIX-only: Windows has no process groups and no OS-delivered `SIGTERM`/`SIGHUP`, so there a kill on the process tree still ends the deploy.
+
+## CLI
+
+`@aws-blocks/blocks` ships the `blocks` command (also installed as `cdk-blocks`). Its version is the installed `@aws-blocks/blocks` version. Run it from anywhere inside an app; it finds the project root by walking up to the `package.json` that has an `aws-blocks/` directory, or from `-C <dir>`. Options follow the command: `npx --no -- blocks dev --port 4000`.
+
+```bash
+npx --no -- blocks --help            # grouped command list
+npx --no -- blocks help deploy       # help for one command; same as `npx --no -- blocks deploy --help`
+npx --no -- blocks --version
+```
+
+> Run the command directly as `npx --no -- blocks` (the `--` stops npm from reading `--help` or `--version` as its own options), never a bare `npx blocks` or `npx cdk-blocks`: `--no` uses the CLI installed with `@aws-blocks/blocks` and never downloads a package, while a bare `npx` would install whatever is published under that name (`blocks` on npm is an unrelated package), without asking in CI.
+
+`blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]`
+
+| Group | Command | Does |
+|---|---|---|
+| Develop | `blocks dev [--port N] [--no-frontend]` | Run the app locally, with reload; no AWS |
+| | `blocks dev stop [--port N] [--all]` | Stop the local dev server this app started |
+| | `blocks sandbox` | Deploy your personal sandbox, watch for changes, and run the local server against it |
+| | `blocks sandbox deploy` | Deploy the sandbox once and exit (CI) |
+| | `blocks sandbox destroy [--yes]` | Delete your sandbox stack; never production |
+| | `blocks sandbox console` | Open the AWS console for the sandbox stack |
+| Deploy | `blocks deploy [--wait-live[=SECONDS]]` | Deploy the production stack; the target is printed first |
+| | `blocks destroy [--yes]` | Delete the production stack, after a confirmation |
+| | `blocks whoami` | Show the AWS identity and Region that `deploy` uses (with `.env.production` applied), and the stacks that `sandbox` and `deploy` would affect |
+| Configure | `blocks secret set KEY` / `list` / `remove KEY` | Manage secrets; a value is never accepted on the command line |
+| | `blocks config set KEY VALUE` / `list` / `remove KEY` | Manage non-secret config |
+| | `blocks telemetry [status\|enable\|disable] [--global]` | Show or change telemetry consent |
+| Generate | `blocks generate client [foundation] [output]` | Generate the typed client (`aws-blocks/client.js`) |
+| | `blocks generate spec [backend] [output]` | Generate the OpenRPC spec |
+| | `blocks generate types [--check]` | Generate secret/config key types; `--check` exits 1 when stale |
+| Data and blocks | `blocks db <migrate\|status\|generate-types\|pull> [args...]` | Data block operations, forwarded unchanged to the `bb-data` CLI |
+| Project | `blocks vendorize <package> [--force]` | Copy a Building Block into the app for customization |
+| | `blocks help [command...]` | Help |
+
+The npm-script spellings also work as hidden aliases: `dev:stop`, `sandbox:deploy`, `sandbox:destroy`, `sandbox:console`, `console`, `typegen`, `generate-client`, `spec`, `cleanup` (`dev stop --all`), and `sandbox --deploy-only` (`sandbox deploy`). `db`, `secret`, `config` and `vendorize` forward every token after their name unchanged, so put global options before the command name. The exception is `-h`/`--help`: anywhere after one of these commands it shows help and never runs the tool with your arguments. For a verb of the tool (`blocks db pull ./out --help`, `blocks help secret remove KEY`), only `<verb> --help` reaches the tool, which prints that verb's usage.
+
+Run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`; until then the check exits 1.
+
+`secret` and `config` take `--stage <name>` with any name; there is no fixed list. A value set with `--stage <name>` is read only by an app whose Hosting `secretStore` (or `configStore`) sets `stage: '<name>'`. Without `--stage`, the value is shared, and every stage falls back to it.
+
+Global options: `-h`/`--help`, `--version`, `-q`/`--quiet`, `-v`/`--verbose`, `--debug`, `--output text|json`, `--query <path>`, `-y`/`--yes`, `--no-input`, `--profile <name>` (sets `AWS_PROFILE`), `--region <region>` (sets `AWS_REGION`), `-C`/`--cwd <dir>` and `--telemetry-file <path>`. The log level is passed to child processes as `BLOCKS_LOG_LEVEL=quiet|normal|verbose|debug`. `--telemetry-file` (also `--telemetry-file=<path>`) is passed to the lifecycle runners, which also write the run's telemetry events to that file, as the npm scripts did: `npm run dev -- --telemetry-file=/tmp/events.json`. A relative path is resolved from the directory you run the command in.
+
+### Output and exit codes
+
+Results go to stdout; progress, warnings and errors go to stderr. In text mode the CLI runs core with `BLOCKS_LOG_STREAM=stderr`: core's progress lines, the CDK milestones, raw CDK output (`--verbose`/`--debug`) and the streamed CloudFormation events go to stderr, while the result lines — `🎯 Deployment target: …`, `BLOCKS_DEPLOYED …` and the final URLs — stay on stdout. Without `BLOCKS_LOG_STREAM` (core's scripts called directly) the streams are as before. With `--output json`, stdout carries exactly one JSON document and all output of CDK and other child tools moves to stderr; after a failed or interrupted deploy no result is printed. `blocks deploy` and `blocks sandbox deploy` print `{apiUrl, url, stack, account, region}`, where the account and Region are the ones the deploy itself used (it loads `.env.production` or `.env.local`); `blocks whoami` prints `{account, arn, credentials, region, projectRoot, stacks: {sandbox, production}}`; `blocks dev stop` prints `{stopped: [...]}`. Arguments after `--` are an error (exit 2) except for `db`, `secret`, `config` and `vendorize`, which forward them.
+
+`--query <path>` prints one field of that result, raw: a string without quotes, `null` as an empty line, and an object as JSON. An unknown path exits 2 before the command runs.
+
+```bash
+API_URL=$(npx --no -- blocks deploy --query apiUrl)
+npx --no -- blocks whoami --query stacks.production
+```
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | The operation failed |
+| 2 | Usage error: unknown command or option, missing argument, or a confirmation that a non-interactive run cannot give |
+| 130 | Interrupted (Ctrl-C) |
+
+Errors print as `Error: <what failed>`, then where it failed and a `Try:` line with the next step. An unknown command or option suggests the closest name. Colour is used only on a terminal, and never when `NO_COLOR` is set.
+
+`blocks destroy` prints the stack it deletes, then asks for confirmation in a terminal. Without a terminal (no TTY, `--no-input`, or `CI` set) it needs `--yes`, and exits 2 otherwise: `npx --no -- blocks destroy --yes`.
+
+### Per-app configuration
+
+`blocks dev` and `blocks sandbox` read the local server settings from `package.json` under `"blocks"`:
+
+```json
+{
+  "blocks": {
+    "dev": { "port": 3000, "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 }
+  }
+}
+```
+
+`port` is the port you open in the browser; it serves the app and proxies the frontend dev server, which listens on the internal `frontendPort` (default `3100`). `host` sets the interface to bind (default `127.0.0.1`); a `host` you set (or `--host`) is also exported to the dev server as `BLOCKS_DEV_HOST` (unless `BLOCKS_DEV_HOST` is already set, which then wins), which opts the local realtime WebSocket (`/realtime`) into that host's origins. Without `frontendCommand`, the frontend is detected from the app's dependencies and started on `frontendPort`: `next` runs `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>`, `vite` runs `npx vite --port <frontendPort> --strictPort`, and neither runs the backend only. `"frontend": false` runs the backend only even when `next` or `vite` is installed, as `--no-frontend` does; it cannot be combined with `frontendCommand` or `frontendPort`. A `frontendCommand` you set must listen on `frontendPort` itself. Flags override both: `npx --no -- blocks dev --port 4000` serves the app on http://localhost:4000.
+
+The lifecycle commands run the app's TypeScript with `tsx`, as the generated npm scripts do. The CLI runs its runners and client generation (`blocks generate client`, and the client step of `blocks deploy` and `blocks sandbox`) with the app's own `tsx` when it is installed, and otherwise with the one that `@aws-blocks/blocks` depends on. `blocks dev` runs under `tsx watch`, which restarts it on a change; the other runners run as `node --import` with the `tsx` loader, with no `tsx` process in between, so a closed terminal does not end `blocks deploy` before the deploy it runs. CDK synth is different: CDK runs the app's own `tsx`, through the `app` command in `cdk.json` (`npx tsx …` in the templates) for `blocks deploy` and `blocks destroy`, and through `npm exec tsx` for the sandbox commands. So keep `tsx` in your app's `devDependencies`, as the templates do.
 
 ## Testing
 

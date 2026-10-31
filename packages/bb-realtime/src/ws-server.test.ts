@@ -340,6 +340,12 @@ describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
 		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
 	});
 
+	it('a specific IPv6 opt-in matches its bracketed Origin, with or without brackets', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', 'fd00::1'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '[FD00::1]'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::2]:3000', 'fd00::1'), false);
+	});
+
 	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {
 		// evil.example re-pointed at this machine: the browser sends Origin and Host both = evil.example
 		assert.strictEqual(isAllowedUpgradeOrigin('http://evil.example:3000', '0.0.0.0', 'evil.example:3000'), false);
