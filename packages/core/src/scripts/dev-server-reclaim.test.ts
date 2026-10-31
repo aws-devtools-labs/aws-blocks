@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import {
   reclaimPort,
   reclaimMessage,
+  describePortHolders,
   evaluatePortBindRetry,
   createBindRetryController,
   scheduleBindRetry,
@@ -37,31 +38,34 @@ function getFreePort(): Promise<number> {
 // Fully injected: no real processes are spawned. `probe` is scripted to model
 // the port's open/closed state across the reclaim sequence, so we assert exactly
 // which signals are sent and when it gives up.
-describe('reclaimPort — frees a stale/orphaned port before startup', () => {
+describe('reclaimPort — frees a port only from listeners this app owns', () => {
   // reclaimPort probes the port up to three times: (1) initial check,
   // (2) after the SIGTERM wait, (3) the final reclaimed? check.
   function scriptedProbe(states: boolean[]): (port: number) => Promise<boolean> {
     let i = 0;
     return async () => states[Math.min(i++, states.length - 1)];
   }
+  const ours = { owned: () => true, commandOf: () => 'vite' };
 
   it('is a no-op when the port is already free (no discovery, no kills)', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
     let listed = 0;
     const result = await reclaimPort(3000, {
+      ...ours,
       probe: scriptedProbe([false]),
       listPids: () => { listed++; return [111]; },
       killTree: (pid, sig) => kills.push([pid, sig]),
       waitFree: async () => {},
     });
-    assert.deepStrictEqual(result, { wasOpen: false, reclaimed: true, pids: [] });
+    assert.deepStrictEqual(result, { wasOpen: false, reclaimed: true, pids: [], foreign: [] });
     assert.strictEqual(listed, 0, 'must not discover PIDs when the port is free');
     assert.deepStrictEqual(kills, []);
   });
 
-  it('SIGTERMs every listener and reports reclaimed when the port frees gracefully', async () => {
+  it('SIGTERMs every owned listener and reports reclaimed when the port frees gracefully', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
     const result = await reclaimPort(3100, {
+      ...ours,
       // open, then free after SIGTERM, then still free at the final check
       probe: scriptedProbe([true, false, false]),
       listPids: () => [4242, 4243],
@@ -69,12 +73,13 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
       waitFree: async () => {},
     });
     assert.deepStrictEqual(kills, [[4242, 'SIGTERM'], [4243, 'SIGTERM']]);
-    assert.deepStrictEqual(result, { wasOpen: true, reclaimed: true, pids: [4242, 4243] });
+    assert.deepStrictEqual(result, { wasOpen: true, reclaimed: true, pids: [4242, 4243], foreign: [] });
   });
 
   it('escalates to SIGKILL when the listener survives the graceful SIGTERM', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
     const result = await reclaimPort(3000, {
+      ...ours,
       // open, still open after SIGTERM, free after SIGKILL
       probe: scriptedProbe([true, true, false]),
       listPids: () => [777],
@@ -87,6 +92,7 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
 
   it('reports reclaimed:false when the port stays bound through SIGKILL', async () => {
     const result = await reclaimPort(3000, {
+      ...ours,
       probe: scriptedProbe([true, true, true]),
       listPids: () => [777],
       killTree: () => {},
@@ -96,38 +102,67 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
     assert.strictEqual(result.reclaimed, false);
   });
 
-  it('re-discovers listeners for the SIGKILL pass when the first discovery was empty', async () => {
+  it('never signals a listener it does not own, and names it instead', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
-    let call = 0;
-    const result = await reclaimPort(3000, {
-      probe: scriptedProbe([true, true, false]),
-      // First lsof pass momentarily returns nothing; second finds the owner.
-      listPids: () => (call++ === 0 ? [] : [999]),
+    const result = await reclaimPort(41012, {
+      probe: scriptedProbe([true]),
+      listPids: () => [555],
+      commandOf: () => 'python3 -m http.server 41012',
       killTree: (pid, sig) => kills.push([pid, sig]),
       waitFree: async () => {},
     });
-    assert.deepStrictEqual(kills, [[999, 'SIGKILL']]);
-    assert.strictEqual(result.reclaimed, true);
+    assert.deepStrictEqual(kills, [], 'nothing is owned by default');
+    assert.deepStrictEqual(result, {
+      wasOpen: true,
+      reclaimed: false,
+      pids: [],
+      foreign: [{ pid: 555, command: 'python3 -m http.server 41012' }],
+    });
   });
 
-  it('SIGKILLs the CURRENT owner, not the stale one, when the port changed hands during the wait', async () => {
-    // The original listener (111) is SIGTERM'd but exits, and a DIFFERENT process
-    // (222) grabs the port before the SIGKILL pass. The escalation must re-list
-    // and target the new owner (222) — never the stale pid (111) it already
-    // signalled — otherwise it SIGKILLs a dead pid and leaves the real owner.
+  it('leaves the port alone when one of its listeners is foreign, even if another is owned', async () => {
     const kills: Array<[number, NodeJS.Signals]> = [];
-    let call = 0;
-    const result = await reclaimPort(3000, {
-      // open, still open after SIGTERM (new owner now holds it), free after SIGKILL
-      probe: scriptedProbe([true, true, false]),
-      listPids: () => (call++ === 0 ? [111] : [222]),
+    const result = await reclaimPort(3100, {
+      probe: scriptedProbe([true]),
+      listPids: () => [4242, 555],
+      owned: (pid) => pid === 4242,
+      commandOf: () => 'other',
       killTree: (pid, sig) => kills.push([pid, sig]),
       waitFree: async () => {},
     });
-    assert.deepStrictEqual(kills, [[111, 'SIGTERM'], [222, 'SIGKILL']]);
-    assert.strictEqual(result.reclaimed, true);
-    // result.pids reflects the initial discovery (what we SIGTERM'd).
-    assert.deepStrictEqual(result.pids, [111]);
+    assert.deepStrictEqual(kills, []);
+    assert.deepStrictEqual(result.foreign, [{ pid: 555, command: 'other' }]);
+  });
+
+  it('signals nothing when no listener pid can be found', async () => {
+    const kills: Array<[number, NodeJS.Signals]> = [];
+    const result = await reclaimPort(3000, {
+      ...ours,
+      probe: scriptedProbe([true]),
+      listPids: () => [],
+      killTree: (pid, sig) => kills.push([pid, sig]),
+      waitFree: async () => {},
+    });
+    assert.deepStrictEqual(kills, []);
+    assert.deepStrictEqual(result, { wasOpen: true, reclaimed: false, pids: [], foreign: [] });
+  });
+
+  it('does not SIGKILL a new, foreign owner that grabbed the port during the wait', async () => {
+    // The owned listener (111) exits on SIGTERM, and an unrelated process (222)
+    // binds the port before the SIGKILL pass: it must be judged afresh, not killed.
+    const kills: Array<[number, NodeJS.Signals]> = [];
+    let call = 0;
+    const result = await reclaimPort(3000, {
+      probe: scriptedProbe([true, true, true]),
+      listPids: () => (call++ === 0 ? [111] : [222]),
+      owned: (pid) => pid === 111,
+      commandOf: (pid) => `cmd-${pid}`,
+      killTree: (pid, sig) => kills.push([pid, sig]),
+      waitFree: async () => {},
+    });
+    assert.deepStrictEqual(kills, [[111, 'SIGTERM']]);
+    assert.strictEqual(result.reclaimed, false);
+    assert.deepStrictEqual(result.foreign, [{ pid: 222, command: 'cmd-222' }]);
   });
 
   it('reports the port free once its real listener is reclaimed (real sockets, injected kill)', async () => {
@@ -141,6 +176,7 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
     // path is exercised end-to-end without spawning an OS process.
     let killed = false;
     const result = await reclaimPort(port, {
+      ...ours,
       probe: (p) => isPortOpen(p, '127.0.0.1'),
       listPids: () => [process.pid],
       killTree: () => { if (!killed) { killed = true; srv.close(); } },
@@ -152,22 +188,25 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
   });
 });
 
-// ── reclaimMessage — accurate startup reclaim-outcome messaging ──────────────
-describe('reclaimMessage — three-way reclaim outcome message', () => {
+// ── reclaimMessage / describePortHolders ─────────────────────────────────────
+describe('reclaimMessage — reclaim outcome message', () => {
   it('reports success when the port was reclaimed', () => {
-    const msg = reclaimMessage(3000, { wasOpen: true, reclaimed: true, pids: [] }, 'a stale/orphaned listener');
-    assert.match(msg, /Reclaimed port 3000 from a stale\/orphaned listener/);
+    const msg = reclaimMessage(3000, { wasOpen: true, reclaimed: true, pids: [], foreign: [] }, "this app's previous dev server");
+    assert.match(msg, /Reclaimed port 3000 from this app's previous dev server/);
   });
 
-  it('names the holding pid(s) when reclaim failed but an owner is known', () => {
-    const msg = reclaimMessage(3100, { wasOpen: true, reclaimed: false, pids: [4242, 4243] }, 'a stale/orphaned dev server');
-    assert.match(msg, /Port 3100 held by pid\(s\) \[4242, 4243\]/);
-    assert.match(msg, /stop that process and retry/);
+  it('names a foreign holder by pid and command', () => {
+    const result = { wasOpen: true, reclaimed: false, pids: [], foreign: [{ pid: 4242, command: 'python3 -m http.server 3100' }] };
+    assert.strictEqual(describePortHolders(3100, result), 'port 3100 is in use by pid 4242 (python3 -m http.server 3100)');
+    assert.match(reclaimMessage(3100, result, 'x'), /in use by pid 4242 \(python3 -m http\.server 3100\); not stopping it/);
   });
 
-  it('falls back to the generic message when reclaim failed with no owner PID', () => {
-    const msg = reclaimMessage(3000, { wasOpen: true, reclaimed: false, pids: [] }, 'a stale/orphaned listener');
-    assert.match(msg, /no owner PID found/);
+  it('names an owned listener that survived SIGKILL', () => {
+    assert.match(describePortHolders(3000, { wasOpen: true, reclaimed: false, pids: [77], foreign: [] }), /still held by pid\(s\) 77/);
+  });
+
+  it('falls back to the generic message when no owner PID was found', () => {
+    assert.match(describePortHolders(3000, { wasOpen: true, reclaimed: false, pids: [], foreign: [] }), /owner could not be found/);
   });
 });
 
@@ -461,7 +500,7 @@ describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', 
   }
 
   function makeController(
-    result: ReclaimResult = { wasOpen: true, reclaimed: true, pids: [] },
+    result: ReclaimResult = { wasOpen: true, reclaimed: true, pids: [], foreign: [] },
     policy = DEFAULT_PORT_BIND_RETRY_POLICY,
   ): Recorder {
     const rec: Recorder = {
@@ -511,7 +550,7 @@ describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', 
   });
 
   it('gives up after the attempt budget — no reclaim, no retry scheduled, actionable message', async () => {
-    const c = makeController({ wasOpen: true, reclaimed: true, pids: [] }, { maxAttempts: 2, backoffMs: 100 });
+    const c = makeController({ wasOpen: true, reclaimed: true, pids: [], foreign: [] }, { maxAttempts: 2, backoffMs: 100 });
 
     c.handler(); // attempt 1 → retry
     await flush();
@@ -525,13 +564,13 @@ describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', 
   });
 
   it('surfaces the holding pid(s) when a retry reclaim fails to free the port', async () => {
-    const c = makeController({ wasOpen: true, reclaimed: false, pids: [4242] });
+    const c = makeController({ wasOpen: true, reclaimed: false, pids: [], foreign: [{ pid: 4242, command: 'vite' }] });
 
     c.handler(); // attempt 1 → retry; reclaim fails
     await flush();
 
     assert.ok(
-      c.warnings.some((w) => /held by pid\(s\) \[4242\]/.test(w)),
+      c.warnings.some((w) => /in use by pid 4242 \(vite\)/.test(w)),
       'operator sees the pid-naming reclaim message, not just the generic banner',
     );
     // A failed reclaim still schedules the next attempt (the budget, not reclaim

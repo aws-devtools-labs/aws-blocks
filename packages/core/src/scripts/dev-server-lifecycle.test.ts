@@ -68,6 +68,40 @@ function makeApp(): string {
   return dir;
 }
 
+const quote = (word: string) => `'${word.replace(/'/g, "'\\''")}'`;
+
+/** An HTTP server answering `body` on `port`, as a separate process: a frontend, or someone else's server. */
+function serverScript(dir: string): string {
+  const script = join(dir, 'server.mjs');
+  writeFileSync(
+    script,
+    "import { createServer } from 'node:http';\n" +
+      "createServer((_q, r) => r.end(process.argv[3])).listen(Number(process.argv[2]), '127.0.0.1');\n",
+  );
+  return script;
+}
+
+function frontendCommand(dir: string, port: number, body: string): string {
+  return `${quote(process.execPath)} ${quote(serverScript(dir))} ${port} ${body}`;
+}
+
+/** Start an unrelated process that holds `port`. */
+async function foreignServer(dir: string, port: number): Promise<ChildProcess> {
+  const child = spawn(process.execPath, [serverScript(dir), String(port), 'foreign'], { stdio: 'ignore', detached: posix });
+  live.push(child);
+  await waitFor('the foreign server', () => fetchText(port).then((t) => t === 'foreign'));
+  return child;
+}
+
+async function fetchText(port: number, path = '/'): Promise<string | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(2000) });
+    return await response.text();
+  } catch {
+    return undefined;
+  }
+}
+
 function startDev(
   dir: string,
   options: Partial<DevServerOptions>,
@@ -213,5 +247,48 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     }
     await waitFor('blocks dev to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
     assert.strictEqual(await serving(port), false);
+  });
+
+  it('refuses to start when an unrelated process holds its port, and leaves that process alone', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const foreign = await foreignServer(dir, port);
+    const dev = startDev(dir, { port }, { watch: true });
+    const code = await dev.exited;
+    assert.strictEqual(code, 1, dev.out.stderr);
+    assert.match(dev.out.stderr, new RegExp(`port ${port} is in use by pid ${foreign.pid} \\(.*server\\.mjs ${port} foreign\\)`));
+    assert.match(dev.out.stderr, /choose another port with --port/);
+    assert.strictEqual(await fetchText(port), 'foreign', 'the unrelated server still answers');
+    assert.ok(!existsSync(join(dir, devPidfilePath(port))), 'the failed start leaves no pidfile');
+  });
+
+  it("never stops another app's frontend on a shared frontend port", async () => {
+    const [portA, portB, frontendPort] = await Promise.all([freePort(), freePort(), freePort()]);
+    const appA = makeApp();
+    const a = startDev(appA, { port: portA, frontendPort, frontendCommand: frontendCommand(appA, frontendPort, 'frontend-A') });
+    await waitFor("app A's frontend", async () => (await fetchText(portA)) === 'frontend-A', [a]);
+    const appB = makeApp();
+    const b = startDev(appB, { port: portB, frontendPort, frontendCommand: frontendCommand(appB, frontendPort, 'frontend-B') });
+    assert.strictEqual(await b.exited, 1, b.out.stderr);
+    assert.match(b.out.stderr, new RegExp(`port ${frontendPort} is in use by pid \\d+ .*frontend-A.*--frontend-port`, 's'));
+    assert.strictEqual(await fetchText(portA), 'frontend-A', "app A's front door still serves its own frontend");
+    assert.doesNotMatch(a.out.stderr, /Frontend dev server exited/);
+  });
+
+  it("reclaims the frontend port from its own crashed predecessor's frontend", async () => {
+    const dir = makeApp();
+    const [port, frontendPort] = await Promise.all([freePort(), freePort()]);
+    const command = frontendCommand(dir, frontendPort, 'frontend');
+    const crashed = startDev(dir, { port, frontendPort, frontendCommand: command });
+    await waitFor('the frontend', async () => (await fetchText(port)) === 'frontend', [crashed]);
+    // SIGKILL the dev server's own group: no cleanup runs, and the detached frontend (its own group) is orphaned.
+    killGroup(crashed.child);
+    await crashed.exited;
+    await waitFor('the front door to close', async () => !(await serving(port)));
+    assert.strictEqual(await fetchText(frontendPort), 'frontend', 'the orphaned frontend still holds its port');
+
+    const next = startDev(dir, { port, frontendPort, frontendCommand: command });
+    await waitFor('the new dev server', async () => (await fetchText(port)) === 'frontend' && (await serving(port)), [next]);
+    assert.match(next.out.stdout, new RegExp(`Reclaimed port ${frontendPort} from this app's previous dev server`));
   });
 });
