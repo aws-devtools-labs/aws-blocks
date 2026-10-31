@@ -436,7 +436,25 @@ export async function readAwsIdentity({
 		...(target.profile ? { profile: target.profile } : {}),
 		region: region || null,
 	};
-	if (!region) return identity;
+	if (!region) {
+		// No request to send, but a selected profile that does not exist is the first thing to fix:
+		// with it, no Region can be read from the profile either.
+		const source = environmentKeys ? undefined : await describeCredentialSource(env, profile).catch(() => undefined);
+		if (source?.type === 'missing-profile') {
+			throw new Error(
+				await credentialFailureMessage({
+					command: invocation,
+					invocation,
+					errorName: 'ProfileNotFound',
+					failure: 'unavailable',
+					env,
+					profile,
+					readAwsCliVersion,
+				}),
+			);
+		}
+		return identity;
+	}
 
 	let verified: VerifiedCredentials | undefined;
 	try {

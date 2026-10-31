@@ -11,3 +11,4 @@ fix(core): production destroy and deploy guidance for the `blocks` CLI
 - With a `stackName`, the production `destroy()` first lists the CDK app's stacks with `cdk ls`, and refuses, deleting nothing, when the app does not define that stack: `cdk destroy` acts on the stacks `index.cdk.ts` defines, not on the name the caller confirmed.
 - The error for a missing `.blocks/config.json` or `stackId` says that, for an app already deployed, `<id>-prod` must be the name of its existing production stack; another id makes the next deploy create a second production stack.
 - `getStackId()` says `.blocks/config.json is not valid JSON (<parse error>)` for a file that does not parse, instead of "not found or missing stackId".
+- `readAwsIdentity()` reports a selected profile that is not in the AWS config files even when no Region is set, instead of returning no identity, which `blocks whoami --profile <typo>` reported as "no AWS Region is set".

@@ -73,6 +73,18 @@ describe('readAwsIdentity', () => {
 		assert.strictEqual(identity.account, undefined);
 	});
 
+	it('says a selected profile does not exist, even when no Region is set', async () => {
+		await assert.rejects(
+			readAwsIdentity({
+				invocation: 'blocks whoami --profile zz-nope',
+				env: { ...env, AWS_PROFILE: 'zz-nope' },
+				projectRoot: directory,
+				readAwsCliVersion: async () => 'aws-cli/2.32.0 Python/3.13.4 Linux/6 exe/x86_64',
+			}),
+			/Profile zz-nope is not in your AWS config or credentials file\./,
+		);
+	});
+
 	it('names the invocation in the guidance for missing credentials', async () => {
 		await assert.rejects(
 			readAwsIdentity({
