@@ -11,7 +11,7 @@ import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,14 +33,20 @@ async function freePort(): Promise<number> {
 }
 
 /** Poll `check` until it returns a value; the only signal some of these real processes give. */
-async function waitFor<T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, timeoutMs = 20_000): Promise<T> {
+async function waitFor<T>(
+  what: string,
+  check: () => T | undefined | false | Promise<T | undefined | false>,
+  runs: DevRun[] = [],
+  timeoutMs = 20_000,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = await check();
     if (value) return value;
     await new Promise((r) => setTimeout(r, 25));
   }
-  assert.fail(`timed out waiting for ${what}`);
+  const output = runs.map((run, i) => `\n--- run ${i} stdout:\n${run.out.stdout}\n--- run ${i} stderr:\n${run.out.stderr}`).join('');
+  assert.fail(`timed out waiting for ${what}${output}`);
 }
 
 interface DevRun {
@@ -50,6 +56,7 @@ interface DevRun {
 }
 
 const live: ChildProcess[] = [];
+let entries = 0;
 const dirs: string[] = [];
 
 /** A minimal app: one API, run from its own directory (the dev server's pidfiles are cwd-relative). */
@@ -66,12 +73,14 @@ function startDev(
   options: Partial<DevServerOptions>,
   { watch = false, env = {} }: { watch?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): DevRun {
+  // One entry file per run: rewriting a shared one would make a running `tsx watch` reload.
+  const entry = `run-dev-${++entries}.ts`;
   writeFileSync(
-    join(dir, 'run-dev.ts'),
+    join(dir, entry),
     `import { startDevServer } from ${JSON.stringify(join(__dirname, 'dev-server.js'))};\n` +
       `startDevServer(${JSON.stringify({ backendPath: join(dir, 'backend.ts'), typegen: false, ...options })});\n`,
   );
-  const child = spawn(process.execPath, [tsxCli, ...(watch ? ['watch', '--clear-screen=false'] : []), 'run-dev.ts'], {
+  const child = spawn(process.execPath, [tsxCli, ...(watch ? ['watch', '--clear-screen=false'] : []), entry], {
     cwd: dir,
     env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1', BLOCKS_LOG_LEVEL: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -124,15 +133,55 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe('dev server lifecycle', { skip: !posix && 'POSIX process groups' }, () => {
+describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeout: 180_000 }, () => {
   it('keeps serving after its stdout and stderr readers go away (EPIPE)', async () => {
     const port = await freePort();
     // Request logging on, so every call writes to the closed stdout.
     const dev = startDev(makeApp(), { port }, { env: { BLOCKS_DEV_QUIET: '' } });
-    await waitFor('the server to start', () => dev.out.stdout.includes('local server running'));
+    await waitFor('the server to start', () => dev.out.stdout.includes('local server running'), [dev]);
     dev.child.stdout?.destroy();
     dev.child.stderr?.destroy();
     for (let i = 0; i < 3; i++) assert.strictEqual(await rpc(port), 'pong');
     assert.strictEqual(dev.child.exitCode, null, 'the dev server is still running');
+  });
+
+  it('ends a second blocks dev in the same app at once, with the reason, and leaves the first running', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const first = startDev(dir, { port }, { watch: true });
+    await waitFor('the first server', () => serving(port), [first]);
+    const failureFile = join(dir, 'failure.txt');
+    const second = startDev(dir, { port }, { watch: true, env: { BLOCKS_DEV_FAILURE_FILE: failureFile } });
+    // Its `tsx watch` exits too: nothing is left waiting for a file change.
+    await waitFor('the second blocks dev to exit', () => second.child.exitCode !== null || second.child.signalCode !== null, [first, second]);
+    assert.match(second.out.stderr, new RegExp(`already running on :${port}`));
+    assert.match(second.out.stderr, new RegExp(`blocks dev stop --port ${port}`));
+    assert.doesNotMatch(second.out.stderr, /npm run dev/);
+    assert.match(readFileSync(failureFile, 'utf-8'), new RegExp(`already running on :${port} \\(pid \\d+\\)`));
+    assert.ok(await serving(port), 'the first server still serves');
+    assert.strictEqual(first.child.exitCode, null);
+  });
+
+  it('starts exactly one of two dev servers started at the same moment', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const runs = [startDev(dir, { port }, { watch: true }), startDev(dir, { port }, { watch: true })];
+    const loser = await Promise.race(runs.map((run) => run.exited.then(() => run)));
+    const winner = runs.find((run) => run !== loser);
+    assert.ok(winner);
+    assert.match(loser.out.stderr, /already running/);
+    await waitFor('the winner to serve', () => serving(port), runs);
+    assert.strictEqual(winner.child.exitCode, null, 'the winner was not stopped by the loser');
+    assert.doesNotMatch(winner.out.stdout + winner.out.stderr, /Reclaimed|Shutting down/);
+  });
+
+  it('exits non-zero when it cannot bind the port, instead of waiting under tsx watch', { skip: process.getuid?.() === 0 && 'root can bind port 1' }, async () => {
+    const dir = makeApp();
+    const failureFile = join(dir, 'failure.txt');
+    const run = startDev(dir, { port: 1 }, { watch: true, env: { BLOCKS_DEV_FAILURE_FILE: failureFile } });
+    await waitFor('blocks dev to exit', () => run.child.exitCode !== null || run.child.signalCode !== null, [run]);
+    assert.match(run.out.stderr, /could not listen on 127\.0\.0\.1:1: .*EACCES/);
+    assert.match(readFileSync(failureFile, 'utf-8'), /EACCES/);
+    assert.ok(!existsSync(join(dir, '.blocks-sandbox', 'dev-server.1.pid')), 'the failed start leaves no pidfile');
   });
 });

@@ -4,7 +4,7 @@
 import { Agent, createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
-import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync, linkSync } from 'node:fs';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -571,11 +571,7 @@ export function createBindRetryController(
     attempts += 1;
     const decision = evaluatePortBindRetry(attempts, policy);
     if (!decision.retry) {
-      deps.warn(
-        `\n❌ Port ${port} is still in use after ${policy.maxAttempts} ` +
-        `attempts to reclaim it — another process is holding :${port}. Stop it (or run the ` +
-        `cleanup script) and retry \`npm run dev\`.\n`,
-      );
+      deps.warn(`⚠️  Port ${port} is still in use after ${policy.maxAttempts} attempts to bind it.`);
       deps.onExhausted();
       return;
     }
@@ -601,6 +597,15 @@ export interface DevServerPidRecord {
   ppid: number;
   /** The front-door port this record guards. */
   port: number;
+  /**
+   * `pid`'s command line when the record was written (`''` where it can't be
+   * read). A live `pid` counts as this dev server only while its command line
+   * still matches, so a pid the OS has since reused never blocks a start.
+   * Absent in a record written by an older version.
+   */
+  command?: string;
+  /** `ppid`'s command line when the record was written; see {@link command}. */
+  parentCommand?: string;
 }
 
 /** Parse a pidfile body into a {@link DevServerPidRecord}; `null` if absent/corrupt/incomplete. */
@@ -608,7 +613,10 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
   try {
     const o = JSON.parse(text);
     if (o && Number.isInteger(o.pid) && Number.isInteger(o.ppid) && Number.isInteger(o.port)) {
-      return { pid: o.pid, ppid: o.ppid, port: o.port };
+      const record: DevServerPidRecord = { pid: o.pid, ppid: o.ppid, port: o.port };
+      if (typeof o.command === 'string') record.command = o.command;
+      if (typeof o.parentCommand === 'string') record.parentCommand = o.parentCommand;
+      return record;
     }
   } catch {
     // Corrupt / empty pidfile — treat as absent.
@@ -627,43 +635,247 @@ export function isPidAlive(pid: number, kill: (pid: number, signal: number) => v
   }
 }
 
-/** Result of {@link evaluateSingleton}: proceed with startup, or exit cleanly (a live peer owns the port). */
+/** Read `pid`'s full command line (`ps -ww -o command=`), '' on any failure or Windows. */
+function pidCommand(pid: number): string {
+  if (process.platform === 'win32') return '';
+  try {
+    const { stdout } = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      windowsHide: true,
+      timeout: 3000,
+    });
+    return (stdout ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** True iff `command` looks like a `tsx watch` supervisor (not a bare shell). */
+function isTsxWatcher(command: string): boolean {
+  return /\btsx\b/.test(command) && /\bwatch\b/.test(command);
+}
+
+/** Which of a record's processes are still the ones it recorded. */
+export interface RecordLiveness {
+  /** The recorded dev server is alive, with the command line it had. */
+  pidAlive: boolean;
+  /** Its `tsx watch` parent is alive, with the command line it had: the session goes on across a reload. */
+  watcherAlive: boolean;
+}
+
+/**
+ * Check a record's processes against the live system. A pid counts only while
+ * its command line still matches the recorded one (when the record has one),
+ * and the parent only while it is a `tsx watch` supervisor: a plain
+ * `node server.ts` start has the caller's shell as its parent, which outlives
+ * the dev server and must not keep a stale record alive.
+ */
+export function recordLiveness(
+  record: DevServerPidRecord,
+  isAlive: (pid: number) => boolean,
+  commandOf: (pid: number) => string,
+): RecordLiveness {
+  const pidAlive =
+    isAlive(record.pid) && (record.command === undefined || commandOf(record.pid) === record.command);
+  let watcherAlive = false;
+  if (record.ppid > 1 && isAlive(record.ppid)) {
+    const parent = commandOf(record.ppid);
+    watcherAlive = isTsxWatcher(parent) && (record.parentCommand === undefined || parent === record.parentCommand);
+  }
+  return { pidAlive, watcherAlive };
+}
+
+/** Result of {@link evaluateSingleton}: proceed with startup, or exit (a live peer owns the port). */
 export type SingletonDecision = { action: 'proceed' } | { action: 'exit'; reason: string };
 
 /**
- * Decide whether a *new* dev-server invocation should start, or bow out because
- * another supervisor already owns `port`. This is the singleton guard that stops
- * the "two fighting supervisors" restart loop — a second `npm run dev` racing the
- * first on `:3000`/`:3100` — WITHOUT breaking `tsx watch`'s own restart of the
- * *same* supervisor on a file change.
+ * Decide whether a *new* dev-server invocation may take over an existing
+ * pidfile, or must bow out because another session already owns `port`. This
+ * is the singleton guard that stops two supervisors fighting over
+ * `:3000`/`:3100`, WITHOUT breaking `tsx watch`'s own restart of the *same*
+ * supervisor on a file change.
  *
- * - **No / corrupt pidfile** → proceed (first start; startup reclaim covers any orphan socket).
+ * - **No / corrupt pidfile** → proceed.
  * - **Same pid** → proceed (defensive; the record is our own).
- * - **Same parent (`ppid`) and dead recorded child** → proceed. `tsx watch` is
- *   the stable parent across reloads, and it relaunches after the old child exits.
- *   A live recorded child with the same parent can also happen when two
- *   `npm run dev` jobs share a shell, so that still goes through the live-owner
- *   check below.
- * - **Different, still-live owner actually holding the port** → exit cleanly with
- *   a clear message (do not spawn a competing supervisor).
- * - **Otherwise** (recorded owner is dead → stale pidfile, or the port is free)
- *   → proceed; startup reclaim frees any orphaned socket.
+ * - **Same parent (`ppid`) and the recorded child is gone** → proceed: `tsx
+ *   watch` is the stable parent across reloads, and it relaunches after the old
+ *   child exits. (Two jobs started from one shell also share a parent, so a
+ *   live recorded child still goes through the owner check below.)
+ * - **The recorded dev server, or its `tsx watch` session, is still alive**
+ *   (see {@link recordLiveness}) → exit with a clear message. A session between
+ *   two reloads has no live child but a live watcher, and still owns the port.
+ * - **Otherwise** the record is stale → proceed.
  */
 export function evaluateSingleton(
   existing: DevServerPidRecord | null,
   self: { pid: number; ppid: number },
-  portInUse: boolean,
-  isAlive: (pid: number) => boolean,
+  liveness: RecordLiveness,
 ): SingletonDecision {
   if (!existing) return { action: 'proceed' };
   if (existing.pid === self.pid) return { action: 'proceed' };
-  const existingPidAlive = isAlive(existing.pid);
-  if (existing.ppid === self.ppid && !existingPidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
-  const ownerAlive = existingPidAlive || (existing.ppid > 1 && isAlive(existing.ppid));
-  if (ownerAlive && portInUse) {
-    return { action: 'exit', reason: `dev server already running on :${existing.port} (pid ${existing.pid})` };
+  if (existing.ppid === self.ppid && !liveness.pidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
+  if (liveness.pidAlive || liveness.watcherAlive) {
+    const pid = liveness.pidAlive ? existing.pid : existing.ppid;
+    return { action: 'exit', reason: `a dev server is already running on :${existing.port} (pid ${pid})` };
   }
   return { action: 'proceed' };
+}
+
+/** Injectable seams for {@link claimDevPidfile} (real file system and process table by default). */
+export interface ClaimPidfileDeps {
+  /** Create `path` holding `body` only if it doesn't exist; false when it does. Atomic: no reader sees it half-written. */
+  createExclusive: (path: string, body: string) => boolean;
+  /** The file's body, or null when it doesn't exist. */
+  read: (path: string) => string | null;
+  /** Rename `from` to `to`; false when `from` doesn't exist. */
+  rename: (from: string, to: string) => boolean;
+  /** Delete `path` if it exists. */
+  remove: (path: string) => void;
+  isAlive: (pid: number) => boolean;
+  commandOf: (pid: number) => string;
+}
+
+/** Outcome of {@link claimDevPidfile}. */
+export type PidfileClaim =
+  | {
+      acquired: true;
+      /** The stale record this start took over (a crashed predecessor, or our own `tsx watch` predecessor), if any. */
+      previous: DevServerPidRecord | null;
+    }
+  | { acquired: false; reason: string };
+
+/** Write `body` to `path` only if `path` doesn't exist, atomically (temp file + hard link; `wx` where links fail). */
+function createFileExclusive(path: string, body: string): boolean {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, body);
+  try {
+    linkSync(tmp, path);
+    return true;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return false;
+    // A file system without hard links: fall back to an exclusive create.
+    try {
+      writeFileSync(path, body, { flag: 'wx' });
+      return true;
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw e2;
+    }
+  } finally {
+    try { unlinkSync(tmp); } catch { /* already gone */ }
+  }
+}
+
+function defaultClaimDeps(): ClaimPidfileDeps {
+  return {
+    createExclusive: createFileExclusive,
+    read: (p) => {
+      try { return readFileSync(p, 'utf-8'); } catch { return null; }
+    },
+    rename: (from, to) => {
+      try { renameSync(from, to); return true; } catch { return false; }
+    },
+    remove: (p) => {
+      try { unlinkSync(p); } catch { /* already gone */ }
+    },
+    isAlive: (pid) => isPidAlive(pid),
+    commandOf: (pid) => pidCommand(pid),
+  };
+}
+
+/** How many times {@link claimDevPidfile} retries when other starts keep changing the pidfile under it. */
+const CLAIM_ATTEMPTS = 5;
+
+/**
+ * Take the per-port pidfile for `self`, so exactly one dev server runs on a
+ * port even when several start at the same moment.
+ *
+ * The pidfile is created exclusively, so of two simultaneous starts only one
+ * creates it. When it already exists, {@link evaluateSingleton} decides: a live
+ * owner makes this start bow out; a stale (or unreadable) record is taken over.
+ * The takeover first renames the old pidfile to a private path — of two starts
+ * that both found it stale, only one rename succeeds — then checks that what
+ * it took is the record it judged (a racer may have replaced it, in which case
+ * that record is put back and judged again), then creates the pidfile afresh.
+ */
+export function claimDevPidfile(
+  path: string,
+  self: DevServerPidRecord,
+  deps: Partial<ClaimPidfileDeps> = {},
+): PidfileClaim {
+  const d = { ...defaultClaimDeps(), ...deps };
+  const body = JSON.stringify(self);
+  const judge = (record: DevServerPidRecord | null): SingletonDecision =>
+    record ? evaluateSingleton(record, self, recordLiveness(record, d.isAlive, d.commandOf)) : { action: 'proceed' };
+  let previous: DevServerPidRecord | null = null;
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    if (d.createExclusive(path, body)) return { acquired: true, previous };
+    const text = d.read(path);
+    if (text === null) continue; // removed since: create again
+    const existing = parsePidRecord(text);
+    const decision = judge(existing);
+    if (decision.action === 'exit') return { acquired: false, reason: decision.reason };
+    const claimPath = `${path}.${self.pid}.gc`;
+    if (!d.rename(path, claimPath)) continue; // another start took it first
+    const claimedText = d.read(claimPath);
+    const claimed = claimedText === null ? null : parsePidRecord(claimedText);
+    if (claimedText !== text) {
+      const again = judge(claimed);
+      if (again.action === 'exit') {
+        // A racer's live record: put it back unless yet another start has created one since.
+        if (claimedText !== null && !d.createExclusive(path, claimedText)) { /* the newer one stays */ }
+        d.remove(claimPath);
+        return { acquired: false, reason: again.reason };
+      }
+    }
+    d.remove(claimPath);
+    previous = claimed ?? previous;
+  }
+  return { acquired: false, reason: `other dev servers kept starting on :${self.port}` };
+}
+
+/**
+ * The environment variable naming a file the dev server writes a one-line
+ * reason to when it can't start (another dev server owns the port, the port is
+ * taken, the bind fails). `blocks dev` sets it, so it can tell this failure
+ * apart from a requested stop: both end its `tsx watch` with a signal.
+ */
+export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
+
+/** `blocks dev stop`, with `--port` when the port isn't the default. */
+function devStopCommand(port: number): string {
+  return port === 3000 ? 'blocks dev stop' : `blocks dev stop --port ${port}`;
+}
+
+/** How long {@link failDevStartup} waits for `tsx watch` to relay its SIGTERM back before exiting anyway. */
+const FAIL_RELAY_GRACE_MS = 2000;
+
+/**
+ * End the dev session on a startup failure that editing the backend can't fix.
+ * Prints `reason`, records it in {@link DEV_FAILURE_FILE_ENV}'s file, and exits 1.
+ *
+ * A `tsx watch` parent would otherwise wait for a file change forever after we
+ * exit, with nothing left running that `dev stop` could find, so it is stopped
+ * too: it gets a SIGTERM, relays it back to us, and we exit 1 then — not
+ * before — so that tsx exits with our code instead of reporting a stop.
+ * Returns at once; the process ends shortly after.
+ */
+function failDevStartup(reason: string, hint?: string): void {
+  console.error(`\n❌ ${reason}.${hint ? `\n   ${hint}` : ''}\n`);
+  const file = process.env[DEV_FAILURE_FILE_ENV];
+  if (file) {
+    try { writeFileSync(file, `${reason}${hint ? `; ${hint}` : ''}`); } catch { /* best effort */ }
+  }
+  const exit = (): never => process.exit(1);
+  const parent = process.ppid;
+  if (!(parent > 1 && isTsxWatcher(pidCommand(parent)))) exit();
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    process.removeAllListeners(signal); // no cleanup: nothing was started
+    process.once(signal, exit);
+  }
+  setTimeout(exit, FAIL_RELAY_GRACE_MS);
+  try { process.kill(parent, 'SIGTERM'); } catch { exit(); }
 }
 
 export async function startDevServer(options: DevServerOptions) {
@@ -696,14 +908,14 @@ export async function startDevServer(options: DevServerOptions) {
   installDevRejectionHandler();
 
   // ── Singleton guard ─────────────────────────────────────────────────────
-  // Prevent two fighting supervisors: a second `npm run dev` must not spawn a
-  // competing supervisor that races the first on :3000/:3100 (backend + Vite
-  // EADDRINUSE → mutual Vite kills → restart loop). We record {pid, ppid, port}
-  // in a per-port pidfile and consult it here. The `ppid` (stable `tsx watch`
-  // watcher) lets us tell a hot-reload relaunch of OUR OWN script apart from a
-  // genuine second invocation — see {@link evaluateSingleton}. A stale pidfile
-  // (dead owner) never blocks startup.
-  const pidfilePath = join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
+  // One dev server per front-door port: a second `blocks dev` must not start a
+  // supervisor that fights the first over :3000/:3100. The per-port pidfile is
+  // created exclusively (see {@link claimDevPidfile}), so this holds even for
+  // two starts at the same moment. The recorded `ppid` (the stable `tsx watch`
+  // watcher) tells a hot-reload relaunch of OUR OWN script from a second
+  // invocation, and the recorded command lines tell a live owner from a reused
+  // pid. A stale pidfile (dead owner) never blocks startup.
+  const pidfilePath = devPidfilePath(port);
   const removeOwnPidfile = (): void => {
     // Close the read-check-then-delete TOCTOU: a naive `read → if mine → unlink`
     // could delete a tsx-watch SUCCESSOR's pidfile if it wrote between our read
@@ -726,34 +938,24 @@ export async function startDevServer(options: DevServerOptions) {
     let rec: DevServerPidRecord | null = null;
     try { rec = parsePidRecord(readFileSync(claimPath, 'utf-8')); } catch { /* unreadable snapshot */ }
     if (rec && rec.pid !== process.pid) {
-      // Snapshot belongs to a successor — restore it and leave its guard intact.
-      // Residual (astronomically narrow) window: between this rename-away and
-      // rename-back the canonical path briefly has no pidfile, so a THIRD
-      // concurrent start could momentarily see "no guard" and proceed — the same
-      // benign "weakened guard, never broken startup" degradation the write path
-      // already tolerates. tsx-watch drains the old supervisor before relaunching,
-      // so overlap here does not occur in practice.
-      try { renameSync(claimPath, pidfilePath); return; } catch { /* fall through to cleanup */ }
+      // Snapshot belongs to a successor — restore it (unless a newer one exists) and leave its guard intact.
+      try { linkSync(claimPath, pidfilePath); } catch { /* a newer pidfile stays */ }
     }
     try { unlinkSync(claimPath); } catch { /* already gone */ }
   };
   {
     mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
-    let existing: DevServerPidRecord | null = null;
-    try { existing = parsePidRecord(readFileSync(pidfilePath, 'utf-8')); } catch { /* absent */ }
-    const portInUse = await isPortOpen(port);
-    const decision = evaluateSingleton(existing, { pid: process.pid, ppid: process.ppid }, portInUse, isPidAlive);
-    if (decision.action === 'exit') {
-      console.error(
-        `\n⚠️  ${decision.reason}.\n` +
-        `   Not starting a second dev server. Stop the running one with ` +
-        `\`npm run dev:stop\` and retry \`npm run dev\`.\n`,
-      );
-      process.exit(0);
+    const claim = claimDevPidfile(pidfilePath, {
+      pid: process.pid,
+      ppid: process.ppid,
+      port,
+      command: pidCommand(process.pid),
+      parentCommand: pidCommand(process.ppid),
+    });
+    if (!claim.acquired) {
+      failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(port)}\`, or use another --port.`);
+      return;
     }
-    try {
-      writeFileSync(pidfilePath, JSON.stringify({ pid: process.pid, ppid: process.ppid, port }));
-    } catch { /* best-effort — a missing pidfile only weakens the guard, never breaks startup */ }
   }
 
   // Load .env.local if present (connection strings, project refs, etc.)
@@ -1190,7 +1392,7 @@ export async function startDevServer(options: DevServerOptions) {
     reclaim: (p) => reclaimPort(p),
     relisten: () => server.listen(port, host, onListening),
     scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
-    onExhausted: () => process.exit(1),
+    onExhausted: () => failDevStartup(`port ${port} is still in use`, 'Stop the process that holds it, or use another --port.'),
     warn: (msg) => console.error(msg),
   });
   // Malformed/aborted requests must not become unhandled socket errors.
@@ -1218,8 +1420,7 @@ export async function startDevServer(options: DevServerOptions) {
       duration: Date.now() - devStartTime,
       error: { code: 'UNKNOWN', phase: 'startup' },
     });
-    console.error(`\n❌ Dev server failed to start: ${err.message}\n`);
-    process.exit(1);
+    failDevStartup(`the dev server could not listen on ${host}:${port}: ${err.message}`);
   });
 
   server.listen(port, host, onListening);
@@ -1350,21 +1551,6 @@ export interface StopDevServerDeps {
   waitFree: (port: number, timeoutMs?: number) => Promise<void>;
 }
 
-/** Read `pid`'s command line (`ps -o command=`), '' on any failure or Windows. */
-function pidCommand(pid: number): string {
-  if (process.platform === 'win32') return '';
-  try {
-    const { stdout } = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], {
-      encoding: 'utf-8',
-      windowsHide: true,
-      timeout: 3000,
-    });
-    return (stdout ?? '').trim();
-  } catch {
-    return '';
-  }
-}
-
 function defaultStopDeps(): StopDevServerDeps {
   return {
     readPidfile: (p) => {
@@ -1389,11 +1575,6 @@ function defaultStopDeps(): StopDevServerDeps {
     killTree: (pid, sig) => killListenerTree(pid, sig),
     waitFree: (p, t) => waitForPortFree(p, t),
   };
-}
-
-/** True iff `command` looks like a `tsx watch` supervisor (not a bare shell). */
-function isTsxWatcher(command: string): boolean {
-  return /\btsx\b/.test(command) && /\bwatch\b/.test(command);
 }
 
 /**

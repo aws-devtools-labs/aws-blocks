@@ -11,6 +11,8 @@ import {
   scheduleBindRetry,
   DEFAULT_PORT_BIND_RETRY_POLICY,
   evaluateSingleton,
+  recordLiveness,
+  claimDevPidfile,
   parsePidRecord,
   isPidAlive,
   isPortOpen,
@@ -198,48 +200,149 @@ describe('evaluateSingleton — one supervisor per port, hot-reload safe', () =>
     port: 3000,
     ...over,
   });
-  const alive = () => true;
-  const dead = () => false;
+  const live = { pidAlive: true, watcherAlive: true };
+  const gone = { pidAlive: false, watcherAlive: false };
 
   it('proceeds when there is no (or a corrupt) pidfile', () => {
-    assert.deepStrictEqual(evaluateSingleton(null, { pid: 1, ppid: 2 }, true, alive), { action: 'proceed' });
+    assert.deepStrictEqual(evaluateSingleton(null, { pid: 1, ppid: 2 }, live), { action: 'proceed' });
   });
 
   it('proceeds on a tsx-watch relaunch after the previous child has exited', () => {
     // New child, DIFFERENT own pid, SAME watcher parent, and old child is dead.
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 1001, ppid: 500 }, true, dead);
+    const d = evaluateSingleton(rec(), { pid: 1001, ppid: 500 }, { pidAlive: false, watcherAlive: true });
     assert.deepStrictEqual(d, { action: 'proceed' });
   });
 
-  it('exits when a same-parent live owner is actually holding the port', () => {
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500, port: 3000 }), { pid: 1001, ppid: 500 }, true, alive);
+  it('exits when a same-parent owner is still alive (two jobs from one shell)', () => {
+    const d = evaluateSingleton(rec(), { pid: 1001, ppid: 500 }, { pidAlive: true, watcherAlive: false });
     if (d.action !== 'exit') assert.fail(`expected exit, got ${d.action}`);
     assert.match(d.reason, /already running on :3000/);
     assert.match(d.reason, /pid 1000/);
   });
 
-  it('exits when a different, live supervisor is actually holding the port', () => {
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500, port: 3000 }), { pid: 2000, ppid: 900 }, true, alive);
+  it('exits when a different supervisor is alive, whether or not it has bound the port yet', () => {
+    const d = evaluateSingleton(rec(), { pid: 2000, ppid: 900 }, { pidAlive: true, watcherAlive: true });
     if (d.action !== 'exit') assert.fail(`expected exit, got ${d.action}`);
-    assert.match(d.reason, /already running on :3000/);
-    assert.match(d.reason, /pid 1000/);
+    assert.match(d.reason, /already running on :3000 \(pid 1000\)/);
   });
 
-  it('proceeds when the recorded owner is dead (stale pidfile), even if the port looks in use', () => {
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 2000, ppid: 900 }, true, dead);
-    assert.deepStrictEqual(d, { action: 'proceed' });
+  it('proceeds when the recorded owner and its watcher are gone (stale pidfile)', () => {
+    assert.deepStrictEqual(evaluateSingleton(rec(), { pid: 2000, ppid: 900 }, gone), { action: 'proceed' });
   });
 
-  it('proceeds when a different live owner is NOT holding the port (nothing to fight over)', () => {
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 2000, ppid: 900 }, false, alive);
-    assert.deepStrictEqual(d, { action: 'proceed' });
+  it('exits while another session is between two reloads (only its tsx watch is alive)', () => {
+    const d = evaluateSingleton(rec(), { pid: 2000, ppid: 900 }, { pidAlive: false, watcherAlive: true });
+    if (d.action !== 'exit') assert.fail(`expected exit, got ${d.action}`);
+    assert.match(d.reason, /pid 500/, 'names the live watcher');
+  });
+});
+
+describe('recordLiveness — a live pid counts only with the command line it had', () => {
+  const record: DevServerPidRecord = {
+    pid: 1000, ppid: 500, port: 3000, command: 'node run-dev.ts', parentCommand: 'node tsx watch run-dev.ts',
+  };
+  const commands: Record<number, string> = { 1000: 'node run-dev.ts', 500: 'node tsx watch run-dev.ts' };
+  const commandOf = (pid: number) => commands[pid] ?? '';
+
+  it('reports both alive when pid and watcher match their recorded commands', () => {
+    assert.deepStrictEqual(recordLiveness(record, () => true, commandOf), { pidAlive: true, watcherAlive: true });
   });
 
-  it('treats the owner as alive when only its parent pid is still alive', () => {
-    // Recorded pid gone, but its parent (the watcher) is alive → owner alive.
-    const isAlive = (pid: number) => pid === 500;
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 2000, ppid: 900 }, true, isAlive);
-    assert.strictEqual(d.action, 'exit');
+  it('treats a reused pid (another command) as gone', () => {
+    const reused = (pid: number) => (pid === 1000 ? 'python3 -m http.server' : commandOf(pid));
+    assert.strictEqual(recordLiveness(record, () => true, reused).pidAlive, false);
+  });
+
+  it('never counts a parent that is not a tsx watcher (a plain start from a shell)', () => {
+    const shell = { ...record, parentCommand: undefined };
+    const asShell = (pid: number) => (pid === 500 ? '-zsh' : commandOf(pid));
+    assert.strictEqual(recordLiveness(shell, () => true, asShell).watcherAlive, false);
+  });
+
+  it('falls back to pid liveness for a record without command lines (older versions)', () => {
+    const old: DevServerPidRecord = { pid: 1000, ppid: 1, port: 3000 };
+    assert.deepStrictEqual(recordLiveness(old, (pid) => pid === 1000, () => 'anything'), { pidAlive: true, watcherAlive: false });
+  });
+});
+
+describe('claimDevPidfile — exactly one start owns the port', () => {
+  /** An in-memory file system with the same atomicity as the real one. */
+  function memoryFs(initial: Record<string, string> = {}) {
+    const files = new Map(Object.entries(initial));
+    return {
+      files,
+      deps: {
+        createExclusive: (p: string, body: string) => (files.has(p) ? false : (files.set(p, body), true)),
+        read: (p: string) => files.get(p) ?? null,
+        rename: (from: string, to: string) => {
+          const body = files.get(from);
+          if (body === undefined) return false;
+          files.delete(from);
+          files.set(to, body);
+          return true;
+        },
+        remove: (p: string) => { files.delete(p); },
+      },
+    };
+  }
+  const self: DevServerPidRecord = { pid: 2000, ppid: 900, port: 3000, command: 'b', parentCommand: 'p' };
+  const path = '/app/.blocks-sandbox/dev-server.3000.pid';
+
+  it('creates the pidfile when there is none', () => {
+    const fs = memoryFs();
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => false, commandOf: () => '' });
+    assert.deepStrictEqual(claim, { acquired: true, previous: null });
+    assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), self);
+  });
+
+  it('refuses while the recorded owner is alive, and leaves its pidfile alone', () => {
+    const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 3000, command: 'a', parentCommand: 'q' });
+    const fs = memoryFs({ [path]: owner });
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => true, commandOf: (pid) => (pid === 1000 ? 'a' : 'q') });
+    assert.strictEqual(claim.acquired, false);
+    assert.strictEqual(fs.files.get(path), owner);
+    assert.strictEqual(fs.files.size, 1, 'no claim file is left behind');
+  });
+
+  it('takes over a stale pidfile and reports the record it replaced', () => {
+    const stale = { pid: 1000, ppid: 500, port: 3000, command: 'a' };
+    const fs = memoryFs({ [path]: JSON.stringify(stale) });
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => false, commandOf: () => '' });
+    assert.deepStrictEqual(claim, { acquired: true, previous: stale });
+    assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), self);
+    assert.strictEqual(fs.files.size, 1);
+  });
+
+  it('takes over a garbage pidfile', () => {
+    const fs = memoryFs({ [path]: 'garbage' });
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => false, commandOf: () => '' });
+    assert.deepStrictEqual(claim, { acquired: true, previous: null });
+  });
+
+  it('lets only one of two starts that both found the same stale pidfile win', () => {
+    // B judges the stale record, then A takes it over before B renames it: B
+    // claims A's fresh record, sees a live owner, puts it back and bows out.
+    const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 3000 });
+    const fs = memoryFs({ [path]: stale });
+    const a: DevServerPidRecord = { pid: 3000, ppid: 901, port: 3000, command: 'a3', parentCommand: 'pa' };
+    const alive = (pid: number) => pid === 3000 || pid === 901;
+    const commandOf = (pid: number) => ({ 3000: 'a3', 901: 'pa' } as Record<number, string>)[pid] ?? '';
+    let raced = false;
+    const claim = claimDevPidfile(path, self, {
+      ...fs.deps,
+      rename: (from, to) => {
+        if (!raced) {
+          raced = true;
+          assert.deepStrictEqual(claimDevPidfile(path, a, { ...fs.deps, isAlive: alive, commandOf }).acquired, true);
+        }
+        return fs.deps.rename(from, to);
+      },
+      isAlive: alive,
+      commandOf,
+    });
+    assert.strictEqual(claim.acquired, false);
+    assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), a, "the winner's pidfile is back in place");
+    assert.strictEqual(fs.files.size, 1);
   });
 });
 
