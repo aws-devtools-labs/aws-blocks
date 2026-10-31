@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, it, mock } from 'node:test';
-import { forceDeleteWarning, runValueCli, ValueCliUsageError } from './secret-cli.js';
+import { setImmediate as setImmediatePromise } from 'node:timers/promises';
+import { forceDeleteWarning, runValueCli, ValueCliInterruptedError, ValueCliUsageError } from './secret-cli.js';
 
 afterEach(() => mock.restoreAll());
 
@@ -203,6 +205,44 @@ void describe('runValueCli() — interactive / yes options', () => {
 				(e: unknown) => e instanceof ValueCliUsageError,
 				argv.join(' '),
 			);
+		}
+	});
+});
+
+/** Run `fn` with a terminal-like stdin that `feed` writes to, and capture what the prompt writes to stdout. */
+async function withTerminal<T>(
+	feed: (input: PassThrough) => void,
+	fn: () => Promise<T>,
+): Promise<{ result: Promise<T>; stdout: string }> {
+	const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => input });
+	const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+	Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
+	let stdout = '';
+	mock.method(process.stdout, 'write', (chunk: string | Uint8Array) => {
+		stdout += String(chunk);
+		return true;
+	});
+	try {
+		const result = fn();
+		// The prompt reads from the interface it creates once its import resolves.
+		while (input.listenerCount('keypress') === 0 && input.listenerCount('data') === 0) await setImmediatePromise();
+		feed(input);
+		await result.catch(() => {});
+		return { result, stdout };
+	} finally {
+		if (stdin) Object.defineProperty(process, 'stdin', stdin);
+	}
+}
+
+void describe('runValueCli() — the hidden prompt', () => {
+	void it('rejects with ValueCliInterruptedError on Ctrl-C and on Ctrl-D, before any store call', async () => {
+		// Ctrl-C after some input; Ctrl-D on an empty line (on a non-empty one it deletes a character).
+		for (const keys of ['partial\x03', '\x04']) {
+			const { result } = await withTerminal(
+				(input) => input.write(keys),
+				() => runValueCli(['set', 'ZZ_CTRL'], { kind: 'secret' }),
+			);
+			await assert.rejects(result, (e: unknown) => e instanceof ValueCliInterruptedError, JSON.stringify(keys));
 		}
 	});
 });

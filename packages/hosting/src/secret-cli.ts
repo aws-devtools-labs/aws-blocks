@@ -63,6 +63,14 @@ export class ValueCliUsageError extends Error {
 	}
 }
 
+/** The hidden value prompt ended without an answer: Ctrl-C, or the end of the input (Ctrl-D). */
+export class ValueCliInterruptedError extends Error {
+	constructor() {
+		super('The prompt was interrupted; nothing was set.');
+		this.name = 'ValueCliInterruptedError';
+	}
+}
+
 function assertValidKey(key: string): void {
 	if (!key || !KEY_PATTERN.test(key)) {
 		throw new Error(
@@ -549,10 +557,21 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 	process.stdout.write(prompt);
 	muted = true;
 	try {
-		const value = await new Promise<string>((resolve) => rl.question('', resolve));
-		process.stdout.write('\n');
-		return value;
+		return await new Promise<string>((resolve, reject) => {
+			let answered = false;
+			// In a terminal, readline reads Ctrl-C as a key: without this listener it only pauses stdin,
+			// and the prompt never settles. Ctrl-D (the end of the input) closes the interface.
+			rl.on('SIGINT', () => rl.close());
+			rl.on('close', () => {
+				if (!answered) reject(new ValueCliInterruptedError());
+			});
+			rl.question('', (answer) => {
+				answered = true;
+				resolve(answer);
+			});
+		});
 	} finally {
+		process.stdout.write('\n');
 		rl.close();
 	}
 }
