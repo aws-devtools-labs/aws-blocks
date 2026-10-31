@@ -72,8 +72,8 @@
   },
   "devDependencies": {
     "@aws-blocks/bb-lambda-compute": "^0.6.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.1153.0",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@aws-sdk/client-bedrock-runtime": "^3.1156.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3"
   },
