@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
-import { resolveDevConfig, resolveDevPort, unknownDevConfigWarnings } from './config.js';
+import { frontendPortWarning, resolveDevConfig, resolveDevPort, unknownDevConfigWarnings } from './config.js';
 import {
 	applyStageEnv,
 	blocksVersion,
@@ -357,6 +357,8 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	const config = resolveDevConfig(root, input.flags);
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
+	const portWarning = frontendPortWarning(config);
+	if (portWarning) ctx.out.warn(portWarning);
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
 	if (ctx.logLevel === 'verbose' || ctx.logLevel === 'debug') {
 		ctx.out.progress(
@@ -443,6 +445,8 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
 	for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
+	const portWarning = deployOnly ? undefined : frontendPortWarning(config);
+	if (portWarning) ctx.out.warn(portWarning);
 	const { source: _source, ...devConfig } = config;
 	const tsx = resolveTsxCli(root);
 	// startSandbox runs its dev server from one shell string. It is the dev server

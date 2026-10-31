@@ -604,4 +604,37 @@ describe('per-app dev config', () => {
 			/"blocks\.dev\.port" must be a port number/,
 		);
 	});
+
+	it('warns when a frontendCommand you set does not contain the frontend port', async () => {
+		const warning =
+			/^Warning: the frontend command "npx vite --port 3100 --strictPort" does not contain the frontend port 41079,/m;
+		const hardCoded = fixtureApp({
+			dependencies: { vite: '*' },
+			blocks: { dev: { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 } },
+		});
+		assert.match((await runCli(['dev', '--frontend-port', '41079'], { cwd: hardCoded })).stderr, warning);
+		const flag = await runCli(
+			['dev', '--frontend-command', 'npx vite --port 3100 --strictPort', '--frontend-port', '41079'],
+			{
+				cwd: fixtureApp(),
+			},
+		);
+		assert.match(flag.stderr, warning);
+		// The port in the command, or a detected frontend: nothing to warn about.
+		for (const [cwd, argv] of [
+			[hardCoded, ['dev']],
+			[fixtureApp(), ['dev', '--frontend-port', '41079']],
+			[
+				fixtureApp({ blocks: { dev: { frontendCommand: 'node web.js', frontendPort: 3100 } } }),
+				['dev', '--no-frontend'],
+			],
+		] as const) {
+			assert.doesNotMatch((await runCli([...argv], { cwd })).stderr, /frontend command/, argv.join(' '));
+		}
+		assert.match(
+			(await runCli(['dev'], { cwd: fixtureApp({ blocks: { dev: { frontendCommand: 'node web.js' } } }) }))
+				.stderr,
+			/"node web\.js" does not contain the frontend port 3100,/,
+		);
+	});
 });

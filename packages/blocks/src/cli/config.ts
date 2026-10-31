@@ -4,7 +4,7 @@
 /**
  * Per-app CLI configuration, read from `package.json` under `"blocks"`:
  *
- *     "blocks": { "dev": { "port": 3000, "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 } }
+ *     "blocks": { "dev": { "port": 3000, "frontendPort": 3100 } }
  *
  * Without `blocks.dev.frontendCommand`, the frontend is detected from the app's
  * dependencies: `next` runs the Next.js dev server, `vite` runs Vite, and
@@ -196,4 +196,22 @@ export function resolveDevConfig(root: string, flags: FlagValues = {}): Resolved
 		}
 	}
 	return resolved;
+}
+
+/**
+ * A warning when a `frontendCommand` you set (flag or package.json) does not contain the frontend port
+ * that the dev server proxies to: the command starts the frontend as written, so `--frontend-port`
+ * does not move it, and the app answers 502 if it listens elsewhere.
+ */
+export function frontendPortWarning(config: ResolvedDevConfig): string | undefined {
+	if (config.frontendCommand === undefined || (config.source !== 'flags' && config.source !== 'package.json')) {
+		return undefined;
+	}
+	const port = config.frontendPort ?? DEFAULT_FRONTEND_PORT;
+	if (new RegExp(`(^|\\D)${port}(\\D|$)`).test(config.frontendCommand)) return undefined;
+	return (
+		`the frontend command ${JSON.stringify(config.frontendCommand)} does not contain the frontend port ${port}, ` +
+		'which the dev server proxies to; if the frontend listens on another port, the app answers 502. ' +
+		'Put the port in the command, or drop "frontendCommand" so blocks dev detects next or vite and starts it on that port.'
+	);
 }
