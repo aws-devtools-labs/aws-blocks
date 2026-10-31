@@ -570,6 +570,14 @@ describe('blocks migrate', () => {
 		assert.match(run.stdout, /delete aws-blocks\/scripts\/server\.ts/);
 	});
 
+	it('--dry-run words the kept items as the plan, not as done', async () => {
+		const root = writeApp('backend@1aeebe50');
+		const run = await runCli(['migrate', '--dry-run'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.match(run.stdout, /\nWould be left for you to finish by hand \(exit code 1; everything else would be migrated\):\n/);
+		assert.doesNotMatch(run.stdout, /was migrated/);
+	});
+
 	it('--dry-run --output json reports the devConfig it would add, and writes nothing', async () => {
 		const root = writeApp('backend@1aeebe50');
 		const before = snapshot(root);

@@ -579,7 +579,12 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 	if (devConfig) lines.push(`  set package.json "blocks.dev" to ${JSON.stringify(devConfig)}`);
 	for (const file of result.removed) lines.push(`  delete ${file}`);
 	if (result.kept.length > 0) {
-		lines.push('', 'Left for you to finish by hand (exit code 1; everything else was migrated):');
+		lines.push(
+			'',
+			dryRun
+				? 'Would be left for you to finish by hand (exit code 1; everything else would be migrated):'
+				: 'Left for you to finish by hand (exit code 1; everything else was migrated):',
+		);
 		for (const { file, reason } of result.kept) lines.push(`  ${file}: ${reason}`);
 	}
 	return lines.join('\n');

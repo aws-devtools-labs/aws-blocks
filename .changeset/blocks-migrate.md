@@ -12,3 +12,4 @@ Run `npx --no -- blocks migrate --dry-run` first to see the plan. Unless you pas
 Fixes from CLI testing:
 
 - Two `blocks migrate` runs at the same time no longer crash with `ENOENT` when one deletes a wrapper the other planned to delete.
+- `blocks migrate --dry-run` no longer says "everything else was migrated" above the items it would keep.
