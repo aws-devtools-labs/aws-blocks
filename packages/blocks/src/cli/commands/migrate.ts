@@ -212,30 +212,57 @@ function findWrappers(root: string): Wrapper[] {
 	return wrappers;
 }
 
-/** Directories that hold no app source: dependencies, build output, tool state. */
-const SKIPPED_DIRS: readonly string[] = ['node_modules', 'dist', 'cdk.out', 'build'];
+/** Directories that hold no app source: dependencies, version control, build output, tool state and caches. */
+const SKIPPED_DIRS: ReadonlySet<string> = new Set([
+	'node_modules',
+	'.git',
+	'.hg',
+	'.svn',
+	'dist',
+	'build',
+	'coverage',
+	'cdk.out',
+	'.blocks-sandbox',
+	'.amplify',
+	'.next',
+	'.nuxt',
+	'.output',
+	'.svelte-kit',
+	'.astro',
+	'.vite',
+	'.turbo',
+	'.cache',
+	'.parcel-cache',
+]);
+
+/** Larger files are data or generated output, not something that runs a wrapper. */
+const MAX_SCANNED_BYTES = 1024 * 1024;
 
 /**
- * Every app file that might use a wrapper: the TypeScript and JavaScript
- * sources anywhere in the project (not dependencies, build output or dot
- * directories), and cdk.json.
+ * Every app file that might use a wrapper: each regular text file under the
+ * project root, dot directories included (`.github`, `.vscode`), so shell
+ * scripts, Dockerfiles and CI workflows count. Skipped: the {@link SKIPPED_DIRS},
+ * files over {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
+ * `package.json` (its scripts are checked after the rewrite) and symbolic links,
+ * which are not followed. Nothing above the project root is read.
  */
-function referencingSources(root: string, skip: ReadonlySet<string>): { path: string; text: string }[] {
+function referencingSources(root: string): { path: string; text: string }[] {
 	const sources: { path: string; text: string }[] = [];
 	const walk = (dir: string): void => {
-		for (const name of readdirSync(dir)) {
-			if (SKIPPED_DIRS.includes(name) || name.startsWith('.')) continue;
-			const path = join(dir, name);
-			if (statSync(path).isDirectory()) walk(path);
-			else if (/\.(c|m)?(t|j)sx?$/.test(name)) {
-				const rel = posix(relative(root, path));
-				if (!skip.has(rel)) sources.push({ path: rel, text: readFileSync(path, 'utf-8') });
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (!SKIPPED_DIRS.has(entry.name)) walk(path);
+				continue;
 			}
+			if (!entry.isFile()) continue;
+			const rel = posix(relative(root, path));
+			if (rel === 'package.json' || statSync(path).size > MAX_SCANNED_BYTES) continue;
+			const bytes = readFileSync(path);
+			if (!bytes.includes(0)) sources.push({ path: rel, text: bytes.toString('utf-8') });
 		}
 	};
 	walk(root);
-	if (existsSync(join(root, 'cdk.json')))
-		sources.push({ path: 'cdk.json', text: readFileSync(join(root, 'cdk.json'), 'utf-8') });
 	return sources;
 }
 
@@ -314,10 +341,12 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	// it at runtime without naming it (WRAPPER_RUNTIME_DEPENDENCIES), so iterate
 	// until the set of deletions is stable.
 	const candidates = new Set(wrappers.filter((w) => w.generated).map((w) => w.path));
+	const allSources = referencingSources(root);
 	let changed = true;
 	while (changed) {
 		changed = false;
-		const sources = referencingSources(root, candidates);
+		// A wrapper that is going to be deleted uses nothing.
+		const sources = allSources.filter((source) => !candidates.has(source.path));
 		for (const wrapper of wrappers) {
 			if (!candidates.has(wrapper.path)) continue;
 			const scriptUsers = Object.entries(scripts)

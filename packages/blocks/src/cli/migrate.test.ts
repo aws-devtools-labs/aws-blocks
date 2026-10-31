@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -101,6 +101,63 @@ describe('blocks migrate references', () => {
 		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.deepStrictEqual(scriptsDir(root), ['sandbox-helpers.ts']);
+	});
+
+	it('keeps a generated wrapper that a shell script, Dockerfile, CI workflow or editor config runs', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['scripts/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
+			app.files.Dockerfile = 'CMD ["npx", "tsx", "watch", "aws-blocks/scripts/server.ts"]\n';
+			app.files['.github/workflows/teardown.yml'] =
+				'jobs:\n  t:\n    steps:\n      - run: npx tsx aws-blocks/scripts/destroy.ts\n';
+			app.files['.vscode/launch.json'] = '{ "program": "aws-blocks/scripts/typegen.ts" }\n';
+			app.files['.gitlab-ci.yml'] = 'console:\n  script: npx tsx aws-blocks/scripts/console.ts\n';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => [k.file, k.reason]).sort(), [
+			['aws-blocks/scripts/console.ts', 'generated, but still used by .gitlab-ci.yml'],
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by scripts/release.sh'],
+			['aws-blocks/scripts/destroy.ts', 'generated, but still used by .github/workflows/teardown.yml'],
+			['aws-blocks/scripts/server.ts', 'generated, but still used by Dockerfile'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by .vscode/launch.json'],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'server.ts', 'typegen.ts']);
+	});
+
+	it('ignores dependencies, build output, tool state, binary and oversized files', async () => {
+		const mention = 'npx tsx aws-blocks/scripts/deploy.ts\n';
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			for (const dir of [
+				'node_modules/some-dep',
+				'.git',
+				'cdk.out',
+				'dist',
+				'.blocks-sandbox',
+				'packages/x/node_modules',
+			])
+				app.files[`${dir}/notes.txt`] = mention;
+		});
+		writeFileSync(join(root, 'image.bin'), Buffer.concat([Buffer.from(mention), Buffer.from([0, 1, 2])]));
+		writeFileSync(join(root, 'huge.log'), `${mention}${'x'.repeat(2 * 1024 * 1024)}`);
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stdout);
+		assert.deepStrictEqual(scriptsDir(root), []);
+	});
+
+	it('does not follow symbolic links', {
+		skip: process.platform === 'win32' && 'symlinks need privileges',
+	}, async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-migrate-outside-'));
+		writeFileSync(join(outside, 'release.sh'), 'npx tsx aws-blocks/scripts/deploy.ts\n');
+		symlinkSync(join(outside, 'release.sh'), join(root, 'release.sh'));
+		symlinkSync(outside, join(root, 'linked-dir'));
+		symlinkSync(join(root, 'missing'), join(root, 'dangling'));
+		symlinkSync('.', join(root, 'loop'));
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 });
 
