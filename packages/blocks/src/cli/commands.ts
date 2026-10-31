@@ -106,11 +106,16 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			},
 		);
 	}
-	const code = result.interrupted ? ExitCode.Interrupted : exitCodeForChild(result.code, result.signal);
+	// A child that is not long-running and exited 0 finished its work before the
+	// Ctrl-C reached it (`blocks db migrate` applied every migration): report that.
+	// A long-running child (`blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
+	const completed = result.code === 0 && !run.longRunning;
+	const code = result.interrupted && !completed ? ExitCode.Interrupted : exitCodeForChild(result.code, result.signal);
 	if (code === ExitCode.Interrupted) {
 		ctx.out.progress(`${run.operation} interrupted.`);
 		return code;
 	}
+	if (result.interrupted) ctx.out.progress(`${run.operation} finished before the interrupt stopped it.`);
 	if (code !== ExitCode.Ok) {
 		const where = run.where ?? [`project: ${run.cwd}`];
 		if (run.tool) {

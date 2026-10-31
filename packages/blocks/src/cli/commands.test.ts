@@ -377,7 +377,7 @@ describe('lifecycle commands', () => {
 			[{ code: 2 }, 2],
 			[{ code: 7 }, 1],
 			[{ code: null, signal: 'SIGINT' as const }, 130],
-			[{ code: 0, interrupted: true }, 130],
+			[{ code: 1, interrupted: true }, 130],
 		] as const) {
 			const run = await runCli(['vendorize', 'x'], { cwd, onSpawn: () => result });
 			assert.strictEqual(run.code, expected, JSON.stringify(result));
@@ -387,6 +387,13 @@ describe('lifecycle commands', () => {
 			failed.stderr,
 			/^Error: blocks vendorize failed: blocks-vendorize exited with code 7; its output is above\.\n {2}project: /,
 		);
+		// The child finished its work before a Ctrl-C reached it: that is the result, not an interruption.
+		const finished = await runCli(['db', 'migrate'], { cwd, onSpawn: () => ({ code: 0, interrupted: true }) });
+		assert.strictEqual(finished.code, 0);
+		assert.match(finished.stderr, /blocks db migrate finished before the interrupt stopped it\./);
+		// A long-running child exits 0 when Ctrl-C stops it: that is an interruption.
+		const dev = await runCli(['dev'], { cwd, onSpawn: () => ({ code: 0, interrupted: true }) });
+		assert.strictEqual(dev.code, 130);
 	});
 
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
