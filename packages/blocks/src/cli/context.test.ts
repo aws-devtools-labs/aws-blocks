@@ -4,12 +4,14 @@
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { connect, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { resolveDevConfig } from './config.js';
 import { createSpawnChild, findProjectRoot, isCi, logLevelFor, PromptInterrupted, promptLine } from './context.js';
 import { CliError } from './errors.js';
@@ -164,6 +166,43 @@ describe('run environment', () => {
 	});
 });
 
+/** Ports that nothing listened on a moment ago. */
+async function freePorts(count: number): Promise<number[]> {
+	const servers = Array.from({ length: count }, () => createServer());
+	const ports = await Promise.all(
+		servers.map(async (server) => {
+			server.listen(0, '127.0.0.1');
+			await once(server, 'listening');
+			const address = server.address();
+			assert.ok(address !== null && typeof address === 'object');
+			return address.port;
+		}),
+	);
+	await Promise.all(servers.map((server) => once(server.close(), 'close')));
+	return ports;
+}
+
+async function isListening(port: number): Promise<boolean> {
+	const socket = connect(port, '127.0.0.1');
+	try {
+		await once(socket, 'connect');
+		return true;
+	} catch {
+		return false;
+	} finally {
+		socket.destroy();
+	}
+}
+
+function isRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 // On Windows, child.kill() ends the child without running its handlers.
 // These tests signal a real child process, so they run on the real clock: fake
 // timers cannot advance it. The grace period is shortened to keep them quick, and
@@ -176,7 +215,7 @@ describe('signals sent to the CLI while a child runs', { skip: process.platform 
 	 * 50 ms after a SIGTERM; with `exitOnSigint`, after a SIGINT too, as the dev
 	 * server and the sandbox clean up after a Ctrl-C. SIGINT is otherwise ignored.
 	 */
-	async function start(options: { exitOnSigint?: boolean; terminateOnHangup?: boolean } = {}) {
+	async function start(options: { exitOnSigint?: boolean; longRunning?: boolean } = {}) {
 		const dir = mkdtempSync(join(tmpdir(), 'blocks-cli-signals-'));
 		const log = join(dir, 'signals.log');
 		const ready = join(dir, 'ready');
@@ -193,13 +232,13 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 writeFileSync(${JSON.stringify(ready)}, String(process.pid));
 setInterval(() => {}, 1000);
 `;
-		const spawn = createSpawnChild({ sigintGraceMs: GRACE_MS });
+		const spawn = createSpawnChild({ graceMs: GRACE_MS });
 		const running = spawn({
 			command: process.execPath,
 			args: ['-e', script],
 			cwd: dir,
 			env: process.env,
-			terminateOnHangup: options.terminateOnHangup,
+			longRunning: options.longRunning,
 		});
 		// A real child process: poll for the file it writes once its handlers are installed.
 		while (!existsSync(ready) || readFileSync(ready, 'utf-8') === '') await sleep(10);
@@ -236,15 +275,95 @@ setInterval(() => {}, 1000);
 		assert.deepStrictEqual(child.received(), ['SIGINT'], 'only the Ctrl-C itself');
 	});
 
-	it('forwards SIGTERM, and SIGHUP as SIGTERM, which tsx passes on, for a watch runner', async () => {
+	it('forwards SIGTERM at once to a child that is not long-running, as core deploy coalesces it', async () => {
 		const term = await start();
 		process.emit('SIGTERM');
 		assert.strictEqual((await term.running).interrupted, false);
 		assert.deepStrictEqual(term.received(), ['SIGTERM']);
-		const hangup = await start({ terminateOnHangup: true });
+	});
+
+	it('forwards nothing to a long-running child that a SIGTERM to the process group reached', async () => {
+		const child = await start({ longRunning: true });
+		// A supervisor, `timeout` or CI signals the whole process group: the CLI and the child.
+		process.emit('SIGTERM');
+		process.kill(child.pid, 'SIGTERM');
+		const result = await child.running;
+		await sleep(GRACE_MS * 2);
+		assert.strictEqual(result.interrupted, false);
+		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'only the group signal itself');
+	});
+
+	it('forwards one SIGTERM after the grace period to a long-running child that SIGTERM and SIGHUP to the CLI did not reach', async () => {
+		const child = await start({ longRunning: true });
 		process.emit('SIGHUP');
-		assert.strictEqual((await hangup.running).interrupted, false);
-		assert.deepStrictEqual(hangup.received(), ['SIGTERM']);
+		process.emit('SIGTERM');
+		process.emit('SIGTERM');
+		await sleep(GRACE_MS / 2);
+		assert.deepStrictEqual(child.received(), []);
+		const result = await child.running;
+		assert.strictEqual(result.interrupted, false);
+		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'exactly one SIGTERM, which tsx passes on');
+	});
+
+	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', { timeout: 60_000 }, async () => {
+		const root = mkdtempSync(join(tmpdir(), 'blocks-cli-dev-sigterm-'));
+		const [port, frontendPort] = await freePorts(2);
+		// A frontend like `npx next dev`: a leader that exits on SIGTERM at once, and the server under it,
+		// which closes its port at once but finishes writing (Next's `.next`) only a moment later.
+		writeFileSync(
+			join(root, 'frontend.cjs'),
+			[
+				"const { spawn } = require('node:child_process');",
+				"const { writeFileSync } = require('node:fs');",
+				`const server = spawn(process.execPath, ['-e', ${JSON.stringify(
+					[
+						"const http = require('node:http');",
+						"const { writeFileSync } = require('node:fs');",
+						`const listener = http.createServer((req, res) => res.end('ok')).listen(${frontendPort}, '127.0.0.1');`,
+						"process.on('SIGTERM', () => { listener.close(); setTimeout(() => { writeFileSync('frontend.stopped', ''); process.exit(0); }, 500); });",
+					].join('\n'),
+				)}], { stdio: 'inherit' });`,
+				"writeFileSync('frontend.pids', process.pid + ' ' + server.pid);",
+				"process.on('SIGTERM', () => process.exit(0));",
+			].join('\n'),
+		);
+		writeFileSync(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: 'dev-sigterm-app',
+				type: 'module',
+				blocks: { dev: { port, frontendCommand: 'node frontend.cjs', frontendPort } },
+			}),
+		);
+		mkdirSync(join(root, 'aws-blocks'));
+		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
+		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		// Its own process group, so that the SIGTERM reaches the CLI, `tsx watch` and the dev server, as `timeout` sends it.
+		const cli = spawn(process.execPath, [bin, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		let output = '';
+		cli.stdout.on('data', (chunk) => (output += chunk));
+		cli.stderr.on('data', (chunk) => (output += chunk));
+		const exited = once(cli, 'close');
+		const pidsFile = join(root, 'frontend.pids');
+		let frontendPids: number[] = [];
+		try {
+			while (!(existsSync(pidsFile) && (await isListening(port)) && (await isListening(frontendPort)))) {
+				assert.strictEqual(cli.exitCode, null, output);
+				await sleep(100);
+			}
+			frontendPids = readFileSync(pidsFile, 'utf-8').split(' ').map(Number);
+			process.kill(-(cli.pid ?? 0), 'SIGTERM');
+			await exited;
+			assert.ok(existsSync(join(root, 'frontend.stopped')), `the frontend finished stopping before blocks dev exited\n${output}`);
+			// The frontend's processes have exited; an exited orphan is reaped by its new parent at once.
+			for (let i = 0; i < 20 && frontendPids.some(isRunning); i++) await sleep(50);
+			assert.deepStrictEqual(frontendPids.filter(isRunning), [], output);
+			assert.doesNotMatch(output, /Force killing/);
+		} finally {
+			for (const pid of frontendPids) if (isRunning(pid)) process.kill(pid, 'SIGKILL');
+			if (cli.exitCode === null && cli.signalCode === null) process.kill(-(cli.pid ?? 0), 'SIGKILL');
+			rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+		}
 	});
 
 	it('otherwise ignores SIGHUP and does not forward it, as core defers it during a deploy', async () => {

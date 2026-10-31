@@ -49,7 +49,7 @@ import {
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
-interface ChildRun extends Pick<SpawnSpec, 'terminateOnHangup'> {
+interface ChildRun extends Pick<SpawnSpec, 'longRunning'> {
 	operation: string;
 	command: string;
 	args: string[];
@@ -87,7 +87,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			cwd: run.cwd,
 			env: { ...ctx.env, ...run.env },
 			stdoutToStderr: ctx.out.format === 'json',
-			terminateOnHangup: run.terminateOnHangup,
+			longRunning: run.longRunning,
 		});
 	} catch (error) {
 		throw new CliError(
@@ -112,7 +112,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	return code;
 }
 
-interface RunnerRun extends Pick<SpawnSpec, 'terminateOnHangup'>, Pick<RunnerLaunch, 'watch' | 'conditions'> {
+interface RunnerRun extends Pick<SpawnSpec, 'longRunning'>, Pick<RunnerLaunch, 'watch' | 'conditions'> {
 	runner: RunnerName;
 	operation: string;
 	/** Passed to the runner as JSON in `process.argv[2]`. */
@@ -165,7 +165,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		cwd: root,
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
-		terminateOnHangup: run.terminateOnHangup,
+		longRunning: run.longRunning,
 	});
 }
 
@@ -300,7 +300,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		operation: 'blocks dev',
 		watch: true,
 		env: devServerEnv(ctx.env, { backendPath, ...devConfig }),
-		terminateOnHangup: true,
+		longRunning: true,
 	});
 }
 
@@ -360,9 +360,9 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
 		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
 		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
-		// Watch mode runs until stopped. A deploy-only run is not stopped by the CLI on a hangup,
-		// but core's sandbox deploy does not defer SIGHUP: a hangup of the whole process group ends it.
-		terminateOnHangup: !deployOnly,
+		// Watch mode runs until stopped. A deploy-only run is not long-running: the CLI does not stop it on a
+		// hangup, but core's sandbox deploy does not defer SIGHUP, so a hangup of the whole process group ends it.
+		longRunning: !deployOnly,
 	});
 	// After an interruption or a failure there is no result to report.
 	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, 'sandbox', 'blocks sandbox deploy');
