@@ -37,7 +37,7 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import { join, posix as posixPath, relative } from 'node:path';
-import type { DevPackageConfig } from '../config.js';
+import { type DevPackageConfig, detectFrontend } from '../config.js';
 import type { Context } from '../context.js';
 import { CliError, ExitCode } from '../errors.js';
 import type { CommandInput } from '../registry.js';
@@ -497,8 +497,16 @@ export function planMigration(
 	}
 
 	const server = byFile.get('server.ts');
-	if (server?.generated && pkg.blocks?.dev === undefined)
-		result.devConfig = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash) ? SERVER_DEV_OPTIONS[server.hash] : {};
+	if (server?.generated && pkg.blocks?.dev === undefined) {
+		const options = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash) ? SERVER_DEV_OPTIONS[server.hash] : {};
+		// `blocks dev` detects the same command from the dependencies; leaving it out keeps --frontend-port working.
+		const { frontendCommand, ...rest } = options;
+		const detected =
+			frontendCommand !== undefined && options.frontendPort !== undefined
+				? detectFrontend(root)?.command(options.frontendPort)
+				: undefined;
+		result.devConfig = frontendCommand !== undefined && frontendCommand === detected ? rest : options;
+	}
 
 	// Delete generated wrappers that nothing references after the rewrite. A
 	// kept wrapper can import another one (sandbox.ts names server.ts), or start

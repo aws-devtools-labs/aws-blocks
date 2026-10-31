@@ -324,12 +324,26 @@ describe('blocks migrate', () => {
 			from: 'tsx aws-blocks/scripts/deploy.ts',
 			to: 'blocks deploy',
 		});
-		assert.deepStrictEqual(after.blocks, {
-			dev: { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 },
-		});
+		// The vite command equals what blocks dev detects from the vite dependency, so only the port moves:
+		// leaving frontendCommand out keeps `blocks dev --frontend-port` working.
+		assert.deepStrictEqual(after.blocks, { dev: { frontendPort: 3100 } });
 		assert.deepStrictEqual(result.devConfig, after.blocks?.dev, 'the JSON reports the blocks.dev it wrote');
 		assert.strictEqual(result.removed.length, 10);
 		assert.ok(!existsSync(join(root, 'aws-blocks', 'scripts')), 'the emptied scripts directory is removed');
+	});
+
+	it('keeps a frontendCommand that differs from what blocks dev detects', async () => {
+		// Without the vite dependency, blocks dev would detect no frontend: the command must be written.
+		const root = writeApp('default@0ab6b047', (app) => {
+			const pkg = app.packageJson as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+			delete pkg.dependencies?.vite;
+			delete pkg.devDependencies?.vite;
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(readPkg(root).blocks, {
+			dev: { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 },
+		});
 	});
 
 	it('migrates the same app to what create-blocks-app now scaffolds', async () => {
@@ -339,9 +353,13 @@ describe('blocks migrate', () => {
 			assert.strictEqual(run.code, 0, run.stderr);
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
-			// spec and vendorize call bins, not wrappers; migrate leaves them as they are.
-			const { spec: _a, vendorize: _b, ...expected } = current.scripts;
-			const { spec: _c, vendorize: _d, ...actual } = migrated.scripts;
+			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
+			// templates have changed them since; migrate leaves them as they are.
+			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e'];
+			const pick = (scripts: Record<string, string>) =>
+				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
+			const expected = pick(current.scripts);
+			const actual = pick(migrated.scripts);
 			assert.deepStrictEqual(actual, expected, template);
 			assert.deepStrictEqual(migrated.blocks, current.blocks, template);
 		}
