@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AwsIdentity, describeDeploymentCredentials } from '@aws-blocks/core/scripts';
+import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
@@ -1850,5 +1850,22 @@ describe('blocks secret and config', () => {
 		await runCli(['secret', 'set', 'K'], { cwd, core, env: { CI: 'true' }, stdinIsTTY: true });
 		// The tool then reports a non-TTY stdin as such, not as "--no-input or CI".
 		assert.deepStrictEqual(seen, [true, false, false]);
+	});
+
+	it('exits 2 with no --verbose hint for a bare command and an invalid key', async () => {
+		const cwd = fixtureApp();
+		for (const name of ['secret', 'config']) {
+			const bare = await runCli([name], { cwd });
+			assert.strictEqual(bare.code, 2);
+			assert.strictEqual(
+				bare.stderr,
+				`Error: "blocks ${name}" needs a verb: set, list or remove.\nTry: blocks ${name} --help\n`,
+			);
+		}
+		// The real tool: the key is checked before any store call.
+		const bad = await runCli(['secret', 'remove', 'bad-key'], { cwd, core: { runSecretCli } });
+		assert.strictEqual(bad.code, 2, bad.stderr);
+		assert.match(bad.stderr, /^Error: Invalid key "bad-key"\./);
+		assert.doesNotMatch(bad.stderr, /--verbose/);
 	});
 });

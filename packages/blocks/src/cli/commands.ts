@@ -771,7 +771,15 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 	return { interactive: !ctx.globals.noInput && !isCi(ctx.env), yes: ctx.globals.yes };
 }
 
+/** A bare `blocks secret` or `blocks config` is a usage error that points to its help, as a bare `blocks db` is. */
+function requireValueVerb(name: 'secret' | 'config', input: CommandInput): void {
+	if (input.flags.help !== true && input.passthrough.length === 0) {
+		throw new UsageError(`"blocks ${name}" needs a verb: set, list or remove.`, { hint: `blocks ${name} --help` });
+	}
+}
+
 export async function secret(ctx: Context, input: CommandInput): Promise<number> {
+	requireValueVerb('secret', input);
 	// A verb's help works outside an app too, with the default store prefix.
 	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
@@ -779,6 +787,7 @@ export async function secret(ctx: Context, input: CommandInput): Promise<number>
 }
 
 export async function config(ctx: Context, input: CommandInput): Promise<number> {
+	requireValueVerb('config', input);
 	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
 	return inProcess(ctx, () => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
