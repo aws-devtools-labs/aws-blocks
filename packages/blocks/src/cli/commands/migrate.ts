@@ -585,6 +585,15 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 	return lines.join('\n');
 }
 
+/** Remove `dir` when it is empty; a directory that is already gone is fine. */
+function removeIfEmpty(dir: string): void {
+	try {
+		if (readdirSync(dir).length === 0) rmdirSync(dir);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+	}
+}
+
 export async function migrate(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	const dryRun = input.flags['dry-run'] === true;
@@ -611,9 +620,9 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 	const { result, pkg } = planMigration(root, git.kind === 'listed' ? git.files : null);
 	if (!dryRun) {
 		if (result.changed.includes('package.json')) writePackageJson(root, pkg, result.devConfig);
-		for (const file of result.removed) rmSync(join(root, file));
-		const dir = join(root, SCRIPTS_DIR);
-		if (result.removed.length > 0 && existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir);
+		// Another run (or the user) may have deleted a file since the plan was made: the result is the same.
+		for (const file of result.removed) rmSync(join(root, file), { force: true });
+		if (result.removed.length > 0) removeIfEmpty(join(root, SCRIPTS_DIR));
 	}
 	ctx.out.result(result, describe(result, dryRun));
 	return result.kept.length > 0 ? ExitCode.Failure : ExitCode.Ok;

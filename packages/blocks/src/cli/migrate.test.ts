@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
 	existsSync,
 	mkdirSync,
@@ -608,6 +608,36 @@ describe('blocks migrate', () => {
 		git(root, 'commit', '-q', '-m', 'init');
 		const run = await runCli(['migrate'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
+	});
+
+	it('two concurrent runs do not crash on a file the other one deleted', async () => {
+		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const root = writeApp('default@0ab6b047');
+			git(root, 'init', '-q');
+			git(root, 'add', '-A');
+			git(root, 'commit', '-q', '-m', 'init');
+			const runs = await Promise.all(
+				[0, 1].map(
+					() =>
+						new Promise<{ code: number | null; stderr: string }>((resolve) => {
+							const child = spawn(process.execPath, [bin, '-C', root, 'migrate', '--output', 'json'], {
+								stdio: ['ignore', 'ignore', 'pipe'],
+							});
+							let stderr = '';
+							child.stderr.on('data', (chunk) => (stderr += chunk));
+							child.on('close', (code) => resolve({ code, stderr }));
+						}),
+				),
+			);
+			for (const run of runs) {
+				// The later run either migrates too (the deletes are idempotent) or refuses the tree the other one changed.
+				if (run.code !== 0) assert.match(run.stderr, /^Error: the git working tree has uncommitted changes/, run.stderr);
+				assert.doesNotMatch(run.stderr, /ENOENT/);
+			}
+			assert.deepStrictEqual(scriptsDir(root), []);
+			assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy');
+		}
 	});
 
 	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {
