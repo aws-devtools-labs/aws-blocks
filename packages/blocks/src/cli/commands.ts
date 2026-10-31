@@ -19,6 +19,7 @@ import {
 	blocksVersion,
 	type ChildResult,
 	type Context,
+	isCi,
 	PromptInterrupted,
 	readStageEnvFile,
 	REGION_PATTERN,
@@ -762,9 +763,12 @@ async function inProcess(ctx: Context, run: () => Promise<void>): Promise<number
 	return typeof process.exitCode === 'number' && process.exitCode !== 0 ? ExitCode.Failure : ExitCode.Ok;
 }
 
-/** `--no-input`/`CI` and the global `--yes`, for the in-process secret and config CLIs. */
+/**
+ * `--no-input`/`CI` and the global `--yes`, for the in-process secret and config CLIs. Stdin that is not
+ * a terminal is left to the tool, which says so (`stdin is not a TTY`) rather than blaming `--no-input`.
+ */
 function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
-	return { interactive: ctx.interactive, yes: ctx.globals.yes };
+	return { interactive: !ctx.globals.noInput && !isCi(ctx.env), yes: ctx.globals.yes };
 }
 
 export async function secret(ctx: Context, input: CommandInput): Promise<number> {

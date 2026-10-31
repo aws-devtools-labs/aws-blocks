@@ -1836,4 +1836,19 @@ describe('blocks secret and config', () => {
 		assert.strictEqual(run.code, 130);
 		assert.strictEqual(run.stderr, 'Interrupted; nothing was set.\n');
 	});
+
+	it('leaves stdin that is not a terminal to the tool, and refuses prompts only for --no-input or CI', async () => {
+		const cwd = fixtureApp();
+		const seen: (boolean | undefined)[] = [];
+		const core = {
+			runSecretCli: async (_args: string[], options?: { interactive?: boolean }) => {
+				seen.push(options?.interactive);
+			},
+		};
+		await runCli(['secret', 'set', 'K'], { cwd, core, stdinIsTTY: false });
+		await runCli(['--no-input', 'secret', 'set', 'K'], { cwd, core, stdinIsTTY: true });
+		await runCli(['secret', 'set', 'K'], { cwd, core, env: { CI: 'true' }, stdinIsTTY: true });
+		// The tool then reports a non-TTY stdin as such, not as "--no-input or CI".
+		assert.deepStrictEqual(seen, [true, false, false]);
+	});
 });
