@@ -7,7 +7,7 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
-import { log } from './log.js';
+import { ignoreClosedOutput, log } from './log.js';
 import { runCapture } from './run-command.js';
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
@@ -162,6 +162,7 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
 }
 
 export async function destroy(options: DestroyOptions) {
+  ignoreClosedOutput();
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
 

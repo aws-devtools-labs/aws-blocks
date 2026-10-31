@@ -98,3 +98,33 @@ export const log = {
 		console.error(stack ?? String(error));
 	},
 };
+
+/** Write errors that mean the reader of stdout/stderr is gone: a closed pipe (`EPIPE`), a hung-up terminal (`EIO`). */
+const CLOSED_OUTPUT_CODES: Readonly<Record<string, true>> = { EPIPE: true, EIO: true, ERR_STREAM_DESTROYED: true };
+
+const guardedStreams = new WeakSet<NodeJS.EventEmitter>();
+
+/**
+ * Keep running when stdout or stderr loses its reader: `… | tee log` after a
+ * Ctrl-C (tee exits with the process group), `cmd | head`, a background job
+ * whose pipe closed, or a closed terminal (SIGHUP, then `EIO`). Node reports
+ * the failed write as an `'error'` event on the stream, and with no listener
+ * that event kills the process — before a runner reaps its detached children
+ * (`cdk watch`, the dev server) or records a deploy that is still running.
+ *
+ * Installs one listener per stream that drops those errors, so later output is
+ * discarded instead. Any other stream error is rethrown, as without a listener.
+ * Idempotent. Every long-running script (deploy, destroy, sandbox, dev server)
+ * calls it first.
+ */
+export function ignoreClosedOutput(
+	streams: readonly NodeJS.EventEmitter[] = [process.stdout, process.stderr],
+): void {
+	for (const stream of streams) {
+		if (guardedStreams.has(stream)) continue;
+		guardedStreams.add(stream);
+		stream.on('error', (error: NodeJS.ErrnoException) => {
+			if (!Object.hasOwn(CLOSED_OUTPUT_CODES, error.code ?? '')) throw error;
+		});
+	}
+}

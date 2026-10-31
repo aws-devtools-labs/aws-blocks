@@ -16,7 +16,7 @@ import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
 import { BACKEND_OUTPUT_KEY, OUTPUTS_FILE } from './deploy-outputs.js';
-import { log } from './log.js';
+import { ignoreClosedOutput, log } from './log.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -230,6 +230,8 @@ export function makeInvalidationProbe(
 }
 
 export async function deploy(options: DeployOptions) {
+  // A closed terminal (SIGHUP, then EIO) or output pipe must not end the deploy (see ignoreClosedOutput).
+  ignoreClosedOutput();
   // Structured deploy history (.blocks/deploy-history.jsonl) is the primary
   // source for the dashboard's deployments view: IN_PROGRESS at start, one
   // terminal record (same id) at the end. Best-effort, never fails a deploy.
