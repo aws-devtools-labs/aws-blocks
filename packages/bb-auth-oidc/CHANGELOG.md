@@ -1,21 +1,179 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.3.0
+
+### Minor Changes
+
+- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
+
+  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
+  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
+  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
+  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
+  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
+  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
+
+  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
+
+- 928c48a: fix(bb-auth-oidc): `cognitoFederated()` registers the deployed app's callback and sign-out URLs on the Cognito app client
+
+  The Cognito app client used to register only an `https://localhost` placeholder, so Cognito's `/oauth2/authorize` answered `redirect_mismatch` for a deployed app before any identity provider was contacted. The app client now registers, resolved at synth:
+
+  - the app's public origin (`BLOCKS_PUBLIC_ORIGIN` — the CloudFront distribution, primary custom domain, HTTPS ALB or stacked door, or the managed `apiFrontDoor: 'cloudfront'` distribution) plus the callback path;
+  - the shared API Gateway URL (stage included) plus the callback path, used when no front door publishes a public origin;
+  - `http://localhost:3000` plus the callback path, in sandbox mode only.
+
+  Sign-out URLs list the same origins. Only an `https://` public origin is registered, since Cognito accepts `http://` only for `localhost`; a plain-`http://` one (an ALB door without a certificate) is left out and synth emits an `@aws-blocks/bb-auth-oidc:PlainHttpPublicOrigin` warning, because federated sign-in through that door needs HTTPS.
+
+  New `cognitoFederated()` options `additionalCallbackUrls` and `additionalLogoutUrls` register URLs that can't be derived at synth — browser PKCE SPA redirect pages, native-app custom schemes used as a direct sign-in redirect, custom-domain names other than the primary one, or a sandbox dev server on another port. Entries from every `cognitoFederated()` provider are merged and de-duplicated. Each entry is validated at synth, which fails with a descriptive error naming the URL and the option for an entry that isn't a well-formed redirect URL: surrounding whitespace or control characters, a backslash, userinfo (`@`) in the host, a missing, wildcard or non-ASCII host, a plain-`http://` URL whose host isn't `localhost`, a `javascript:`, `data:`, `file:`, `vbscript:`, `blob:` or `about:` scheme, a `#` fragment, or a `code` / `state` query parameter. Native custom schemes such as `myapp://auth/callback` are accepted; the relay flow does not need one registered, since its `redirect_uri` is the backend's HTTPS callback.
+
+  `@aws-blocks/core/cdk` exports two read-only helpers for first-party Building Blocks (marked `@internal`, not a stability-guaranteed API): `getRegisteredConfigValue(scope, key)` reads a value registered with `registerConfig`, and `getSharedGatewayUrl(scope)` returns the shared REST API's base URL. Both read at call time, so call them from a `cdk.Lazy` producer when the value is registered or built after the Building Block is constructed.
+
+  **Upgrading:** the app client's callback and sign-out URLs are now managed by the Building Block. If you added URLs to the Cognito app client outside of CDK (for example, in the console as a workaround for #1001), those manual entries are replaced on the next deploy. Add any URLs you still need through `additionalCallbackUrls` / `additionalLogoutUrls` so they are kept.
+
+- 4d5ea86: feat(auth-oidc): limit `stubIdp()` providers to local development and sandbox deployments
+
+  Behavior change (0.x minor = breaking channel): stacks that configure `stubIdp()` outside a sandbox now fail at synth, and deployed compute serves the stub IdP routes only in a sandbox.
+
+  - **AuthOIDC.** `stubIdp()` providers are now limited to local development and sandbox deployments. Synth fails when a non-sandbox stack configures a `stubIdp` provider, and deployed compute mounts the stub IdP routes only when the deployment is a sandbox. Stub authorization codes are now signed with a key derived from each instance's cookie-signing secret.
+  - **Core.** Adds `getDeploymentType()` (`'local' | 'sandbox' | 'production'`) and the `DeploymentType` type, and propagates the deployment type to runtime as `BLOCKS_DEPLOYMENT_TYPE` so an app can select providers consistently at synth and runtime. Also exports `getCachedConfigValue(key)`, which reads the loaded deployed config without the `process.env` override that `getConfigSync()` applies. `@aws-blocks/core/cdk` also exports `isSandboxContext(scope)`, which reads the `sandboxMode` CDK context.
+  - **DistributedTable.** Sandbox detection now uses `isSandboxContext()`, so a boolean `sandboxMode: true` CDK context (for example from `cdk.json` or `setContext`) is treated as a sandbox, in addition to the string `'true'`. This applies to the sandbox-only GSI management permissions and the GSI manager's sandbox mode.
+
+  To keep a stub provider for local and sandbox while using a real provider elsewhere, select providers by deployment type:
+
+  ```ts
+  import {
+    AuthOIDC,
+    google,
+    stubIdp,
+    getDeploymentType,
+  } from "@aws-blocks/blocks";
+
+  const providers =
+    getDeploymentType() === "production"
+      ? [google({ clientId, clientSecret })]
+      : [stubIdp({ name: "google" })];
+
+  new AuthOIDC(app, "auth", { providers });
+  ```
+
+  Migration: restart `npm run sandbox` once after upgrading. Its initial full deploy writes `BLOCKS_DEPLOYMENT_TYPE` into the deployed config; a `cdk watch` hotswap alone does not, and the stub IdP routes return 404 until that full deploy runs.
+
+### Patch Changes
+
+- 943d405: fix: export a type missing from the `cdk` and `aws-runtime` entry points
+
+  A type exported by the default entry point of `@aws-blocks/bb-auth-oidc` was missing from its `cdk` and
+  `aws-runtime` entries, so backend code importing it failed to type-check under that condition — for example,
+  `import type { OIDCClient } from '@aws-blocks/bb-auth-oidc'`.
+
+  The `cdk` and `aws-runtime` entries now export `OIDCClient`.
+
+- a3969b5: fix: `AuthOIDC.signInRoutePath()` works during `cdk synth`
+
+  `signInRoutePath()` only derives a path from `callbackPath`, so it now returns the same path under `cdk` as at runtime
+  (for example to build a sign-in link or a `RawRoute` path at module scope).
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 14ee6f1: refactor: use Node's built-in `base64url` encoding for signed state and session cookies
+
+  The hand-written base64url helpers are replaced with `Buffer`'s native `base64url` encoding. The encoded output is unchanged, so existing cookies and in-flight sign-in state stay valid.
+
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- Updated dependencies [0765f84]
+- Updated dependencies [5572341]
+- Updated dependencies [43603b0]
+- Updated dependencies [88747f5]
+- Updated dependencies [1076ccc]
+- Updated dependencies [aaa90b6]
+- Updated dependencies [33edca2]
+- Updated dependencies [928c48a]
+- Updated dependencies [4d5ea86]
+- Updated dependencies [90c1b12]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [943d405]
+- Updated dependencies [a3969b5]
+- Updated dependencies [48c35f6]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [9a32674]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8c73a24]
+- Updated dependencies [48c35f6]
+- Updated dependencies [4553866]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [54e9443]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d366907]
+- Updated dependencies [91ed1fc]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d062eeb]
+- Updated dependencies [c22eeee]
+- Updated dependencies [1546160]
+- Updated dependencies [92c4b20]
+- Updated dependencies [9c96135]
+- Updated dependencies [63b154f]
+- Updated dependencies [8565ef7]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [515089c]
+- Updated dependencies [dde6340]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [dd5e807]
+- Updated dependencies [db15b5e]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [72e3259]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8565ef7]
+- Updated dependencies [48c35f6]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [b003705]
+- Updated dependencies [f704a68]
+- Updated dependencies [48c35f6]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/bb-app-setting@0.4.0
+  - @aws-blocks/bb-kv-store@0.4.0
+  - @aws-blocks/bb-logger@0.3.0
+  - @aws-blocks/auth-common@0.3.0
+
 ## 0.2.2
 
 ### Patch Changes
 
 - fd10117: Fix `cognitoFederated()` failing at `cdk synth` with `CannotFindAsset`.
-  
+
   The published `@aws-blocks/bb-auth-oidc` package was missing the bundled Lambda that registers the identity provider on the user pool (`dist/idp-registration-lambda/index.js`), so any app using `cognitoFederated()` failed to synthesize. This affected both the Cognito-hosted domain prefix and custom domains. The release build now produces the bundle, so it ships with the package again.
+
 - 32a4b73: Report `AuthOIDC` as the parent block of its session store, and assert the rendered chain on the wire.
-  
+
   `AuthOIDC` built its session store with the scope it was given rather than itself, so the store's requests reported only `bb/KVStore` and no owning block. It cannot pass `this`: the store becomes the engine's session store, and the engine is an argument to `super()`. It now passes a parent carrying the block's own name, version and fully-qualified ID, built by the new `buildingBlockParent` helper, and the store's own ID is shortened to `sessions` so the session table name is unchanged.
-  
+
   `core` adds two exports: `computeScopeFullId`, the rule `Scope.fullId` already applies, and `buildingBlockParent`, which wraps it for a block that must construct a child before `super()` has run. Both replace a copy of that rule inside `bb-auth-oidc`. The Cognito env var prefix moves into the package's shared `utils.ts` alongside the cookie-secret name, so the CDK writer and the runtime reader derive both names from one function.
-  
+
   Two names change, in local and other non-Lambda `aws-runtime` runs only, where `BLOCKS_STACK_NAME` is unset and the app's root is a `Scope`. In that case the old helper walked one scope too far and produced a leading-dash ID, so the cookie-secret and Cognito env var names it looked up were not the ones the CDK side wrote, and session cookies were named `oidc_-my-app-auth`. Both now resolve. A deployed Lambda always has `BLOCKS_STACK_NAME` set and is unaffected. Under the default condition, which is what a scaffolded app's dev server resolves, the cookie prefix also changes to `oidc_my-app-auth`, from `oidc_my-app_auth` under a plain root and `oidc__my-app_auth` under a `Scope` root, because the dev entry now names cookies with the same expression as the AWS runtime instead of its own. Existing sessions in those two setups are signed out once.
-  
+
   Nothing covered the chain inside the rendered header, so a change that stopped it reaching the wire would still have passed. `bb-kv-store`'s request-capture helper now takes a parent scope, and `bb-auth-oidc` gains a suite that runs under `--conditions=aws-runtime`, where the session store is the real AWS client, and asserts the captured `user-agent` header carries both blocks root-to-leaf. The CDK suite pins the literal env var names the synth side writes, which nothing checked before, and `core` gains tests for the new helper covering attribution, the official-name gate, and the derived ID.
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [e682ba7]
 - Updated dependencies [e7e96e6]
@@ -59,7 +217,7 @@
 
 - 4456fd7: Document the full `AuthState` shape returned by `getAuthState()`/`setAuthState()` (`errorName`, `retriable`, and the `confirmingSignIn` state) in the auth READMEs, and note that `bb-auth-cognito` / `bb-auth-oidc` consumers import the type from `@aws-blocks/auth-common`.
 - 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-  
+
   Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
   request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
   dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
@@ -68,31 +226,33 @@
   so native attribution rides the SDK user-agent chain AWS service telemetry already
   counts. The Kotlin runtime already sends the header, so Kotlin
   callers are attributed as soon as this ships; Swift and Dart follow.
+
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - Updated dependencies [4456fd7]
 - Updated dependencies [fac0e75]
 - Updated dependencies [0e18d5b]
@@ -120,14 +280,14 @@
 ### Minor Changes
 
 - 7b86b8e: fix(auth-oidc): make `cognitoFederated()` deployable by registering the IdP via a deploy-time custom resource
-  
+
   `@aws-blocks/bb-app-setting` now also exports `SECRETS_BULK_CONSTRUCT_ID` — the
   construct id of the shared per-stack secret-init custom resource — so sibling
   blocks can order a resource after the SecureString values are written without
   hard-coding the string. `bb-auth-oidc`'s IdP-registration custom resource uses
   it to take an explicit dependency on that resource (compile-time coupling, so a
   rename can't silently break the ordering guarantee).
-  
+
   `cognitoFederated()` previously produced a CloudFormation template that always
   failed to deploy (#447). It registered the federated identity provider with a
   native `AWS::Cognito::UserPoolIdentityProvider` resource, writing the IdP
@@ -137,38 +297,39 @@
   `ProviderDetails`, so `cdk synth` succeeded but every deploy failed at
   change-set creation — before any resource was created — leaving the stack in
   `REVIEW_IN_PROGRESS` with `SSM Secure reference is not supported in [...ProviderDetails...]`.
-  
+
   The IdP is now registered by a **deploy-time custom resource**: a small
   Lambda-backed provider reads and decrypts the IdP credential SecureString
   parameters via the SDK at deploy time and calls Cognito's
   `CreateIdentityProvider` / `UpdateIdentityProvider` / `DeleteIdentityProvider`.
-  Only the parameter *names* cross into the CloudFormation template — the secret
+  Only the parameter _names_ cross into the CloudFormation template — the secret
   values never appear in it. The handler's role is least-privilege: scoped to
   `cognito-idp:{Create,Update,Delete}IdentityProvider` on the pool ARN,
   `ssm:GetParameter` on the specific parameter ARNs, and `kms:Decrypt` conditioned
   on `kms:ViaService = ssm.<region>`.
-  
+
   A `secret: true` `AppSetting` is an SSM SecureString at `/<fullId>` (not an AWS
   Secrets Manager entry — the `blocks secret` CLI does not apply). Set its value by
   writing the SecureString directly (`aws ssm put-parameter … --type SecureString
-  --overwrite`) or via the `AppSetting` runtime `put()`. Because the credentials
+--overwrite`) or via the `AppSetting` runtime `put()`. Because the credentials
   are read at deploy time and are not stack properties, the custom resource
   re-reads SSM on every `cdk deploy`, so a credential set or rotation takes effect
   on the next deploy. A synth-time check rejects two providers configured with the
   same `identityProvider`.
-  
+
   Verified end-to-end against a real account: `cdk deploy` succeeds (no change-set
   rejection) and the identity provider is created on the User Pool, including the
   path where a real `AppSetting(secret: true)` provisions the SecureString during
   the same deploy.
-  
+
   This is a `minor` bump for `@aws-blocks/bb-auth-oidc` (pre-1.0 minor = a behavior
   change): the synthesized template for a `cognitoFederated()` provider no longer
   contains a native `UserPoolIdentityProvider` resource — the IdP is now a custom
   resource — so anyone asserting on that resource in a snapshot will see a diff.
   The public API is unchanged.
+
 - bd67438: feat(auth-oidc): let `stubIdp()` declare test users inline
-  
+
   `stubIdp()` gains an optional `users?: StubUser[]`. Previously the stub IdP's
   identity directory could only be seeded from a `users.json` file in the mock
   data dir (with a single default user otherwise), so declaring test users meant
@@ -180,17 +341,18 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -199,19 +361,20 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - Updated dependencies [7b86b8e]
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
@@ -259,20 +422,22 @@
 ### Patch Changes
 
 - 309a236: refactor(bb): attach IAM grants to the shared execution role
-  
+
   Data and auth blocks now grant permissions to the shared Blocks execution role
   (`this.executionRole`) instead of the handler function directly. Grants land on
   the same role the handler assumes, so the effective runtime permissions are
   identical — this decouples IAM wiring from the concrete Lambda function ahead of
   the multi-compute model.
-  
+
   For `bb-distributed-data`, the DSQL endpoint and region now flow through the
   config registry (loaded into `process.env` at cold start, like every other
   block) rather than being set as direct handler environment variables, and the
   migration Lambda maps the shared execution role's ARN.
+
 - 27346f3: Make AuthOIDC `requireAuth()` throw `ApiError(401, NotAuthenticatedException)` so the documented `handle401()` 401-redirect pattern works for a signed-out protected call.
-  
+
   Previously `requireAuth()` threw a bare `Error` with no `status`. Over the JSON-RPC boundary `errorResponseFromCatch` serializes a non-`ApiError` as code `500`, so the client received an `ApiError` with `status === 500`. The README's `if (handle401(e, provider)) return;` helper only acts on `err instanceof ApiError && err.status === 401`, so it never matched and the app never redirected to sign-in — the error just surfaced. This aligns AuthOIDC with AuthCognito, whose `requireAuth()` already throws `ApiError(401, …)`. The error name is preserved, so existing `isBlocksError(e, AuthOIDCErrors.NotAuthenticated)` checks are unaffected.
+
 - 9bd5b3e: Reject stub IdP redirect_uris whose query carries a reserved OAuth/OIDC response param, or that carry a URI fragment, matching real-IdP behavior. Reserved-param matching is case-sensitive, so a distinctly-cased key such as `State` is passed through as a real IdP would.
 - Updated dependencies [1ff9d03]
 - Updated dependencies [5798492]

@@ -1,13 +1,220 @@
 # @aws-blocks/bb-data
 
+## 0.5.0
+
+### Minor Changes
+
+- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
+
+  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
+  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
+  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
+  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
+  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
+  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
+
+  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
+
+- 7114399: **Breaking (behavior):** `Database` now reports request errors as named 4xx errors instead of a generic 500 `QueryFailed`, on the local (PGlite), `pg` and Data API engines:
+
+  | Postgres error                                         | SQLSTATE | Error                                | HTTP status |
+  | ------------------------------------------------------ | -------- | ------------------------------------ | ----------- |
+  | Row-level-security rejection, or no grant for the role | `42501`  | `DatabaseErrors.PermissionDenied`    | 403         |
+  | Check constraint                                       | `23514`  | `DatabaseErrors.CheckViolation`      | 400         |
+  | Not-null constraint                                    | `23502`  | `DatabaseErrors.NotNullViolation`    | 400         |
+  | Foreign key                                            | `23503`  | `DatabaseErrors.ForeignKeyViolation` | 409         |
+
+  Match them with `isBlocksError(e, DatabaseErrors.PermissionDenied)` and so on, on the server or the client. Each carries a fixed message; the driver text stays on the server as `cause`. None is retriable.
+
+  If your code matched these failures with `isBlocksError(e, DatabaseErrors.QueryFailed)`, or treated them as server errors because their status was 500, match the new names instead.
+
+  `withRLS()` on PostgreSQL 16 and later (including Aurora) also needs the database user to be a member of the RLS roles: add `GRANT authenticated TO CURRENT_USER;` (and the same for `anon`) to your migrations. If the role switch is refused, `withRLS()` fails with a 500 `QueryFailed` and the server log names the missing grant.
+
+- 92909f8: **Breaking (behavior):** `withRLS({ userId, role, claims })` no longer lets `claims` override `sub` or `role` in `request.jwt.claims`. `sub` always comes from `userId` and `role` from `role`, so an RLS policy that reads either claim sees the server-derived value. Any other claims still pass through.
+
+  If you relied on `claims.sub` or `claims.role` to change those values, pass the intended value as `userId` or `role`, or put it under a different claim name.
+
+### Patch Changes
+
+- 943d405: fix: export types missing from the `cdk` entry point
+
+  Some types exported by the default entry point of `@aws-blocks/bb-data` were missing from its `cdk` entry, so backend
+  code importing them failed to type-check under that condition — for example,
+  `import type { CrudOptions } from '@aws-blocks/bb-data'`.
+
+  The `cdk` entry now exports `PgClientEngineConfig`, `RLSContext`, `SubnetSelection`, `TableSchema`, `TableMetaEntry`,
+  `CrudOptions`, `CrudMethods`, `QueryOpts`, `TableTypeMeta`, `CrudAuthResult`.
+
+- a3969b5: fix: actionable errors for runtime methods called during `cdk synth`
+
+  Calling a Building Block's runtime method (for example `db.query()`, `bucket.put()`, `auth.requireAuth()`, or
+  `auth.admin`) at the top level of a backend module runs it during `cdk synth`. For many Building Blocks this failed with
+  a cryptic `TypeError: x is not a function`; it now throws the same actionable error the other Building Blocks already
+  give: `<Class>.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+
+- 48c35f6: fix: export the same names from every conditional entry point
+
+  Some Building Blocks were missing named exports from their `cdk` or `browser`
+  entry points, even though the TypeScript types said they were there. Importing
+  one of these names from code evaluated during `cdk synth`, or from a browser
+  bundle, failed at import time. Added:
+
+  - `cdk` entry: `InterruptError` (`@aws-blocks/bb-agent`), `BatchSubmitFailedError`
+    (`@aws-blocks/bb-async-job`), and `RLSEnabledDatabase` and `PgClientEngine`
+    (`@aws-blocks/bb-data`).
+  - `browser` entry: the error constants `AgentErrors`, `AppSettingErrors`,
+    `EmailErrors`, `FileBucketErrors` and `LoggingErrors` (for `isBlocksError` checks
+    in frontend code), plus `InterruptError`, `BedrockModels` and `OllamaModels`
+    (`@aws-blocks/bb-agent`) and `fromExisting` (`@aws-blocks/bb-data`).
+
+  The conditional-exports regression test now compares every Building Block's
+  `aws-runtime`, `cdk` and `browser` entries against its default entry in both
+  directions, so these gaps can't come back unnoticed.
+
+- 414df36: fix(bb-data): return real arrays and parsed JSON from the Data API engine
+
+  On AWS, `Database` runs over the RDS Data API, which returns array columns (`text[]`, `int[]`, ...) in a dedicated array shape and `json` / `jsonb` columns as JSON strings. The engine's result unmarshaller dropped the array shape to `null` and returned the JSON strings unparsed, so the same query produced different JavaScript values on AWS than it did on the local PGlite engine — arrays became `null` and objects became strings, with no warning.
+
+  The unmarshaller now maps array columns to JS arrays (recursing through nested arrays) and parses `json` / `jsonb` values into objects using the column type reported in the result metadata, so a query returns the same values on both engines. Element parsing for `json[]` / `jsonb[]` columns is handled too; a malformed JSON string is returned unchanged rather than failing the query.
+
+- d1b4900: fix(bb-data): `db pull` no longer erases other settings in `.env.local` and `.env.production`
+
+  `db pull` used to replace the whole env file with a single `SUPABASE_DB_URL=` line, deleting anything else you kept there (for example `AWS_PROFILE` or an OIDC client secret). Because these files are usually gitignored, those values couldn't be recovered. `db pull` now adds or updates only the `SUPABASE_DB_URL` entry and keeps every other line, comment, blank line, line ending and the file's permissions. An existing `SUPABASE_DB_URL` is updated in place rather than duplicated: the whole line after `=` is rewritten, so nothing from the old value is left behind (including the tail of an unquoted password containing `#` written by an earlier `db pull`), and a comment at the end of that line is not kept. A connection string that needs quoting (for example one containing `#`) is quoted so it reads back intact. As before, the file is written in place, so its owner, group and ACLs are kept too. If `.env.local` can't be updated safely (for example, the change would alter how another entry is read), `db pull` now stops before connecting or generating any files, instead of failing after writing them. When `.env.production` already exists, the production prompt now asks whether to update its `SUPABASE_DB_URL` entry and says that other settings are kept.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- ce5dfa9: feat(compute): the `Compute` block and container-backed AsyncJobs
+
+  Adds a single `Compute` Building Block for choosing where a workload runs, and
+  lets an `AsyncJob` run on a container (AWS Fargate) instead of the default
+  serverless compute — for long-running or high-memory work. All net-new,
+  unreleased surface.
+
+  **`Compute`.** `new Compute(scope, id, { type, ...options })` states the compute
+  type explicitly (`serverless` | `container`); Blocks maps the type to the AWS
+  service. Options are per-type (a discriminated union), so an attribute that
+  doesn't apply to the chosen type is a compile error, and the service name never
+  appears in the API. The concrete backing computes stay internal and extend
+  `Scope` like every other block.
+
+  - `serverless`: `memory`, `maxTimeoutSeconds` (the function's runtime ceiling).
+  - `container`: `size` (a valid `{ vcpu, memory }` combination — invalid pairs are
+    unrepresentable), `scaling` (real Application Auto Scaling —
+    `min/maxInstances` + `cpu`/`memory` target-tracking and `queue-depth`
+    step-scaling policies;
+    queue-depth sums the messages across the queues the compute drains), and a
+    custom `image`.
+
+  **`AsyncJob({ compute })`.** A job runs on the app default (serverless) unless
+  given a `Compute`. On a container, delivery is an owner-matched SQS poller the
+  container self-starts, and each delivery runs in its own worker thread so the
+  job's `timeoutSeconds` is hard-enforced (the worker is terminated at the
+  deadline). `maxConcurrencyPerCPU` sets in-flight deliveries per vCPU — the
+  per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`, and it is a
+  compile error (and a synth-time error) on a serverless job. Both are properties
+  of the work and live on the job; `size`/`scaling` live on the compute. In local
+  dev, compute assignment is transparent. `AsyncJobOptions` has no compute-kind
+  type parameter — the kind is inferred from the `compute` argument — so
+  `new AsyncJob<Payload>(…)` with a container compute compiles without spelling a
+  second generic.
+
+  **One shared VPC per backend, and stateful blocks stay put.** A container needs
+  a VPC, so Blocks provisions **one** shared VPC (and one ECS cluster) per backend
+  root at a fixed id — N container configs do **not** create N VPCs, and placement
+  is independent of declaration order. The shared VPC is tagged by origin:
+  `provided` (customer passed `defaults.vpc.network`) or `derived` (Blocks created
+  it). Stateless compute (Lambda, the container) uses whichever exists. A
+  **stateful** block — today `Database` — joins only a customer-`provided` VPC; it
+  never auto-joins a Blocks-`derived` one. This is a safety guarantee: without it,
+  adding a container (or upgrading to a version that derives a VPC) could move an
+  existing Aurora cluster into the new VPC, which CloudFormation applies as a
+  _replacement_ — destroying the database. A Database with no customer VPC keeps
+  building its own, exactly as before. (Moving a Database into a shared VPC remains
+  a deliberate, out-of-band migration.)
+
+- 48c35f6: Scripts that use a local `Database` or `DistributedDatabase` now exit when they finish. Before, a short-lived script that imported your backend under local development (a seed script, a one-off CLI step, a test) kept running forever after its last query, because the local database engine held the process open. The local engine also now shuts down cleanly when the process exits, so the next start no longer logs `Removed stale postmaster.pid`. Your local data in `.bb-data/` persists as before, and `npm run dev` is unaffected: the dev server keeps running and serving queries until you stop it.
+- d366907: fix: closing a local Database or DistributedData engine no longer hangs with PGlite 0.5.10
+
+  PGlite 0.5.10's `close()` never resolves while the instance is still initializing. An engine destroyed before its
+  first query, for example in a test teardown or a process shutting down early, would hang forever. `destroy()` now waits
+  for PGlite's initialization to settle (or fail) before closing.
+
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- 48c35f6: Vendorized apps using `DistributedTable` with an index, `Database` with migrations, or `DistributedDatabase` now synthesize. A vendorized copy (`npm run vendorize -- <Block>`) contains only the TypeScript sources, so these blocks' deploy-time Lambdas (the GSI manager and the migration runner) previously failed synth with `Cannot find asset` or `Cannot find entry file`. Their handlers are now bundled from the vendorized source at synth, so your edits to them deploy too. Installed (non-vendorized) apps are unchanged: their Lambda assets are byte-for-byte the same.
+
+  The helpers that do this, `deployTimeLambdaCode()` and `deployTimeLambdaEntry()`, are framework-internal (`@aws-blocks/core/cdk/internal`), for Building Blocks in this repository that ship a pre-bundled or compiled Lambda handler; they are not on the public `@aws-blocks/core/cdk` or `@aws-blocks/blocks/cdk` entry.
+
+- Updated dependencies [0765f84]
+- Updated dependencies [5572341]
+- Updated dependencies [43603b0]
+- Updated dependencies [88747f5]
+- Updated dependencies [1076ccc]
+- Updated dependencies [928c48a]
+- Updated dependencies [4d5ea86]
+- Updated dependencies [90c1b12]
+- Updated dependencies [943d405]
+- Updated dependencies [50b8c94]
+- Updated dependencies [a3969b5]
+- Updated dependencies [a3969b5]
+- Updated dependencies [48c35f6]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [9a32674]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8c73a24]
+- Updated dependencies [48c35f6]
+- Updated dependencies [4553866]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [54e9443]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d366907]
+- Updated dependencies [91ed1fc]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d062eeb]
+- Updated dependencies [c22eeee]
+- Updated dependencies [1546160]
+- Updated dependencies [9c96135]
+- Updated dependencies [63b154f]
+- Updated dependencies [8565ef7]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [515089c]
+- Updated dependencies [dde6340]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [dd5e807]
+- Updated dependencies [48c35f6]
+- Updated dependencies [db15b5e]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [72e3259]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8565ef7]
+- Updated dependencies [48c35f6]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [b003705]
+- Updated dependencies [48c35f6]
+  - @aws-blocks/core@0.8.0
+  - @aws-blocks/bb-app-setting@0.4.0
+  - @aws-blocks/bb-logger@0.3.0
+  - @aws-blocks/data-common@0.1.7
+
 ## 0.4.0
 
 ### Minor Changes
 
 - 8f725b6: fix(bb-data): enable Aurora storage encryption, backup retention, and log export
-  
+
   Hardens the Aurora Serverless v2 cluster synthesized by `Database`:
-  
+
   - **Storage encryption at rest** is opt-in via the
     `@aws-blocks/bb-data:encryptStorageByDefault` context flag — set in the new
     `create-blocks-app` cdk.json templates, so new projects encrypt by default with
@@ -27,17 +234,17 @@
     Logs, with retention following the stack-wide `defaults.logRetention`.
   - `iamAuthentication` remains intentionally off (access is exclusively via the RDS
     Data API), and automatic secret rotation is documented as a follow-up.
-  
+
   `@aws-blocks/create-blocks-app` scaffolds this default into new projects: every
   template's `cdk.json` now sets the `@aws-blocks/bb-data:encryptStorageByDefault`
   context flag, and the Amplify overlay sets the same flag via `setContext`. As a
   result, a `Database` created in a newly scaffolded project encrypts its storage at
   rest by default.
-  
+
   **Breaking for existing stacks (0.x minor = breaking channel):** the
   backup-retention and CloudWatch log-export changes alter synthesized cluster
   properties, so existing stacks will show a CloudFormation diff.
-  
+
   Storage encryption is **opt-in** specifically so it does **not** silently replace
   existing clusters: with neither the context flag nor a `storageEncryptionKeyArn`
   set, the `StorageEncrypted` property is left unset and the existing cluster is
@@ -60,20 +267,21 @@
   a project that already deployed encrypted, e.g. deleting the cdk.json line or a
   merge dropping it — also changes `StorageEncrypted` and so likewise replaces the
   cluster (back to unencrypted), with the same new-empty-cluster / no-schema outcome.
+
 - b8649dc: feat(core): report the BB user-agent chain as the Postgres `application_name`
-  
+
   The two pg-based Building Blocks now report the block's user-agent chain as the
   Postgres `application_name` (`aws-blocks/<core> bb/Database/<version>`), so the
   origin of a connection is visible to the server — in `pg_stat_activity` where
   the server exposes it, and in provider dashboards. `bb-data` does this on its
   `connectionString` path; the RDS Data API path is HTTP and unaffected.
   `bb-distributed-data` does it on the DSQL path.
-  
+
   The chain is supplied as pg's `fallback_application_name`, which libpq
   documents for a library setting a default name "but allow it to be overridden by
   the user" — so an `application_name` already set in the caller's connection
   string, or their `PGAPPNAME`, is used instead and never replaced.
-  
+
   `Scope.formatUserAgentString()` renders the chain for any string-typed sink and
   applies the two Postgres constraints on `application_name` itself: it keeps the
   value within the 63-**byte** `NAMEDATALEN - 1` limit by dropping whole parent
@@ -85,22 +293,23 @@
 ### Patch Changes
 
 - 3a7eb9e: fix: export runtime values missing from the `cdk` entry points
-  
+
   Some values exported by a Building Block's default and `aws-runtime` entry points were missing from its `cdk` entry,
   so a backend file importing them crashed `cdk synth` at load time — for example, the `InterruptError` import shown in
   the `bb-agent` README failed with `does not provide an export named 'InterruptError'`. The `cdk` entries now also
   export:
-  
+
   - `@aws-blocks/bb-agent`: `InterruptError`
   - `@aws-blocks/bb-async-job`: `BatchSubmitFailedError`
   - `@aws-blocks/bb-auth-cognito`: `SessionStore`; standalone session tables also enable DynamoDB TTL when a positive
     session lifetime is configured.
   - `@aws-blocks/bb-data`: `RLSEnabledDatabase`, `PgClientEngine`
-  
+
   `@aws-blocks/blocks`: picks up the fixed `cdk` entries of the Building Blocks above. The conditional-export parity
   test now also checks every Building Block's `cdk` entry.
+
 - 03ce866: Keep the local dev server alive when a PGlite init trap aborts constructor-time migrations, and recover from it
-  
+
   A `Database` / `DistributedDatabase` configured with `migrationsPath` runs its
   migrations eagerly in the constructor, before any query awaits them. If PGlite's
   WASM `_pg_initdb` aborts (notably under memory pressure, where the WASM linear
@@ -110,10 +319,11 @@
   so the dev server survives; the same rejection still reaches callers via the
   ready-gate, so a query after a failed init surfaces a branded
   `QueryFailedException` rather than being swallowed.
-  
+
   A transient trap no longer wedges the data layer: on an init trap the cached
   rejected promise is cleared, so the next query re-runs the idempotent migrations
   once memory eases (matching the engine's own recover-on-retry behaviour).
+
 - Updated dependencies [ec7eebe]
 - Updated dependencies [e682ba7]
 - Updated dependencies [e7e96e6]
@@ -154,7 +364,7 @@
 ### Patch Changes
 
 - 757d4a9: feat(core): forward the native client user-agent into the AWS SDK user agent
-  
+
   Native runtimes send `x-blocks-user-agent: aws-blocks-<lang>/<version>` on the RPC
   request. `@aws-blocks/core` validates it against a strict grammar (length-capped,
   dropped silently when malformed), carries it per request in an `AsyncLocalStorage`,
@@ -163,38 +373,41 @@
   so native attribution rides the SDK user-agent chain AWS service telemetry already
   counts. The Kotlin runtime already sends the header, so Kotlin
   callers are attributed as soon as this ships; Swift and Dart follow.
+
 - b0be240: Upgrade PGlite from `^0.2.0` to `^0.5.8` to address the `_pg_initdb` WASM init crash seen on Node 22 / CI.
-  
+
   On the CI runner (Node 22), PGlite's WASM `initdb` traps with `RuntimeError: unreachable` at `_pg_initdb`; the trapped instance is unrecoverable, so a Database or DistributedDatabase block whose init hits the trap fails to start. The `0.3.7` "wasm runtime exception" fix (electric-sql/pglite#753) did NOT resolve it — an upgrade to `0.3.16` was verified to still trap. PGlite `0.4.0` re-architected initdb into a separate module and `0.4.3` added an initial-memory-size control, so the plausible fix for an initdb-path trap is in the 0.4.x+ line, not 0.3.x. This moves to the current `0.5.8`.
-  
-  The query/transaction API surface the engines use (`new PGlite(dir)`, `query().rows`, `query().affectedRows`, `close()`, `BEGIN`/`COMMIT`/`ROLLBACK`) and the structural data-directory markers (`PG_VERSION`, `base`, `global`, `global/pg_control`) are unchanged on `0.5.8`, so no engine code changes are required. Note: a `.bb-data` directory created by `0.2` (embedded PG16) is **not** forward-compatible with `0.5.8` (embedded PG18) — `hasInitializedPgliteDataDir` keys on marker *presence*, not the `PG_VERSION` contents, so a stale PG16 dir is treated as initialized and the mismatch surfaces at first query with no auto-recovery. Local-dev only (CI starts clean and `.bb-data` is gitignored); a dev with an old dir must delete it and let `0.5.8` recreate it.
-  
+
+  The query/transaction API surface the engines use (`new PGlite(dir)`, `query().rows`, `query().affectedRows`, `close()`, `BEGIN`/`COMMIT`/`ROLLBACK`) and the structural data-directory markers (`PG_VERSION`, `base`, `global`, `global/pg_control`) are unchanged on `0.5.8`, so no engine code changes are required. Note: a `.bb-data` directory created by `0.2` (embedded PG16) is **not** forward-compatible with `0.5.8` (embedded PG18) — `hasInitializedPgliteDataDir` keys on marker _presence_, not the `PG_VERSION` contents, so a stale PG16 dir is treated as initialized and the mismatch surfaces at first query with no auto-recovery. Local-dev only (CI starts clean and `.bb-data` is gitignored); a dev with an old dir must delete it and let `0.5.8` recreate it.
+
   Note: the trap does not reproduce locally (it is CI-runner-specific), so the crash fix is verified in CI by the `oidc-dsql-notes` / `sql-kb-catalog` dead_server rate; the API compatibility is verified locally.
+
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - Updated dependencies [0e18d5b]
 - Updated dependencies [5501cb6]
 - Updated dependencies [b58f248]
@@ -216,18 +429,18 @@
 ### Minor Changes
 
 - 21443ba: fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
-  
+
   Optimistic-concurrency / conditional-write conflicts now surface to clients as
   JSON-RPC error **code 409 (Conflict)** instead of a generic **500**. Previously
   these conflicts were thrown as plain named `Error`s (or re-thrown raw driver
   errors), and the JSON-RPC serializer maps any non-`ApiError` to 500 — so a
   routine, expected conflict was indistinguishable from an internal server error.
-  
+
   Each affected conflict is now an `ApiError` with `status: 409`, so on the client
   `error.status === 409`. The structured `error.name` is preserved end-to-end, so
   `isBlocksError(e, ...)` keeps matching by name on both server and client, and the
   existing typed error constants are unchanged:
-  
+
   - `@aws-blocks/bb-kv-store` — a failed `ifNotExists` / `ifExists` /
     `ifValueEquals` write or delete (`KVStoreErrors.ConditionalCheckFailed`). The
     AWS runtime now also normalizes DynamoDB's raw `ConditionalCheckFailedException`
@@ -241,24 +454,25 @@
   - `@aws-blocks/bb-data` — a serializable-isolation conflict, SQLSTATE `40001`
     (`DatabaseErrors.SerializationFailure`), across the PGlite, pg-client, and
     Data API engines.
-  
+
   The `retriable` flag is scoped to genuine optimistic-lock conflicts: it is
   `true` for value/field-equals conflicts (`ifValueEquals` / `ifFieldEquals`) and
   the 40001 serialization failures, and omitted/`false` for existence/uniqueness
   assertions (`ifNotExists`, `ifExists`), where a blind identical retry would fail
   identically. Status (409) and `error.name` are unchanged in every case.
-  
+
   This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior: callers that
   branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
   code) will now see `409`. Code that matches conflicts by name via
   `isBlocksError` — the documented pattern — is unaffected.
-  
+
   `@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
   change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
   (no behavior or API change).
+
 - a47d71c: fix(data): map duplicate-key unique-constraint violations to JSON-RPC 409 (Conflict) instead of 500
-  
+
   A duplicate-key / unique-constraint violation (SQLSTATE `23505`,
   `UniqueConstraintViolation`) now surfaces to clients as JSON-RPC error
   **code 409 (Conflict)** instead of a generic **500**. Previously the engine
@@ -267,13 +481,13 @@
   expected duplicate-key conflict was indistinguishable from an internal server
   error. This mirrors the `40001`/OCC → 409 mapping already established for these
   Blocks.
-  
+
   Each affected conflict is now an `ApiError` with `status: 409`, so on the client
   `error.status === 409`. The structured `error.name` is preserved end-to-end, so
   `isBlocksError(e, DatabaseErrors.UniqueConstraintViolation)` (and the
   `DistributedDatabaseErrors` equivalent) keeps matching by name on both server and
   client; the typed error constants are unchanged.
-  
+
   - `@aws-blocks/bb-data` — a duplicate-key violation (SQLSTATE `23505`,
     `DatabaseErrors.UniqueConstraintViolation`) across the PGlite, pg-client, and
     Data API engines (both the SQLState-parsed and message-matched Data API paths),
@@ -281,7 +495,7 @@
   - `@aws-blocks/bb-distributed-data` — a DSQL duplicate-key violation (SQLSTATE
     `23505`, `DistributedDatabaseErrors.UniqueConstraintViolation`) in
     `translateDsqlError`, in both the mock and real engines.
-  
+
   The conflict is **not** flagged `retriable`: a duplicate key is deterministic, so
   a blind retry of the same insert fails identically (unlike the `40001`
   serialization failures, which stay retriable). The client-visible message is a
@@ -289,37 +503,38 @@
   is retained only as `cause` for server-side diagnostics. Genuine infrastructure
   errors (`ConnectionFailed`, `QueryFailed`) are unchanged and correctly stay 500,
   and the `SerializationFailure`/OCC paths are untouched.
-  
+
   This is a `minor` bump. Both data packages are pre-1.0, where `minor` is this
   repo's signal for a change that can alter existing behavior: callers that
   branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
   code) will now see `409`. Code that matches conflicts by name via
   `isBlocksError` — the documented pattern — is unaffected.
-  
+
   `@aws-blocks/blocks` gets a `patch` bump because it re-exports `bb-data` and
   `bb-distributed-data` (satisfies the umbrella publish guard); no umbrella source
   changed.
-  
+
   Fixes #508.
 
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - 6496713: Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
 - 6496713: fix(bb-data): place shared-VPC Aurora in the subnets the VPC actually has
-  
+
   When `Database` runs inside a bring-your-own VPC, its Aurora cluster was pinned
   to `PRIVATE_ISOLATED` subnets. The VPC in every docs example
   (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`) has no isolated
   tier, so following the documented setup and adding a `Database` failed synth
   with "no isolated subnet groups in this VPC."
-  
+
   Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), not
   a raw Postgres socket, so the placement tier does not affect reachability — it
   only has to be a tier the VPC actually has. The shared-VPC path now prefers the
@@ -327,20 +542,21 @@
   back to `PRIVATE_WITH_EGRESS` otherwise, via the VPC context's `selectSubnets`.
   The standalone path is unchanged — it still builds its own VPC with a dedicated
   isolated tier.
-  
+
   This is a `patch` bump: pre-1.0, where this repo reserves `minor` for breaking
   changes. The behavior change only affects the shared-VPC path that previously
   failed synth, so it is strictly a fix. The umbrella `@aws-blocks/blocks` gets
   the same bump because it re-exports `Database`.
-  
+
   Also adds `Template.fromStack` unit coverage for `finalizeVpc` in
   `@aws-blocks/core` — asserting the provisioned `AWS::EC2::VPCEndpoint` set, the
   gateway/interface dedup, and the always-on CloudWatch Logs + SSM endpoints —
   which previously had no test exercising the provisioning path.
+
 - 6496713: feat(core): constructor-forced VPC requirements, lazy VPC, and Database subnet control
-  
+
   Continues the VPC review follow-ups (net-new, unreleased VPC feature).
-  
+
   **Building Blocks declare VPC requirements via the constructor, not a method.**
   `BuildingBlockScope` is no longer abstract: its constructor takes the block's VPC
   requirements (a value, or a callback for values that depend on `fullId`) and
@@ -349,29 +565,30 @@
   silently omit its requirements — without a standing method on every subclass, and
   gives the framework one place to read, deduplicate, and answer "does anything here
   need a VPC?". All Building Blocks were migrated to pass requirements to `super()`.
-  
+
   **VPC is now a derived resource, not a hard prerequisite.** A block that cannot
   function without a VPC declares `requiresVpc: true`; when one is needed and the
   customer didn't bring their own, Blocks lazily creates a single shared VPC
   (generalizing the create-if-absent behavior `bb-data` already used for Aurora) and
   emits a notice about the NAT cost. Setting `defaults.vpc = { network }` remains the
   bring-your-own override.
-  
+
   **`Database` accepts an optional `subnets` placement.** A CDK-free mirror of
   `ec2.SubnetSelection` (tier as a string, subnets by id) lets you steer where the
   Aurora cluster lands — for a bring-your-own VPC that lacks an isolated tier, or a
   compliance requirement to use specific subnets. Omit it to keep the default
   (prefer isolated, fall back to `private-with-egress`).
+
 - 6496713: fix(core): harden VPC integration — scoped endpoint SG, runtime-subnet validation, instructive subnet errors
-  
+
   Second-pass hardening of VPC support based on review feedback.
-  
+
   **Interface endpoints are no longer reachable from the whole VPC.** They now get
   a dedicated security group that allows 443 only from the Blocks Lambda SG, and
   the endpoints are created with `open: false` to suppress CDK's default
   "allow 443 from the entire VPC CIDR" rule. On a bring-your-own VPC this stops
   unrelated workloads from reaching every Blocks interface endpoint.
-  
+
   **`VpcRequirements.subnetRole` is replaced by `requiresEgress`.** The old field
   was declared but never consumed. `requiresEgress` expresses a real, validated
   capability: whether the BB's parent runtime (the shared handler Lambda) must be
@@ -381,23 +598,24 @@
   `bb-distributed-data` (DSQL) declares `requiresEgress: true`, turning a
   previously silent runtime failure (DSQL in isolated subnets deploys clean, then
   every call times out) into a build-time error.
-  
+
   **`VpcContext.selectSubnets` is now instructive.** It takes the requesting BB and
   verifies the VPC actually has the requested subnet tier, throwing a BB-named,
   actionable error instead of the opaque CDK "no subnet groups" error. It accepts
   an explicit `{ fallback }` so a BB can opt into graceful degradation (e.g. Aurora
   over the Data API works from `private-with-egress` when there is no isolated
   tier); the downgrade is never silent. `bb-data` uses this.
-  
+
   **Other fixes:** Lambda placement now fails fast with an actionable error when a
   VPC has no private-with-egress tier and none was specified; `bb-data` drops its
   unused 5432 ingress rule (Aurora is reached over the RDS Data API, not a socket);
   removed `any` casts from the Lambda props and endpoint/CIDR handling; de-duplicated
   the VPC/non-VPC branches in `BlocksStack`.
-  
+
   All pre-1.0 `patch` bumps — no breaking changes to shipped, consumed API
   (`subnetRole` had no consumers). The umbrella `@aws-blocks/blocks` re-exports the
   affected types.
+
 - Updated dependencies [7b86b8e]
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
@@ -423,17 +641,17 @@
 ### Patch Changes
 
 - ed158cf: fix(bb-data): apply migrations to a scale-to-zero Aurora cluster instead of failing the deploy
-  
+
   A `Database` configured with `minCapacity: 0` auto-pauses after ~5 minutes idle.
   The first Data API call of a deploy wakes the cluster and fails with
   `DatabaseResumingException` while it resumes, which made the migration custom
   resource fail and roll the stack back. Any deploy made more than ~5 minutes
   after the last database activity hit this — it was deterministic, not a race.
-  
+
   The migration Lambda already retried with exponential backoff (1s → 30s, 8
   attempts) while Aurora was coming up, but two things kept the resume error out
   of that path:
-  
+
   - `DataApiEngine` classified it as `QueryFailed`. Errors carrying no SQLState
     are classified by SDK exception name, and `DatabaseResumingException` was not
     in that list. It now maps to `ConnectionFailed`, alongside
@@ -445,38 +663,40 @@
     on `ConnectionFailed`, so a transient connection failure during a deploy is
     retried rather than failing the stack. The raw SDK names are still matched for
     errors raised outside the engine, and the retry log line now names the error.
-  
+
   Backoff limits are unchanged: ~2 minutes total, against a resume that typically
   completes in well under a minute.
+
 - c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
-  
+
   `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
-  
+
   - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
   - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
   - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
-  
+
   Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
-  
+
   **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
-  
+
   **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
-  
+
   **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
-  
+
   **⚠️ Behavior changes on upgrade:**
   - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
   - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
   - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
   - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
-  
+
   `bb-dashboard` now points its log widgets at the framework-owned handler log
   group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
   `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
   CDK-generated name, so the old convention would leave the "Recent Errors" /
   "Log Volume" widgets querying an empty group.
-  
+
   Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+
 - Updated dependencies [df667c5]
 - Updated dependencies [df667c5]
 - Updated dependencies [64ddd74]
@@ -496,17 +716,18 @@
 ### Patch Changes
 
 - 309a236: refactor(bb): attach IAM grants to the shared execution role
-  
+
   Data and auth blocks now grant permissions to the shared Blocks execution role
   (`this.executionRole`) instead of the handler function directly. Grants land on
   the same role the handler assumes, so the effective runtime permissions are
   identical — this decouples IAM wiring from the concrete Lambda function ahead of
   the multi-compute model.
-  
+
   For `bb-distributed-data`, the DSQL endpoint and region now flow through the
   config registry (loaded into `process.env` at cold start, like every other
   block) rather than being set as direct handler environment variables, and the
   migration Lambda maps the shared execution role's ARN.
+
 - Updated dependencies [1ff9d03]
 - Updated dependencies [5798492]
 - Updated dependencies [f00adb0]
@@ -526,32 +747,33 @@
 ### Patch Changes
 
 - 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
-  
+
   `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
-  
+
   Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
-  
+
   The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
-  
+
   **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+
 - 6df9e2d: fix(data): declare the `data-common` TypeScript project reference in `bb-data` and `bb-distributed-data`
-  
+
   Both packages depend on `@aws-blocks/data-common` in `package.json`, but neither
   listed it in its `tsconfig.json` `references`. Because `src/` ships in these
   tarballs, `data-common`'s declarations have to already exist for the compiler to
   resolve `@aws-blocks/data-common` — and nothing in the project-reference graph
   guaranteed that.
-  
+
   Correct build order was therefore supplied by the position of `data-common` in
   the root `workspaces` array (index 8, ahead of `bb-data` at 10 and
   `bb-distributed-data` at 11) rather than by the dependency graph. Any build that
   does not follow that array order fails with:
-  
+
   ```
   packages/bb-distributed-data/src/validation.ts(12,54): error TS2307:
     Cannot find module '@aws-blocks/data-common' or its corresponding type declarations.
   ```
-  
+
   That was already reachable from the repo's own scripts: the former
   `npm run build:packages` resolved its `-w` targets in a different order and hit
   exactly this, which is why `scripts/agent-bench/steps/1-init-bench-app.sh`
@@ -559,13 +781,15 @@
   bb-data". Adding the two missing references fixes the root cause, so build order
   now comes from the project-reference graph rather than from the ordering of the
   root `workspaces` array.
-  
+
   No API, runtime, or packaged-output change — `tsconfig.json` is not in either
   package's `files`, so the published tarballs are unchanged.
+
 - 3614a09: Bundle the migration lambdas through `blocksNodejsBundling()` so `import.meta.url` used anywhere in the bundled migration handler is shimmed to its CommonJS equivalent instead of throwing at Lambda load. Consistent with the backend handler; no behavior change for existing migration lambdas. Also documents in the README that `migrationsPath` is simplest as a path relative to your project root, and that `import.meta.url` inside the bundle resolves to the bundled output (not your source tree).
 - e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
-  
+
   PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+
 - Updated dependencies [7b4c62d]
 - Updated dependencies [5262062]
 - Updated dependencies [3614a09]
