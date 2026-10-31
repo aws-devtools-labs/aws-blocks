@@ -35,6 +35,8 @@ let authApi: typeof AuthApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+// A new user per run: the local auth store in .bb-data persists, so a fixed name is already taken on the next run.
+const username = `testuser-${Date.now()}@example.com`;
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
@@ -116,11 +118,11 @@ test('auth: starts signed out', async () => {
 test('auth: sign up creates account and signs in', async () => {
   const state = await authApi.setAuthState({
     action: 'signUp',
-    username: 'testuser@example.com',
+    username,
     password: 'TestPass123!',
   });
   assert.strictEqual(state.state, 'signedIn');
-  assert.strictEqual(state.user?.username, 'testuser@example.com');
+  assert.strictEqual(state.user?.username, username);
 });
 
 test('auth: unauthenticated access is rejected', async () => {
@@ -135,7 +137,7 @@ test('auth: unauthenticated access is rejected', async () => {
   // Sign back in for remaining tests
   await authApi.setAuthState({
     action: 'signIn',
-    username: 'testuser@example.com',
+    username,
     password: 'TestPass123!',
   });
 });
@@ -154,7 +156,7 @@ test('todos: create with priority', async () => {
 test('todos: list (only own)', async () => {
   const list = await api.listTodos();
   assert.ok(list.length >= 1);
-  assert.ok(list.every(t => t.userId === 'testuser@example.com'));
+  assert.ok(list.every(t => t.userId === username));
 });
 
 test('todos: list sorted by priority (client-side sort)', async () => {

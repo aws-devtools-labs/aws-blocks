@@ -29,7 +29,7 @@
     "destroy": "blocks destroy",
     "secret": "blocks secret",
     "typegen": "blocks generate types",
-    "test:e2e": "tsx -C browser test/e2e.test.ts",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
     "vendorize": "blocks vendorize"
   },
   "blocks": {

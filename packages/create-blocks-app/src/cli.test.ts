@@ -293,6 +293,23 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every template e2e suite can run again and again against one running dev server', () => {
+    // AGENTS.md's iteration loop reruns `npm run test:e2e` against a running server. The
+    // realtime client keeps its socket to that server open, so the run must exit when the
+    // tests finish; and the local auth store persists, so a fixed test user exists on rerun.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const script: string = JSON.parse(readFileSync(join(templatesDir, entry.name, 'package.json'), 'utf-8')).scripts['test:e2e'];
+      if (!script.includes('--test-force-exit')) problems.push(`${entry.name}: "test:e2e" is "${script}"`);
+      const fixedUser = readFileSync(testPath, 'utf-8').match(/username: '[^']+'/);
+      if (fixedUser) problems.push(`${entry.name}: signs up a fixed ${fixedUser[0]}`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('AGENTS.md backgrounds long-running scripts into a log file that every template ignores', () => {
     // A background `npm run dev &` without a redirect dies at its next log line once
     // the agent's shell closes; the log it writes instead must not be committed.
