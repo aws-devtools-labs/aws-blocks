@@ -442,6 +442,7 @@ describe('blocks migrate', () => {
 		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
 			'aws-blocks/scripts/server.ts',
 			'aws-blocks/scripts/stop.ts',
+			'package.json#scripts.blocks:dev',
 			'package.json#scripts.blocks:stop',
 		]);
 		assert.match(
@@ -459,13 +460,17 @@ describe('blocks migrate', () => {
 		assert.strictEqual(run.code, 1);
 		assert.doesNotMatch(run.stderr, /Error:/, 'remaining manual work is a report, not a crash');
 		const result = JSON.parse(run.stdout);
-		assert.deepStrictEqual(
-			result.kept.map((k: { file: string }) => k.file),
-			['aws-blocks/scripts/deploy.ts'],
-		);
+		const kept = result.kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => k.file).sort(), ['aws-blocks/scripts/deploy.ts', 'package.json#scripts.deploy']);
+		const wrapper = kept.find((k) => k.file === 'aws-blocks/scripts/deploy.ts')?.reason ?? '';
 		// A file that matches no known hash may be an unmodified wrapper from a release migrate does not know.
-		assert.match(result.kept[0].reason, /^unrecognised version \(only public create-blocks-app releases are recognised\)/);
-		assert.doesNotMatch(result.kept[0].reason, /customized/);
+		assert.match(wrapper, /^unrecognised version \(only public create-blocks-app releases are recognised\)/);
+		assert.doesNotMatch(wrapper, /customized/);
+		// The script that still runs it is listed too, so a JSON consumer sees every script left on a wrapper.
+		assert.strictEqual(
+			kept.find((k) => k.file === 'package.json#scripts.deploy')?.reason,
+			'"tsx aws-blocks/scripts/deploy.ts" runs aws-blocks/scripts/deploy.ts, an unrecognised version that migrate keeps; "blocks deploy" would bypass it, so switch the script by hand once you have moved its changes',
+		);
 		const pkg = readPkg(root);
 		assert.strictEqual(pkg.scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts', 'its script still runs it');
 		assert.strictEqual(pkg.scripts.destroy, 'blocks destroy');
@@ -497,6 +502,10 @@ describe('blocks migrate', () => {
 			const kept = result.kept.map((k: { file: string }) => k.file);
 			assert.ok(kept.includes('aws-blocks/scripts/server.ts'), 'the customized server is reported');
 			assert.ok(kept.includes('package.json#scripts.sandbox'), 'the sandbox script is reported');
+			// So is every script that still runs the customized server.ts.
+			const serverScripts = Object.keys(before).filter((name) => before[name] === 'tsx watch aws-blocks/scripts/server.ts');
+			assert.ok(serverScripts.includes('dev'), template);
+			for (const name of serverScripts) assert.ok(kept.includes(`package.json#scripts.${name}`), name);
 			assert.match(
 				result.kept.find((k: { file: string }) => k.file === 'package.json#scripts.sandbox').reason,
 				/customized aws-blocks\/scripts\/server\.ts/,
@@ -521,6 +530,8 @@ describe('blocks migrate', () => {
 		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
 			'aws-blocks/scripts/sandbox.ts',
 			'aws-blocks/scripts/server.ts',
+			'package.json#scripts.sandbox',
+			'package.json#scripts.sandbox:deploy',
 		]);
 		assert.match(
 			kept.find((k) => k.file.endsWith('server.ts'))?.reason ?? '',

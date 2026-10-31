@@ -15,3 +15,4 @@ Fixes from CLI testing:
 - `blocks migrate --dry-run` no longer says "everything else was migrated" above the items it would keep.
 - The hint for an app without `stackId` now says that `<stackId>-prod` must equal the production stack name in `aws-blocks/index.cdk.ts`: an app that hard-codes `my-blocks-stack-prod` uses `{"stackId": "my-blocks-stack"}`.
 - A wrapper that matches no known version is reported as an "unrecognised version (only public create-blocks-app releases are recognised)", not as "customized": it may be an unmodified file from a release that migrate does not know. The README and `blocks migrate -h` say that only the public releases are recognised.
+- A generated script that still runs a kept, unrecognised wrapper (for example `dev` and `dev:server` with a changed `server.ts`) is now listed in `kept` with the reason, so `--output json` names every script that still uses `aws-blocks/scripts`.

@@ -447,7 +447,13 @@ export function planMigration(
 		if (rewrite) {
 			const wrapper = byFile.get(rewrite.wrapper);
 			// A customized wrapper keeps its script: the alias would drop the customization.
-			if (wrapper && !wrapper.generated) continue;
+			if (wrapper && !wrapper.generated) {
+				result.kept.push({
+					file: `package.json#scripts.${name}`,
+					reason: `"${value}" runs ${wrapper.path}, an unrecognised version that migrate keeps; "${rewrite.alias}" would bypass it, so switch the script by hand once you have moved its changes`,
+				});
+				continue;
+			}
 			// The deploy and destroy aliases need a stackId that an old app may not have.
 			if (stackless.includes(rewrite.wrapper)) {
 				result.kept.push({
