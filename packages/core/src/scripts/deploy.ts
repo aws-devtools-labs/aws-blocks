@@ -35,6 +35,8 @@ export interface DeployOptions {
    * rewrites that file with only its own stack, and can do so during the wait.
    */
   onDeployed?: (deployed: DeployedStack) => void;
+  /** How the user runs the deploy, in the guidance (for example `blocks deploy`). Default: `npm run deploy`. */
+  invocation?: string;
 }
 
 /** The stack a production deploy deployed, from the outputs it read. */
@@ -246,7 +248,12 @@ export async function deploy(options: DeployOptions) {
     // Fail fast if AWS credentials are missing/expired, or the account and Region were
     // never CDK-bootstrapped, before generating the client and spending time in synth
     // only to hit an opaque CDK error.
-    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot, checkBootstrap: true });
+    await assertAwsCredentials({
+      command: 'deploy',
+      invocation: options.invocation,
+      projectRoot: options.projectRoot,
+      checkBootstrap: true,
+    });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name

@@ -21,6 +21,8 @@ export interface DestroyOptions {
    * treats a missing stack as a successful no-op.
    */
   stackName?: string;
+  /** How the user runs the destroy, in the guidance (for example `blocks destroy`). Default: `npm run destroy`. */
+  invocation?: string;
 }
 
 /** The slice of a CloudFormation client that {@link stackExists} needs. */
@@ -109,7 +111,12 @@ export async function destroy(options: DestroyOptions) {
     // [60s, 120s] backoff (the Telemetry E2E timeout this guards against). The
     // retry loop is for transient teardown blockers (bucket-blocked delete,
     // DeleteRestApi 429 throttle, ENI detach), never auth.
-    await assertAwsCredentials({ command: 'destroy', projectRoot: options.projectRoot, accountDetails: false });
+    await assertAwsCredentials({
+      command: 'destroy',
+      invocation: options.invocation,
+      projectRoot: options.projectRoot,
+      accountDetails: false,
+    });
 
     if (options.stackName && (await productionStackExists(options.projectRoot, options.stackName)) === false) {
       const { region } = await resolveDeploymentTarget({ projectRoot: options.projectRoot });

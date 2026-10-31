@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -352,6 +352,8 @@ describe('lifecycle commands', () => {
 				deployOnly: false,
 				devCommand: undefined,
 				clientPort: 3005,
+				invocation: 'blocks sandbox',
+				destroyInvocation: 'blocks sandbox destroy',
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
@@ -382,6 +384,7 @@ describe('lifecycle commands', () => {
 		]);
 		assert.deepStrictEqual(runnerOptions(spec, 'sandbox-destroy'), {
 			backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			invocation: 'blocks sandbox destroy',
 		});
 		assert.match(run.stderr, /production stack is not affected/);
 		assert.deepStrictEqual(run.prompts, []);
@@ -408,9 +411,41 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(runnerOptions(spec, 'deploy'), {
 			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 			projectRoot: root,
+			invocation: 'blocks deploy',
 		});
 		assert.deepStrictEqual(spec.args.slice(-2), ['--wait-live', '--wait-live-timeout=30']);
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
+	});
+
+	it("passes core the command that re-runs this one, with the run's -C, --profile and --region", async () => {
+		const root = withSandboxId(fixtureApp());
+		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
+		const app = join(shell, 'my app');
+		cpSync(root, app, { recursive: true });
+		const globals = ['-C', 'my app', '--profile', 'prod', '--region', 'eu-west-1'];
+		const suffix = "-C 'my app' --profile prod --region eu-west-1";
+		for (const [argv, runner, expected] of [
+			[['deploy'], 'deploy', { invocation: `blocks deploy ${suffix}` }],
+			[['destroy', '--yes'], 'destroy', { invocation: `blocks destroy ${suffix}` }],
+			[['sandbox', 'destroy'], 'sandbox-destroy', { invocation: `blocks sandbox destroy ${suffix}` }],
+			[
+				['sandbox', 'deploy'],
+				'sandbox',
+				{ invocation: `blocks sandbox deploy ${suffix}`, destroyInvocation: `blocks sandbox destroy ${suffix}` },
+			],
+		] as const) {
+			const run = await runCli([...globals, ...argv], { cwd: shell });
+			assert.strictEqual(run.code, 0, run.stderr);
+			const options = runnerOptions(run.spawned[0], runner) as Record<string, unknown>;
+			for (const [key, value] of Object.entries(expected)) assert.strictEqual(options[key], value, argv.join(' '));
+		}
+		const seen: string[] = [];
+		await runCli(['--profile', 'prod', 'whoami'], {
+			cwd: root,
+			env: AWS_ENV,
+			core: { readAwsIdentity: async ({ invocation }) => (seen.push(invocation), IDENTITY) },
+		});
+		assert.deepStrictEqual(seen, ['blocks whoami --profile prod']);
 	});
 
 	it('checks the --wait-live budget before anything runs, and passes core one budget', async () => {
@@ -810,6 +845,7 @@ describe('destroy safety', () => {
 			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			stackName: 'demo-prod',
+			invocation: 'blocks destroy',
 		});
 	});
 

@@ -6,6 +6,6 @@
 import { destroySandbox } from '@aws-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 
-const { backendPath } = JSON.parse(process.argv[2]) as { backendPath: string };
+const { backendPath, invocation } = JSON.parse(process.argv[2]) as { backendPath: string; invocation?: string };
 
-destroySandbox(backendPath).catch(exitWithError);
+destroySandbox(backendPath, { invocation }).catch(exitWithError);

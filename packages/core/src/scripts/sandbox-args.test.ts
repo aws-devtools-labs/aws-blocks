@@ -107,6 +107,14 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
   it('explains why (rollback is off under express mode)', () => {
     assert.match(hint, /rollback is off|automatic rollback/i);
   });
+
+  it('names the commands the user runs, when the caller passes them, aligned', () => {
+    const named = sandboxFailureRecoveryHint('blocks sandbox deploy', 'blocks sandbox destroy');
+    assert.match(named, /If the next `blocks sandbox deploy` reports/);
+    assert.match(named, /^ {5}blocks sandbox destroy {3}# tears/m);
+    assert.match(named, /^ {5}blocks sandbox deploy {4}# redeploy/m);
+    assert.doesNotMatch(named, /npm run/);
+  });
 });
 
 describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {

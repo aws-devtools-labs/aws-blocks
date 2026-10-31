@@ -78,6 +78,21 @@ export function redactArgs(args: readonly string[]): string[] {
 }
 
 /**
+ * The command line that re-runs `blocks <words>` against the same target, for
+ * core's guidance ("Then re-run …"): with the -C, --profile and --region of this
+ * run, quoted for a POSIX shell where needed.
+ */
+function invocation(ctx: Context, ...words: string[]): string {
+	const { cwd, profile, region } = ctx.globals;
+	const options = [
+		...(cwd === undefined ? [] : ['-C', cwd]),
+		...(profile ? ['--profile', profile] : []),
+		...(region ? ['--region', region] : []),
+	].map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : shellQuote(word, 'linux')));
+	return ['blocks', ...words, ...options].join(' ');
+}
+
+/**
  * Run a child process and map its result to the CLI exit code. A failure
  * prints the CLI error after the child's own output; Ctrl-C exits 130.
  */
@@ -383,7 +398,14 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 	const code = await runRunner(ctx, {
 		runner: 'sandbox',
 		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
-		options: { backendPath, deployOnly, devCommand, clientPort: config.port ?? 3000 },
+		options: {
+			backendPath,
+			deployOnly,
+			devCommand,
+			clientPort: config.port ?? 3000,
+			invocation: deployOnly ? invocation(ctx, 'sandbox', 'deploy') : invocation(ctx, 'sandbox'),
+			destroyInvocation: invocation(ctx, 'sandbox', 'destroy'),
+		},
 		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not long-running: the CLI does not stop it on a
 		// hangup, but core's sandbox deploy does not defer SIGHUP, so a hangup of the whole process group ends it.
@@ -433,7 +455,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 		runner: 'sandbox-destroy',
 		operation: 'blocks sandbox destroy',
 		conditions: 'cdk',
-		options: { backendPath },
+		options: { backendPath, invocation: invocation(ctx, 'sandbox', 'destroy') },
 		where,
 	});
 	if (code === ExitCode.Ok) forgetSandboxRecords(root, stack);
@@ -540,7 +562,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	const code = await runRunner(ctx, {
 		runner: 'deploy',
 		operation: 'blocks deploy',
-		options: { cdkAppPath, projectRoot: root },
+		options: { cdkAppPath, projectRoot: root, invocation: invocation(ctx, 'deploy') },
 		args,
 		where: [`stack: ${stack}`, label, `project: ${root}`],
 	});
@@ -561,7 +583,7 @@ export async function destroy(ctx: Context): Promise<number> {
 	return runRunner(ctx, {
 		runner: 'destroy',
 		operation: 'blocks destroy',
-		options: { cdkAppPath, projectRoot: root, stackName: stack },
+		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy') },
 		where,
 	});
 }
@@ -598,7 +620,7 @@ export async function whoami(ctx: Context): Promise<number> {
 	}
 	let identity: AwsIdentity;
 	try {
-		identity = await core.readAwsIdentity({ invocation: 'blocks whoami', env, projectRoot });
+		identity = await core.readAwsIdentity({ invocation: invocation(ctx, 'whoami'), env, projectRoot });
 	} catch (error) {
 		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
 	}

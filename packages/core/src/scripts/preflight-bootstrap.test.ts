@@ -104,6 +104,13 @@ describe('CDK bootstrap check', () => {
 		});
 	}
 
+	it('names the command the user ran, when the caller passes it', async () => {
+		const message = await failure(reader(NOT_FOUND).read, { invocation: 'blocks deploy --profile starter' });
+		assert.match(message, /so `blocks deploy --profile starter` cannot deploy there/);
+		assert.match(message, /Then re-run `blocks deploy --profile starter`\.$/);
+		assert.doesNotMatch(message, /npm run/);
+	});
+
 	it('checks the qualifier from the cdk.json context and passes the cdk.json profile', async () => {
 		await writeFile(
 			join(directory, 'cdk.json'),
