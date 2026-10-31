@@ -543,7 +543,8 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 		);
 	}
 	const { createInterface } = await import('node:readline');
-	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+	// The prompt goes to stderr, so stdout carries only the result (`… set KEY | cat` shows the prompt).
+	const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
 	// Mask typed input by overriding readline's `_writeToOutput`. This is an
 	// undocumented Node internal, but it is the long-standing idiom for hidden
 	// prompts (no public readline masking API exists). It is best-effort: if a
@@ -552,9 +553,9 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 	const output = rl as unknown as { _writeToOutput?: (s: string) => void };
 	let muted = false;
 	output._writeToOutput = (str: string) => {
-		if (!muted) process.stdout.write(str);
+		if (!muted) process.stderr.write(str);
 	};
-	process.stdout.write(prompt);
+	process.stderr.write(prompt);
 	muted = true;
 	try {
 		return await new Promise<string>((resolve, reject) => {
@@ -571,7 +572,7 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 			});
 		});
 	} finally {
-		process.stdout.write('\n');
+		process.stderr.write('\n');
 		rl.close();
 	}
 }

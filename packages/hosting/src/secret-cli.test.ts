@@ -209,17 +209,22 @@ void describe('runValueCli() — interactive / yes options', () => {
 	});
 });
 
-/** Run `fn` with a terminal-like stdin that `feed` writes to, and capture what the prompt writes to stdout. */
+/** Run `fn` with a terminal-like stdin that `feed` writes to, and capture what it writes to stdout and stderr. */
 async function withTerminal<T>(
 	feed: (input: PassThrough) => void,
 	fn: () => Promise<T>,
-): Promise<{ result: Promise<T>; stdout: string }> {
+): Promise<{ result: Promise<T>; stdout: string; stderr: string }> {
 	const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => input });
 	const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
 	Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
 	let stdout = '';
+	let stderr = '';
 	mock.method(process.stdout, 'write', (chunk: string | Uint8Array) => {
 		stdout += String(chunk);
+		return true;
+	});
+	mock.method(process.stderr, 'write', (chunk: string | Uint8Array) => {
+		stderr += String(chunk);
 		return true;
 	});
 	try {
@@ -228,8 +233,9 @@ async function withTerminal<T>(
 		while (input.listenerCount('keypress') === 0 && input.listenerCount('data') === 0) await setImmediatePromise();
 		feed(input);
 		await result.catch(() => {});
-		return { result, stdout };
+		return { result, stdout, stderr };
 	} finally {
+		mock.restoreAll();
 		if (stdin) Object.defineProperty(process, 'stdin', stdin);
 	}
 }
@@ -244,5 +250,15 @@ void describe('runValueCli() — the hidden prompt', () => {
 			);
 			await assert.rejects(result, (e: unknown) => e instanceof ValueCliInterruptedError, JSON.stringify(keys));
 		}
+	});
+
+	void it('writes the prompt to stderr, so stdout carries only the result', async () => {
+		const { stdout, stderr } = await withTerminal(
+			(input) => input.write('\x03'),
+			() => runValueCli(['set', 'ZZ_PIPEOUT'], { kind: 'secret' }),
+		);
+		// The test runner reports on this process's stdout too: check only for the prompt.
+		assert.doesNotMatch(stdout, /Enter value/);
+		assert.match(stderr, /Enter value for secret 'ZZ_PIPEOUT' \(hidden\): /);
 	});
 });
