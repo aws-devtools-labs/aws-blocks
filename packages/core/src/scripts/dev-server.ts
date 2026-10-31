@@ -108,11 +108,45 @@ export function isAllowedDevRequestHost(
 }
 
 /**
- * Resolve the CORS origin for the dev server.
- * Reflects back origins matching localhost/127.0.0.1; otherwise returns the fallback.
+ * The host to put in the dev server's URLs for the interface it binds:
+ * `localhost` for loopback and for all interfaces (`0.0.0.0`, `::`), else the
+ * bound address or name itself, with brackets for an IPv6 address. A server
+ * bound to `10.0.0.5` isn't reachable at `localhost`.
  */
-export function resolveDevCorsOrigin(origin: string): string {
-  return LOCALHOST_PATTERN.test(origin) ? origin : 'http://localhost:3000';
+export function devUrlHost(host: string): string {
+  if (isLoopbackHost(host) || isWildcardHost(host)) return 'localhost';
+  const bare = host.trim().replace(/^\[|\]$/g, '');
+  return bare.includes(':') ? `[${bare}]` : bare;
+}
+
+/** The interface and port the dev server listens on, for {@link resolveDevCorsOrigin}. */
+export interface DevServerAddress {
+  host: string;
+  port: number;
+}
+
+/**
+ * Resolve the CORS origin for the dev server. Reflects back origins on
+ * localhost/127.0.0.1, and — when the server binds one specific non-loopback
+ * host — origins on that host (a page served from `http://10.0.0.5:5173` calling
+ * the API on `10.0.0.5:3000`). Otherwise returns the server's own origin
+ * (`http://localhost:3000` when `bound` is not given).
+ */
+export function resolveDevCorsOrigin(origin: string, bound?: DevServerAddress): string {
+  if (LOCALHOST_PATTERN.test(origin)) return origin;
+  if (!bound) return 'http://localhost:3000';
+  const urlHost = devUrlHost(bound.host);
+  if (urlHost !== 'localhost') {
+    try {
+      const url = new URL(origin);
+      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.origin === origin && url.hostname === urlHost.toLowerCase()) {
+        return origin;
+      }
+    } catch {
+      // Not a URL (`null`, empty): fall back.
+    }
+  }
+  return `http://${urlHost}:${bound.port}`;
 }
 
 /**
@@ -122,9 +156,9 @@ export function resolveDevCorsOrigin(origin: string): string {
  * same `Vary: Origin` — so the reflected `Access-Control-Allow-Origin` can't be
  * served across origins by a shared cache, and so the two sites can't drift.
  */
-export function buildDevCorsHeaders(requestOrigin: string): Record<string, string> {
+export function buildDevCorsHeaders(requestOrigin: string, bound?: DevServerAddress): Record<string, string> {
   return {
-    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin),
+    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin, bound),
     'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
@@ -141,13 +175,14 @@ export interface BlocksRuntimeConfig {
 
 /**
  * Build the runtime config the browser fetches at `${BLOCKS_SANDBOX_PREFIX}/config.json`.
- * In sandbox mode the browser still targets the localhost front door (the dev
- * server proxies `/aws-blocks/api` to the deployed API), so the shape is the
- * same in both modes — only `environment` differs.
+ * The browser targets the dev server's own front door on the host it binds
+ * (see {@link devUrlHost}); in sandbox mode the dev server proxies
+ * `/aws-blocks/api` to the deployed API, so the shape is the same in both
+ * modes — only `environment` differs.
  */
-export function buildBlocksConfig(port: number, isSandbox: boolean): BlocksRuntimeConfig {
+export function buildBlocksConfig(port: number, isSandbox: boolean, host = '127.0.0.1'): BlocksRuntimeConfig {
   return {
-    apiUrl: `http://localhost:${port}${BLOCKS_RPC_PREFIX}`,
+    apiUrl: `http://${devUrlHost(host)}:${port}${BLOCKS_RPC_PREFIX}`,
     environment: isSandbox ? 'sandbox' : 'local',
   };
 }
@@ -1041,7 +1076,9 @@ export async function startDevServer(options: DevServerOptions) {
   // BLOCKS_API_URL server-side, so the request still reaches the deployed Lambda.
   // This makes sandbox single-origin, matching `npm run dev` and the prod
   // CloudFront proxy; `crossDomain` stays unnecessary.
-  const blocksConfig = buildBlocksConfig(port, isSandbox);
+  const blocksConfig = buildBlocksConfig(port, isSandbox, host);
+  /** The front door's URL on the interface it binds (see {@link devUrlHost}). */
+  const frontDoor = `http://${devUrlHost(host)}:${port}`;
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
   writeFileSync(join(BLOCKS_SANDBOX_DIR, 'config.json'), JSON.stringify(blocksConfig, null, 2));
 
@@ -1144,10 +1181,10 @@ export async function startDevServer(options: DevServerOptions) {
       if (shouldCreditFrontendReady(child, frontendProcess)) {
         frontendRestarts = [];
       }
-      console.log(`\n  ➜  http://localhost:${port}/${suffix}\n`);
+      console.log(`\n  ➜  ${frontDoor}/${suffix}\n`);
     } catch (e) {
       console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
-      console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
+      console.log(`\n  ➜  ${frontDoor}/  (API only — frontend unavailable)\n`);
     }
   };
 
@@ -1305,7 +1342,7 @@ export async function startDevServer(options: DevServerOptions) {
 
     // CORS headers
     const requestOrigin = req.headers.origin || '';
-    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin))) {
+    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin, { host, port }))) {
       res.setHeader(name, value);
     }
 
@@ -1374,7 +1411,7 @@ export async function startDevServer(options: DevServerOptions) {
     await mod.attach(server);
   }
 
-  (globalThis as any).__BLOCKS_REALTIME_WS_URL__ = `ws://localhost:${port}/realtime`;
+  (globalThis as any).__BLOCKS_REALTIME_WS_URL__ = `ws://${devUrlHost(host)}:${port}/realtime`;
   (globalThis as any).__BLOCKS_DEV_SERVER_PORT__ = port;
 
   // Config already written during startup (local mode overwrites, sandbox mode preserves).
@@ -1431,7 +1468,7 @@ export async function startDevServer(options: DevServerOptions) {
     try {
       writeFileSync(pidfilePath, JSON.stringify({ pid: process.pid, ppid: process.ppid, port }));
     } catch { /* best-effort, as at startup */ }
-    console.log(`AWS Blocks local server running on http://localhost:${port}`);
+    console.log(`AWS Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
     // Spawn frontend dev server after Blocks server is ready
@@ -1439,7 +1476,7 @@ export async function startDevServer(options: DevServerOptions) {
       const child = spawnFrontend(frontendCommand);
       await announceFrontendReady(child);
     } else {
-      console.log(`\n  ➜  http://localhost:${port}/\n`);
+      console.log(`\n  ➜  ${frontDoor}/\n`);
     }
   };
 
