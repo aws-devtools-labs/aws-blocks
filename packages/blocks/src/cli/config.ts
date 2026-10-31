@@ -54,10 +54,11 @@ const FRONTENDS = [
 	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
 ] as const;
 
+/** Reads the app's package.json. A leading UTF-8 byte order mark is ignored, as npm ignores it. */
 function readPackageJson(root: string): AppPackageJson {
 	const path = join(root, 'package.json');
 	try {
-		return JSON.parse(readFileSync(path, 'utf-8')) as AppPackageJson;
+		return JSON.parse(readFileSync(path, 'utf-8').replace(/^\uFEFF/, '')) as AppPackageJson;
 	} catch (error) {
 		throw new CliError(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
