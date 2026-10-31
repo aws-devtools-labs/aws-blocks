@@ -53,11 +53,13 @@
     "@aws-blocks/bb-logger": "^0.2.2",
     "@aws-blocks/core": "^0.7.0",
     "@aws-sdk/client-rds-data": "^3.1156.0",
-    "@electric-sql/pglite": "^0.5.10",
+    "@electric-sql/pglite": "0.5.11",
     "pg": "^8.23.1",
     "pluralize": "^8.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite-pgvector": "0.0.12",
+    "@electric-sql/pglite-postgis": "0.2.11",
     "@types/aws-lambda": "^8.10.164",
     "@types/node": "^20.19.43",
     "@types/pg": "^8.23.1",
@@ -65,8 +67,18 @@
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
+    "@electric-sql/pglite-pgvector": "0.0.12",
+    "@electric-sql/pglite-postgis": "0.2.11",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
     "kysely": ">=0.28.12 <0.30.0"
+  },
+  "peerDependenciesMeta": {
+    "@electric-sql/pglite-pgvector": {
+      "optional": true
+    },
+    "@electric-sql/pglite-postgis": {
+      "optional": true
+    }
   }
 }

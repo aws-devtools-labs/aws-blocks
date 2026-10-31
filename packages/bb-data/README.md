@@ -348,6 +348,41 @@ the transaction should continue.
 - **Storage:** `.bb-data/{fullId}/` — persists across restarts, wipe with `rm -rf .bb-data`
 - **Migrations:** Run automatically on first query
 
+### Local Postgres extensions (PostGIS, pgvector)
+
+Aurora PostgreSQL supports extensions such as PostGIS and pgvector natively, but
+the local PGlite engine does not load any by default — so `CREATE EXTENSION postgis`
+works once deployed but fails in local dev, breaking local/production parity.
+
+Declare the extensions your app uses and they load in local dev too:
+
+```typescript
+const db = new Database(scope, 'main', {
+  extensions: ['postgis'],   // or ['pgvector'], or both
+});
+```
+
+- **Local-only.** Like `postgresVersion`, `extensions` is read only by the local
+  PGlite engine and ignored on AWS (Aurora loads these natively). Your app code is
+  unchanged across environments.
+- **Opt-in install.** Each extension ships as its own package, installed only if
+  you declare it:
+  - `postgis` → `npm install @electric-sql/pglite-postgis@0.2.11`
+  - `pgvector` → `npm install @electric-sql/pglite-pgvector@0.0.12`
+
+  Install the exact version shown: `bb-data` peer-pins it, and each extension
+  release pins its own `@electric-sql/pglite` version, so an unpinned install can
+  pull a release that conflicts with the `pglite` version `bb-data` uses.
+
+  If a declared extension's package is missing (or the name is unknown), the
+  first database interaction fails with an actionable error — the exact install
+  command for a missing package, or the list of supported names.
+- **Still run `CREATE EXTENSION`.** This option only makes the extension available;
+  issue `CREATE EXTENSION <name>` in a migration as you would on Postgres.
+
+Both extension packages are experimental upstream; because the install is opt-in,
+that risk stays with your app rather than every `bb-data` consumer.
+
 ### Local vs. AWS: column types
 
 Array columns and `json` / `jsonb` columns return the same JavaScript values on
@@ -381,6 +416,13 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * Postgres extensions to load in the LOCAL PGlite engine, by name
+   * (e.g. ['postgis'] or ['pgvector']). Local-only, mirroring postgresVersion:
+   * ignored on Aurora, which supports these natively. Supported: 'postgis',
+   * 'pgvector'. See "Local Postgres extensions" below. @default []
+   */
+  extensions?: string[];
   /**
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
    * (also encrypts the auto-generated credentials secret). Supplying it turns

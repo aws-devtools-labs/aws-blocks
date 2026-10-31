@@ -4,6 +4,7 @@
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { PGliteEngine } from './engines/pglite-engine.js';
+import { LazyEngine } from './engines/lazy-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { runMigrations, loadMigrationsFromDir, trackEager, logRecovery } from '@aws-blocks/data-common';
@@ -77,8 +78,24 @@ export class Database extends Scope {
       this.migrationsRun = trackEager(initPromise, this.log, 'Database connection setup failed');
     } else {
       // Local PGlite for development
-      const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
-      this.base = new RLSEnabledDatabase(engine);
+      if (options?.extensions && options.extensions.length > 0) {
+        // Extensions are resolved by dynamic import (async), which the sync
+        // constructor cannot await. Install ONE stable engine — a LazyEngine
+        // that builds the extension-loaded PGliteEngine on first use and
+        // memoizes it — so `this.base` is never reassigned. Every data path
+        // (query/execute/transaction/withRLS and the crud() handlers, which
+        // capture `this.base` synchronously) therefore shares the same engine
+        // and sees the extensions once they resolve. The factory import()s the
+        // extension packages lazily, so a Database that declares extensions but
+        // is never queried never loads them.
+        const extensions = options.extensions;
+        const dataDir = `.bb-data/${this.fullId}`;
+        const lazyEngine = new LazyEngine(() => PGliteEngine.create(dataDir, extensions));
+        this.base = new RLSEnabledDatabase(lazyEngine);
+      } else {
+        const engine = new PGliteEngine(`.bb-data/${this.fullId}`);
+        this.base = new RLSEnabledDatabase(engine);
+      }
     }
 
     if (options?.schema) {
@@ -112,6 +129,9 @@ export class Database extends Scope {
       // (onTrap below), so a run that resolves while `trapped` is set is a HEAL:
       // log the recovery marker, the causal companion to the unavailable
       // sentinel, so the bench scorer knows the data layer was up by test time.
+      // `this.base` is stable (never reassigned); when it wraps a LazyEngine the
+      // extensions resolve on the first engine call `runMigrations` makes, so
+      // migrations run against the extension-loaded engine.
       let trapped = false;
       const startMigrations = () => {
         const retry = trapped;
