@@ -38,7 +38,8 @@ import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
 import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
-import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
+import type { DeployManifest, Redirect, RemotePattern, RouteBehavior } from '../manifest/types.js';
+import { buildProfile } from './shared/build_profile.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -298,6 +299,13 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
 
   warnIfImageOptUnreachable(manifest, staticDir);
 
+  // No image function (`skipImageOptimization`): the door answers `/_image`
+  // itself, so record the allowlist it redirects remote sources to.
+  if (buildProfile().skipImageOptimization) {
+    const sources = astroImageRemoteSources(config);
+    if (sources) manifest.imageRemoteSources = sources;
+  }
+
   return manifest;
 };
 
@@ -332,6 +340,36 @@ type AstroConfigShape = {
      */
     service?: { entrypoint?: string; config?: unknown };
   };
+};
+
+/**
+ * Astro's remote image allowlist (`image.domains`, `image.remotePatterns`),
+ * keeping only well-formed entries. A pattern with no `hostname` allows any
+ * host in Astro, so it is recorded as hostname `'**'` (any host).
+ *
+ * @param config the loaded astro.config.
+ * @returns the allowlist, or `undefined` when it is empty.
+ */
+/** The allowlist hostname that matches any host. */
+const ANY_IMAGE_HOST = '**';
+
+const astroImageRemoteSources = (config: AstroConfigShape): DeployManifest['imageRemoteSources'] => {
+  const domains = (config.image?.domains ?? []).filter((d): d is string => typeof d === 'string' && d.length > 0);
+  const patterns: RemotePattern[] = [];
+  const raw: unknown = config.image?.remotePatterns;
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { protocol, hostname, port, pathname }: Record<string, unknown> = { ...entry };
+    if (hostname !== undefined && (typeof hostname !== 'string' || !hostname)) continue;
+    patterns.push({
+      hostname: hostname ?? ANY_IMAGE_HOST,
+      ...(protocol === 'http' || protocol === 'https' ? { protocol } : {}),
+      ...(typeof port === 'string' ? { port } : {}),
+      ...(typeof pathname === 'string' ? { pathname } : {}),
+    });
+  }
+  if (domains.length === 0 && patterns.length === 0) return undefined;
+  return { ...(domains.length ? { domains } : {}), ...(patterns.length ? { remotePatterns: patterns } : {}) };
 };
 
 // ---- pipeline steps ----

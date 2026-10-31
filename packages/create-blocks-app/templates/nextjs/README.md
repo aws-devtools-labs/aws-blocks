@@ -49,6 +49,7 @@ Open http://localhost:3000 after `npm run dev`.
 | `npm run start` | Serve the production build locally |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources |
 | `npm run destroy` | Tear down the production stack |

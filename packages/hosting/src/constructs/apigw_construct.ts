@@ -40,6 +40,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import type { HostingPlan } from '../plan/types.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
+import { imagePathPrefixes, trimTrailingSlashes } from './asset_proxy_core.js';
 import { warnRulesNotApplied } from './proxy_rules.js';
 import { type ApiGwCustomDomain, resolveApiGwDomain } from './apigw_domain.js';
 import {
@@ -75,6 +76,21 @@ export type ApiGatewayConstructProps = {
    * when S3 fails.
    */
   errorPages?: { notFound?: string; serverError?: string };
+  /**
+   * Routes that a compute other than the server serves (e.g. a Next.js
+   * `runtime: 'edge'` route built as a regional function), most-specific
+   * first. Each pattern (basePath-prefixed) gets a route to that function.
+   */
+  computeRoutes?: readonly { pattern: string; computeName: string }[];
+  /**
+   * The deploy has no image function: route the framework image endpoints
+   * (`/_next/image`, `/_ipx/*` and each of `pathPrefixes`, `/_image`, under
+   * the basePath) to the asset
+   * proxy, which serves the source image unoptimized. A remote source is
+   * redirected to itself only when its host is in `hosts` (the app's image
+   * allowlist); the proxy never fetches it.
+   */
+  imageFallback?: { hosts: readonly string[]; pathPrefixes?: readonly string[] };
 };
 
 
@@ -145,6 +161,7 @@ export class ApiGatewayConstruct extends Construct {
           redirects: plan.routes.redirects,
           headers: plan.routes.headers,
           errorPages: props.errorPages,
+          ...(props.imageFallback && !imageFn ? { imageFallback: props.imageFallback } : {}),
         }),
       ),
       timeout: Duration.seconds(15),
@@ -212,6 +229,40 @@ export class ApiGatewayConstruct extends Construct {
 
     // Route table → routes (deduped; catch-all handled by defaultIntegration).
     const seen = new Set<string>();
+    // Routes served by a compute other than the server go straight to it; the
+    // route table lists them as server routes, so they are claimed first.
+    const computeIntegrations = new Map<string, HttpLambdaIntegration>();
+    // Patterns with no route form (a wildcard inside a segment); reported once below.
+    const inexpressible: string[] = [];
+    for (const r of props.computeRoutes ?? []) {
+      const fn = compute.get(r.computeName);
+      // `/api/edge/*/info` has no HTTP API route form: report it rather than
+      // registering `*` as a literal path segment.
+      if (hasInnerWildcard(r.pattern)) {
+        if (fn) inexpressible.push(r.pattern);
+        continue;
+      }
+      const path = globToProxyPath(r.pattern);
+      if (!fn || path === null || seen.has(path) || backendPaths.has(path)) continue;
+      let integration = computeIntegrations.get(r.computeName);
+      if (!integration) {
+        integration = new HttpLambdaIntegration(`ComputeInt-${r.computeName}`, fn);
+        computeIntegrations.set(r.computeName, integration);
+      }
+      seen.add(path);
+      this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration });
+    }
+    // No image function: the framework image endpoints go to the asset proxy,
+    // which answers them with the source image.
+    if (props.imageFallback && !imageFn) {
+      const base = trimTrailingSlashes(plan.policies.basePath ?? '');
+      const pathForms = imagePathPrefixes(props.imageFallback.pathPrefixes).map((p) => `${base}${p}/{proxy+}`);
+      for (const path of [`${base}/_next/image`, ...pathForms, `${base}/_image`]) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
+      }
+    }
     // Redirect sources first: each routes to the asset proxy, which answers the
     // redirect with the CloudFront door's semantics (first match, wildcard tail
     // spliced). A source with an inner wildcard has no route form.
@@ -227,11 +278,12 @@ export class ApiGatewayConstruct extends Construct {
       seen.add(path);
       this.api.addRoutes({ path, methods: [HttpMethod.ANY], integration: assetIntegration });
     }
-    const inexpressible: string[] = [];
     for (const entry of plan.routes.entries) {
       // A wildcard inside a segment (`/*.js`) has no route form: the default serves it.
       if (hasInnerWildcard(entry.pattern)) {
-        inexpressible.push(entry.pattern);
+        // `/_next/image*` with no image function: its endpoint is already
+        // routed to the asset proxy above, so nothing is left unrouted.
+        if (!seen.has(entry.pattern.replace(/\*$/, ''))) inexpressible.push(entry.pattern);
         continue;
       }
       const path = globToProxyPath(entry.pattern);

@@ -6,6 +6,7 @@ import * as os from 'os';
 import { spawn } from './spawn.js';
 import { nitroAdapter } from './nitro.js';
 import { withComputeTarget } from './shared/compute_target.js';
+import { withBuildProfile } from './shared/build_profile.js';
 import {
   buildKvsEntries,
   generateKvsRouterRequestCode,
@@ -229,6 +230,44 @@ void describe('nitroAdapter — IPX provisioning', () => {
     );
     assert.ok(ipxRoute, 'a route targeting image-optimization must exist');
     assert.strictEqual(ipxRoute.pattern, '/_ipx/*');
+  });
+
+  void it('`skipImageOptimization` builds no IPX bundle but keeps a custom IPX endpoint route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ runtimeConfig: { ipx: { baseURL: '/img' } } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined, 'no image function is built');
+    const ipxRoute = manifest.routes.find((r) => r.target === 'image-optimization');
+    assert.strictEqual(ipxRoute?.pattern, '/img/*', 'the custom endpoint stays in the route table');
+  });
+
+  void it('`skipImageOptimization` records @nuxt/image domains for the remote-image allowlist', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ image: { domains: ['images.example.com'] } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined);
+    assert.deepStrictEqual(manifest.imageRemoteSources, { domains: ['images.example.com'] });
+  });
+
+  void it('`skipImageOptimization` without @nuxt/image emits no image route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.routes.find((r) => r.target === 'image-optimization'), undefined);
   });
 
   void it('does NOT provision IPX Lambda when @nuxt/image is missing', () => {
@@ -520,6 +559,56 @@ void describe('nitroAdapter — preset + feature validation', () => {
     const manifest = withComputeTarget('web-function', () => nitroAdapter({ projectDir: tmpDir }));
     assert.strictEqual(presetSeen, 'node-server');
     assert.strictEqual(manifest.compute.default?.type, 'http-server');
+  });
+
+  void it('builds node-server behind an API Gateway HTTP API, started by a run.sh on Lambda', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withBuildProfile({ serverInvoke: 'http-api' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(presetSeen, 'node-server');
+    const server = manifest.compute.default;
+    assert.strictEqual(server?.type, 'http-server');
+    // The Lambda Web Adapter execs the entrypoint; Nitro's index.mjs has no shebang.
+    assert.strictEqual(server?.entrypoint, 'run.sh');
+    const runSh = fs.readFileSync(path.join(server.bundle, 'run.sh'), 'utf-8');
+    assert.match(runSh, /exec \/var\/lang\/bin\/node index\.mjs/);
+    assert.ok((fs.statSync(path.join(server.bundle, 'run.sh')).mode & 0o111) !== 0, 'run.sh is executable');
+  });
+
+  void it('stays aws-lambda behind an HTTP API in a region with no Lambda Web Adapter layer', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withBuildProfile({ serverInvoke: 'http-api', lambdaWebAdapter: false }, () =>
+      nitroAdapter({ projectDir: tmpDir }),
+    );
+    assert.strictEqual(presetSeen, 'aws-lambda');
+    assert.strictEqual(manifest.compute.default?.type, 'handler');
+  });
+
+  void it('an explicit preset wins behind an HTTP API', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    withBuildProfile({ serverInvoke: 'http-api' }, () => nitroAdapter({ projectDir: tmpDir, preset: 'aws-lambda' }));
+    assert.strictEqual(presetSeen, 'aws-lambda');
+  });
+
+  void it('Web Functions start node-server from index.mjs (no run.sh)', () => {
+    writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: 'node-server' } });
+    writePackageJson(tmpDir);
+    const manifest = withComputeTarget('web-function', () => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
+    assert.strictEqual(manifest.compute.default?.entrypoint, 'index.mjs');
   });
 
   void it('accepts node-server', () => {
