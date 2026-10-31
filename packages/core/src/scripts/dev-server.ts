@@ -174,6 +174,37 @@ export interface DevServerOptions {
    * (a failure only logs a warning). Set `false` to disable. Default: enabled.
    */
   typegen?: boolean;
+  /**
+   * Regenerate `aws-blocks/client.js` from the backend at startup (local mode
+   * only; sandbox mode never does). Set `false` for an app that ships its own
+   * client, such as the Amplify overlay, whose `client.js` reads
+   * `amplify_outputs.json` and adds the Cognito token. When omitted, the dev
+   * server reads `package.json#blocks.dev.generateClient` from the app root (the
+   * working directory); default `true`. See {@link readDevGenerateClient}.
+   */
+  generateClient?: boolean;
+}
+
+/**
+ * `package.json#blocks.dev.generateClient` in `root`: `false` keeps a
+ * hand-written `aws-blocks/client.js`. `undefined` when the package.json, the
+ * key or a boolean value is missing; a non-boolean value is warned about and
+ * ignored, since it's an option the dev server can work without.
+ */
+export function readDevGenerateClient(root: string): boolean | undefined {
+  let pkg: unknown;
+  try {
+    // A leading UTF-8 byte order mark is ignored, as npm ignores it.
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, ''));
+  } catch {
+    return undefined;
+  }
+  const blocks = pkg && typeof pkg === 'object' && 'blocks' in pkg ? pkg.blocks : undefined;
+  const dev = blocks && typeof blocks === 'object' && 'dev' in blocks ? blocks.dev : undefined;
+  const value = dev && typeof dev === 'object' && 'generateClient' in dev ? dev.generateClient : undefined;
+  if (value === undefined || typeof value === 'boolean') return value;
+  log.warn(`⚠️  Ignoring package.json "blocks.dev.generateClient": ${JSON.stringify(value)} is not true or false.`);
+  return undefined;
 }
 
 /**
@@ -1352,11 +1383,15 @@ export async function startDevServer(options: DevServerOptions) {
   // Generate client code — skip in sandbox mode because sandbox.ts already
   // generated it with --conditions=aws-runtime (correct aws-middleware).
   // Re-generating here without that condition would overwrite with mock-middleware.
+  // An app that ships its own client (the Amplify overlay) opts out.
   if (!isSandbox) {
-    const awsBlocksDir = dirname(resolvedPath);
-    const clientPath = join(awsBlocksDir, 'client.js');
-    log.progress('📝 Generating client code...');
-    await writeClientCode(resolvedPath, clientPath);
+    const clientPath = join(dirname(resolvedPath), 'client.js');
+    if ((options.generateClient ?? readDevGenerateClient(process.cwd())) === false) {
+      log.detail('📝 Keeping aws-blocks/client.js (generateClient is false).');
+    } else {
+      log.progress('📝 Generating client code...');
+      await writeClientCode(resolvedPath, clientPath);
+    }
   }
 
   // Type-safe getSecret/getConfig: generate + watch the key augmentation so the
