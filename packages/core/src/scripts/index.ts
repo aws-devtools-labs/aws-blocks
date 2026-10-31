@@ -44,7 +44,7 @@ export {
 export { ensureSecrets, loadEnvFile, loadProductionEnv } from './ensure-secrets.js';
 export { generateClientCode, writeClientCode } from './generate-client.js';
 export { generateSpec, type SpecGenerationOptions, writeSpec } from './generate-spec.js';
-export { log } from './log.js';
+export { ignoreClosedOutput, log } from './log.js';
 export {
 	NativeCatalogError,
 	type NativeDeclarationInput,

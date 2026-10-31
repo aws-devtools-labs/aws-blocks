@@ -37,7 +37,7 @@ import {
   killListenerTree,
   waitForProcessGroupExit,
 } from './process-tree.js';
-import { isCuratedLevel, log, resolveLogLevel } from './log.js';
+import { ignoreClosedOutput, isCuratedLevel, log, resolveLogLevel } from './log.js';
 import { installDevRejectionHandler, runDevRequest } from './dev-unhandled-rejection.js';
 
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
@@ -667,6 +667,9 @@ export function evaluateSingleton(
 }
 
 export async function startDevServer(options: DevServerOptions) {
+  // A closed output pipe (`blocks dev | head`, a background job whose reader
+  // went away) must not kill the server on its next log line (see ignoreClosedOutput).
+  ignoreClosedOutput();
   // Bind loopback unless the developer explicitly opts into a wider interface.
   const host = resolveDevHost(options.host);
   if (!isLoopbackHost(host)) {
