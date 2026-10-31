@@ -20,8 +20,10 @@
  * - A generated wrapper is deleted once nothing references it any more.
  *
  * Exit codes: 0 when the app is fully migrated (or there was nothing to do);
- * 1 when kept items remain for the user to finish by hand. Exit 1 is a
- * report, not a crash: everything that could be migrated was migrated.
+ * 1 when kept items remain for the user to finish by hand (a report, not a
+ * crash: everything that could be migrated was migrated), or when migrate
+ * refused and wrote nothing, which `--output json` tells apart by printing
+ * `{"error": {"message", "hint"}}` instead of the result; 2 for a usage error.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -615,28 +617,47 @@ function removeIfEmpty(dir: string): void {
 	}
 }
 
+/**
+ * What git knows about `root`, after refusing (unless `force` or `dryRun`) a
+ * repository git fails to read, an app git does not track, or a dirty tree.
+ *
+ * @throws {CliError} The refusal, or a git command that failed; nothing was written.
+ */
+function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
+	const git = gitView(root);
+	if (dryRun || force) return git;
+	if (git.kind === 'refused') {
+		throw new CliError(`git failed in ${root}: ${git.message}`, {
+			hint: 'fix what git reports, or "blocks migrate --force" to migrate without git',
+		});
+	}
+	if (git.kind === 'unseen') {
+		throw new CliError(
+			'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
+			{ where: [`project: ${root}`], hint: '"blocks migrate --force" to migrate anyway' },
+		);
+	}
+	if (git.kind === 'listed' && gitStatus(root).trim() !== '') {
+		throw new CliError('the git working tree has uncommitted changes; commit or stash them first.', {
+			where: [`project: ${root}`],
+			hint: 'git stash, or "blocks migrate --force" to migrate anyway',
+		});
+	}
+	return git;
+}
+
 export async function migrate(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	const dryRun = input.flags['dry-run'] === true;
-	const git = gitView(root);
-	if (!dryRun && input.flags.force !== true) {
-		if (git.kind === 'refused') {
-			throw new CliError(`git failed in ${root}: ${git.message}`, {
-				hint: 'fix what git reports, or "blocks migrate --force" to migrate without git',
-			});
+	let git: GitView;
+	try {
+		git = checkGit(root, dryRun, input.flags.force === true);
+	} catch (error) {
+		// A JSON consumer tells a refusal (nothing written) from kept items (also exit 1) by this document.
+		if (error instanceof CliError && ctx.out.format === 'json') {
+			ctx.out.text(JSON.stringify({ error: { message: error.message, hint: error.hint ?? null } }, null, 2));
 		}
-		if (git.kind === 'unseen') {
-			throw new CliError(
-				'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
-				{ where: [`project: ${root}`], hint: '"blocks migrate --force" to migrate anyway' },
-			);
-		}
-		if (git.kind === 'listed' && gitStatus(root).trim() !== '') {
-			throw new CliError('the git working tree has uncommitted changes; commit or stash them first.', {
-				where: [`project: ${root}`],
-				hint: 'git stash, or "blocks migrate --force" to migrate anyway',
-			});
-		}
+		throw error;
 	}
 	const { result, pkg } = planMigration(root, git.kind === 'listed' ? git.files : null);
 	if (!dryRun) {

@@ -245,6 +245,16 @@ describe('blocks migrate references', () => {
 		assert.match(run.stderr, /^Error: git does not track this app/);
 		assert.match(run.stderr, /\nTry: .*blocks migrate --force/);
 		assert.deepStrictEqual(snapshot(root), before);
+		const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message:
+					'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
+				hint: '"blocks migrate --force" to migrate anyway',
+			},
+		});
+		assert.deepStrictEqual(snapshot(root), before);
 
 		const forced = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(forced.code, 1, forced.stderr);
@@ -643,6 +653,23 @@ describe('blocks migrate', () => {
 		assert.match(run.stderr, /\nTry: .*blocks migrate --force/);
 		assert.deepStrictEqual(snapshot(root), before);
 
+		// Under --output json the refusal is a JSON document on stdout, so an agent tells it from kept items (also exit 1).
+		const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message: 'the git working tree has uncommitted changes; commit or stash them first.',
+				hint: 'git stash, or "blocks migrate --force" to migrate anyway',
+			},
+		});
+		assert.match(json.stderr, /^Error: the git working tree has uncommitted changes/);
+		assert.deepStrictEqual(snapshot(root), before);
+
+		const help = await runCli(['migrate', '-h'], { cwd: root });
+		assert.match(help.stdout, /Exit codes:\n {2}0 {2}fully migrated, or nothing to do\n {2}1 {2}kept items remain/);
+		assert.match(help.stdout, /\{"error": \{"message", "hint"\}\}/);
+		assert.match(help.stdout, /\n {2}2 {2}usage error/);
+
 		const forced = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
 		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy');
@@ -714,6 +741,11 @@ describe('blocks migrate', () => {
 			assert.match(run.stderr, /^Error: git failed in .*: fatal: detected dubious ownership in repository at /);
 			assert.match(run.stderr, /\nTry: .*blocks migrate --force/);
 			assert.deepStrictEqual(snapshot(root), before);
+			const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
+			assert.strictEqual(json.code, 1);
+			const { error } = JSON.parse(json.stdout) as { error: { message: string; hint: string } };
+			assert.match(error.message, /^git failed in .*: fatal: detected dubious ownership in repository at /);
+			assert.match(error.hint, /blocks migrate --force/);
 
 			const forced = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 			assert.strictEqual(forced.code, 1, forced.stderr);

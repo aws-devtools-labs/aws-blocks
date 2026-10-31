@@ -540,7 +540,12 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +
 			'does not track (a parent repository ignores its directory), since git could not undo the\n' +
 			'changes, and a repository that git fails to read.\n' +
-			'Exit code 1 means kept items remain for you to finish by hand; it is not a crash.',
+			'Exit codes:\n' +
+			'  0  fully migrated, or nothing to do\n' +
+			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
+			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
+			'     instead of the result\n' +
+			'  2  usage error',
 		flags: [
 			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
 			{
