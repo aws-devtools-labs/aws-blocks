@@ -13,13 +13,17 @@ const CLI_PATH = join(__dirname, '../dist/index.js');
 /**
  * The dev server settings that `blocks dev` resolves for an app, from the built
  * `@aws-blocks/blocks` CLI in this repository: what the scaffolded `blocks.dev` does.
+ * `flags` are the `blocks dev` options, for example `{ 'frontend-port': '41902' }`.
  */
-async function resolvedDevConfig(root: string): Promise<{ frontendCommand?: string; port?: number; source: string }> {
+async function resolvedDevConfig(
+  root: string,
+  flags: Record<string, string> = {},
+): Promise<{ frontendCommand?: string; frontendPort?: number; port?: number; source: string }> {
   // A runtime path, not a static import: `@aws-blocks/blocks` exports no `cli/config`, and
   // create-blocks-app does not depend on it, so the test loads the sibling package's build.
   const config = pathToFileURL(join(__dirname, '../../blocks/dist/cli/config.js')).href;
   const { resolveDevConfig } = await import(config);
-  return resolveDevConfig(root);
+  return resolveDevConfig(root, flags);
 }
 
 function run(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
@@ -219,17 +223,19 @@ describe('create-blocks-app template metadata', () => {
   it('every deployable template sets its dev server in package.json "blocks.dev"', () => {
     // `blocks dev` and the sandbox's dev server read these settings; they replace
     // the options the removed aws-blocks/scripts/server.ts passed to startDevServer.
-    const vite = { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 };
+    // No template sets `frontendCommand`: `blocks dev` builds it from the app's
+    // `vite` or `next` dependency and the effective frontend port.
+    const frontend = { frontendPort: 3100 };
     const expected: Record<string, unknown> = {
       'api-only': { port: 3001, frontend: false },
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
-      nextjs: { frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100', frontendPort: 3100 },
-      'auth-cognito': vite,
-      bare: vite,
-      default: vite,
-      demo: vite,
-      react: vite,
+      nextjs: frontend,
+      'auth-cognito': frontend,
+      bare: frontend,
+      default: frontend,
+      demo: frontend,
+      react: frontend,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     const actual: Record<string, unknown> = {};
@@ -241,6 +247,23 @@ describe('create-blocks-app template metadata', () => {
       if (pkg.scripts?.sandbox) actual[entry.name] = pkg.blocks?.dev;
     }
     assert.deepStrictEqual(actual, expected);
+  });
+
+  it('every frontend template starts its frontend dev server on the --frontend-port it is given', async () => {
+    // A hard-coded `frontendCommand` would keep its own `--port 3100`, so the dev server
+    // would proxy to the requested port while the frontend listened on another one.
+    const vite = (port: number) => `npx vite --port ${port} --strictPort`;
+    const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
+    const commands: Record<string, (port: number) => string> = {
+      nextjs: next, 'auth-cognito': vite, bare: vite, default: vite, demo: vite, react: vite,
+    };
+    const templatesDir = join(__dirname, '..', 'templates');
+    for (const [name, command] of Object.entries(commands)) {
+      const moved = await resolvedDevConfig(join(templatesDir, name), { 'frontend-port': '41902' });
+      assert.strictEqual(moved.frontendCommand, command(41902), name);
+      assert.strictEqual(moved.frontendPort, 41902, name);
+      assert.strictEqual((await resolvedDevConfig(join(templatesDir, name))).frontendCommand, command(3100), name);
+    }
   });
 
   it('every HTML template declares a UTF-8 charset', () => {
@@ -599,20 +622,30 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('honors --template when adding to an existing project (nextjs uses next dev)', () => {
-    const tmpDir = join(__dirname, '../.test-existing-nextjs-template');
-    mkdirSync(tmpDir, { recursive: true });
-    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0' }));
-    try {
-      const result = run(['.', '--template', 'nextjs', '-y', '--skip-install'], tmpDir);
-      assert.strictEqual(result.exitCode, 0);
-      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      const frontendCommand: string = pkg.blocks?.dev?.frontendCommand ?? '';
-      assert.match(frontendCommand, /next dev/, 'nextjs template should start the Next.js dev server');
-      assert.ok(!frontendCommand.includes('vite'), 'nextjs template should not start a Vite dev server');
-      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
-    } finally {
-      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  it('runs an existing project\'s own frontend dev server, whichever template is added', async () => {
+    // The template's frontend settings describe the template's frontend, so they are not
+    // copied: a Next.js project with the default (Vite) template still runs `next dev`.
+    const projects: Record<string, { deps: Record<string, unknown>; command: string }> = {
+      next: { deps: { dependencies: { next: '*' } }, command: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100' },
+      vite: { deps: { devDependencies: { vite: '*' } }, command: 'npx vite --port 3100 --strictPort' },
+    };
+    for (const template of ['default', 'nextjs']) {
+      for (const [framework, { deps, command }] of Object.entries(projects)) {
+        const tmpDir = join(__dirname, `../.test-existing-${framework}-${template}`);
+        mkdirSync(tmpDir, { recursive: true });
+        writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: `my-${framework}-app`, version: '1.0.0', ...deps }));
+        try {
+          const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+          assert.strictEqual(result.exitCode, 0, result.stderr);
+          const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+          assert.strictEqual(pkg.blocks, undefined, `${template} into ${framework}`);
+          const dev = await resolvedDevConfig(tmpDir, { 'frontend-port': '41902' });
+          assert.strictEqual(dev.frontendCommand, command.replace('3100', '41902'), `${template} into ${framework}`);
+          assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'scripts')), 'no lifecycle wrappers are copied');
+        } finally {
+          rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        }
+      }
     }
   });
 
@@ -637,16 +670,19 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('defaults to the default template (vite) when no --template is given for an existing project', () => {
+  it('defaults to the default template when no --template is given for an existing project', () => {
     const tmpDir = join(__dirname, '../.test-existing-default-template');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0' }));
     try {
       const result = run(['.', '-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
+      assert.deepStrictEqual(
+        readFileSync(join(tmpDir, 'aws-blocks', 'index.ts'), 'utf-8'),
+        readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'index.ts'), 'utf-8'),
+      );
       // The existing-project path must also wire the sanctioned stop command.
       const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      assert.match(pkg.blocks?.dev?.frontendCommand ?? '', /vite/, 'default template should start the Vite dev server');
       assert.strictEqual(pkg.scripts['dev:server'], 'blocks dev');
       assert.strictEqual(pkg.scripts['dev:stop'], 'blocks dev stop');
     } finally {

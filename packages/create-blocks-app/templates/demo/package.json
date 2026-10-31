@@ -34,7 +34,6 @@
   },
   "blocks": {
     "dev": {
-      "frontendCommand": "npx vite --port 3100 --strictPort",
       "frontendPort": 3100
     }
   },

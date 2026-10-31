@@ -34,7 +34,6 @@
   },
   "blocks": {
     "dev": {
-      "frontendCommand": "npx next dev --webpack --hostname 127.0.0.1 --port 3100",
       "frontendPort": 3100
     }
   },

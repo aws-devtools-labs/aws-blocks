@@ -137,12 +137,12 @@ Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws
     "build": "tsc && vite build"
   },
   "blocks": {
-    "dev": { "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 }
+    "dev": { "frontendPort": 3100 }
   }
 }
 ```
 
-Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `blocks dev` backend-only even when the project has `vite` or `next` installed. `nextjs` runs `npx next dev --webpack --hostname 127.0.0.1 --port 3100`. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way, and copies the template's `blocks.dev` unless your `package.json` already has one, so `--template backend`, `api-only` or `sql` in a Vite or Next.js project runs the backend only. The Amplify overlay adds `blocks:dev` (`blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
+No template sets `frontendCommand`: `blocks dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`. Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `blocks dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
 
 `npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question.
 

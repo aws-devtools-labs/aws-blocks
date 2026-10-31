@@ -48,7 +48,7 @@ Open http://localhost:3000 after `npm run dev`.
 
 Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
 `"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
-The dev server settings (port, frontend command) are in `package.json` under `"blocks": { "dev": … }`.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Building on this template

@@ -610,6 +610,22 @@ frontend:
 
 // ─── Init into existing project ─────────────────────────────────────────────
 
+/**
+ * The template's `blocks` settings that suit any existing project: the dev server
+ * `port` and the backend-only `frontend: false`. The template's frontend settings
+ * describe the template's own frontend, not the project's, so they are left out and
+ * `blocks dev` detects the project's frontend dev server from its dependencies.
+ * `undefined` when nothing is left to copy.
+ */
+function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined {
+  const dev = (blocks as { dev?: Record<string, unknown> } | undefined)?.dev;
+  if (!dev || typeof dev !== 'object') return undefined;
+  const kept: Record<string, unknown> = {};
+  if (dev.port !== undefined) kept.port = dev.port;
+  if (dev.frontend !== undefined) kept.frontend = dev.frontend;
+  return Object.keys(kept).length > 0 ? { dev: kept } : undefined;
+}
+
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
@@ -628,9 +644,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the requested template. The template's
-  // `package.json#blocks.dev` (below) carries its frontend dev server — `next dev`
-  // vs `vite` — so `blocks dev` matches the user's project.
+  // 1. Copy aws-blocks/ from the requested template. `blocks dev` detects the
+  // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
+  // so only the template's backend settings are copied below.
   const templateDir = join(__dirname, '../templates', templateName);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
@@ -683,7 +699,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'dev:server': 'blocks dev',
       'dev:stop': 'blocks dev stop',
     },
-    blocksConfig: templatePkg.blocks,
+    blocksConfig: backendDevConfig(templatePkg.blocks),
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
   });

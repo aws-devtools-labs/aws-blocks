@@ -38,7 +38,7 @@ npm run typegen          # Regenerate secret/config key types (-- --check in CI)
 
 Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
 `"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
-The dev server settings (port, frontend command) are in `package.json` under `"blocks": { "dev": … }`.
+The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Local dev vs Sandbox vs Deploy (process model)
@@ -91,7 +91,7 @@ This template is backend-only. To add a frontend:
        "build": "tsc && vite build"
      },
      "blocks": {
-       "dev": { "frontendCommand": "npx vite --port 3100 --strictPort", "frontendPort": 3100 }
+       "dev": { "frontendPort": 3100 }
      },
      "dependencies": {
        "react": "^19.0.0",

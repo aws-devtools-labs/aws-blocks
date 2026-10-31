@@ -57,7 +57,7 @@ npm run typegen          # Regenerate secret/config key types (-- --check in CI)
 
 Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
 `"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
-The dev server settings (port, frontend command) are in `package.json` under `"blocks": { "dev": … }`.
+The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ### RPC endpoint (local dev)
