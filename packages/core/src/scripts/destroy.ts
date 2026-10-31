@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { loadProductionEnv } from './ensure-secrets.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
@@ -44,6 +45,12 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
+
+    // The same environment as the production deploy: `.env.production` can set
+    // AWS_PROFILE and AWS_REGION (an exported variable wins), so without it the
+    // destroy could target other credentials or another Region than the deploy.
+    loadProductionEnv();
+    process.env.BLOCKS_STAGE = 'production';
 
     // Fail fast on a missing/expired credential BEFORE entering the retry loop:
     // a credential error is deterministic, so retrying it only burns the full

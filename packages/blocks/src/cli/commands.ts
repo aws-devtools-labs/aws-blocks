@@ -463,8 +463,8 @@ export async function destroy(ctx: Context): Promise<number> {
 	const root = ctx.requireRoot();
 	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
-	// Core's production destroy loads no env file, unlike its deploy.
-	const { label } = await targetLabel(ctx, root, ctx.env);
+	// Core's production destroy loads `.env.production`, as its deploy does.
+	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	const where = [`stack: ${stack} (production)`, label, `project: ${root}`];
 	ctx.out.progress(`This deletes the production stack ${stack}; ${label}; project ${root}.`);
 	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where);

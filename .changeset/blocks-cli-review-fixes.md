@@ -28,3 +28,4 @@ fix(blocks): `blocks` output streams, non-interactive runs and usage errors
 - A typo of a hidden alias suggests the canonical command: `blocks consol` suggests `sandbox console`, `blocks typegn` suggests `generate types`.
 - A relative `--telemetry-file` is resolved from the directory you run the command in for the commands that run core in the CLI process too (`blocks sandbox console`), instead of from the project root.
 - `blocks telemetry enable|disable` outside an app is a usage error that suggests `--global`, instead of writing a `.blocks/config.json` into the current directory; `blocks -C <dir> telemetry` reads `<dir>`, not the shell's directory.
+- `blocks destroy` prints the target with `.env.production` applied, as `blocks deploy` and `blocks whoami` do, and core's destroy now uses it too, so all three name the same credentials and Region.

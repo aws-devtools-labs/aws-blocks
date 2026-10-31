@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { AwsIdentity } from '@aws-blocks/core/scripts';
+import { type AwsIdentity, describeDeploymentCredentials } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
@@ -905,6 +905,64 @@ describe('stage env files', () => {
 		// The shell's own setting wins over the file, as in core.
 		const shell = await runCli(['deploy'], { cwd: root, env: { AWS_REGION: 'us-west-1' } });
 		assert.match(shell.stderr, /; Region us-west-1,/);
+	});
+
+	it('resolves the same target for destroy, deploy and whoami in every precedence combination', async () => {
+		const whoamiCore = {
+			readAwsIdentity: async ({ env, projectRoot }: { env?: NodeJS.ProcessEnv; projectRoot?: string }) => {
+				const target = await describeDeploymentCredentials({ env, projectRoot });
+				return { credentials: target.credentials, region: target.region, account: '123456789012' };
+			},
+		};
+		const cases: { name: string; file?: string; env?: NodeJS.ProcessEnv; flags?: string[]; expected: string }[] = [
+			{
+				name: 'shell only',
+				env: { AWS_REGION: 'us-east-1' },
+				expected: 'Region us-east-1, credentials: the default credential chain',
+			},
+			{
+				name: '.env.production only',
+				file: 'AWS_PROFILE=prod\nAWS_REGION=eu-west-2\n',
+				expected: 'Region eu-west-2, credentials: AWS profile prod',
+			},
+			{
+				name: 'an exported Region and profile win over the file',
+				file: 'AWS_PROFILE=prod\nAWS_REGION=eu-west-2\n',
+				env: { AWS_PROFILE: 'shell', AWS_REGION: 'us-west-1' },
+				expected: 'Region us-west-1, credentials: AWS profile shell',
+			},
+			{
+				name: '--profile and --region win over the shell and the file',
+				file: 'AWS_PROFILE=prod\nAWS_REGION=eu-west-2\n',
+				env: { AWS_PROFILE: 'shell', AWS_REGION: 'us-west-1' },
+				flags: ['--profile', 'flag', '--region', 'ap-south-1'],
+				expected: 'Region ap-south-1, credentials: AWS profile flag',
+			},
+			{
+				name: 'the file Region with --profile',
+				file: 'AWS_REGION=eu-west-2\n',
+				flags: ['--profile', 'flag'],
+				expected: 'Region eu-west-2, credentials: AWS profile flag',
+			},
+			{
+				name: 'AWS_DEFAULT_REGION and AWS_DEFAULT_PROFILE from the file',
+				file: 'AWS_DEFAULT_PROFILE=prod\nAWS_DEFAULT_REGION=eu-north-1\n',
+				expected: 'Region eu-north-1, credentials: AWS profile prod',
+			},
+		];
+		for (const { name, file, env, flags = [], expected } of cases) {
+			const root = fixtureApp();
+			if (file !== undefined) writeFileSync(join(root, '.env.production'), file);
+			const destroy = await runCli([...flags, 'destroy', '--yes'], { cwd: root, env });
+			assert.strictEqual(destroy.code, 0, `${name}: ${destroy.stderr}`);
+			assert.ok(destroy.stderr.includes(`This deletes the production stack demo-prod; ${expected};`), `${name}: ${destroy.stderr}`);
+			const deploy = await runCli([...flags, 'deploy'], { cwd: root, env });
+			assert.ok(deploy.stderr.includes(`Deploying the production stack demo-prod; ${expected};`), `${name}: ${deploy.stderr}`);
+			const whoami = await runCli([...flags, 'whoami', '--output', 'json'], { cwd: root, env, core: whoamiCore });
+			assert.strictEqual(whoami.code, 0, `${name}: ${whoami.stderr}`);
+			const { region, credentials } = JSON.parse(whoami.stdout) as { region: string; credentials: string };
+			assert.strictEqual(`Region ${region}, credentials: ${credentials}`, expected, name);
+		}
 	});
 });
 

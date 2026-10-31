@@ -35,11 +35,12 @@ before(() => {
   for (const name of ['npm', 'npx']) {
     const file = join(bin, name);
     // Records its argv and, like CDK, writes a manifest into the `--output`
-    // directory. cdk.log gets the working directory and whether a stale file
-    // was still in that directory when it ran.
+    // directory. cdk.log gets the working directory, the stage environment and
+    // whether a stale file was still in that directory when it ran.
     writeFileSync(
       file,
       `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvLog}"\necho "cwd=$PWD" > "${cdkLog}"\n` +
+        `echo "stage=$BLOCKS_STAGE mark=$ZZ_MARK" >> "${cdkLog}"\n` +
         `prev=\nfor a in "$@"; do if [ "$prev" = --output ]; then ` +
         `if [ -e "$a/stale.json" ]; then echo stale-seen >> "${cdkLog}"; fi; ` +
         `/bin/mkdir -p "$a" && echo '{}' > "$a/manifest.json"; fi; prev=$a; done\n`,
@@ -98,5 +99,17 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     assert.doesNotMatch(cdk, /stale-seen/);
     // ... and the successful destroy removed what CDK wrote.
     assert.ok(!existsSync(assemblyDir), `expected ${assemblyDir} to be removed`);
+  });
+
+  it('the production destroy loads .env.production, as the production deploy does', () => {
+    writeFileSync(join(root, '.env.production'), 'ZZ_MARK=from-env-production\n');
+    try {
+      const argv = recordDestroyArgv('./destroy.js', `mod.destroy({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: ${JSON.stringify(root)} })`);
+      assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
+      // cdk destroy synthesizes the app with the production environment.
+      assert.match(readFileSync(cdkLog, 'utf-8'), /^stage=production mark=from-env-production$/m);
+    } finally {
+      rmSync(join(root, '.env.production'), { force: true });
+    }
   });
 });
