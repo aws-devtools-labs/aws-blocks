@@ -130,12 +130,13 @@ export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: 
 };
 
 /**
- * Wrappers a generated wrapper runs at runtime, beyond what its import
- * statements show. Every generated `sandbox.ts` starts `server.ts` as the
- * sandbox's local dev server, through `devCommand` or core's default
- * (`npx tsx watch aws-blocks/scripts/server.ts`). The `blocks sandbox` alias
- * uses the CLI's own dev runner instead, so a customized `server.ts` would be
- * silently bypassed.
+ * Wrappers a wrapper runs at runtime, beyond what its import statements show.
+ * Every generated `sandbox.ts` starts `server.ts` as the sandbox's local dev
+ * server, through `devCommand` or core's default
+ * (`npx tsx watch aws-blocks/scripts/server.ts`), and so does a customized one
+ * unless it changed that. The `blocks sandbox` alias uses the CLI's own dev
+ * runner instead, so a customized `server.ts` would be silently bypassed; and a
+ * `sandbox.ts` that stays keeps its `server.ts`.
  */
 export const WRAPPER_RUNTIME_DEPENDENCIES: Readonly<Partial<Record<WrapperFile, readonly WrapperFile[]>>> = {
 	'sandbox.ts': ['server.ts'],
@@ -309,8 +310,9 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	if (server?.generated && pkg.blocks?.dev === undefined) result.devConfig = SERVER_DEV_OPTIONS[server.hash] ?? {};
 
 	// Delete generated wrappers that nothing references after the rewrite. A
-	// kept wrapper can import another one (sandbox.ts names server.ts), so
-	// iterate until the set of deletions is stable.
+	// kept wrapper can import another one (sandbox.ts names server.ts), or start
+	// it at runtime without naming it (WRAPPER_RUNTIME_DEPENDENCIES), so iterate
+	// until the set of deletions is stable.
 	const candidates = new Set(wrappers.filter((w) => w.generated).map((w) => w.path));
 	let changed = true;
 	while (changed) {
@@ -324,7 +326,16 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 			const fileUsers = sources
 				.filter((source) => refersTo(source.text, source.path, wrapper.path))
 				.map((source) => source.path);
-			const users = [...scriptUsers, ...fileUsers];
+			// A wrapper that stays (customized, or kept above) still starts its runtime dependencies.
+			const runtimeUsers = wrappers
+				.filter(
+					(user) =>
+						!candidates.has(user.path) &&
+						!fileUsers.includes(user.path) &&
+						WRAPPER_RUNTIME_DEPENDENCIES[user.file]?.includes(wrapper.file),
+				)
+				.map((user) => `${user.path}, which starts it at runtime`);
+			const users = [...scriptUsers, ...fileUsers, ...runtimeUsers];
 			if (users.length > 0) {
 				candidates.delete(wrapper.path);
 				result.kept.push({

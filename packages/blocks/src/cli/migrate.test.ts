@@ -263,6 +263,45 @@ describe('blocks migrate', () => {
 		assert.strictEqual(readPkg(root).scripts.dev, 'blocks dev');
 	});
 
+	it('keeps a generated server.ts that a customized sandbox.ts starts without naming it', async () => {
+		// api-only's sandbox.ts passes no devCommand, so core starts its default,
+		// `npx tsx watch aws-blocks/scripts/server.ts`: no import or string names server.ts.
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['aws-blocks/scripts/sandbox.ts'] = app.files['aws-blocks/scripts/sandbox.ts'].replace(
+				"deployOnly: process.argv.includes('--deploy-only'),",
+				"deployOnly: process.argv.includes('--deploy-only'), clientPort: 4000,",
+			);
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const result = JSON.parse(run.stdout);
+		const server = result.kept.find((k: { file: string }) => k.file === 'aws-blocks/scripts/server.ts');
+		assert.match(server?.reason ?? '', /still used by aws-blocks\/scripts\/sandbox\.ts/);
+		assert.ok(!result.removed.includes('aws-blocks/scripts/server.ts'));
+		assert.ok(scriptsDir(root).includes('server.ts'), 'the sandbox can still start its dev server');
+		assert.strictEqual(readPkg(root).scripts.sandbox, 'tsx aws-blocks/scripts/sandbox.ts');
+	});
+
+	it('keeps a generated server.ts while a script still runs the generated sandbox.ts', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.packageJson.scripts['sandbox:ci'] = 'CI=1 tsx aws-blocks/scripts/sandbox.ts';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
+			'aws-blocks/scripts/sandbox.ts',
+			'aws-blocks/scripts/server.ts',
+			'package.json#scripts.sandbox:ci',
+		]);
+		assert.match(kept.find((k) => k.file.endsWith('/sandbox.ts'))?.reason ?? '', /script "sandbox:ci"/);
+		assert.match(
+			kept.find((k) => k.file.endsWith('/server.ts'))?.reason ?? '',
+			/still used by aws-blocks\/scripts\/sandbox\.ts/,
+		);
+		assert.deepStrictEqual(scriptsDir(root), ['sandbox.ts', 'server.ts']);
+	});
+
 	it('--dry-run writes nothing and prints the plan', async () => {
 		const root = writeApp('default@0ab6b047');
 		const before = snapshot(root);
