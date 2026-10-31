@@ -133,7 +133,7 @@ Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws
     "typegen": "blocks generate types",
     "spec": "blocks generate spec",
     "vendorize": "blocks vendorize",
-    "prebuild": "blocks-generate-client",
+    "prebuild": "blocks generate client",
     "build": "tsc && vite build"
   },
   "blocks": {

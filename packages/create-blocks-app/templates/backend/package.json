@@ -14,7 +14,7 @@
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
     "spec": "blocks generate spec",
-    "prebuild": "blocks-generate-client",
+    "prebuild": "blocks generate client",
     "dev": "blocks dev",
     "dev:stop": "blocks dev stop",
     "sandbox": "blocks sandbox",

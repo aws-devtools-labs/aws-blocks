@@ -195,6 +195,7 @@ describe('create-blocks-app template metadata', () => {
       typegen: 'blocks generate types',
       spec: 'blocks generate spec',
       vendorize: 'blocks vendorize',
+      prebuild: 'blocks generate client',
     };
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];
