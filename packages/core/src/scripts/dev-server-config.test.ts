@@ -22,6 +22,12 @@ describe('buildBlocksConfig — client runtime config', () => {
       environment: 'sandbox',
     });
   });
+
+  it('points at the specific host the dev server binds, which localhost does not reach', () => {
+    assert.strictEqual(buildBlocksConfig(41083, false, '10.253.66.118').apiUrl, 'http://10.253.66.118:41083/aws-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, 'fd00::5').apiUrl, 'http://[fd00::5]:3000/aws-blocks/api');
+    assert.strictEqual(buildBlocksConfig(3000, false, '0.0.0.0').apiUrl, 'http://localhost:3000/aws-blocks/api');
+  });
 });
 
 describe('isBlocksConfigRequest — reserved runtime-config path', () => {

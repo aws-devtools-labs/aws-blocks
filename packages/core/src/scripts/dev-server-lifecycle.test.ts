@@ -12,7 +12,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type DevServerOptions, devPidfilePath, stopDevServer } from './dev-server.js';
@@ -290,5 +290,22 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const next = startDev(dir, { port, frontendPort, frontendCommand: command });
     await waitFor('the new dev server', async () => (await fetchText(port)) === 'frontend' && (await serving(port)), [next]);
     assert.match(next.out.stdout, new RegExp(`Reclaimed port ${frontendPort} from this app's previous dev server`));
+  });
+
+  const lanAddress = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+
+  it('uses the bound host, not localhost, in its banner, config.json and CORS', { skip: !lanAddress && 'no non-loopback IPv4 address' }, async () => {
+    const host = lanAddress ?? '';
+    const port = await freePort();
+    const dev = startDev(makeApp(), { port, host });
+    await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
+    assert.ok(dev.out.stdout.includes(`running on http://${host}:${port}`), dev.out.stdout);
+    const config = await fetch(`http://${host}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
+    assert.deepStrictEqual(config, { apiUrl: `http://${host}:${port}/aws-blocks/api`, environment: 'local' });
+    const page = `http://${host}:5173`;
+    const response = await fetch(`http://${host}:${port}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: page } });
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), page);
+    const foreign = await fetch(`http://${host}:${port}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } });
+    assert.strictEqual(foreign.headers.get('access-control-allow-origin'), `http://${host}:${port}`);
   });
 });
