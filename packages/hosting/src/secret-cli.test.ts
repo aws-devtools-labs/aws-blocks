@@ -331,3 +331,37 @@ void describe('runValueCli() — list', () => {
 		);
 	});
 });
+
+void describe('runValueCli() — usage errors', () => {
+	void it('reports an invalid key, an empty value and a missing subcommand as ValueCliUsageError', async () => {
+		const input = Object.assign(new PassThrough(), { isTTY: false });
+		const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+		Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
+		try {
+			input.end('');
+			await assert.rejects(
+				runValueCli(['set', 'K', '--value-stdin'], { kind: 'secret' }),
+				(e: unknown) => e instanceof ValueCliUsageError && /No value provided for 'K'/.test(e.message),
+			);
+		} finally {
+			if (stdin) Object.defineProperty(process, 'stdin', stdin);
+		}
+		for (const argv of [
+			['set', 'bad-key', 'v'],
+			['set', '1BAD', 'v'],
+			['remove', 'bad-key'],
+		]) {
+			await assert.rejects(
+				runValueCli(argv, { kind: 'config' }),
+				(e: unknown) => e instanceof ValueCliUsageError && /^Invalid key/.test(e.message),
+				argv.join(' '),
+			);
+		}
+		await assert.rejects(
+			runValueCli([], { kind: 'secret', label: 'blocks secret' }),
+			(e: unknown) =>
+				e instanceof ValueCliUsageError &&
+				e.message === 'blocks secret needs a subcommand: set, list or remove.',
+		);
+	});
+});

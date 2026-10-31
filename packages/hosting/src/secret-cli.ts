@@ -73,7 +73,7 @@ export class ValueCliInterruptedError extends Error {
 
 function assertValidKey(key: string): void {
 	if (!key || !KEY_PATTERN.test(key)) {
-		throw new Error(
+		throw new ValueCliUsageError(
 			`Invalid key ${JSON.stringify(key)}. Keys must match ${KEY_PATTERN} ` +
 				`(start with a letter or underscore, then letters, digits, or underscores).`,
 		);
@@ -415,7 +415,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			} else {
 				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `, opts.interactive);
 			}
-			if (value.length === 0) throw new Error(`No value provided for '${key}'.`);
+			if (value.length === 0) throw new ValueCliUsageError(`No value provided for '${key}'.`);
 			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage, region: effRegion });
 			break;
 		}
@@ -463,7 +463,9 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		}
 		default:
 			throw new ValueCliUsageError(
-				`Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
+				subcommand === undefined
+					? `${label} needs a subcommand: set, list or remove.`
+					: `Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
 			);
 	}
 }
