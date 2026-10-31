@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, it, mock } from 'node:test';
 import { setImmediate as setImmediatePromise } from 'node:timers/promises';
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { forceDeleteWarning, runValueCli, ValueCliInterruptedError, ValueCliUsageError } from './secret-cli.js';
 
 afterEach(() => mock.restoreAll());
@@ -260,5 +261,48 @@ void describe('runValueCli() — the hidden prompt', () => {
 		// The test runner reports on this process's stdout too: check only for the prompt.
 		assert.doesNotMatch(stdout, /Enter value/);
 		assert.match(stderr, /Enter value for secret 'ZZ_PIPEOUT' \(hidden\): /);
+	});
+});
+
+/** Answer each Secrets Manager call with `answer(commandName, input)`, recording the calls; no AWS. */
+function fakeSecretsManager(answer: (command: string, input: Record<string, unknown>) => unknown): string[] {
+	const calls: string[] = [];
+	mock.method(
+		SecretsManagerClient.prototype,
+		'send',
+		async (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+			calls.push(command.constructor.name);
+			return answer(command.constructor.name, command.input);
+		},
+	);
+	mock.method(console, 'warn', () => {});
+	return calls;
+}
+
+function awsError(name: string, message: string): Error {
+	return Object.assign(new Error(message), { name });
+}
+
+void describe('runValueCli() — Secrets Manager edge cases', () => {
+	void it('restores a secret that remove scheduled for deletion, then sets it', async () => {
+		const calls = fakeSecretsManager((command) => {
+			if (command === 'CreateSecretCommand') {
+				throw awsError(
+					'InvalidRequestException',
+					"You can't create this secret because a secret with this name is already scheduled for deletion.",
+				);
+			}
+			return {};
+		});
+		const input = Object.assign(new PassThrough(), { isTTY: false });
+		const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+		Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
+		try {
+			input.end('v\n');
+			await runValueCli(['set', 'ZZ_DBG', '--value-stdin'], { kind: 'secret', prefix: 'blocks/secrets' });
+		} finally {
+			if (stdin) Object.defineProperty(process, 'stdin', stdin);
+		}
+		assert.deepStrictEqual(calls, ['CreateSecretCommand', 'RestoreSecretCommand', 'PutSecretValueCommand']);
 	});
 });

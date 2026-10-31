@@ -96,15 +96,21 @@ export async function setValue(
 	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
-		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand } = await import(
+		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand, RestoreSecretCommand } = await import(
 			'@aws-sdk/client-secrets-manager'
 		);
 		const client = new SecretsManagerClient(clientConfig);
 		try {
 			await client.send(new CreateSecretCommand({ Name: name, SecretString: value }));
 		} catch (error: unknown) {
-			if ((error as { name?: string })?.name === 'ResourceExistsException') {
+			const { name: errorName, message } = (error ?? {}) as { name?: string; message?: string };
+			if (errorName === 'ResourceExistsException') {
 				await client.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+			} else if (errorName === 'InvalidRequestException' && /scheduled for deletion/i.test(message ?? '')) {
+				// `remove` (a recoverable delete) left it in its recovery window: setting it again restores it.
+				await client.send(new RestoreSecretCommand({ SecretId: name }));
+				await client.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+				console.log(`♻️  ${kind} '${key}' was scheduled for deletion; restored it.`);
 			} else {
 				throw error;
 			}
