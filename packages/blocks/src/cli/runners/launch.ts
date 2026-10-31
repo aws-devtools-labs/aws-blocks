@@ -29,6 +29,9 @@ import { CliError } from '../errors.js';
 /** The environment variable that carries the dev server runner's options. */
 export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
 
+/** The environment variable naming the file core's dev server writes a fatal startup failure to (`blocks dev`). */
+export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
+
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
 

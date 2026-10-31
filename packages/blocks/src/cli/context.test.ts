@@ -407,8 +407,9 @@ setInterval(() => {}, 1000);
 		timeout: 60_000,
 	}, async () => {
 		// As `kill <pid>`, an IDE's stop button or a harness that kills a background job sends it.
-		await stopDev('pid', 'SIGTERM', 1500);
-		await stopDev('pid', 'SIGHUP', 1500);
+		// A stop the CLI requested is a success, whether `tsx watch` exits 0 or, with no runner left, 143.
+		assert.strictEqual(await stopDev('pid', 'SIGTERM', 1500), 0);
+		assert.strictEqual(await stopDev('pid', 'SIGHUP', 1500), 0);
 	});
 
 	it('otherwise ignores SIGHUP and does not forward it, as core defers it during a deploy', async () => {

@@ -7,8 +7,9 @@
  * it replaces; see `runners/launch.ts`.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
@@ -37,6 +38,7 @@ import {
 	readLastDeploy,
 } from './runners/last-deploy.js';
 import {
+	DEV_FAILURE_FILE_ENV,
 	DEV_OPTIONS_ENV,
 	type RunnerLaunch,
 	type RunnerName,
@@ -62,6 +64,13 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
 	where?: string[];
+	/**
+	 * The file a `tsx watch` runner writes the reason of a fatal startup failure
+	 * to, before it stops its `tsx watch` (`BLOCKS_DEV_FAILURE_FILE`). A reason
+	 * there fails the command with it; without one, an exit 143 is a requested
+	 * stop (`blocks dev stop`, or a SIGTERM to a backend that crashed).
+	 */
+	failureFile?: string;
 }
 
 /**
@@ -123,6 +132,13 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			},
 		);
 	}
+	const reason = run.failureFile && existsSync(run.failureFile) ? readFileSync(run.failureFile, 'utf-8').trim() : '';
+	if (reason) {
+		throw new CliError(`${run.operation} failed: ${reason.replace(/\.$/, '')}.`, {
+			where: run.where ?? [`project: ${run.cwd}`],
+		});
+	}
+	if (run.failureFile && result.code === 128 + 15 && !result.interrupted) return ExitCode.Ok;
 	// A child that is not long-running and exited 0 finished its work before the
 	// Ctrl-C reached it (`blocks db migrate` applied every migration): report that.
 	// A long-running child (`blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
@@ -159,6 +175,7 @@ interface RunnerRun extends Pick<SpawnSpec, 'longRunning'>, Pick<RunnerLaunch, '
 	where?: string[];
 	/** The directory the runner runs from. Default: the project root, which the command then requires. */
 	cwd?: string;
+	failureFile?: string;
 }
 
 /**
@@ -205,6 +222,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		where: run.where,
 		longRunning: run.longRunning,
 		watcher: run.watch,
+		failureFile: run.failureFile,
 	});
 }
 
@@ -345,13 +363,21 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		);
 	}
 	const { source: _source, ...devConfig } = config;
-	return runRunner(ctx, {
-		runner: 'dev-server',
-		operation: 'blocks dev',
-		watch: true,
-		env: devServerEnv(ctx.env, { backendPath, ...devConfig }),
-		longRunning: true,
-	});
+	// The dev server records a fatal startup failure here (see ChildRun.failureFile).
+	const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
+	const failureFile = join(failureDir, 'failure');
+	try {
+		return await runRunner(ctx, {
+			runner: 'dev-server',
+			operation: 'blocks dev',
+			watch: true,
+			env: { ...devServerEnv(ctx.env, { backendPath, ...devConfig }), [DEV_FAILURE_FILE_ENV]: failureFile },
+			longRunning: true,
+			failureFile,
+		});
+	} finally {
+		rmSync(failureDir, { recursive: true, force: true });
+	}
 }
 
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {

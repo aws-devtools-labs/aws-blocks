@@ -682,6 +682,29 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(dev.code, 130);
 	});
 
+	it('fails blocks dev with the reason its runner recorded, and takes a 143 without one as a requested stop', async () => {
+		const cwd = fixtureApp();
+		const failed = await runCli(['dev'], {
+			cwd,
+			onSpawn: (spec) => {
+				writeFileSync(
+					String(spec.env.BLOCKS_DEV_FAILURE_FILE),
+					'dev server already running on :3000 (pid 42)\n',
+				);
+				return { code: 143 };
+			},
+		});
+		assert.strictEqual(failed.code, 1);
+		assert.match(failed.stderr, /^Error: blocks dev failed: dev server already running on :3000 \(pid 42\)\.\n/);
+		assert.doesNotMatch(failed.stderr, /--verbose/);
+		// `blocks dev stop`, or a SIGTERM to the CLI, while the backend had crashed: tsx watch exits 143.
+		const stopped = await runCli(['dev'], { cwd, onSpawn: () => ({ code: 143 }) });
+		assert.strictEqual(stopped.code, 0, stopped.stderr);
+		assert.strictEqual(stopped.stderr, '');
+		// Other commands keep mapping 143 to a failure.
+		assert.strictEqual((await runCli(['vendorize', 'x'], { cwd, onSpawn: () => ({ code: 143 }) })).code, 1);
+	});
+
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
 		const cwd = withSandboxId(fixtureApp());
 		for (const [argv, longRunning] of [
