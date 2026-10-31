@@ -206,9 +206,14 @@ export async function removeValue(
 
 	if (store === 'secrets-manager') {
 		if (opts.force) console.warn(forceDeleteWarning(kind, key, opts.stage));
-		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
+		const { SecretsManagerClient, DeleteSecretCommand, DescribeSecretCommand } = await import(
+			'@aws-sdk/client-secrets-manager'
+		);
 		const client = new SecretsManagerClient(clientConfig);
 		try {
+			// Secrets Manager accepts a forced delete of a name that does not exist: look it up first,
+			// so a typo'd key reports "was not set" (ResourceNotFoundException) instead of "removed".
+			if (opts.force) await client.send(new DescribeSecretCommand({ SecretId: name }));
 			// Default: recoverable delete (recovery window). --force: immediate, no recovery.
 			await client.send(
 				new DeleteSecretCommand(

@@ -218,7 +218,12 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			requests = [];
 			const run = await runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
-			assert.deepStrictEqual(requests, ['secretsmanager.DeleteSecret'], argv.join(' '));
+			// A forced delete first checks that the secret exists.
+			assert.deepStrictEqual(
+				requests,
+				['secretsmanager.DescribeSecret', 'secretsmanager.DeleteSecret'],
+				argv.join(' '),
+			);
 		}
 	});
 

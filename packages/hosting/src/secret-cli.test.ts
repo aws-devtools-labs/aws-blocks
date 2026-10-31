@@ -305,4 +305,17 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 		}
 		assert.deepStrictEqual(calls, ['CreateSecretCommand', 'RestoreSecretCommand', 'PutSecretValueCommand']);
 	});
+
+	void it('reports a forced remove of a secret that does not exist as not set, and deletes nothing', async () => {
+		const calls = fakeSecretsManager((command) => {
+			if (command === 'DescribeSecretCommand') {
+				throw awsError('ResourceNotFoundException', "Secrets Manager can't find the specified secret.");
+			}
+			return {};
+		});
+		const log = mock.method(console, 'log', () => {});
+		await runValueCli(['remove', 'ZZ_NOPE', '--force', '--yes'], { kind: 'secret', prefix: 'blocks/secrets' });
+		assert.deepStrictEqual(calls, ['DescribeSecretCommand']);
+		assert.match(String(log.mock.calls.at(-1)?.arguments[0]), /'ZZ_NOPE' was not set/);
+	});
 });
