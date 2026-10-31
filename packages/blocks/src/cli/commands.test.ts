@@ -183,6 +183,24 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(spec.args.slice(1), ['@aws-blocks/bb-kv-store', '--force']);
 	});
 
+	it('exits 2 when vendorize gets no package, two packages or an unknown option', async () => {
+		const cwd = fixtureApp();
+		for (const [argv, message] of [
+			[
+				['vendorize'],
+				/^Error: "blocks vendorize" needs the <package> argument\.\nTry: blocks vendorize --help\n$/,
+			],
+			[['vendorize', '--force'], /needs the <package> argument/],
+			[['vendorize', 'a', 'b'], /unexpected argument "b" for "blocks vendorize"/],
+			[['vendorize', 'a', '-x'], /unknown option "-x" for "blocks vendorize"; it takes only --force/],
+		] as const) {
+			const run = await runCli([...argv], { cwd });
+			assert.strictEqual(run.code, 2, argv.join(' '));
+			assert.match(run.stderr, message);
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+		}
+	});
+
 	it('maps telemetry subcommands and flags to the core telemetry argv', async () => {
 		const seen: string[][] = [];
 		const core = {

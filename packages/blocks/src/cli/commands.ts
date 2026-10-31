@@ -694,6 +694,23 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 // ── Project ──────────────────────────────────────────────────────────────────
 
 export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
+	// The tool takes one package and --force; check them here, so a mistake is a usage error (exit 2).
+	const tokens = input.passthrough.filter((token) => token !== '--');
+	const option = tokens.find((token) => token.startsWith('-') && token !== '--force');
+	if (option !== undefined) {
+		throw new UsageError(`unknown option "${option}" for "blocks vendorize"; it takes only --force.`, {
+			hint: 'blocks vendorize --help',
+		});
+	}
+	const packages = tokens.filter((token) => !token.startsWith('-'));
+	if (packages.length === 0) {
+		throw new UsageError('"blocks vendorize" needs the <package> argument.', { hint: 'blocks vendorize --help' });
+	}
+	if (packages.length > 1) {
+		throw new UsageError(`unexpected argument "${packages[1]}" for "blocks vendorize".`, {
+			hint: 'blocks vendorize --help',
+		});
+	}
 	const root = ctx.requireRoot();
 	return runChild(ctx, {
 		operation: 'blocks vendorize',
