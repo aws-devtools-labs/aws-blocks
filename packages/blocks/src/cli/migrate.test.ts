@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
 	existsSync,
 	mkdirSync,
@@ -10,12 +10,13 @@ import {
 	readdirSync,
 	readFileSync,
 	renameSync,
+	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GENERATED_WRAPPERS, SCRIPT_REWRITES, SERVER_DEV_OPTIONS, sourceHash } from './commands/migrate.js';
 import { parseArgv } from './parse.js';
@@ -38,6 +39,21 @@ const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/template
  * #51); every later app has one with a stackId, which the tests add.
  */
 const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
+
+/**
+ * The git these tests and `blocks migrate` run reads no system or user config,
+ * which can change what it reports: a CI runner's `safe.directory=*` hides the
+ * dubious ownership one test asserts. Migrate's git inherits `process.env`.
+ */
+const GIT_HOME = mkdtempSync(join(tmpdir(), 'blocks-migrate-home-'));
+writeFileSync(join(GIT_HOME, '.gitconfig'), '');
+Object.assign(process.env, {
+	GIT_CONFIG_NOSYSTEM: '1',
+	GIT_CONFIG_GLOBAL: join(GIT_HOME, '.gitconfig'),
+	HOME: GIT_HOME,
+	GIT_TERMINAL_PROMPT: '0',
+});
+after(() => rmSync(GIT_HOME, { recursive: true, force: true }));
 
 /** Write a fixture app to a fresh temporary directory; returns its root. */
 function writeApp(name: string, edit?: (app: FixtureApp) => void): string {
@@ -594,7 +610,7 @@ describe('blocks migrate', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 	});
 
-	it('refuses a repository that git does not read, quoting git, unless --force', async () => {
+	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['tools/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
 		});
@@ -606,6 +622,16 @@ describe('blocks migrate', () => {
 		// What git does in a directory another user owns: a WSL /mnt/c checkout or a Docker bind mount.
 		process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
 		try {
+			// A git build that ignores the variable cannot make a directory look foreign; skip rather than fail.
+			const probe = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+				cwd: root,
+				encoding: 'utf-8',
+				env: { ...process.env, LC_ALL: 'C' },
+			});
+			if (!probe.stderr.includes('detected dubious ownership')) {
+				t.skip(`git does not report dubious ownership under GIT_TEST_ASSUME_DIFFERENT_OWNER (git rev-parse: ${probe.stderr.trim() || probe.stdout.trim()})`);
+				return;
+			}
 			const run = await runCli(['migrate'], { cwd: root });
 			assert.strictEqual(run.code, 1);
 			assert.match(run.stderr, /^Error: git failed in .*: fatal: detected dubious ownership in repository at /);
