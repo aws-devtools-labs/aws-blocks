@@ -329,6 +329,15 @@ describe('per-app dev config', () => {
 		assert.deepStrictEqual(resolveDevConfig(fixtureApp({})), { source: 'none' });
 	});
 
+	it('reads a package.json that starts with a UTF-8 byte order mark, as npm does', () => {
+		const root = fixtureApp({});
+		const path = join(root, 'package.json');
+		writeFileSync(path, `\uFEFF${JSON.stringify({ devDependencies: { vite: '*' }, blocks: { dev: { port: 3001 } } })}`);
+		const config = resolveDevConfig(root);
+		assert.strictEqual(config.port, 3001);
+		assert.strictEqual(config.source, 'vite');
+	});
+
 	it('uses package.json "blocks.dev" instead of detection, and flags over both', () => {
 		const root = fixtureApp({
 			dependencies: { vite: '*' },
