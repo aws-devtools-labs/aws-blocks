@@ -170,8 +170,12 @@ export class Context {
 		this.globals = parsed.globals;
 		this.env = deps.env;
 		this.startDir = resolve(deps.cwd, this.globals.cwd ?? '.');
-		if (this.globals.cwd !== undefined && !existsSync(this.startDir)) {
-			throw new UsageError(`directory ${this.startDir} does not exist (from -C/--cwd).`);
+		if (this.globals.cwd !== undefined && !statSync(this.startDir, { throwIfNoEntry: false })?.isDirectory()) {
+			throw new UsageError(
+				existsSync(this.startDir)
+					? `${this.startDir} is not a directory (from -C/--cwd).`
+					: `directory ${this.startDir} does not exist (from -C/--cwd).`,
+			);
 		}
 		this.logLevel = logLevelFor(this.globals, this.env);
 		const query =
@@ -191,8 +195,8 @@ export class Context {
 		if (this.globals.profile) this.env.AWS_PROFILE = this.globals.profile;
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
-		// so a stray one does not stop local commands. Help and --version never use it.
-		if (parsed.command && !this.globals.help && !this.globals.version) {
+		// so a stray one does not stop local commands. Help (`--help`, `blocks help`) and --version never use it.
+		if (parsed.command && parsed.command.path[0] !== 'help' && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(
 					`option --region must be an AWS Region code such as us-east-1, not ${JSON.stringify(this.globals.region)}.`,

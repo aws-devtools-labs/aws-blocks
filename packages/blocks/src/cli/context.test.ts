@@ -74,6 +74,10 @@ describe('project root detection', () => {
 
 		const missing = await runCli(['-C', join(elsewhere, 'nope'), 'dev'], { cwd: elsewhere });
 		assert.strictEqual(missing.code, 2);
+		const file = await runCli(['-C', join(root, 'package.json'), 'generate', 'spec'], { cwd: elsewhere });
+		assert.strictEqual(file.code, 2);
+		assert.match(file.stderr, /^Error: .*package\.json is not a directory \(from -C\/--cwd\)\.\n/);
+		assert.deepStrictEqual(file.spawned, []);
 	});
 });
 
@@ -163,6 +167,8 @@ describe('run environment', () => {
 			0,
 		);
 		assert.strictEqual((await runCli(['deploy', '--help'], { cwd, env: { AWS_REGION: 'bad' } })).code, 0);
+		assert.strictEqual((await runCli(['--region', 'nope', 'help'], { cwd })).code, 0);
+		assert.strictEqual((await runCli(['--region', 'nope', 'help', 'deploy'], { cwd })).code, 0);
 	});
 });
 
@@ -306,7 +312,9 @@ setInterval(() => {}, 1000);
 		assert.deepStrictEqual(child.received(), ['SIGTERM'], 'exactly one SIGTERM, which tsx passes on');
 	});
 
-	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', { timeout: 60_000 }, async () => {
+	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
+		timeout: 60_000,
+	}, async () => {
 		const root = mkdtempSync(join(tmpdir(), 'blocks-cli-dev-sigterm-'));
 		const [port, frontendPort] = await freePorts(2);
 		// A frontend like `npx next dev`: a leader that exits on SIGTERM at once, and the server under it,
@@ -340,7 +348,11 @@ setInterval(() => {}, 1000);
 		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
 		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
 		// Its own process group, so that the SIGTERM reaches the CLI, `tsx watch` and the dev server, as `timeout` sends it.
-		const cli = spawn(process.execPath, [bin, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		const cli = spawn(process.execPath, [bin, 'dev'], {
+			cwd: root,
+			detached: true,
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
 		let output = '';
 		cli.stdout.on('data', (chunk) => (output += chunk));
 		cli.stderr.on('data', (chunk) => (output += chunk));
@@ -353,13 +365,20 @@ setInterval(() => {}, 1000);
 				await sleep(100);
 			}
 			const serverPid = Number(readFileSync(pidsFile, 'utf-8').split(' ')[1]);
-			frontendGroup = Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(serverPid)], { encoding: 'utf-8' }).trim());
-			assert.notStrictEqual(frontendGroup, cli.pid, 'the dev server runs its frontend in a process group of its own');
+			frontendGroup = Number(
+				execFileSync('ps', ['-o', 'pgid=', '-p', String(serverPid)], { encoding: 'utf-8' }).trim(),
+			);
+			assert.notStrictEqual(
+				frontendGroup,
+				cli.pid,
+				'the dev server runs its frontend in a process group of its own',
+			);
 			process.kill(-(cli.pid ?? 0), 'SIGTERM');
 			await exited;
 			// The dev server waits until the group has drained, so it is gone by now. The bound allows only for
 			// reaping a member that the dev server's fallback SIGKILL ended; it is shorter than the server's stop.
-			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; ) await sleep(25);
+			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; )
+				await sleep(25);
 			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived blocks dev\n${output}`);
 			assert.doesNotMatch(output, /Force killing/);
 		} finally {
@@ -454,7 +473,10 @@ describe('per-app dev config', () => {
 	it('reads a package.json that starts with a UTF-8 byte order mark, as npm does', () => {
 		const root = fixtureApp({});
 		const path = join(root, 'package.json');
-		writeFileSync(path, `\uFEFF${JSON.stringify({ devDependencies: { vite: '*' }, blocks: { dev: { port: 3001 } } })}`);
+		writeFileSync(
+			path,
+			`\uFEFF${JSON.stringify({ devDependencies: { vite: '*' }, blocks: { dev: { port: 3001 } } })}`,
+		);
 		const config = resolveDevConfig(root);
 		assert.strictEqual(config.port, 3001);
 		assert.strictEqual(config.source, 'vite');
@@ -513,9 +535,13 @@ describe('per-app dev config', () => {
 			source: 'package.json',
 		});
 		// A frontend command flag still starts one.
-		assert.strictEqual(resolveDevConfig(root, { 'frontend-command': 'npm run web' }).frontendCommand, 'npm run web');
+		assert.strictEqual(
+			resolveDevConfig(root, { 'frontend-command': 'npm run web' }).frontendCommand,
+			'npm run web',
+		);
 		assert.throws(
-			() => resolveDevConfig(fixtureApp({ blocks: { dev: { frontend: false, frontendCommand: 'npm run web' } } })),
+			() =>
+				resolveDevConfig(fixtureApp({ blocks: { dev: { frontend: false, frontendCommand: 'npm run web' } } })),
 			/"blocks\.dev\.frontend": false cannot be combined/,
 		);
 		assert.throws(

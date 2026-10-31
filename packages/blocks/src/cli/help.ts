@@ -80,7 +80,10 @@ export function commandHelp(command: CommandSpec): string {
 		);
 	}
 	if (command.passthrough) {
-		lines.push('', `Global options go before "${command.path[0]}"; every token after it is forwarded unchanged.`);
+		lines.push(
+			'',
+			`Global options apply anywhere before a "--"; the other tokens after "${command.path[0]}" are forwarded unchanged.`,
+		);
 	} else {
 		lines.push('', 'Global options: see "blocks --help".');
 	}

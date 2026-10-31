@@ -334,7 +334,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Configure',
 		summary: 'Manage secrets: set KEY, list, remove KEY',
 		description:
-			'Manage secrets. Everything after "secret" is forwarded unchanged. A secret value is never\n' +
+			'Manage secrets. The tokens after "secret" are forwarded unchanged, except the global options\n' +
+			'(--profile, --output, …) before a "--". A secret value is never\n' +
 			'accepted on the command line: pipe it with --value-stdin, or omit it to be prompted.\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>, --force, --yes.\n' +
 			'"blocks secret <set|list|remove> --help" shows the flags of one subcommand.\n' +
@@ -358,7 +359,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Configure',
 		summary: 'Manage non-secret config: set KEY VALUE, list, remove KEY',
 		description:
-			'Manage non-secret config values. Everything after "config" is forwarded unchanged.\n' +
+			'Manage non-secret config values. The tokens after "config" are forwarded unchanged, except\n' +
+			'the global options (--profile, --output, …) before a "--"; put a value that starts with "-" after "--".\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>.\n' +
 			'"blocks config <set|list|remove> --help" shows the flags of one subcommand.\n' +
 			STAGE_HELP.replace('%STORE%', 'configStore'),
@@ -443,8 +445,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Data and blocks',
 		summary: 'Data block operations: migrate, status, generate-types, pull',
 		description:
-			'Run a data block operation. The verb and everything after it are forwarded unchanged\n' +
-			'to the bb-data CLI of @aws-blocks/bb-data. "blocks db <verb> --help" shows its options.',
+			'Run a data block operation. The verb and the tokens after it are forwarded unchanged to the\n' +
+			'bb-data CLI of @aws-blocks/bb-data, except the global options (--profile, --output, …) before\n' +
+			'a "--". "blocks db <verb> --help" shows its options.',
 		args: [
 			{ name: 'verb', description: 'migrate | status | generate-types | pull', required: true },
 			{ name: 'args', description: 'Forwarded unchanged', variadic: true },

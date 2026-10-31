@@ -39,7 +39,7 @@ describe('passthrough commands', () => {
 		const root = fixtureApp();
 		const sub = join(root, 'aws-blocks');
 		const calls: string[][] = [];
-		const argv = ['set', 'API_KEY', '--value-stdin', '--stage', 'production', '--region', 'eu-west-1'];
+		const argv = ['set', 'API_KEY', '--value-stdin', '--stage', 'production', '--prefix', '/p'];
 		const run = await runCli(['secret', ...argv], {
 			cwd: sub,
 			core: {
@@ -62,6 +62,60 @@ describe('passthrough commands', () => {
 		});
 		assert.strictEqual(config.code, 0, config.stderr);
 		assert.deepStrictEqual(calls[1], ['set', 'FLAG', 'on']);
+	});
+
+	it('applies the global options after secret, config and db, and never forwards them to the tool', async () => {
+		const root = fixtureApp();
+		const calls: string[][] = [];
+		const record = async (args: string[]) => {
+			calls.push(args);
+		};
+		const core = { runSecretCli: record, runConfigCli: record };
+		const config = await runCli(
+			['config', 'set', 'K', 'value', '--profile', 'other', '--region=eu-west-1', '-qv'],
+			{
+				cwd: root,
+				core,
+			},
+		);
+		assert.strictEqual(config.code, 0, config.stderr);
+		assert.deepStrictEqual(calls.at(-1), ['set', 'K', 'value']);
+		assert.strictEqual(config.env.AWS_PROFILE, 'other');
+		assert.strictEqual(config.env.AWS_REGION, 'eu-west-1');
+		assert.strictEqual(config.env.BLOCKS_LOG_LEVEL, 'verbose');
+
+		const remove = await runCli(['secret', 'remove', 'K', '--profile', 'other', '-C', root], {
+			cwd: tmpdir(),
+			core,
+		});
+		assert.strictEqual(remove.code, 0, remove.stderr);
+		assert.deepStrictEqual(calls.at(-1), ['remove', 'K']);
+		assert.strictEqual(remove.env.AWS_PROFILE, 'other');
+
+		// After `--`, every token is the tool's.
+		const literal = await runCli(['config', 'set', 'K', '--', '--profile', '-q'], { cwd: root, core });
+		assert.strictEqual(literal.code, 0, literal.stderr);
+		assert.deepStrictEqual(calls.at(-1), ['set', 'K', '--', '--profile', '-q']);
+		assert.strictEqual(literal.env.AWS_PROFILE, undefined);
+
+		const db = await runCli(['db', 'generate-types', '--no-input', '-y'], { cwd: root });
+		assert.strictEqual(db.code, 0, db.stderr);
+		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['generate-types']);
+
+		// A bad global option is a usage error before anything runs: never a value, never ignored.
+		const callsBefore = calls.length;
+		for (const argv of [
+			['config', 'list', '--output', 'json'],
+			['secret', 'list', '--query', 'keys'],
+			['secret', 'list', '--region', 'nowhere'],
+			['db', 'status', '--output', 'json'],
+			['config', 'set', 'K', 'v', '--profile'],
+		]) {
+			const run = await runCli(argv, { cwd: root, core });
+			assert.strictEqual(run.code, 2, `${argv.join(' ')}: ${run.stderr}`);
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+		}
+		assert.strictEqual(calls.length, callsBefore);
 	});
 
 	it('reports a secret CLI error in the CLI format with exit 1', async () => {
@@ -242,10 +296,16 @@ describe('lifecycle commands', () => {
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.deepStrictEqual(run.spawned[0].args.slice(-1), [`--telemetry-file=${file}`], argv.join(' '));
 		}
-		const deploy = await runCli(['deploy', '--wait-live', '--telemetry-file=events.json'], { cwd: root, env: AWS_ENV });
+		const deploy = await runCli(['deploy', '--wait-live', '--telemetry-file=events.json'], {
+			cwd: root,
+			env: AWS_ENV,
+		});
 		assert.strictEqual(deploy.code, 0, deploy.stderr);
 		assert.deepStrictEqual(deploy.spawned[0].args.slice(-2), ['--wait-live', `--telemetry-file=${file}`]);
-		const sandbox = await runCli(['sandbox', 'destroy', '--telemetry-file=events.json'], { cwd: root, env: AWS_ENV });
+		const sandbox = await runCli(['sandbox', 'destroy', '--telemetry-file=events.json'], {
+			cwd: root,
+			env: AWS_ENV,
+		});
 		assert.strictEqual(sandbox.code, 0, sandbox.stderr);
 		assert.deepStrictEqual(sandbox.spawned[0].args.slice(-1), [`--telemetry-file=${file}`]);
 		// Without the flag, no runner gets one.
@@ -278,10 +338,16 @@ describe('lifecycle commands', () => {
 
 	it('keeps an inherited BLOCKS_DEV_HOST over --host, and exports the host when none is inherited', async () => {
 		const root = fixtureApp();
-		const inherited = await runCli(['dev', '--host', '0.0.0.0'], { cwd: root, env: { BLOCKS_DEV_HOST: 'mybox.example.com' } });
+		const inherited = await runCli(['dev', '--host', '0.0.0.0'], {
+			cwd: root,
+			env: { BLOCKS_DEV_HOST: 'mybox.example.com' },
+		});
 		assert.strictEqual(inherited.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
 		const configured = fixtureApp({ blocks: { dev: { host: '0.0.0.0' } } });
-		const sandbox = await runCli(['sandbox'], { cwd: configured, env: { ...AWS_ENV, BLOCKS_DEV_HOST: 'mybox.example.com' } });
+		const sandbox = await runCli(['sandbox'], {
+			cwd: configured,
+			env: { ...AWS_ENV, BLOCKS_DEV_HOST: 'mybox.example.com' },
+		});
 		assert.strictEqual(sandbox.spawned[0].env.BLOCKS_DEV_HOST, 'mybox.example.com');
 		const fresh = await runCli(['dev', '--host', '0.0.0.0'], { cwd: root, env: {} });
 		assert.strictEqual(fresh.spawned[0].env.BLOCKS_DEV_HOST, '0.0.0.0');
@@ -899,7 +965,10 @@ describe('JSON output', () => {
 		assert.match(nested.stderr, /no field "stacks\.prod" in the result of blocks whoami\. Fields: account, arn,/);
 		const noJson = await runCli(['dev', '--query', 'port'], { cwd: fixtureApp() });
 		assert.strictEqual(noJson.code, 2);
-		assert.match(noJson.stderr, /"blocks dev" has no JSON output to query/);
+		assert.match(
+			noJson.stderr,
+			/^Error: --query is not supported for "blocks dev": it has no JSON result\.\nTry: blocks dev --help\n$/,
+		);
 	});
 
 	it('inherits the child stdout in text mode', async () => {

@@ -17,6 +17,8 @@ export interface FakeRun {
 	spawned: SpawnSpec[];
 	chdirs: string[];
 	prompts: string[];
+	/** The run's environment, after the CLI set AWS_PROFILE, AWS_REGION and the log level on it. */
+	env: NodeJS.ProcessEnv;
 }
 
 export interface FakeOptions {
@@ -48,12 +50,20 @@ const NO_AWS: Partial<CoreScripts> = {
 
 /** Run the CLI in this process with fake seams. */
 export async function runCli(argv: string[], options: FakeOptions): Promise<FakeRun> {
-	const run: FakeRun = { code: -1, stdout: '', stderr: '', spawned: [], chdirs: [], prompts: [] };
+	const run: FakeRun = {
+		code: -1,
+		stdout: '',
+		stderr: '',
+		spawned: [],
+		chdirs: [],
+		prompts: [],
+		env: { HOME: options.cwd, ...options.env },
+	};
 	const deps: CliDeps = {
 		stdout: { write: (chunk: string) => (run.stdout += chunk) },
 		stderr: { write: (chunk: string) => (run.stderr += chunk) },
 		stdinIsTTY: options.stdinIsTTY ?? false,
-		env: { HOME: options.cwd, ...options.env },
+		env: run.env,
 		cwd: options.cwd,
 		prompt: async (question) => {
 			run.prompts.push(question);

@@ -6,9 +6,10 @@
  *
  * `blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]`
  *
- * Global options may come before or after the command. A passthrough command
- * (`db`, `secret`, `config`, `vendorize`) forwards every token after its name
- * verbatim, so its global options must come before it.
+ * Global options may come before the command, between the words of its path
+ * (`blocks generate --debug client`) or after it. A passthrough command (`db`,
+ * `secret`, `config`, `vendorize`) forwards the tokens after its name to its
+ * tool, except the CLI's global options before a `--`: those apply to the run.
  */
 
 import { parseArgs } from 'node:util';
@@ -114,37 +115,104 @@ function nameIndex(): Map<string, IndexEntry> {
 
 const isOption = (token: string) => token.startsWith('-') && token !== '-';
 
-/** The global flag a leading token names, with the number of tokens it consumes. */
-function leadingGlobal(argv: readonly string[], i: number): { flag: FlagSpec; value?: string; used: number } {
-	const token = argv[i];
-	const [raw, inline] = token.startsWith('--') ? splitInline(token) : [token, undefined];
-	const flag = GLOBAL_FLAGS.find((f) =>
-		raw.startsWith('--') ? `--${f.name}` === raw : f.short && `-${f.short}` === raw,
-	);
-	if (!flag) {
-		throw new UsageError(
-			`unknown option "${raw}".${didYouMean(
-				suggest(
-					raw,
-					GLOBAL_FLAGS.map((f) => `--${f.name}`),
-				),
-			)}`,
-			{ hint: 'blocks --help' },
-		);
+type OptionToken = Extract<NonNullable<ReturnType<typeof parseArgs>['tokens']>[number], { kind: 'option' }>;
+type ArgToken = NonNullable<ReturnType<typeof parseArgs>['tokens']>[number];
+
+/** `parseArgs` tokens for `args`, with `specs` as the known options. */
+function tokenize(args: readonly string[], specs: readonly FlagSpec[]): ArgToken[] {
+	const options: Record<string, { type: 'boolean' | 'string'; short?: string }> = {};
+	for (const spec of specs) {
+		options[spec.name] = {
+			type: spec.type === 'string' ? 'string' : 'boolean',
+			...(spec.short ? { short: spec.short } : {}),
+		};
 	}
-	if (flag.type === 'boolean') {
-		if (inline !== undefined) throw new UsageError(`option --${flag.name} does not take a value.`);
-		return { flag, used: 1 };
-	}
-	if (inline !== undefined) return { flag, value: inline, used: 1 };
-	const next = argv[i + 1];
-	if (next === undefined || isOption(next)) throw new UsageError(`option --${flag.name} needs a value.`);
-	return { flag, value: next, used: 2 };
+	return parseArgs({ args: [...args], options, strict: false, allowPositionals: true, tokens: true }).tokens ?? [];
 }
 
-function splitInline(token: string): [string, string | undefined] {
-	const eq = token.indexOf('=');
-	return eq === -1 ? [token, undefined] : [token.slice(0, eq), token.slice(eq + 1)];
+/** Where an option was given: names the command in errors, and the options it accepts. */
+interface OptionScope {
+	specs: readonly FlagSpec[];
+	/** `blocks deploy`; undefined before the command. */
+	command?: string;
+}
+
+/**
+ * Validate one option token against its scope and record its value.
+ * `arg` is the argv entry the token came from.
+ *
+ * @throws {UsageError} On an unknown option, a value on a boolean option, a
+ * missing value, or a single-valued global option given twice with different values.
+ */
+function applyOption(token: OptionToken, arg: string, scope: OptionScope, values: FlagValues): void {
+	const spec = scope.specs.find((s) => s.name === token.name);
+	const hint = scope.command ? `${scope.command} --help` : 'blocks --help';
+	if (!spec) {
+		const candidates = scope.specs.map((s) => `--${s.name}`);
+		const where = scope.command ? ` for "${scope.command}"` : '';
+		throw new UsageError(
+			`unknown option "${token.rawName}"${where}.${didYouMean(suggest(token.rawName, candidates))}`,
+			{ hint },
+		);
+	}
+	// `-y=false` and `-C=dir`: parseArgs reads the `=` as more short options, or as part of the value.
+	if (/^-[^-]=/.test(arg) && token.rawName === arg.slice(0, 2)) {
+		if (spec.type === 'boolean') throw new UsageError(`option ${token.rawName} does not take a value.`, { hint });
+		throw new UsageError(
+			`option ${token.rawName} takes its value after a space: ${token.rawName} <${spec.value ?? 'value'}>, or --${spec.name}=<${spec.value ?? 'value'}>.`,
+			{ hint },
+		);
+	}
+	let value: string | boolean;
+	if (spec.type === 'boolean') {
+		if (token.inlineValue) throw new UsageError(`option ${token.rawName} does not take a value.`, { hint });
+		value = true;
+	} else if (spec.type === 'optional-string') {
+		value = token.inlineValue && token.value !== undefined ? token.value : true;
+	} else {
+		// A negative number is a value, not an option: `--port -1`.
+		if (token.value === undefined || (!token.inlineValue && isOption(token.value) && !/^-\d/.test(token.value))) {
+			throw new UsageError(`option --${spec.name} needs a value.`, { hint });
+		}
+		value = token.value;
+	}
+	if (spec.multiple) {
+		const list = Array.isArray(values[spec.name]) ? (values[spec.name] as string[]) : [];
+		values[spec.name] = [...list, String(value)];
+		return;
+	}
+	const previous = values[spec.name];
+	if (GLOBAL_FLAGS.includes(spec) && typeof previous === 'string' && previous !== value) {
+		throw new UsageError(
+			`option --${spec.name} is given twice, as ${JSON.stringify(previous)} and ${JSON.stringify(value)}; give it once.`,
+			{ hint },
+		);
+	}
+	values[spec.name] = value;
+}
+
+/**
+ * Apply the CLI's global options in a passthrough command's tail, before `--`,
+ * and return the tail without them. An argv entry is taken only when every
+ * option in it is global (`-qv`, `--profile dev`, `-Capp`); anything else
+ * (`--stage prod`, `-x`) is the tool's, and stays.
+ */
+function liftGlobals(tail: readonly string[], values: FlagValues): string[] {
+	const end = tail.includes('--') ? tail.indexOf('--') : tail.length;
+	const byEntry = new Map<number, OptionToken[]>();
+	for (const token of tokenize(tail.slice(0, end), GLOBAL_FLAGS)) {
+		if (token.kind !== 'option') continue;
+		byEntry.set(token.index, [...(byEntry.get(token.index) ?? []), token]);
+	}
+	const lifted = new Set<number>();
+	for (const [index, tokens] of byEntry) {
+		if (!tokens.every((token) => GLOBAL_FLAGS.some((flag) => flag.name === token.name))) continue;
+		for (const token of tokens) applyOption(token, tail[index], { specs: GLOBAL_FLAGS }, values);
+		const lastToken = tokens[tokens.length - 1];
+		const used = lastToken.value !== undefined && !lastToken.inlineValue ? 2 : 1;
+		for (let i = index; i < index + used; i++) lifted.add(i);
+	}
+	return tail.filter((_, i) => !lifted.has(i));
 }
 
 function toGlobals(values: FlagValues): Globals {
@@ -179,20 +247,14 @@ function parseCommandArgs(
 	tokens: readonly string[],
 	values: FlagValues,
 ): { positionals: string[]; passthrough: string[] } {
-	const specs = [...GLOBAL_FLAGS, ...(command.flags ?? [])];
-	const options: Record<string, { type: 'boolean' | 'string'; short?: string; multiple?: boolean }> = {};
-	for (const spec of specs) {
-		options[spec.name] = {
-			type: spec.type === 'string' ? 'string' : 'boolean',
-			...(spec.short ? { short: spec.short } : {}),
-		};
-	}
-	const parsed = parseArgs({ args: [...tokens], options, strict: false, allowPositionals: true, tokens: true });
+	const scope: OptionScope = {
+		specs: [...GLOBAL_FLAGS, ...(command.flags ?? [])],
+		command: `blocks ${command.path.join(' ')}`,
+	};
 	const positionals: string[] = [];
 	const passthrough: string[] = [];
 	let terminated = false;
-	const name = `blocks ${command.path.join(' ')}`;
-	for (const token of parsed.tokens ?? []) {
+	for (const token of tokenize(tokens, scope.specs)) {
 		if (token.kind === 'option-terminator') {
 			terminated = true;
 			continue;
@@ -201,32 +263,7 @@ function parseCommandArgs(
 			(terminated ? passthrough : positionals).push(token.value);
 			continue;
 		}
-		const spec = specs.find((s) => s.name === token.name);
-		if (!spec) {
-			const candidates = specs.map((s) => `--${s.name}`);
-			throw new UsageError(
-				`unknown option "${token.rawName}" for "${name}".${didYouMean(suggest(token.rawName, candidates))}`,
-				{ hint: `${name} --help` },
-			);
-		}
-		let value: string | boolean;
-		if (spec.type === 'boolean') {
-			if (token.inlineValue) throw new UsageError(`option --${spec.name} does not take a value.`);
-			value = true;
-		} else if (spec.type === 'optional-string') {
-			value = token.inlineValue && token.value !== undefined ? token.value : true;
-		} else {
-			if (token.value === undefined || (!token.inlineValue && isOption(token.value))) {
-				throw new UsageError(`option --${spec.name} needs a value.`, { hint: `${name} --help` });
-			}
-			value = token.value;
-		}
-		if (spec.multiple) {
-			const list = Array.isArray(values[spec.name]) ? (values[spec.name] as string[]) : [];
-			values[spec.name] = [...list, String(value)];
-		} else {
-			values[spec.name] = value;
-		}
+		applyOption(token, tokens[token.index], scope, values);
 	}
 	return { positionals, passthrough };
 }
@@ -239,16 +276,29 @@ function checkPositionals(command: CommandSpec, positionals: string[]): void {
 		const extra = positionals[args.length];
 		const subcommands = subcommandsOf(command.path);
 		if (subcommands.length > 0 && args.length === 0) {
+			const asked = [...command.path, extra].join(' ');
+			// `blocks dev --port 4000 stop`: the subcommand is right, the option is in the middle of it.
+			if (findCommand([...command.path, extra])) {
+				throw new UsageError(
+					`"${extra}" must follow "${name}" directly: put the options of "blocks ${asked}" after the whole command.`,
+					{ hint: `blocks ${asked} --help` },
+				);
+			}
 			const candidates = subcommands.map((s) => s.path.join(' '));
-			throw new UsageError(
-				`unknown command "${[...command.path, extra].join(' ')}".${didYouMean(suggest([...command.path, extra].join(' '), candidates))}`,
-				{ hint: `${name} --help` },
-			);
+			throw new UsageError(`unknown command "${asked}".${didYouMean(suggest(asked, candidates))}`, {
+				hint: `${name} --help`,
+			});
 		}
 		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: `${name} --help` });
 	}
 	const missing = args.find((a, i) => a.required && positionals[i] === undefined);
 	if (missing) throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: `${name} --help` });
+}
+
+/** A command path word, and its argv index. */
+interface PathWord {
+	value: string;
+	index: number;
 }
 
 /**
@@ -259,34 +309,66 @@ function checkPositionals(command: CommandSpec, positionals: string[]): void {
  */
 export function parseArgv(argv: readonly string[]): ParsedInvocation {
 	const values: FlagValues = {};
-	let i = 0;
-	while (i < argv.length && isOption(argv[i]) && argv[i] !== '--') {
-		const { flag, value, used } = leadingGlobal(argv, i);
-		values[flag.name] = value ?? true;
-		i += used;
+	// The global options before the command apply at once. The command path is up to three
+	// words, with only global options between them; those apply once the path is known.
+	const words: PathWord[] = [];
+	const between: OptionToken[] = [];
+	let leadingTerminator = false;
+	for (const token of tokenize(argv, GLOBAL_FLAGS)) {
+		if (token.kind === 'option-terminator') {
+			if (words.length > 0 || leadingTerminator) break;
+			leadingTerminator = true;
+			continue;
+		}
+		if (token.kind === 'positional') {
+			if (words.length === 3) break;
+			words.push({ value: token.value, index: token.index });
+			continue;
+		}
+		if (words.length === 0) {
+			applyOption(token, argv[token.index], { specs: GLOBAL_FLAGS }, values);
+			continue;
+		}
+		if (!GLOBAL_FLAGS.some((flag) => flag.name === token.name)) break;
+		between.push(token);
 	}
-	if (argv[i] === '--') i++;
 
-	const rest = argv.slice(i);
-	if (rest.length === 0) return { globals: toGlobals(values), flags: values, positionals: [], passthrough: [] };
+	if (words.length === 0) {
+		const globals = toGlobals(values);
+		if (!globals.help && !globals.version && (globals.output === 'json' || globals.query !== undefined)) {
+			throw new UsageError(
+				`${globals.query === undefined ? '--output json' : '--query'} needs a command whose result it prints.`,
+				{ hint: 'blocks --help' },
+			);
+		}
+		return { globals, flags: values, positionals: [], passthrough: [] };
+	}
 
 	const index = nameIndex();
 	let match: IndexEntry | undefined;
 	let used = 0;
-	for (let n = Math.min(3, rest.length); n > 0 && !match; n--) {
-		if (rest.slice(0, n).some(isOption)) continue;
-		match = index.get(rest.slice(0, n).join(' '));
+	for (let n = words.length; n > 0 && !match; n--) {
+		match = index.get(
+			words
+				.slice(0, n)
+				.map((word) => word.value)
+				.join(' '),
+		);
 		if (match) used = n;
 	}
 	if (!match) {
 		const topLevel = [...index.keys()].filter((key) => !key.includes(' '));
-		throw new UsageError(`unknown command "${rest[0]}".${didYouMean(suggest(rest[0], topLevel))}`, {
+		throw new UsageError(`unknown command "${words[0].value}".${didYouMean(suggest(words[0].value, topLevel))}`, {
 			hint: 'blocks --help',
 		});
 	}
+	const last = words[used - 1].index;
+	for (const token of between) {
+		if (token.index < last) applyOption(token, argv[token.index], { specs: GLOBAL_FLAGS }, values);
+	}
 
 	let { command } = match;
-	let tail = [...(match.alias?.args ?? []), ...rest.slice(used)];
+	let tail = [...(match.alias?.args ?? []), ...argv.slice(last + 1)];
 	let aliasName = match.alias?.name.join(' ');
 	// A flag alias counts only before `--`: after it, the token is the user's argument.
 	const end = tail.includes('--') ? tail.indexOf('--') : tail.length;
@@ -307,6 +389,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		// `-h`/`--help` anywhere after a passthrough command means help, never a run
 		// with the user's arguments: `blocks config remove KEY --help` must not delete KEY.
 		const help = tail.some((token) => token === '-h' || token === '--help');
+		const forwarded = liftGlobals(tail, values);
 		if (help) values.help = true;
 		parsed = {
 			command,
@@ -314,13 +397,13 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 			globals: toGlobals(values),
 			flags: values,
 			positionals: [],
-			passthrough: help ? [] : tail,
+			passthrough: help ? [] : forwarded,
 			helpVerb: help ? tail.find((token) => command.verbs?.includes(token)) : undefined,
 		};
 	} else {
 		const { positionals, passthrough } = parseCommandArgs(command, tail, values);
 		parsed = { command, alias: aliasName, globals: toGlobals(values), flags: values, positionals, passthrough };
-		if (!parsed.globals.help) {
+		if (!parsed.globals.help && !parsed.globals.version) {
 			checkPositionals(command, positionals);
 			// Only passthrough commands forward arguments after `--`; elsewhere they would be dropped.
 			if (passthrough.length > 0) {
@@ -331,12 +414,20 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		}
 	}
 	const { globals } = parsed;
-	if (!globals.help && command.handler && (globals.output === 'json' || globals.query !== undefined)) {
+	if (
+		!globals.help &&
+		!globals.version &&
+		command.handler &&
+		(globals.output === 'json' || globals.query !== undefined)
+	) {
 		const name = `blocks ${command.path.join(' ')}`;
 		if (!command.json) {
-			throw new UsageError(`"${name}" has no JSON output${globals.query === undefined ? '' : ' to query'}.`, {
-				hint: name,
-			});
+			throw new UsageError(
+				globals.query === undefined
+					? `--output json is not supported for "${name}": it prints text only.`
+					: `--query is not supported for "${name}": it has no JSON result.`,
+				{ hint: `${name} --help` },
+			);
 		}
 		// Check the top-level field before the command runs, so a typo never repeats a deploy.
 		const field = globals.query?.split('.')[0];
