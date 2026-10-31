@@ -1765,4 +1765,34 @@ describe('blocks dev stop', () => {
 			assert.deepStrictEqual(stops, []);
 		}
 	});
+
+	it('reads only the port, so an invalid unrelated blocks.dev setting does not stop it', async () => {
+		const { stops, core } = stopCore();
+		const cwd = fixtureApp({ blocks: { dev: { port: 41030, frontend: true, frontendCommand: '' } } });
+		const run = await runCli(['dev', 'stop'], { cwd, core });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(stops, [41030]);
+		// The port itself must still be valid: it says which server to stop.
+		const bad = await runCli(['dev', 'stop'], { cwd: fixtureApp({ blocks: { dev: { port: 'x' } } }), core });
+		assert.strictEqual(bad.code, 2);
+		assert.match(bad.stderr, /"blocks\.dev\.port" must be a port number/);
+	});
+
+	it('warns about an unknown blocks.dev key, and accepts generateClient', async () => {
+		const { core } = stopCore();
+		const cwd = fixtureApp({ blocks: { dev: { prot: 4000, generateClient: false, zzz: 1 } } });
+		for (const argv of [['dev', 'stop'], ['dev']]) {
+			const run = await runCli(argv, { cwd, core });
+			assert.match(
+				run.stderr,
+				/^Warning: package\.json "blocks\.dev\.prot" is not a dev setting, and is ignored\. Did you mean "port"\?\n/m,
+				argv.join(' '),
+			);
+			assert.match(
+				run.stderr,
+				/"blocks\.dev\.zzz" is not a dev setting, and is ignored\. The settings are port, host, frontendCommand, frontendPort, frontend\./,
+			);
+			assert.doesNotMatch(run.stderr, /generateClient/);
+		}
+	});
 });

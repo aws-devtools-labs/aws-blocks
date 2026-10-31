@@ -16,6 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CliError, UsageError } from './errors.js';
+import { suggest } from './parse.js';
 import type { FlagValues } from './registry.js';
 
 export interface DevConfig {
@@ -81,11 +82,50 @@ function parseText(value: unknown, where: string): string | undefined {
 	return value;
 }
 
-/** Read `package.json#blocks.dev`, validated; `undefined` when absent. */
-export function readDevConfig(root: string): DevPackageConfig | undefined {
+/** The `blocks.dev` keys that `blocks dev` reads, named in the unknown-key warning. */
+const DEV_CONFIG_KEYS = ['port', 'host', 'frontendCommand', 'frontendPort', 'frontend'];
+/** `blocks.dev` keys that core reads (the Amplify overlay's client-generation opt-out): accepted silently. */
+const CORE_DEV_CONFIG_KEYS = ['generateClient'];
+
+/** `package.json#blocks.dev` as written, checked to be an object; `undefined` when absent. */
+function readRawDevConfig(root: string): Record<string, unknown> | undefined {
 	const dev = readPackageJson(root).blocks?.dev;
 	if (dev === undefined) return undefined;
-	if (typeof dev !== 'object' || dev === null) throw new UsageError('package.json "blocks.dev" must be an object.');
+	if (typeof dev !== 'object' || dev === null || Array.isArray(dev)) {
+		throw new UsageError('package.json "blocks.dev" must be an object.');
+	}
+	return dev;
+}
+
+/** A warning for each `package.json#blocks.dev` key that nothing reads (a typo such as `prot`). */
+export function unknownDevConfigWarnings(root: string): string[] {
+	return Object.keys(readRawDevConfig(root) ?? {})
+		.filter((key) => !DEV_CONFIG_KEYS.includes(key) && !CORE_DEV_CONFIG_KEYS.includes(key))
+		.map((key) => {
+			const nearest = suggest(key, DEV_CONFIG_KEYS);
+			return (
+				`package.json "blocks.dev.${key}" is not a dev setting, and is ignored.` +
+				(nearest ? ` Did you mean "${nearest}"?` : ` The settings are ${DEV_CONFIG_KEYS.join(', ')}.`)
+			);
+		});
+}
+
+/**
+ * The port of the app's dev server: `--port`, then `package.json#blocks.dev.port`, then 3000. Only the
+ * port is read, so `blocks dev stop` works while another `blocks.dev` setting is invalid.
+ */
+export function resolveDevPort(root: string, flags: FlagValues = {}): number {
+	return (
+		parsePort(flags.port, 'option --port') ??
+		parsePort(readRawDevConfig(root)?.port, 'package.json "blocks.dev.port"') ??
+		3000
+	);
+}
+
+/** Read `package.json#blocks.dev`, validated; `undefined` when absent. */
+export function readDevConfig(root: string): DevPackageConfig | undefined {
+	const dev = readRawDevConfig(root);
+	if (dev === undefined) return undefined;
 	const config: DevPackageConfig = {
 		port: parsePort(dev.port, 'package.json "blocks.dev.port"'),
 		host: parseText(dev.host, 'package.json "blocks.dev.host"'),
