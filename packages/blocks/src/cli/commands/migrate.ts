@@ -294,40 +294,21 @@ interface WrapperUser {
 }
 
 /**
- * Every app file that names one of `wrappers`. In a git work tree the files
- * are the ones git lists for the project directory: tracked files and
- * untracked files that are not ignored, under any directory name. Outside git,
- * every file under the project root, dot directories included (`.github`,
- * `.vscode`), other than the {@link SKIPPED_DIRS}. Either way, shell scripts,
- * Dockerfiles and CI workflows count; `*.md`, `*.mdx` and `*.mdc` files, files
- * over {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
+ * Every app file that names one of `wrappers`. `files` are the ones git lists
+ * for the project directory: tracked files and untracked files that are not
+ * ignored, under any directory name. A directory that git lists (a submodule,
+ * or an untracked repository inside the app) is walked. With `files` `null`
+ * (outside git, or where git does not track the app), every file under the
+ * project root is read, dot directories included (`.github`, `.vscode`),
+ * other than the {@link SKIPPED_DIRS}. Either way, shell scripts, Dockerfiles
+ * and CI workflows count; `*.md`, `*.mdx` and `*.mdc` files, files over
+ * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
  * `package.json` (its scripts are checked after the rewrite) and symbolic
  * links, which are not followed, do not. Each file is read once, and only the
  * wrappers it names are kept. Nothing above the project root is read.
  */
-function wrapperUsers(root: string, wrappers: readonly Wrapper[]): WrapperUser[] {
+function wrapperUsers(root: string, wrappers: readonly Wrapper[], files: readonly string[] | null): WrapperUser[] {
 	const users: WrapperUser[] = [];
-	const scan = (rel: string): void => {
-		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
-		const path = join(root, rel);
-		let stats: Stats;
-		try {
-			stats = lstatSync(path);
-		} catch {
-			return; // A tracked file deleted from the work tree.
-		}
-		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return;
-		const bytes = readFileSync(path);
-		if (bytes.includes(0)) return;
-		const text = bytes.toString('utf-8');
-		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w.path)).map((w) => w.path));
-		if (uses.size > 0) users.push({ path: rel, uses });
-	};
-	const files = gitFiles(root);
-	if (files) {
-		for (const rel of files) scan(rel);
-		return users;
-	}
 	const walk = (dir: string): void => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
 			const path = join(dir, entry.name);
@@ -338,7 +319,29 @@ function wrapperUsers(root: string, wrappers: readonly Wrapper[]): WrapperUser[]
 			}
 		}
 	};
-	walk(root);
+	const scan = (rel: string): void => {
+		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
+		const path = join(root, rel);
+		let stats: Stats;
+		try {
+			stats = lstatSync(path);
+		} catch {
+			return; // A tracked file deleted from the work tree.
+		}
+		if (stats.isDirectory()) {
+			walk(path);
+			return;
+		}
+		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return;
+		const bytes = readFileSync(path);
+		if (bytes.includes(0)) return;
+		const text = bytes.toString('utf-8');
+		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w.path)).map((w) => w.path));
+		if (uses.size > 0) users.push({ path: rel, uses });
+	};
+	if (files === null) walk(root);
+	// git lists an untracked repository as `dir/`.
+	else for (const rel of files) scan(rel.replace(/\/$/, ''));
 	return users;
 }
 
@@ -363,15 +366,24 @@ function refersTo(text: string, sourcePath: string, wrapperPath: string): boolea
 	return false;
 }
 
-/** True when `root` is in a git work tree and git runs. */
-function inGitWorkTree(root: string): boolean {
+/**
+ * What git knows about the project directory: `outside` a git work tree (or
+ * without git); `unseen` when the work tree does not list the app's
+ * `package.json` (a parent repo ignores the app's directory), so git could not
+ * undo the migration; or the files git lists for the project, from
+ * {@link gitFiles}.
+ */
+type GitView = { kind: 'outside' } | { kind: 'unseen' } | { kind: 'listed'; files: string[] };
+
+function gitView(root: string): GitView {
 	const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf-8' });
-	return !inside.error && inside.status === 0 && inside.stdout.trim() === 'true';
+	if (inside.error || inside.status !== 0 || inside.stdout.trim() !== 'true') return { kind: 'outside' };
+	const files = gitFiles(root);
+	return files.includes('package.json') ? { kind: 'listed', files } : { kind: 'unseen' };
 }
 
-/** `git status --porcelain` for the project, or `null` outside a git work tree (or without git). */
-function gitStatus(root: string): string | null {
-	if (!inGitWorkTree(root)) return null;
+/** `git status --porcelain` for the project, which must be in a git work tree. */
+function gitStatus(root: string): string {
 	const status = spawnSync('git', ['status', '--porcelain', '--', '.'], { cwd: root, encoding: 'utf-8' });
 	if (status.error || status.status !== 0) {
 		throw new CliError(`git status failed in ${root}: ${status.stderr || status.error?.message}`.trim());
@@ -381,11 +393,9 @@ function gitStatus(root: string): string | null {
 
 /**
  * The project's tracked files and its untracked files that git does not
- * ignore, relative to `root` with `/` separators, or `null` outside a git work
- * tree (or without git).
+ * ignore, relative to `root` with `/` separators.
  */
-function gitFiles(root: string): string[] | null {
-	if (!inGitWorkTree(root)) return null;
+function gitFiles(root: string): string[] {
 	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
 		cwd: root,
 		encoding: 'utf-8',
@@ -398,8 +408,14 @@ function gitFiles(root: string): string[] | null {
 	return [...new Set(list.stdout.split('\0').filter((path) => path !== ''))];
 }
 
-/** Plan the migration of `root`. Pure apart from reading files and listing them with git. */
-export function planMigration(root: string): { result: MigrateResult; pkg: PackageJson } {
+/**
+ * Plan the migration of `root`, reading `files` (from {@link gitFiles}), or
+ * every file under `root` when `files` is `null`. Pure apart from reading files.
+ */
+export function planMigration(
+	root: string,
+	files: readonly string[] | null,
+): { result: MigrateResult; pkg: PackageJson } {
 	// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
 	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
 	const wrappers = findWrappers(root);
@@ -474,7 +490,7 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 			});
 		}
 	}
-	const namers = wrapperUsers(root, wrappers);
+	const namers = wrapperUsers(root, wrappers, files);
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -556,16 +572,22 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 export async function migrate(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	const dryRun = input.flags['dry-run'] === true;
+	const git = gitView(root);
 	if (!dryRun && input.flags.force !== true) {
-		const status = gitStatus(root);
-		if (status !== null && status.trim() !== '') {
+		if (git.kind === 'unseen') {
+			throw new CliError(
+				'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
+				{ where: [`project: ${root}`], hint: '"blocks migrate --force" to migrate anyway' },
+			);
+		}
+		if (git.kind === 'listed' && gitStatus(root).trim() !== '') {
 			throw new CliError('the git working tree has uncommitted changes; commit or stash them first.', {
 				where: [`project: ${root}`],
 				hint: 'git stash, or "blocks migrate --force" to migrate anyway',
 			});
 		}
 	}
-	const { result, pkg } = planMigration(root);
+	const { result, pkg } = planMigration(root, git.kind === 'listed' ? git.files : null);
 	if (!dryRun) {
 		if (result.changed.includes('package.json')) writePackageJson(root, pkg, result.devConfig);
 		for (const file of result.removed) rmSync(join(root, file));
