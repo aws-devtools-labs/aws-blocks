@@ -474,6 +474,38 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(opened, []);
 	});
 
+	it('forgets the deleted sandbox in last-deploy.json, outputs.json and config.json, and keeps the rest', async () => {
+		const root = withSandboxId(fixtureApp());
+		const dir = join(root, '.blocks-sandbox');
+		const write = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
+		const read = (name: string) => JSON.parse(readFileSync(join(dir, name), 'utf-8')) as unknown;
+		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
+		const seed = (config: unknown) => {
+			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
+			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
+			write('config.json', config);
+		};
+		seed({ apiUrl: 'https://s', environment: 'sandbox' });
+		// A failed destroy forgets nothing.
+		const failed = await runCli(['sandbox', 'destroy'], { cwd: root, env: AWS_ENV, onSpawn: () => ({ code: 1 }) });
+		assert.strictEqual(failed.code, 1);
+		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
+		const run = await runCli(['sandbox', 'destroy'], { cwd: root, env: AWS_ENV });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['production']);
+		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
+		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
+		const console = await runCli(['sandbox', 'console'], { cwd: root, core: { openConsole: async () => {} } });
+		assert.strictEqual(console.code, 1);
+		// A production config.json stays; an outputs.json with only the sandbox goes.
+		seed({ apiUrl: 'https://p', environment: 'production' });
+		write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+		assert.strictEqual((await runCli(['sandbox', 'destroy'], { cwd: root, env: AWS_ENV })).code, 0);
+		assert.deepStrictEqual(read('config.json'), { apiUrl: 'https://p', environment: 'production' });
+		assert.ok(!existsSync(join(dir, 'outputs.json')));
+	});
+
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
 		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));

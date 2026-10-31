@@ -7,7 +7,7 @@
  * it replaces; see `runners/launch.ts`.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -429,13 +429,40 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 		? await confirm(ctx, 'Delete the sandbox stack?', 'blocks sandbox destroy --yes', where)
 		: undefined;
 	if (declined !== undefined) return declined;
-	return runRunner(ctx, {
+	const code = await runRunner(ctx, {
 		runner: 'sandbox-destroy',
 		operation: 'blocks sandbox destroy',
 		conditions: 'cdk',
 		options: { backendPath },
 		where,
 	});
+	if (code === ExitCode.Ok) forgetSandboxRecords(root, stack);
+	return code;
+}
+
+/**
+ * Remove what this machine recorded about the deleted sandbox stack, so that
+ * `sandbox console` and the frontend no longer point at it: its entry in
+ * `last-deploy.json`, its stack in `outputs.json`, and `config.json` when the
+ * sandbox wrote it. The sandbox id stays: the next deploy reuses it.
+ */
+function forgetSandboxRecords(root: string, stack: string): void {
+	forgetLastDeploy(root, 'sandbox');
+	const dir = join(root, '.blocks-sandbox');
+	const readJson = (name: string): Record<string, unknown> | undefined => {
+		try {
+			return JSON.parse(readFileSync(join(dir, name), 'utf-8')) as Record<string, unknown>;
+		} catch {
+			return undefined;
+		}
+	};
+	const outputs = readJson('outputs.json');
+	if (outputs && stack in outputs) {
+		delete outputs[stack];
+		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
+		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
+	}
+	if (readJson('config.json')?.environment === 'sandbox') rmSync(join(dir, 'config.json'));
 }
 
 /**
