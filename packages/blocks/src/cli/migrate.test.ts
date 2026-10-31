@@ -594,6 +594,36 @@ describe('blocks migrate', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 	});
 
+	it('refuses a repository that git does not read, quoting git, unless --force', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['tools/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
+		});
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export const uncommitted = 1;\n');
+		const before = snapshot(root);
+		// What git does in a directory another user owns: a WSL /mnt/c checkout or a Docker bind mount.
+		process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+		try {
+			const run = await runCli(['migrate'], { cwd: root });
+			assert.strictEqual(run.code, 1);
+			assert.match(run.stderr, /^Error: git failed in .*: fatal: detected dubious ownership in repository at /);
+			assert.match(run.stderr, /\nTry: .*blocks migrate --force/);
+			assert.deepStrictEqual(snapshot(root), before);
+
+			const forced = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+			assert.strictEqual(forced.code, 1, forced.stderr);
+			assert.deepStrictEqual(
+				(JSON.parse(forced.stdout).kept as { file: string }[]).map((k) => k.file),
+				['aws-blocks/scripts/deploy.ts'],
+			);
+			assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
+		} finally {
+			delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+		}
+	});
+
 	it('leaves unrelated scripts and files untouched', async () => {
 		const root = writeApp('default@0ab6b047', (app) => {
 			app.packageJson.scripts['seed'] = 'tsx aws-blocks/scripts/seed.ts';
