@@ -413,6 +413,37 @@ describe('lifecycle commands', () => {
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
 	});
 
+	it('checks the --wait-live budget before anything runs, and passes core one budget', async () => {
+		const root = fixtureApp();
+		for (const [argv, expected] of [
+			[['--wait-live'], ['--wait-live']],
+			[['--wait-live', '--wait-live-timeout=3600'], ['--wait-live', '--wait-live-timeout=3600']],
+			[['--wait-live', '--wait-live-timeout', '1'], ['--wait-live', '--wait-live-timeout=1']],
+		] as const) {
+			const run = await runCli(['deploy', ...argv], { cwd: root, env: AWS_ENV });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.deepStrictEqual(run.spawned[0].args.slice(-expected.length), expected, argv.join(' '));
+			assert.strictEqual(run.spawned[0].args.filter((arg) => arg.startsWith('--wait-live')).length, expected.length);
+		}
+		for (const [argv, message] of [
+			[['--wait-live=0'], /option --wait-live must be a whole number of seconds from 1 to 3600, not "0"\./],
+			[['--wait-live=abc'], /option --wait-live must be .*, not "abc"\./],
+			[['--wait-live=-5'], /option --wait-live must be .*, not "-5"\./],
+			[['--wait-live=3601'], /not "3601"/],
+			[['--wait-live=1.5'], /not "1\.5"/],
+			[['--wait-live='], /not ""/],
+			[['--wait-live', '--wait-live-timeout=abc'], /option --wait-live-timeout must be .*, not "abc"\./],
+			[['--wait-live-timeout=20'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: blocks deploy --wait-live=20\n/],
+			[['--wait-live=10', '--wait-live-timeout=20'], /give the --wait-live budget once/],
+		] as const) {
+			const run = await runCli(['deploy', ...argv], { cwd: root, env: AWS_ENV });
+			assert.strictEqual(run.code, 2, argv.join(' '));
+			assert.deepStrictEqual(run.spawned, [], argv.join(' '));
+			assert.match(run.stderr, message, argv.join(' '));
+			assert.doesNotMatch(run.stderr, /Deploying/, argv.join(' '));
+		}
+	});
+
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
 		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));

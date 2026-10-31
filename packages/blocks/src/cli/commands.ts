@@ -451,19 +451,41 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 
 // ── Deploy ───────────────────────────────────────────────────────────────────
 
+/**
+ * The `--wait-live` flags as core reads them from `process.argv`: `--wait-live`
+ * and one `--wait-live-timeout=N`. A bad budget is a usage error here, before
+ * any AWS call: core only warns and falls back to its default.
+ */
+function waitLiveArgs(flags: CommandInput['flags']): string[] {
+	const waitLive = flags['wait-live'];
+	const timeout = flags['wait-live-timeout'];
+	if (timeout !== undefined && waitLive === undefined) {
+		throw new UsageError('option --wait-live-timeout needs --wait-live.', {
+			hint: `blocks deploy --wait-live=${String(timeout)}`,
+		});
+	}
+	if (typeof waitLive === 'string' && timeout !== undefined) {
+		throw new UsageError('give the --wait-live budget once: --wait-live=SECONDS or --wait-live-timeout=SECONDS.');
+	}
+	if (waitLive === undefined) return [];
+	const [option, value] = typeof waitLive === 'string' ? ['--wait-live', waitLive] : ['--wait-live-timeout', timeout];
+	if (value === undefined) return ['--wait-live'];
+	const seconds = /^\d+$/.test(String(value)) ? Number(value) : Number.NaN;
+	if (!(seconds >= 1 && seconds <= 3600)) {
+		throw new UsageError(
+			`option ${option} must be a whole number of seconds from 1 to 3600, not ${JSON.stringify(value)}.`,
+		);
+	}
+	return ['--wait-live', `--wait-live-timeout=${seconds}`];
+}
+
 export async function deploy(ctx: Context, input: CommandInput): Promise<number> {
+	const args = waitLiveArgs(input.flags);
 	const root = ctx.requireRoot();
 	const cdkAppPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const stack = await productionStack(ctx, root);
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	ctx.out.progress(`Deploying the production stack ${stack}; ${label}; project ${root}.`);
-	// Core reads these flags from process.argv: `--wait-live` and `--wait-live-timeout=N`.
-	const args: string[] = [];
-	const waitLive = input.flags['wait-live'];
-	if (waitLive !== undefined) args.push('--wait-live');
-	if (typeof waitLive === 'string') args.push(`--wait-live-timeout=${waitLive}`);
-	if (typeof input.flags['wait-live-timeout'] === 'string')
-		args.push(`--wait-live-timeout=${input.flags['wait-live-timeout']}`);
 	forgetLastDeploy(root, 'production');
 	const code = await runRunner(ctx, {
 		runner: 'deploy',
