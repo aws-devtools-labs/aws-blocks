@@ -1,5 +1,104 @@
 # @aws-blocks/bb-dashboard
 
+## 0.3.0
+
+### Minor Changes
+
+- 88747f5: feat: Building Block mock entries fail closed in a deployed environment
+
+  - **Runtime guard.** `@aws-blocks/core/bb-utils` exports `assertNotMockInDeployedEnv(bbName)`, the runtime counterpart of the `--conditions=cdk` synth check. It throws when a Building Block's mock (`default` export) entry is loaded in a deployed environment, which happens when the backend was bundled without the `aws-runtime` export condition. A deployed environment is detected from `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`, which Blocks sets on every compute it provisions (Lambda, container, AgentCore). On compute Blocks doesn't configure, the check is inert and the `aws-runtime` bundler condition is the only protection. It is a no-op in local dev and tests.
+  - **Wired into every BB mock entry.** Each Building Block's mock entry calls the guard at module load, so a mis-bundled artifact throws instead of running in-memory stubs: at process start on container and AgentCore computes, and on the first invocation on Lambda (where the backend is imported lazily, so the deploy succeeds and requests then return an error).
+  - **AuthOIDC mock cookie secret.** The mock runtime's cookie-signing secret is now random per project instead of a fixed string, persisted (mode 0600) under the instance's `.bb-data/` mock data dir so local sessions survive backend reloads and dev-server restarts. Local sign-in is unchanged.
+  - **Bundler conditions.** The `@aws-blocks/hosting` handler bundle and the AuthOIDC IdP-registration and DistributedTable GSI-manager Lambda bundles now pin the `aws-runtime` condition. The hosting bundle uses `['aws-runtime', 'module']` so esbuild keeps preferring packages' ESM builds.
+  - **Scaffold template.** `@aws-blocks/create-block`'s primitive template calls the guard in its mock entry and depends on an `@aws-blocks/core` range that exports it.
+  - **Docs.** `docs/guides/extending-with-existing-aws-resources.md` documents configuring your own bundler (esbuild, webpack) or unbundled Node (`--conditions=aws-runtime`) with the `aws-runtime` condition when deploying to a compute target Blocks doesn't own, and adds the guard call to the BB-author checklist.
+
+  Maintainer note: these are `minor` bumps because AWS Blocks is pre-1.0, where `minor` is the channel for behavior changes — mock entries that previously ran in a deployed environment now throw.
+
+### Patch Changes
+
+- 943d405: fix: error constants can be imported in frontend code
+
+  Frontend code imports a Building Block's error constants to match errors with `isBlocksError`, which resolves the
+  package's `browser` entry. Some of those imports failed the frontend build:
+
+  - `AppSettingErrors`, `EmailErrors`, `FileBucketErrors`, and `LoggingErrors` were missing from the `browser` entries
+    of `@aws-blocks/bb-app-setting`, `@aws-blocks/bb-email-client`, `@aws-blocks/bb-file-bucket`, and
+    `@aws-blocks/bb-logger`. They are now exported.
+  - Any import from `@aws-blocks/bb-auth-basic` or `@aws-blocks/bb-auth-cognito`, including `AuthBasicErrors` and
+    `AuthCognitoErrors`, failed with `No matching export ... for import "ApiNamespace"`. The browser stubs no longer
+    depend on `ApiNamespace`; their server-only `createApi()` / `buildApi()` now throw if called in the browser.
+  - `CronJobErrors.ScheduleNotSupported` was `undefined` in the browser, so `isBlocksError(e, CronJobErrors.ScheduleNotSupported)`
+    never matched. The `@aws-blocks/bb-cron-job` and `@aws-blocks/bb-dashboard` browser entries now re-export the
+    server's constants instead of keeping their own copies.
+  - `@aws-blocks/bb-realtime` had no `browser` entry, so importing `RealtimeErrors` in frontend code pulled in the
+    server build and failed to bundle. It now has one.
+
+  `@aws-blocks/blocks`: the conditional-export parity test now checks that every Building Block with error constants
+  has a `browser` entry that exports them with the same values, and that the entry bundles for the browser.
+
+- 48c35f6: Two Building Blocks that would handle the same Lambda event now fail `cdk synth`, instead of deploying and then failing every request on cold start. This covers two `AsyncJob`s whose queue names collide, and two `CronJob`s or `Realtime` blocks that end up with the same scope-qualified id (for example `x-y`/`z` and `x`/`y-z`). The error names the event key and both blocks.
+
+  `registerConfig()` now also fails synth when another construct has already registered the same config key for the same backend with a different value, naming the key and both constructs; before, the second value silently replaced the first and both blocks read the same resource at runtime. Config keys built from a block id fold case and map every non-alphanumeric character to `_`, so ids such as `orders-a` and `orders_a` (or `Orders` and `orders`) collided this way: rename one of the blocks. Registering a key again from the same construct, or with the same value, is unaffected. Keys shared by design keep their last-one-wins behaviour: `Hosting`'s `BLOCKS_PUBLIC_ORIGIN` / `CORS_HOSTING_ORIGINS`, the dashboard URL, and `AppSetting`'s `BLOCKS_SSM_PARAM_*` key.
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 9aa8ae2: Correct API docs: `AsyncJob`'s `maxRetries` counts total delivery attempts including the first; the `DashboardErrors` example now compiles and catches `InvalidMetricConfig` where it is thrown (when dashboards are finalized, not in the constructor), and an omitted `metricConfigs` renders no metrics section; `CronJobEvent.jobName` is the CronJob's fully-qualified id, not the bare constructor id.
+- 33e8d73: The `Metadata.AWSToolsMetrics.AWSBlocks` template entry now also lists the Building Blocks used by the app (`bb=`) and a count of custom blocks (`custom=`).
+- Updated dependencies [0765f84]
+- Updated dependencies [5572341]
+- Updated dependencies [88747f5]
+- Updated dependencies [1076ccc]
+- Updated dependencies [928c48a]
+- Updated dependencies [4d5ea86]
+- Updated dependencies [90c1b12]
+- Updated dependencies [50b8c94]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [9a32674]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8c73a24]
+- Updated dependencies [48c35f6]
+- Updated dependencies [4553866]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [54e9443]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d366907]
+- Updated dependencies [91ed1fc]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d062eeb]
+- Updated dependencies [c22eeee]
+- Updated dependencies [1546160]
+- Updated dependencies [9c96135]
+- Updated dependencies [63b154f]
+- Updated dependencies [8565ef7]
+- Updated dependencies [ce5dfa9]
+- Updated dependencies [515089c]
+- Updated dependencies [dde6340]
+- Updated dependencies [7477b6e]
+- Updated dependencies [6a53068]
+- Updated dependencies [dd5e807]
+- Updated dependencies [db15b5e]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [48c35f6]
+- Updated dependencies [72e3259]
+- Updated dependencies [48c35f6]
+- Updated dependencies [8565ef7]
+- Updated dependencies [48c35f6]
+- Updated dependencies [0d4ede3]
+- Updated dependencies [63b154f]
+- Updated dependencies [b6b8ade]
+- Updated dependencies [82ea78a]
+- Updated dependencies [e44ac0c]
+- Updated dependencies [33e8d73]
+- Updated dependencies [b003705]
+- Updated dependencies [48c35f6]
+  - @aws-blocks/core@0.8.0
+
 ## 0.2.2
 
 ### Patch Changes
@@ -39,30 +138,31 @@
 ### Patch Changes
 
 - a23b8d8: Stop leaking raw backend exception details in RPC error responses, while forwarding Building Block error names AND their BB-authored messages.
-  
+
   `errorResponseFromCatch` sorts a caught throw into three cases: an `ApiError` crosses the wire verbatim (status, `message`, `name`, `retriable`); a Building Block error carrying the wire-safe brand forwards BOTH its BB `name` in `data.name` AND its BB-authored `message` (per D-003, the wire carries `name` alongside `message`), so `isBlocksError()` keeps matching on the client and the caller sees the real, actionable message ("Batch contains 150 payloads, exceeds the 100 limit"); and everything else — a driver/SDK exception, a bare `Error`, or a non-`Error` throw — collapses to a nameless generic `500` / `"Internal error"`. The full error (including `cause`) is still logged server-side in every case.
-  
+
   The brand is a non-enumerable symbol stamped by core's new `brandBlocksError()` helper, and the serializer keys the name-and-message-forwarding decision on that brand rather than on `.name !== 'Error'`. Every Building Block that mints a named error now routes it through that one helper — core's `blocksError()`, each package's own local `blocksError()`, and the inline named-error sites across the runtime and mock layers — so a BB error keeps its `name` and message on the wire no matter which package or layer threw it. A raw driver exception whose class name happens to be non-generic (`PostgresError`, `DynamoDBServiceException`) is never branded, so neither its class name nor its raw message ever reaches the client.
-  
+
   The load-bearing invariant, now that messages cross the wire: **a branded error's message must never embed raw driver/SDK text.** Two message-embedding sites are therefore given stable, BB-authored messages (`bb-kv-store` and `bb-distributed-table`'s item-too-large remaps, which previously copied DynamoDB's raw `err.message`), keeping the raw driver error only as `cause`.
-  
+
   Re-tag paths are branded, with a stable message. The catch-all re-tag paths in `bb-data` (`wrapError` / `translatePgError`) and `bb-distributed-data` (`translateDsqlError`) — which classify a caught driver error as `QueryFailed` / `ConnectionFailed` — now build a fresh BRANDED error carrying the BB `name` and a stable BB message (e.g. "The database query failed"), keeping the raw driver error as `cause`. This preserves the client-side `isBlocksError(e, DatabaseErrors.QueryFailed | .ConnectionFailed)` retry contract the `bb-data` README teaches for auto-pause-resume, and — because the message is a stable BB string, not the driver's — a re-tagged error still never leaks driver internals over the wire. The 40001 / 23505 conflict paths already crossed as `ApiError` (409) with stable messages and are unchanged. Also branded in this pass: `bb-auth-oidc`'s `InvalidRelayError` (a class-field error not reached by the `.name =` sweep) and `bb-distributed-data`'s mock DDL-guard error (name `DsqlPermissionException`, the internal `DSQL_PERMISSION_ERROR_NAME`; now branded with a stable message, its name kept internal and mock-only, not a public `DistributedDatabaseErrors` constant).
-  
+
   The two `bb-realtime` client-middleware `brandBlocksError` calls are commented as intentionally inert (a client-side subscription rejection matches on `err.name`, never routes through the server serializer). The realtime e2e's `ConnectionFailedException` assertions run against `channel.subscribe()` in-process on the client, not across the RPC serializer.
-  
+
   ## Breaking change (why `@aws-blocks/core` is a minor)
-  
+
   App code that throws a plain `Error('Todo not found')` from an API method now surfaces as a generic `500` / `"Internal error"` on the client instead of the raw message (a customer-defined `Error` also loses its `.name`). This is the intended safety net — an unbranded throw is treated as an unhandled internal error — but it changes client-visible behavior, so `@aws-blocks/core` ships as a minor (we are pre-1.0). To send a specific status, name, and message to the client, throw an `ApiError`:
-  
+
   ```ts
   // before — message collapses to "Internal error" on the client
-  throw new Error('Todo not found');
-  
+  throw new Error("Todo not found");
+
   // after — status, message, and name all reach the client
-  throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
+  throw new ApiError("Todo not found", 404, { name: "TodoNotFoundException" });
   ```
-  
+
   Building Block errors (`isBlocksError` / `blocksError`) are unaffected — their name and message continue to cross the wire.
+
 - e57da06: Report bbName/bbVersion in telemetry.
 - Updated dependencies [5501cb6]
 - Updated dependencies [b58f248]
@@ -82,17 +182,17 @@
 ### Minor Changes
 
 - d7312f9: Make observability **compute-driven** so it composes correctly once an app has more than one compute. Logging, tracing, and the dashboard now key off compute state rather than off the Logger / Tracer / Dashboard blocks poking a single implicit compute.
-  
+
   **Logging is always on; retention is a compute-level setting.** Every compute captures stdout to its own log group unconditionally — there is no "enable logging" step. The retention of that group is set per compute via a new `logRetention` prop on `LambdaCompute` (`@aws-blocks/bb-lambda-compute`), falling back to `defaults.logRetention`. Log **level** is purely per-instance runtime behavior: set it via a `Logger`'s `level` option (default `'info'`). There is no app-wide log-level default and no `LOG_LEVEL` env var.
-  
+
   **Tracing is presence-gated.** Creating any `Tracer` in the app now enables X-Ray on **every** compute (X-Ray provisions real, costed infrastructure, so it stays off until the app opts in by constructing a Tracer). This replaces the previous model where a Tracer turned on tracing for one implicit compute. `@aws-blocks/core/cdk` adds `registerTracer()` (records Tracer presence) and `finalizeTracing()` (enables tracing on all computes at finalize); `create()` runs it before finalizing dashboards. `Compute.enableTracing()` is now idempotent.
-  
+
   **The dashboard is organized by compute, with display toggles.** `DashboardOptions` gains `logs?: boolean` (default `true`) and `traces?: boolean` (default `true`) — app-wide display toggles applied uniformly to every compute section. `logs:false` hides the (always-captured) logs section; `traces:false` hides traces even when tracing is enabled.
-  
+
   The dashboard covers **every** compute in the app (resolved at finalize, so construction order never matters). Each compute renders a health section always, a logs section (unless `logs:false`), and a traces section only when tracing is enabled on it (unless `traces:false`). Metrics remain app-scoped and are passed explicitly. No `computes` selector is exposed yet — it would leak the internal `Compute` type before customers can construct a compute; it arrives with the multi-compute surface.
-  
+
   **⚠️ Behavior / API changes:**
-  
+
   - **`Logger` no longer reconfigures log retention.** The CDK `Logger` is now a no-op placeholder (logging is always on and retention moved to the compute). The `retention` option was removed from `LoggingOptions`; set `logRetention` on the compute instead.
   - **A `Tracer` now enables X-Ray on all computes, not one.** Any Tracer in the app turns on tracing fleet-wide.
   - **`Logger` no longer reads the `LOG_LEVEL` environment variable.** Log level is set solely via the per-`Logger` `level` option (default `'info'`); the previously supported `LOG_LEVEL` env-var override has been removed, and Blocks stamps no app-wide log-level config. `BlocksDefaults` has no `logLevel` field.
@@ -101,7 +201,7 @@
 ### Patch Changes
 
 - 4342149: fix(bb-dashboard): depend on `@aws-blocks/bb-lambda-compute@^0.4.0`
-  
+
   `bb-dashboard` declared its `@aws-blocks/bb-lambda-compute` devDependency as
   `^0.3.0`, which excludes the current workspace version (`0.4.0`). npm therefore
   installed the published `0.3.0` tarball into `bb-dashboard` instead of linking
@@ -109,16 +209,18 @@
   fell out of sync (breaking `npm ci` repo-wide), and `bb-dashboard`'s CDK test
   crashed with `ERR_PACKAGE_PATH_NOT_EXPORTED` importing
   `@aws-blocks/bb-lambda-compute/cdk` — a subpath the old `0.3.0` did not export.
-  
+
   Aligning the range to `^0.4.0` links the local workspace (which exports
   `./cdk`), fixing both. Dev-dependency-only; no runtime or API change.
+
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - Updated dependencies [2806ae2]
 - Updated dependencies [f552ebe]
 - Updated dependencies [9aa0814]
@@ -140,34 +242,35 @@
 ### Patch Changes
 
 - c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
-  
+
   `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
-  
+
   - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
   - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
   - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
-  
+
   Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
-  
+
   **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
-  
+
   **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
-  
+
   **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
-  
+
   **⚠️ Behavior changes on upgrade:**
   - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
   - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
   - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
   - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
-  
+
   `bb-dashboard` now points its log widgets at the framework-owned handler log
   group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
   `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
   CDK-generated name, so the old convention would leave the "Recent Errors" /
   "Log Volume" widgets querying an empty group.
-  
+
   Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+
 - Updated dependencies [df667c5]
 - Updated dependencies [df667c5]
 - Updated dependencies [64ddd74]
