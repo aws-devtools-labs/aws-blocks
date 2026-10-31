@@ -154,6 +154,27 @@ export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[
 	cce9579010fa07686477746f78d6fa6c461da5fead9666c0ac6b86616a8b6030: ['server.ts'],
 };
 
+/**
+ * Wrappers whose alias needs `.blocks/config.json#stackId`: `blocks deploy` and
+ * `blocks destroy` name the production stack `<stackId>-prod`, while the
+ * wrappers call core's deploy and destroy, which do not. Apps scaffolded before
+ * create-blocks-app wrote that file keep these wrappers until it exists.
+ */
+const STACK_ID_WRAPPERS: readonly WrapperFile[] = ['deploy.ts', 'destroy.ts'];
+
+const STACK_ID_HINT =
+	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" is the name of your production stack (see aws-blocks/index.cdk.ts), commit it, and run blocks migrate again';
+
+/** True when `.blocks/config.json` has the stackId that `blocks deploy` and `blocks destroy` need. */
+function hasStackId(root: string): boolean {
+	try {
+		const config = JSON.parse(readFileSync(join(root, '.blocks', 'config.json'), 'utf-8')) as { stackId?: unknown };
+		return typeof config.stackId === 'string' && config.stackId !== '';
+	} catch {
+		return false;
+	}
+}
+
 const SCRIPTS_DIR = join('aws-blocks', 'scripts');
 
 /** Whitespace-insensitive form of a source file: CRLF, indentation and blank lines do not matter. */
@@ -317,6 +338,7 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	const byFile = new Map(wrappers.map((w) => [w.file, w]));
 	const result: MigrateResult = { changed: [], removed: [], kept: [], scriptsRewritten: {}, devConfig: null };
 	const scripts = { ...(pkg.scripts ?? {}) };
+	const stackless = hasStackId(root) ? [] : STACK_ID_WRAPPERS;
 
 	for (const [name, value] of Object.entries(scripts)) {
 		const rewrite = SCRIPT_REWRITES[value];
@@ -324,6 +346,14 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 			const wrapper = byFile.get(rewrite.wrapper);
 			// A customized wrapper keeps its script: the alias would drop the customization.
 			if (wrapper && !wrapper.generated) continue;
+			// The deploy and destroy aliases need a stackId that an old app may not have.
+			if (stackless.includes(rewrite.wrapper)) {
+				result.kept.push({
+					file: `package.json#scripts.${name}`,
+					reason: `"${rewrite.alias}" needs "stackId" in .blocks/config.json, which this app lacks: ${STACK_ID_HINT}`,
+				});
+				continue;
+			}
 			// So does a generated wrapper that runs a customized one: the alias would bypass it.
 			const customizedDependency = (WRAPPER_RUNTIME_DEPENDENCIES[rewrite.wrapper] ?? [])
 				.map((file) => byFile.get(file))
@@ -365,7 +395,15 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	// kept wrapper can import another one (sandbox.ts names server.ts), or start
 	// it at runtime without naming it (WRAPPER_RUNTIME_DEPENDENCIES), so iterate
 	// until the set of deletions is stable.
-	const candidates = new Set(wrappers.filter((w) => w.generated).map((w) => w.path));
+	const candidates = new Set(wrappers.filter((w) => w.generated && !stackless.includes(w.file)).map((w) => w.path));
+	for (const wrapper of wrappers) {
+		if (wrapper.generated && stackless.includes(wrapper.file)) {
+			result.kept.push({
+				file: wrapper.path,
+				reason: `generated, but kept until .blocks/config.json has the "stackId" that the blocks deploy and destroy commands need: ${STACK_ID_HINT}`,
+			});
+		}
+	}
 	const allSources = referencingSources(root);
 	let changed = true;
 	while (changed) {

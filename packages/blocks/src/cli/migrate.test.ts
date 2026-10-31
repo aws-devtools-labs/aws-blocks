@@ -24,10 +24,18 @@ const FIXTURES = JSON.parse(
 
 const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/templates/', import.meta.url));
 
+/**
+ * Fixtures from before create-blocks-app wrote `.blocks/config.json` (f42c604b,
+ * #51); every later app has one with a stackId, which the tests add.
+ */
+const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
+
 /** Write a fixture app to a fresh temporary directory; returns its root. */
 function writeApp(name: string, edit?: (app: FixtureApp) => void): string {
 	const app = structuredClone(FIXTURES[name]);
 	assert.ok(app, `fixture ${name} exists`);
+	if (!SCAFFOLDED_BEFORE_STACK_ID.includes(name))
+		app.files['.blocks/config.json'] = `${JSON.stringify({ stackId: 'my-app-a1b2c3' }, null, 2)}\n`;
 	edit?.(app);
 	const root = mkdtempSync(join(tmpdir(), 'blocks-migrate-'));
 	writeFileSync(join(root, 'package.json'), `${JSON.stringify(app.packageJson, null, 2)}\n`);
@@ -214,13 +222,25 @@ describe('blocks migrate', () => {
 	});
 
 	it('migrates an app from the first template version and an old nextjs version', async () => {
+		// It predates .blocks/config.json, which blocks deploy and blocks destroy need for the
+		// stack name: deploy and destroy stay on their wrappers and are reported; the rest migrates.
 		const backend = writeApp('backend@1aeebe50');
-		const run = await runCli(['migrate'], { cwd: backend });
-		assert.strictEqual(run.code, 0, run.stderr);
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: backend });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
+			'aws-blocks/scripts/deploy.ts',
+			'aws-blocks/scripts/destroy.ts',
+			'package.json#scripts.deploy',
+			'package.json#scripts.destroy',
+		]);
+		for (const { file, reason } of kept) assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
 		assert.deepStrictEqual(readPkg(backend).blocks, { dev: { port: 3001, frontend: false } });
 		assert.strictEqual(readPkg(backend).scripts.dev, 'blocks dev');
+		assert.strictEqual(readPkg(backend).scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts');
+		assert.strictEqual(readPkg(backend).scripts.destroy, 'tsx aws-blocks/scripts/destroy.ts');
 		// sandbox-id.ts is imported by index.cdk.ts and is not a lifecycle wrapper: left alone.
-		assert.deepStrictEqual(scriptsDir(backend), ['sandbox-id.ts']);
+		assert.deepStrictEqual(scriptsDir(backend), ['deploy.ts', 'destroy.ts', 'sandbox-id.ts']);
 
 		const nextjs = writeApp('nextjs@0ac38793');
 		const next = await runCli(['migrate'], { cwd: nextjs });
@@ -229,6 +249,34 @@ describe('blocks migrate', () => {
 			dev: { frontendCommand: 'npx next dev --port 3100', frontendPort: 3100 },
 		});
 		assert.deepStrictEqual(scriptsDir(nextjs), []);
+	});
+
+	it('keeps deploy and destroy while .blocks/config.json has no stackId, and finishes once it has', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['.blocks/config.json'] = '{}\n';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.kept.map((k: { file: string }) => k.file).sort(), [
+			'aws-blocks/scripts/deploy.ts',
+			'aws-blocks/scripts/destroy.ts',
+			'package.json#scripts.deploy',
+			'package.json#scripts.destroy',
+		]);
+		assert.match(
+			result.kept.find((k: { file: string }) => k.file === 'package.json#scripts.deploy').reason,
+			/"blocks deploy"/,
+		);
+		assert.strictEqual(result.scriptsRewritten.sandbox.to, 'blocks sandbox', 'the other scripts migrate');
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
+
+		writeFileSync(join(root, '.blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
+		const again = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(again.code, 0, again.stdout);
+		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy');
+		assert.strictEqual(readPkg(root).scripts.destroy, 'blocks destroy');
+		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
 	it('migrates the amplify overlay and keeps its client generator', async () => {
@@ -400,7 +448,8 @@ describe('blocks migrate', () => {
 		const root = writeApp('backend@1aeebe50');
 		const before = snapshot(root);
 		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root });
-		assert.strictEqual(run.code, 0, run.stderr);
+		// Exit 1: this app has no stackId, so deploy and destroy would be kept.
+		assert.strictEqual(run.code, 1, run.stderr);
 		assert.deepStrictEqual(snapshot(root), before);
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false });
