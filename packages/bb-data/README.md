@@ -384,6 +384,31 @@ const db = new Database(scope, 'main', {
 Both extension packages are experimental upstream; because the install is opt-in,
 that risk stays with your app rather than every `bb-data` consumer.
 
+### Local CLI: `bb-data migrate`, `status`, `generate-types`
+
+Without `--url`, these commands work on the local database that `npm run dev`
+uses: `.bb-data/<fullId>/`, where `<fullId>` is the Database's scope id and block
+id joined by `-` (`my-app-main` for `new Database(new Scope('my-app'), 'main')`).
+
+```bash
+npx bb-data status aws-blocks/migrations
+npx bb-data migrate aws-blocks/migrations
+npx bb-data generate-types ./types/database.ts
+```
+
+- With one local database, the commands use it. With several, pass
+  `--block <fullId>`; the error lists the ones found.
+- A fresh app has no local database until the first query in `npm run dev`
+  creates it. Until then `status` lists every migration as pending, and `migrate`
+  asks you to start the app or to pass `--block <fullId>` to create the database.
+- Stop the dev server first (`npm run dev:stop`). PGlite runs inside one process,
+  so the commands refuse while another process has the database open. Concurrent
+  `bb-data` commands on one database wait for each other.
+- For a `fromExisting()` app, the commands refuse without `--url`. They detect such
+  an app by a `*_DB_URL` / `*_CONNECTION_STRING` variable in the environment or in
+  `.env.local`, or by the connection string `bb-data pull` stores in
+  `.bb-data/settings.json`.
+
 ### Local vs. AWS: column types
 
 Array columns and `json` / `jsonb` columns return the same JavaScript values on

@@ -23,6 +23,7 @@ const PG_SERIALIZATION_FAILURE = '40001';
 /** PostgreSQL error code class for connection exceptions. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
 const PGLITE_INITIALIZED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global', 'global/pg_control'];
+/** Entries that only a PostgreSQL data directory has; one of them marks a (partial) PGlite data dir. */
 const PGLITE_DATA_DIR_MARKERS = [
   'PG_VERSION',
   'base',
@@ -33,6 +34,26 @@ const PGLITE_DATA_DIR_MARKERS = [
   'postgresql.auto.conf',
   'postmaster.pid',
 ];
+/** Every top-level entry a PGlite (PostgreSQL 16) data directory can hold. */
+const PGLITE_DATA_DIR_ENTRIES = new Set([
+  ...PGLITE_DATA_DIR_MARKERS,
+  'pg_commit_ts',
+  'pg_dynshmem',
+  'pg_hba.conf',
+  'pg_ident.conf',
+  'pg_logical',
+  'pg_multixact',
+  'pg_notify',
+  'pg_replslot',
+  'pg_serial',
+  'pg_snapshots',
+  'pg_stat',
+  'pg_stat_tmp',
+  'pg_subtrans',
+  'pg_tblspc',
+  'pg_twophase',
+  'postmaster.opts',
+]);
 
 /**
  * Translate a PGlite/PostgreSQL error to a standardized DatabaseErrors name.
@@ -87,18 +108,24 @@ function cleanStaleLock(dataDir: string): void {
   }
 }
 
-function hasInitializedPgliteDataDir(dataDir: string): boolean {
+/** True when `dataDir` holds a fully initialized PGlite database. */
+export function hasInitializedPgliteDataDir(dataDir: string): boolean {
   // PGlite loadTar writes PG_VERSION before the directory tree. Requiring
   // global/pg_control ensures base/global exist and contain PostgreSQL state.
   return PGLITE_INITIALIZED_DATA_DIR_ENTRIES.every((entry) => existsSync(join(dataDir, entry)));
 }
 
-function hasInitializedPgliteChildDataDir(dataDir: string, entries: string[]): boolean {
-  return entries.some((entry) => hasInitializedPgliteDataDir(join(dataDir, entry)));
-}
-
-function looksLikePgliteDataDir(entries: string[]): boolean {
-  return entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
+/**
+ * True when the entries are those of a partial PGlite data directory and nothing
+ * else. A directory that also holds anything else — `settings.json`, another
+ * block's data directory — is not PGlite's to quarantine: moving it would take
+ * that data with it.
+ */
+function isOnlyPgliteDataDir(entries: string[]): boolean {
+  return (
+    entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry)) &&
+    entries.every((entry) => PGLITE_DATA_DIR_ENTRIES.has(entry))
+  );
 }
 
 function isErrnoException(error: unknown): error is { code?: string } {
@@ -120,7 +147,7 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
   }
   if (entries.length === 0 || hasInitializedPgliteDataDir(dataDir)) return;
 
-  if (!looksLikePgliteDataDir(entries) || hasInitializedPgliteChildDataDir(dataDir, entries)) return;
+  if (!isOnlyPgliteDataDir(entries)) return;
 
   const corruptDataDir = nextCorruptDataDir(dataDir);
   renameSync(dataDir, corruptDataDir);
