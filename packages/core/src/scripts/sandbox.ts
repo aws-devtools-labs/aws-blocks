@@ -190,8 +190,18 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, previe
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", cdkAppCommand(backendPath),
   ];
+}
+
+/**
+ * The `--app` command CDK runs to synthesize from `backendPath`. CDK runs it
+ * through a shell, so the path is quoted ({@link quoteCdkAppPath}): unquoted, a
+ * project path with a space splits into two words and synth fails before any
+ * stack is touched.
+ */
+export function cdkAppCommand(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+  return `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`;
 }
 
 /**
@@ -229,7 +239,7 @@ export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: Sand
     "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", cdkAppCommand(backendPath),
   ];
 }
 
@@ -305,7 +315,7 @@ export function buildSandboxDeployArgs({
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", assemblyDir ?? cdkAppCommand(backendPath),
   ];
 }
 
@@ -1429,10 +1439,7 @@ export function sandboxDestroyDeps(
     // A destroy doesn't deploy the frontend: reuse an existing frontend build
     // (see common/frontend-build.ts).
     "--context", `${REUSE_FRONTEND_BUILD_CONTEXT}=true`,
-    // Quote backendPath: CDK re-runs the --app string through a shell, so an
-    // unquoted path containing a space would split. quoteCdkAppPath picks the
-    // quoting that shell understands — cmd.exe keeps a literal single quote.
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", cdkAppCommand(backendPath),
   ];
   // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
   // the retry loop prints it once the destroy finally fails.
