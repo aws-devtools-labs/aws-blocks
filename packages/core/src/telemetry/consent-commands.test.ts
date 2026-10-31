@@ -86,6 +86,20 @@ describe('getTelemetryStatus', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('honors a project disable saved with a UTF-8 BOM', () => {
+    delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
+    clearCIVars();
+    const tmp = join(tmpdir(), `blocks-status-test-bom-${Date.now()}`);
+    mkdirSync(join(tmp, '.blocks'), { recursive: true });
+    writeFileSync(join(tmp, '.blocks', 'config.json'), `\uFEFF${JSON.stringify({ stackId: 'my-app-1', telemetry: { enabled: false } })}`);
+    process.chdir(tmp);
+
+    const status = getTelemetryStatus();
+    assert.strictEqual(status.enabled, false);
+    assert.strictEqual(status.projectConfig, false);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
   // The global leg needs a redirected HOME, which `os.homedir()` only reads at process
   // start; it is covered by the shared precedence table in telemetry.test.ts.
   it('stays enabled when the project config enables and no global config exists', () => {

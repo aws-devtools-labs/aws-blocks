@@ -1,25 +1,17 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-
-interface TelemetryConfig {
-  enabled?: boolean;
-  projectId?: string;
-  [key: string]: unknown;
-}
-
-interface BlocksConfig {
-  telemetry?: TelemetryConfig;
-  [key: string]: unknown;
-}
+import { updateBlocksConfigFile } from '../blocks-config-file.js';
 
 /**
  * Read an existing config file, merge the telemetry.enabled setting, and write it back.
  * Creates the file and parent directories if they don't exist.
  * Preserves all other keys in the config file and in the telemetry object
- * (e.g., projectId).
+ * (e.g., projectId, and the project's `stackId`).
+ *
+ * The file is re-read immediately before the write and replaced atomically (temp
+ * file + rename), so concurrent writers never leave a truncated file or drop each
+ * other's keys. A UTF-8 BOM is tolerated.
  *
  * Config format:
  * ```json
@@ -28,25 +20,14 @@ interface BlocksConfig {
  *
  * @param configPath - Absolute path to the config file
  * @param telemetryEnabled - Whether telemetry should be enabled
+ * @throws If the existing file can't be parsed or isn't a JSON object. The file is
+ *   left unchanged rather than replaced, so a committed `stackId` is never lost.
  */
 export function writeConfigTelemetry(configPath: string, telemetryEnabled: boolean): void {
-  let existing: BlocksConfig = {};
-
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    existing = JSON.parse(content) as BlocksConfig;
-  } catch {
-    // File doesn't exist or is invalid — start fresh
-  }
-
-  const telemetry: TelemetryConfig = (existing.telemetry && typeof existing.telemetry === 'object')
-    ? { ...existing.telemetry }
-    : {};
-
-  telemetry.enabled = telemetryEnabled;
-  existing.telemetry = telemetry;
-
-  const dir = dirname(configPath);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+  updateBlocksConfigFile(configPath, (config) => {
+    const existing = config.telemetry;
+    const telemetry = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+    config.telemetry = { ...telemetry, enabled: telemetryEnabled };
+    return true;
+  });
 }

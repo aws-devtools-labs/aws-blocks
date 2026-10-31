@@ -2,6 +2,11 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { debuglog } from 'node:util';
+import { readBlocksConfigFile, updateBlocksConfigFile, type BlocksConfigObject } from '../blocks-config-file.js';
+
+// Debug log: writes to stderr via NODE_DEBUG=blocks-telemetry (developer-facing, for troubleshooting)
+const debug = debuglog('blocks-telemetry');
 
 const FIRST_RUN_NOTICE = `
 AWS Blocks collects anonymous usage data to improve the product.
@@ -10,9 +15,11 @@ To disable: npx --no -- cdk-blocks telemetry disable (or export AWS_BLOCKS_DISAB
 The env var accepts 1, true, or yes (case-insensitive).
 `;
 
-interface BlocksConfig {
-  telemetry?: { enabled?: boolean; projectId?: string };
-  [key: string]: unknown;
+/** The config's non-empty `telemetry.projectId`, if it has one. */
+function storedProjectId(config: BlocksConfigObject): string | undefined {
+  const telemetry = config.telemetry;
+  if (!telemetry || typeof telemetry !== 'object' || !('projectId' in telemetry)) return undefined;
+  return typeof telemetry.projectId === 'string' && telemetry.projectId ? telemetry.projectId : undefined;
 }
 
 /**
@@ -51,38 +58,40 @@ export function getInstallationId(): string {
  * Get or create a persistent project ID.
  * Stored in `.blocks/config.json` under `telemetry.projectId` in the project root (cwd).
  * Generated as UUID v4 on first use.
+ *
+ * Never throws and never rewrites a config it can't parse (it may hold the
+ * committed `stackId`): in that case the ID is for this session only and the
+ * reason is logged under `NODE_DEBUG=blocks-telemetry`.
  */
 export function getProjectId(): string {
   const configPath = join(process.cwd(), '.blocks', 'config.json');
 
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const config: BlocksConfig = JSON.parse(content);
-    if (config.telemetry?.projectId) return config.telemetry.projectId;
-  } catch {
-    // File doesn't exist or invalid JSON
+  const current = readBlocksConfigFile(configPath);
+  if (current.status === 'invalid') {
+    debug('not persisting the projectId: %s could not be read: %s', configPath, current.reason);
+    return randomUUID();
   }
+  const existing = current.status === 'ok' ? storedProjectId(current.config) : undefined;
+  if (existing) return existing;
 
-  const id = randomUUID();
+  let id: string = randomUUID();
   try {
-    const dir = dirname(configPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    // Preserve existing config if present
-    let config: BlocksConfig = {};
-    try {
-      const existing = readFileSync(configPath, 'utf-8');
-      config = JSON.parse(existing);
-    } catch {
-      // No existing config
-    }
-
-    config.telemetry = { ...config.telemetry, projectId: id };
-    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  } catch {
+    updateBlocksConfigFile(configPath, (config) => {
+      // Another process may have persisted an ID since the read above; adopt it.
+      const raced = storedProjectId(config);
+      if (raced) {
+        id = raced;
+        return false;
+      }
+      const telemetry = config.telemetry && typeof config.telemetry === 'object' && !Array.isArray(config.telemetry)
+        ? config.telemetry
+        : {};
+      config.telemetry = { ...telemetry, projectId: id };
+      return true;
+    });
+  } catch (error: unknown) {
     // If we can't persist, still return the generated ID for this session
+    debug('not persisting the projectId: %s', error instanceof Error ? error.message : String(error));
   }
   return id;
 }

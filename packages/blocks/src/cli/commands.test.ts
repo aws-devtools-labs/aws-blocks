@@ -1643,9 +1643,9 @@ describe('JSON output', () => {
 		const bad = await runCli(['whoami'], { cwd: root, core });
 		assert.strictEqual(bad.code, 0, bad.stderr);
 		assert.match(bad.stdout, /Production: {2}\(invalid \.blocks\/config\.json\)/);
-		assert.match(bad.stderr, /Warning: \.blocks\/config\.json is not valid JSON/);
+		assert.match(bad.stderr, /Warning: \.blocks\/config\.json could not be read: invalid JSON/);
 		const deploy = await runCli(['deploy'], { cwd: root, env: AWS_ENV });
-		assert.match(deploy.stderr, /^Error: \.blocks\/config\.json is not valid JSON/);
+		assert.match(deploy.stderr, /^Error: \.blocks\/config\.json could not be read: invalid JSON/);
 		assert.doesNotMatch(deploy.stderr, /Try:/);
 		writeFileSync(config, '{}');
 		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.blocks\/config\.json\)/);

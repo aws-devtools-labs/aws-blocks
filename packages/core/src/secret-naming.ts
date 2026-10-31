@@ -16,18 +16,24 @@
  *
  * Both sides derive the scope from the SAME source: the out-of-band CLI
  * (`npm run secret`/`config`) and the CDK synth both call {@link blocksStoreConfig},
- * which reads `stackId` via {@link getStackId}. When `.blocks/config.json` is absent
- * (e.g. a bare unit test) both sides fall back to the unscoped `/blocks/secrets` /
- * `/blocks/config` identically — so the CLI write and the deploy read can never
- * diverge, whether the id is present or not. `stackId` is stage-independent
+ * which reads `stackId` via {@link readStackId}. When `.blocks/config.json` is absent
+ * (e.g. a bare unit test) or has no `stackId`, both sides fall back to the unscoped
+ * `/blocks/secrets` / `/blocks/config` identically — so the CLI write and the deploy
+ * read can never diverge, whether the id is present or not. The CLI additionally warns
+ * on stderr when it uses that shared fallback (see {@link blocksCliPrefix}). A file
+ * that exists but can't be parsed is an error on both sides, never a silent fallback:
+ * it most likely holds a `stackId`, and the fallback would read or write another
+ * app's values. A UTF-8 BOM is tolerated. `stackId` is stage-independent
  * (prod and sandbox share it); use the opt-in `stage` segment for per-stage values.
  *
  * @module
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { StoreConfig } from '@aws-blocks/hosting/constructs';
 import { secretStoreLocator } from '@aws-blocks/hosting';
-import { getStackId } from './scripts/stack-id.js';
+import { readStackId } from './scripts/stack-id.js';
 
 /** Base Blocks prefix for `secret()` values (Secrets Manager); scoped by `stackId`. */
 export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
@@ -36,29 +42,47 @@ export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
 export const BLOCKS_CONFIG_PARAMETER_PREFIX = '/blocks/config';
 
 /**
- * Resolve the app's `stackId` (stable, stage-independent, from `.blocks/config.json`),
- * or `undefined` when it can't be read. Never throws — a missing id means both the
- * CLI and synth fall back to the unscoped base prefix, so they still agree.
+ * The Blocks `secret()` prefix, scoped to `stackId` when available.
+ *
+ * @throws When `stackId` isn't passed and `.blocks/config.json` exists but can't be parsed.
  */
-function resolveStackId(explicit?: string): string | undefined {
-	if (explicit) return explicit;
-	try {
-		return getStackId();
-	} catch {
-		return undefined;
-	}
-}
-
-/** The Blocks `secret()` prefix, scoped to `stackId` when available. */
 export function blocksSecretPrefix(stackId?: string): string {
-	const id = resolveStackId(stackId);
+	const id = stackId || readStackId();
 	return id ? `/blocks/${id}/secrets` : BLOCKS_SECRET_PARAMETER_PREFIX;
 }
 
-/** The Blocks `config()` prefix, scoped to `stackId` when available. */
+/**
+ * The Blocks `config()` prefix, scoped to `stackId` when available.
+ *
+ * @throws When `stackId` isn't passed and `.blocks/config.json` exists but can't be parsed.
+ */
 export function blocksConfigPrefix(stackId?: string): string {
-	const id = resolveStackId(stackId);
+	const id = stackId || readStackId();
 	return id ? `/blocks/${id}/config` : BLOCKS_CONFIG_PARAMETER_PREFIX;
+}
+
+/**
+ * The default prefix for the out-of-band `secret`/`config` CLI and its programmatic
+ * helpers (`setSecret()`, `listConfig()`, …): {@link blocksSecretPrefix} /
+ * {@link blocksConfigPrefix}, plus a stderr warning when it falls back to the unscoped
+ * namespace that every `stackId`-less Blocks app in the account and Region shares.
+ * Synth paths call the prefix helpers directly and don't warn: a deploy already
+ * requires the `stackId` to name the stack.
+ *
+ * @internal
+ */
+export function blocksCliPrefix(kind: 'secret' | 'config', label: string): string {
+	const prefix = kind === 'secret' ? blocksSecretPrefix() : blocksConfigPrefix();
+	if (prefix === BLOCKS_SECRET_PARAMETER_PREFIX || prefix === BLOCKS_CONFIG_PARAMETER_PREFIX) {
+		const configPath = join(process.cwd(), '.blocks', 'config.json');
+		console.warn(
+			`⚠️  ${configPath} ${existsSync(configPath) ? 'has no "stackId"' : 'not found'}, so \`${label}\` uses the ` +
+				`unscoped ${prefix} namespace, shared by every Blocks app without a stackId in this AWS account and Region. ` +
+				`Run it from your app's root, or add { "stackId": "<your-app-name>" } to .blocks/config.json ` +
+				`(create-blocks-app generates it; commit it) to scope values to this app.`,
+		);
+	}
+	return prefix;
 }
 
 /**
@@ -88,8 +112,11 @@ export function blocksConfigParameterName(key: string, stackId?: string): string
 
 /**
  * The Blocks store config passed to the shared hosting engine — `stackId`-scoped
- * prefixes (falling back to the unscoped base when `.blocks/config.json` is absent).
- * Both the CLI and the CDK synth call this, so they resolve identical names.
+ * prefixes (falling back to the unscoped base when `.blocks/config.json` is absent
+ * or has no `stackId`). Both the CLI and the CDK synth call this, so they resolve
+ * identical names.
+ *
+ * @throws When `stackId` isn't passed and `.blocks/config.json` exists but can't be parsed.
  */
 export function blocksStoreConfig(stackId?: string): StoreConfig {
 	return {
