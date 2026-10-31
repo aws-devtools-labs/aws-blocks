@@ -13,3 +13,4 @@ Fixes from CLI testing:
 
 - Two `blocks migrate` runs at the same time no longer crash with `ENOENT` when one deletes a wrapper the other planned to delete.
 - `blocks migrate --dry-run` no longer says "everything else was migrated" above the items it would keep.
+- The hint for an app without `stackId` now says that `<stackId>-prod` must equal the production stack name in `aws-blocks/index.cdk.ts`: an app that hard-codes `my-blocks-stack-prod` uses `{"stackId": "my-blocks-stack"}`.

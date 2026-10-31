@@ -172,7 +172,7 @@ export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[
 const STACK_ID_WRAPPERS: readonly WrapperFile[] = ['deploy.ts', 'destroy.ts'];
 
 const STACK_ID_HINT =
-	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" is the name of your production stack (see aws-blocks/index.cdk.ts), commit it, and run blocks migrate again';
+	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and run blocks migrate again';
 
 /** True when `.blocks/config.json` has the stackId that `blocks deploy` and `blocks destroy` need. */
 function hasStackId(root: string): boolean {

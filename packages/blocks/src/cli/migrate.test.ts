@@ -360,7 +360,15 @@ describe('blocks migrate', () => {
 			'package.json#scripts.deploy',
 			'package.json#scripts.destroy',
 		]);
-		for (const { file, reason } of kept) assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
+		for (const { file, reason } of kept) {
+			assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
+			// The stack that blocks deploy and destroy name must be the one the CDK app defines.
+			assert.match(
+				reason,
+				/"<id>-prod" must equal the name of the production stack that your aws-blocks\/index\.cdk\.ts defines \(an app whose index\.cdk\.ts hard-codes "my-blocks-stack-prod" uses \{"stackId": "my-blocks-stack"\}\)/,
+				file,
+			);
+		}
 		assert.deepStrictEqual(readPkg(backend).blocks, { dev: { port: 3001, frontend: false } });
 		assert.strictEqual(readPkg(backend).scripts.dev, 'blocks dev');
 		assert.strictEqual(readPkg(backend).scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts');
