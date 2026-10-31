@@ -12,3 +12,4 @@ fix(core): production destroy and deploy guidance for the `blocks` CLI
 - The error for a missing `.blocks/config.json` or `stackId` says that, for an app already deployed, `<id>-prod` must be the name of its existing production stack; another id makes the next deploy create a second production stack.
 - `getStackId()` says `.blocks/config.json is not valid JSON (<parse error>)` for a file that does not parse, instead of "not found or missing stackId".
 - `readAwsIdentity()` reports a selected profile that is not in the AWS config files even when no Region is set, instead of returning no identity, which `blocks whoami --profile <typo>` reported as "no AWS Region is set".
+- The production deploy no longer lists "Frontend hosting (S3 + CloudFront)" for an app without a frontend.

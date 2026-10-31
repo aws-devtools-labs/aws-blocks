@@ -279,8 +279,8 @@ export async function deploy(options: DeployOptions) {
 
     log.progress('🚀 Deploying to AWS...');
     log.detail('   (This may take a few minutes on first deploy)');
-    log.detail('   - Backend API (Lambda + API Gateway)');
-    log.detail('   - Frontend hosting (S3 + CloudFront)');
+    // Not "Frontend hosting": the app may have none, and that is known only from its outputs.
+    log.detail('   - Backend API (Lambda + API Gateway), and frontend hosting when the app defines it');
     log.detail('   Streaming CloudFormation events below; the deploy keeps running if this');
     log.detail('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
 
