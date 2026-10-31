@@ -226,6 +226,70 @@ describe('blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
 	});
 
+	it('in a monorepo, keeps a wrapper that a top-level workflow, script or shell file runs', async () => {
+		const app = writeApp('default@0ab6b047');
+		const mono = mkdtempSync(join(tmpdir(), 'blocks-migrate-mono-'));
+		mkdirSync(join(mono, 'apps'));
+		renameSync(app, join(mono, 'apps', 'web'));
+		const files: Record<string, string> = {
+			// GitHub Actions runs workflows only from the top level.
+			'.github/workflows/web.yml':
+				'jobs:\n  web:\n    defaults:\n      run:\n        working-directory: apps/web\n    steps:\n' +
+				'      - run: npx tsx aws-blocks/scripts/deploy.ts\n' +
+				'      - run: npx tsx apps/web/aws-blocks/scripts/typegen.ts --check\n',
+			'package.json': `${JSON.stringify({ private: true, workspaces: ['apps/*'], scripts: { 'secret:web': 'tsx apps/web/aws-blocks/scripts/secret.ts' } }, null, 2)}\n`,
+			'ci.sh': '#!/bin/sh\ncd apps/web/aws-blocks/scripts && npx tsx sandbox-destroy.ts\n',
+			// A doc and a file of another directory do not count.
+			'README.md': 'Run `npx tsx apps/web/aws-blocks/scripts/console.ts`.\n',
+			'tools/release.sh': '#!/bin/sh\nnpx tsx apps/web/aws-blocks/scripts/cleanup.ts\n',
+		};
+		for (const [path, text] of Object.entries(files)) {
+			mkdirSync(dirname(join(mono, path)), { recursive: true });
+			writeFileSync(join(mono, path), text);
+		}
+		git(mono, 'init', '-q');
+		git(mono, 'add', '-A');
+		git(mono, 'commit', '-q', '-m', 'mono');
+		const root = join(mono, 'apps', 'web');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual((result.kept as { file: string; reason: string }[]).map((k) => [k.file, k.reason]).sort(), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+			['aws-blocks/scripts/sandbox-destroy.ts', 'generated, but still used by ../../ci.sh'],
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../package.json'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'sandbox-destroy.ts', 'secret.ts', 'typegen.ts']);
+		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy', 'the scripts still migrate');
+	});
+
+	it('keeps a wrapper that a workflow, shell file or script runs from another working directory', async () => {
+		const root = writeApp('default@0ab6b047', (app) => {
+			app.files['.github/workflows/d.yml'] =
+				'jobs:\n  d:\n    steps:\n      - run: npx tsx scripts/deploy.ts\n        working-directory: aws-blocks\n';
+			app.files['scripts/ci.sh'] = '#!/bin/sh\ncd aws-blocks/scripts && npx tsx typegen.ts --check\n';
+			app.files.Dockerfile = 'WORKDIR /app/aws-blocks/scripts\nCMD ["npx", "tsx", "./secret.ts"]\n';
+			app.packageJson.scripts['ci:console'] = 'cd aws-blocks/scripts && tsx console.ts';
+			// Another file of the same name is not a wrapper.
+			app.files['tools/serve.sh'] = '#!/bin/sh\nnpx tsx src/server.ts\n';
+		});
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const kept = (JSON.parse(run.stdout).kept as { file: string; reason: string }[]).map((k) => [k.file, k.reason]);
+		assert.deepStrictEqual(kept.sort(), [
+			['aws-blocks/scripts/console.ts', 'generated, but still used by script "ci:console"'],
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by .github/workflows/d.yml'],
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by Dockerfile'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by scripts/ci.sh'],
+			['package.json#scripts.ci:console', '"cd aws-blocks/scripts && tsx console.ts" is not a generated command; replace it with a blocks command by hand'],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'secret.ts', 'typegen.ts']);
+	});
+
 	it('refuses an app that a parent repo ignores unless --force, and then reads its files', async () => {
 		const app = writeApp('api-only@0ab6b047', (app) => {
 			app.files.Dockerfile = 'CMD ["npx", "tsx", "watch", "aws-blocks/scripts/server.ts"]\n';

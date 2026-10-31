@@ -290,10 +290,31 @@ const MAX_SCANNED_BYTES = 1024 * 1024;
 /** Markdown docs and editor rules: prose that names a wrapper does not run it (the backend template's README shows a wrapper script). */
 const DOC_FILE = /\.(md|mdx|mdc)$/i;
 
+/**
+ * CI configuration, shell scripts, Makefiles and Dockerfiles: files that run
+ * commands from a working directory of their own (`working-directory:
+ * aws-blocks`, `cd aws-blocks/scripts && …`), so a bare `scripts/deploy.ts` or
+ * `deploy.ts` there can name a wrapper.
+ */
+const RUNNER_FILE =
+	/(^|\/)(\.github\/(workflows|actions)\/.+|\.circleci\/.+|\.buildkite\/.+|\.gitlab-ci\.ya?ml|\.travis\.ya?ml|azure-pipelines[^/]*\.ya?ml|bitbucket-pipelines\.ya?ml|buildspec[^/]*\.ya?ml|amplify\.ya?ml|Jenkinsfile|(GNU)?[Mm]akefile|[^/]*\.mk|[Jj]ustfile|Procfile|(Docker|Container)file[^/]*|[^/]*\.dockerfile|(docker-)?compose[^/]*\.ya?ml|[^/]*\.(sh|bash|zsh|ps1|bat|cmd))$/;
+
 /** A file that names at least one wrapper, and the project paths of the wrappers it names. */
 interface WrapperUser {
+	/** Relative to the project root: `../../.github/workflows/ci.yml` for a file above it. */
 	path: string;
 	uses: ReadonlySet<string>;
+}
+
+/**
+ * The files above the project that can run its wrappers, when the project is
+ * a subdirectory of its git work tree (a monorepo): `files` relative to the
+ * work tree's `top`, and the project's `prefix` there (`apps/web/`).
+ */
+export interface RepoFiles {
+	top: string;
+	prefix: string;
+	files: string[];
 }
 
 /**
@@ -308,9 +329,16 @@ interface WrapperUser {
  * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
  * `package.json` (its scripts are checked after the rewrite) and symbolic
  * links, which are not followed, do not. Each file is read once, and only the
- * wrappers it names are kept. Nothing above the project root is read.
+ * wrappers it names are kept. Above the project root, only the `repo` files are
+ * read: the top-level `package.json` and CI, shell and Docker files of a
+ * monorepo, from {@link gitRepoFiles}.
  */
-function wrapperUsers(root: string, wrappers: readonly Wrapper[], files: readonly string[] | null): WrapperUser[] {
+function wrapperUsers(
+	root: string,
+	wrappers: readonly Wrapper[],
+	files: readonly string[] | null,
+	repo: RepoFiles | null,
+): WrapperUser[] {
 	const users: WrapperUser[] = [];
 	const walk = (dir: string): void => {
 		for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -322,29 +350,42 @@ function wrapperUsers(root: string, wrappers: readonly Wrapper[], files: readonl
 			}
 		}
 	};
-	const scan = (rel: string): void => {
-		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
-		const path = join(root, rel);
+	/** The text of a file worth reading, or `undefined`; walks a directory instead. */
+	const read = (path: string): string | undefined => {
 		let stats: Stats;
 		try {
 			stats = lstatSync(path);
 		} catch {
-			return; // A tracked file deleted from the work tree.
+			return undefined; // A tracked file deleted from the work tree.
 		}
 		if (stats.isDirectory()) {
 			walk(path);
-			return;
+			return undefined;
 		}
-		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return;
+		if (!stats.isFile() || stats.size > MAX_SCANNED_BYTES) return undefined;
 		const bytes = readFileSync(path);
-		if (bytes.includes(0)) return;
-		const text = bytes.toString('utf-8');
-		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w.path)).map((w) => w.path));
+		return bytes.includes(0) ? undefined : bytes.toString('utf-8');
+	};
+	const scan = (rel: string): void => {
+		if (rel === 'package.json' || DOC_FILE.test(rel)) return;
+		const text = read(join(root, rel));
+		if (text === undefined) return;
+		const bare = RUNNER_FILE.test(rel);
+		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w, { bare })).map((w) => w.path));
 		if (uses.size > 0) users.push({ path: rel, uses });
 	};
 	if (files === null) walk(root);
 	// git lists an untracked repository as `dir/`.
 	else for (const rel of files) scan(rel.replace(/\/$/, ''));
+	const { top, prefix, files: repoFiles } = repo ?? { top: root, prefix: '', files: [] };
+	// From the project up to the top, without resolving symbolic links that git resolved in `top`.
+	const up = prefix.split('/').filter((segment) => segment !== '').map(() => '..');
+	for (const rel of repoFiles) {
+		const text = read(join(top, rel));
+		if (text === undefined) continue;
+		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w, { bare: true, prefix })).map((w) => w.path));
+		if (uses.size > 0) users.push({ path: [...up, rel].join('/'), uses });
+	}
 	return users;
 }
 
@@ -352,19 +393,34 @@ const SOURCE_EXTENSION = /\.[cm]?[jt]sx?$/;
 
 /**
  * True when `text`, the content of the file at `sourcePath` (relative to the
- * project root; `package.json` for a script), refers to the wrapper at
- * `wrapperPath`: by its project path (`aws-blocks/scripts/server.ts`, as npm
- * scripts and `devCommand` strings name it), or by any quoted relative path that
+ * project root, or to the work tree top for a file above it, whose project
+ * then sits at `prefix`; `package.json` for a script), refers to `wrapper`: by
+ * its project path (`aws-blocks/scripts/server.ts`, as npm scripts and
+ * `devCommand` strings name it, also as the end of a longer path such as
+ * `apps/web/aws-blocks/scripts/server.ts`), or by any quoted relative path that
  * resolves to it from the file's directory (`'./server.js'`, `'../server.js'`,
  * `import('../../aws-blocks/scripts/server')`), with or without an extension.
+ * With `bare` (CI, shell and Docker files, and scripts, which run commands
+ * from another working directory), a word `deploy.ts`, `scripts/deploy.ts` or
+ * `./scripts/deploy.ts` counts as well.
  */
-function refersTo(text: string, sourcePath: string, wrapperPath: string): boolean {
-	const target = wrapperPath.replace(SOURCE_EXTENSION, '');
+function refersTo(
+	text: string,
+	sourcePath: string,
+	wrapper: Wrapper,
+	{ bare = false, prefix = '' }: { bare?: boolean; prefix?: string } = {},
+): boolean {
+	const target = wrapper.path.replace(SOURCE_EXTENSION, '');
 	const escaped = target.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 	if (new RegExp(`${escaped}(\\.[cm]?[jt]sx?)?(?![\\w.-])`).test(text)) return true;
+	if (bare) {
+		const name = wrapper.file.replace(/[.-]/g, '\\$&');
+		// Only at the start of a word: `src/server.ts` is another file.
+		if (new RegExp(`(?<![^\\s'"\`=;&|()])(\\./)?(scripts/)?${name}(?![\\w.-])`).test(text)) return true;
+	}
 	const dir = posixPath.dirname(sourcePath);
 	for (const match of text.matchAll(/(['"`])(\.{1,2}\/[^'"`\s]*)\1/g)) {
-		if (posixPath.join(dir, match[2]).replace(SOURCE_EXTENSION, '') === target) return true;
+		if (posixPath.join(dir, match[2]).replace(SOURCE_EXTENSION, '') === prefix + target) return true;
 	}
 	return false;
 }
@@ -375,13 +431,14 @@ function refersTo(text: string, sourcePath: string, wrapperPath: string): boolea
  * trust a directory another user owns), with git's first error line; `unseen`
  * when the work tree does not list the app's `package.json` (a parent repo
  * ignores the app's directory), so git could not undo the migration; or the
- * files git lists for the project, from {@link gitFiles}.
+ * files git lists for the project, from {@link gitFiles}, and, in a monorepo,
+ * the files above it that can run its wrappers, from {@link gitRepoFiles}.
  */
 type GitView =
 	| { kind: 'outside' }
 	| { kind: 'refused'; message: string }
 	| { kind: 'unseen' }
-	| { kind: 'listed'; files: string[] };
+	| { kind: 'listed'; files: string[]; repo: RepoFiles | null };
 
 function gitView(root: string): GitView {
 	// The C locale keeps "not a git repository" in English.
@@ -398,7 +455,7 @@ function gitView(root: string): GitView {
 	}
 	if (inside.stdout.trim() !== 'true') return { kind: 'outside' };
 	const files = gitFiles(root);
-	return files.includes('package.json') ? { kind: 'listed', files } : { kind: 'unseen' };
+	return files.includes('package.json') ? { kind: 'listed', files, repo: gitRepoFiles(root) } : { kind: 'unseen' };
 }
 
 /** `git status --porcelain` for the project, which must be in a git work tree. */
@@ -412,10 +469,11 @@ function gitStatus(root: string): string {
 
 /**
  * The project's tracked files and its untracked files that git does not
- * ignore, relative to `root` with `/` separators.
+ * ignore, relative to `root` with `/` separators; with `args`, those that the
+ * extra `git ls-files` arguments select, as git prints them.
  */
-function gitFiles(root: string): string[] {
-	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
+function gitFiles(root: string, args: readonly string[] = []): string[] {
+	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z', ...args], {
 		cwd: root,
 		encoding: 'utf-8',
 		maxBuffer: Number.POSITIVE_INFINITY,
@@ -428,12 +486,36 @@ function gitFiles(root: string): string[] {
 }
 
 /**
+ * When the project is a subdirectory of its git work tree (a monorepo), the
+ * work tree's top-level `package.json` and its top-level CI, shell and Docker
+ * files ({@link RUNNER_FILE}: `.github/workflows/*`, a root `Dockerfile` or
+ * `ci.sh`): GitHub Actions runs workflows only from the top level, and a root
+ * script or workflow can run an app's wrappers. `null` when the project is the
+ * top level, whose files {@link gitFiles} lists already.
+ */
+function gitRepoFiles(root: string): RepoFiles | null {
+	const where = spawnSync('git', ['rev-parse', '--show-toplevel', '--show-prefix'], { cwd: root, encoding: 'utf-8' });
+	if (where.error || where.status !== 0) {
+		throw new CliError(`git rev-parse failed in ${root}: ${where.stderr || where.error?.message}`.trim());
+	}
+	const [top = '', prefix = ''] = where.stdout.split('\n');
+	if (prefix === '') return null;
+	// Top-level files, and the files of top-level dot directories (.github, .circleci), relative to the top.
+	const files = gitFiles(root, ['--full-name', '--', ':(top,glob)*', ':(top,glob).*/**']).filter(
+		(rel) => !rel.startsWith(prefix) && (rel === 'package.json' || RUNNER_FILE.test(rel)),
+	);
+	return { top, prefix, files };
+}
+
+/**
  * Plan the migration of `root`, reading `files` (from {@link gitFiles}), or
- * every file under `root` when `files` is `null`. Pure apart from reading files.
+ * every file under `root` when `files` is `null`, and the `repo` files above
+ * it (from {@link gitRepoFiles}). Pure apart from reading files.
  */
 export function planMigration(
 	root: string,
 	files: readonly string[] | null,
+	repo: RepoFiles | null = null,
 ): { result: MigrateResult; pkg: PackageJson } {
 	// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
 	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
@@ -490,7 +572,7 @@ export function planMigration(
 			}
 			scripts[name] = rewrite.alias;
 			result.scriptsRewritten[name] = { from: value, to: rewrite.alias };
-		} else if (wrappers.some((w) => refersTo(value, 'package.json', w.path))) {
+		} else if (wrappers.some((w) => refersTo(value, 'package.json', w, { bare: true }))) {
 			result.kept.push({
 				file: `package.json#scripts.${name}`,
 				reason: `"${value}" is not a generated command; replace it with a blocks command by hand`,
@@ -523,7 +605,7 @@ export function planMigration(
 			});
 		}
 	}
-	const namers = wrapperUsers(root, wrappers, files);
+	const namers = wrapperUsers(root, wrappers, files, repo);
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -532,7 +614,7 @@ export function planMigration(
 		for (const wrapper of wrappers) {
 			if (!candidates.has(wrapper.path)) continue;
 			const scriptUsers = Object.entries(scripts)
-				.filter(([, value]) => refersTo(value, 'package.json', wrapper.path))
+				.filter(([, value]) => refersTo(value, 'package.json', wrapper, { bare: true }))
 				.map(([name]) => `script "${name}"`);
 			const fileUsers = sources.filter((source) => source.uses.has(wrapper.path)).map((source) => source.path);
 			// A wrapper that stays (customized, or kept above) still starts its runtime dependencies.
@@ -659,7 +741,11 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 		}
 		throw error;
 	}
-	const { result, pkg } = planMigration(root, git.kind === 'listed' ? git.files : null);
+	const { result, pkg } = planMigration(
+		root,
+		git.kind === 'listed' ? git.files : null,
+		git.kind === 'listed' ? git.repo : null,
+	);
 	if (!dryRun) {
 		if (result.changed.includes('package.json')) writePackageJson(root, pkg, result.devConfig);
 		// Another run (or the user) may have deleted a file since the plan was made: the result is the same.

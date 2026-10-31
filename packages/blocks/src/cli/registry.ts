@@ -537,6 +537,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'never deleted. In a git repository the app files are the tracked and not-ignored ones,\n' +
 			'and the files of a submodule or nested repository inside the app; outside git, or where git does\n' +
 			'not track the app, the files under the app directory other than node_modules and build output.\n' +
+			'In a monorepo it also reads the top-level package.json and CI, shell and Docker files\n' +
+			'(.github/workflows/*). In CI, shell and Docker files and in scripts, a bare scripts/deploy.ts or\n' +
+			'deploy.ts counts as a use too.\n' +
 			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +
 			'does not track (a parent repository ignores its directory), since git could not undo the\n' +
 			'changes, and a repository that git fails to read.\n' +
