@@ -40,7 +40,7 @@ import { join } from 'node:path';
 import { generateKeyPair, exportJWK, SignJWT, type JWK } from 'jose';
 import type { BlocksContext } from '@aws-blocks/core';
 import { BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { constantTimeEquals, getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
 import type { ProviderConfig, StubProvider, StubUser } from '../types.js';
 
 /**
@@ -62,33 +62,34 @@ export function stubIssuerPath(providerName: string): string {
  * The stub IdP's issuer (and its discovery / token / JWKS / authorize
  * endpoints) is fetched **server-side by the Lambda itself** during
  * `openid-client` discovery and code exchange, so it must resolve to a host
- * the Lambda can reach over HTTPS. We prefer the deploy-injected `BLOCKS_API_URL`
- * (the API's own execute-api gateway origin) for exactly that reason: in
- * sandbox, `ctx.request.url` is rewritten to the loopback dev-server front door
+ * the Lambda can reach over HTTPS. We prefer `BLOCKS_API_URL` (the API's own
+ * execute-api gateway origin) when the process has it: in sandbox,
+ * `ctx.request.url` is rewritten to the loopback dev-server front door
  * (`http://localhost:3000`), which the Lambda can't reach and the AWS runtime's
- * HTTPS-only discovery would reject. In a full deploy `BLOCKS_API_URL` is also the
- * execute-api origin (correct), and in local dev it's unset so we fall back to
- * `ctx.request.url` (the in-process mock allows insecure issuers).
+ * HTTPS-only discovery would reject. Core sets `BLOCKS_API_URL` on Hosting's
+ * SSR compute and the sandbox dev server, not on the backend handler, so a
+ * deployed handler falls back to the request's base URL: its gateway origin
+ * plus stage (`getRequestBaseUrl()`). In local dev that base is the request
+ * origin (the in-process mock allows insecure issuers).
  *
  * Like a real external IdP, the stub's authorize/login step then runs on the
  * issuer's own origin (the gateway), not the app front door; that hop sets no
  * cookie and 302s back to the front-door `redirect_uri`.
  *
- * Both sources carry the API Gateway stage prefix (e.g. `/prod`) before the
- * `/aws-blocks` route segment; we extract it so the issuer URL is the correct
- * external-facing one.
+ * Both sources carry the API Gateway stage prefix (e.g. `/prod`) when there is
+ * one, so the issuer URL is the correct external-facing one. `ctx.request.url`
+ * itself never does: its pathname is the route path.
  */
 export function stubIssuerUrl(providerName: string, ctx: { request: { url: URL } }): string {
-	// `BLOCKS_API_URL` is injected at synth by core (the API's own execute-api
-	// gateway URL). Literal key — it's core-owned config, already set under this
-	// name on the compute/SSR functions and read by the RPC client.
-	const apiUrl = process.env.BLOCKS_API_URL;
-	const url = apiUrl ? new URL(apiUrl) : ctx.request.url;
 	const stubPath = stubIssuerPath(providerName);
-	// The stage prefix (if any) is the path segment before the route. All stub
-	// routes live under the reserved `/aws-blocks` namespace — and `BLOCKS_API_URL`
-	// likewise ends in `/{stage}/aws-blocks/api`, so the same scan extracts the
-	// stage from either source.
+	// `BLOCKS_API_URL` is core-owned config (the API's own execute-api gateway
+	// URL). Literal key — it's already set under this name on the compute/SSR
+	// functions and read by the RPC client.
+	const apiUrl = process.env.BLOCKS_API_URL;
+	if (!apiUrl) return `${getRequestBaseUrl(ctx)}${stubPath}`;
+	// `BLOCKS_API_URL` ends in `/{stage}/aws-blocks/api`: everything before the
+	// reserved `/aws-blocks` namespace is the stage prefix.
+	const url = new URL(apiUrl);
 	const pathname = url.pathname;
 	const routeStart = pathname.search(/\/aws-blocks\b/);
 	const stagePrefix = routeStart > 0 ? pathname.slice(0, routeStart) : '';

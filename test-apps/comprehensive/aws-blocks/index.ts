@@ -882,12 +882,13 @@ new RawRoute(scope, 'GreetRoute', {
   },
 });
 
-// Wildcard — captures everything after /files/ as context.request.params['*']
+// Wildcard — captures everything after /files/ as context.request.params['*'].
+// Also echoes the URL's pathname, which must be the route path on every stage.
 new RawRoute(scope, 'FilesRoute', {
   method: 'GET',
   path: '/files/*',
   handler: async (context) => {
-    context.response.send({ path: context.request.params['*'] });
+    context.response.send({ path: context.request.params['*'], pathname: context.request.url.pathname });
   },
 });
 
