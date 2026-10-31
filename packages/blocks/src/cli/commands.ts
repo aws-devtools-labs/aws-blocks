@@ -20,6 +20,7 @@ import {
 	type Context,
 	PromptInterrupted,
 	readStageEnvFile,
+	REGION_PATTERN,
 	type SpawnSpec,
 	STAGE_ENV_FILES,
 	stageEnv,
@@ -437,15 +438,37 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	});
 }
 
+/**
+ * Open the console for this machine's sandbox stack, never another stack in
+ * `.blocks-sandbox/outputs.json`, which a production deploy rewrites with its
+ * own stack alone. The Region is the one the sandbox was deployed to, when
+ * `last-deploy.json` recorded it; otherwise the sandbox's configured Region.
+ */
 export async function sandboxConsole(ctx: Context): Promise<number> {
 	const root = ctx.enterRoot();
-	const outputsFile = requireFile(
-		join(root, '.blocks-sandbox', 'outputs.json'),
-		'stack outputs',
-		'blocks sandbox deploy',
-	);
+	const stack = await sandboxStack(ctx, root);
+	const last = readLastDeploy(root, 'sandbox');
+	let outputs: Record<string, unknown> = {};
+	try {
+		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<string, unknown>;
+	} catch {
+		// No outputs: only last-deploy.json can show that the sandbox was deployed.
+	}
+	if (stack === null || (last?.stack !== stack && !(stack in outputs))) {
+		throw new CliError(
+			stack === null
+				? 'no sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing).'
+				: `no deploy of the sandbox stack ${stack} is recorded on this machine.`,
+			{ where: [`project: ${root}`], hint: 'blocks sandbox deploy' },
+		);
+	}
 	const core = await ctx.core();
-	await core.openConsole({ outputsFile });
+	const configured = await core.describeDeploymentCredentials({ env: stageEnv(ctx.env, root, 'sandbox'), projectRoot: root });
+	// The Region goes into a URL: only a Region code.
+	const region = [last?.stack === stack ? last.region : null, configured.region].find(
+		(candidate): candidate is string => typeof candidate === 'string' && REGION_PATTERN.test(candidate),
+	);
+	await core.openConsole({ stackId: stack, region });
 	return ExitCode.Ok;
 }
 

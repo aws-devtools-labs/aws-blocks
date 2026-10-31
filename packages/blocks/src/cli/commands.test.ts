@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -442,6 +442,36 @@ describe('lifecycle commands', () => {
 			assert.match(run.stderr, message, argv.join(' '));
 			assert.doesNotMatch(run.stderr, /Deploying/, argv.join(' '));
 		}
+	});
+
+	it('opens the console for the sandbox stack in its deployed Region, never the production stack', async () => {
+		const opened: unknown[] = [];
+		const core = { openConsole: async (options: unknown) => void opened.push(options) };
+		const root = withSandboxId(fixtureApp());
+		const sandboxFile = join(root, '.blocks-sandbox');
+		// A production deploy after the sandbox deploy left only its own stack in outputs.json.
+		writeFileSync(join(sandboxFile, 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
+		const last: Partial<LastDeploy> = { stack: 'demo-jdoe-abc123', apiUrl: 'https://s', url: null, region: 'eu-west-1' };
+		writeFileSync(join(sandboxFile, 'last-deploy.json'), JSON.stringify({ sandbox: last }));
+		const recorded = await runCli(['sandbox', 'console', '--region', 'us-west-2'], { cwd: root, core });
+		assert.strictEqual(recorded.code, 0, recorded.stderr);
+		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'eu-west-1' });
+		// Watch mode records no result: the sandbox's own outputs and its stage Region.
+		rmSync(join(sandboxFile, 'last-deploy.json'));
+		writeFileSync(join(sandboxFile, 'outputs.json'), JSON.stringify({ 'demo-jdoe-abc123': { ApiUrl: 'https://s' } }));
+		writeFileSync(join(root, '.env.local'), 'AWS_REGION=ap-south-1\n');
+		const watch = await runCli(['sandbox', 'console'], { cwd: root, core });
+		assert.strictEqual(watch.code, 0, watch.stderr);
+		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'ap-south-1' });
+		// Nothing recorded for the sandbox, or no sandbox at all: exit 1, nothing opened.
+		writeFileSync(join(sandboxFile, 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
+		const none = await runCli(['sandbox', 'console'], { cwd: root, core });
+		assert.strictEqual(none.code, 1);
+		assert.match(none.stderr, /^Error: no deploy of the sandbox stack demo-jdoe-abc123 is recorded on this machine\.\n(.*\n)*Try: blocks sandbox deploy\n/);
+		const noId = await runCli(['sandbox', 'console'], { cwd: fixtureApp(), core });
+		assert.strictEqual(noId.code, 1);
+		assert.match(noId.stderr, /^Error: no sandbox on this machine/);
+		assert.deepStrictEqual(opened, []);
 	});
 
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
