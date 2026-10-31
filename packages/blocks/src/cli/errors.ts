@@ -103,10 +103,3 @@ export function exitCodeForChild(code: number | null, signal: NodeJS.Signals | n
 	if (code === ExitCode.Usage) return ExitCode.Usage;
 	return ExitCode.Failure;
 }
-
-/** The usage error for a `--query` path that the result does not have. */
-export function unknownField(path: string, name: string, fields: readonly string[]): UsageError {
-	return new UsageError(`no field "${path}" in the result of ${name}. Fields: ${fields.join(', ')}.`, {
-		hint: `${name} --output json`,
-	});
-}

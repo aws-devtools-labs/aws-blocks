@@ -957,12 +957,64 @@ describe('JSON output', () => {
 			run.stderr,
 			/^Error: no field "apiURL" in the result of blocks deploy\. Fields: apiUrl, url, stack, account, region\.\n/,
 		);
-		const nested = await runCli(['whoami', '--query', 'stacks.prod'], {
-			cwd: fixtureApp(),
-			core: { readAwsIdentity: async () => IDENTITY },
-		});
-		assert.strictEqual(nested.code, 2);
-		assert.match(nested.stderr, /no field "stacks\.prod" in the result of blocks whoami\. Fields: account, arn,/);
+		// The whole path is checked before the command runs: a nested typo never repeats a deploy or stops a server.
+		const identities: unknown[] = [];
+		const stops: number[] = [];
+		const core = {
+			readAwsIdentity: async () => {
+				identities.push(1);
+				return IDENTITY;
+			},
+			stopDevServer: async (port = 3000) => {
+				stops.push(port);
+				return {
+					port,
+					stopped: true,
+					alreadyStopped: false,
+					portFree: true,
+					record: null,
+					pids: [],
+					via: 'watcher' as const,
+				};
+			},
+		};
+		for (const [argv, message] of [
+			[['whoami', '--query', 'stacks.prod'], 'Fields of stacks: sandbox, production.'],
+			[['deploy', '--query', 'apiUrl.x'], 'apiUrl is a value, with no fields.'],
+			[
+				['dev', 'stop', '--query', 'stopped.0.nope'],
+				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via.',
+			],
+			[
+				['dev', 'stop', '--query', 'stopped.length'],
+				'stopped is a list; name an element by its index, as stopped.0.',
+			],
+			[
+				['dev', 'stop', '--query', 'stopped.01'],
+				'stopped is a list; name an element by its index, as stopped.0.',
+			],
+		] as const) {
+			const nested = await runCli([...argv], { cwd: fixtureApp(), env: AWS_ENV, core });
+			assert.strictEqual(nested.code, 2, argv.join(' '));
+			const path = argv[argv.length - 1].replace(/\./g, '\\.');
+			assert.match(
+				nested.stderr,
+				new RegExp(
+					`^Error: no field "${path}" in the result of blocks ${argv[0]}[^.]*\\. ${message.replace(/\./g, '\\.')}\\n`,
+				),
+			);
+			assert.strictEqual(nested.spawned.length, 0, argv.join(' '));
+		}
+		assert.deepStrictEqual(identities, []);
+		assert.deepStrictEqual(stops, []);
+		// A valid path whose element is absent prints an empty line, after the command did its work.
+		const root = fixtureApp();
+		const port = await runCli(['dev', 'stop', '--port', '41999', '--query', 'stopped.0.port'], { cwd: root, core });
+		assert.strictEqual(port.code, 0, port.stderr);
+		assert.strictEqual(port.stdout, '41999\n');
+		const absent = await runCli(['dev', 'stop', '--port', '41999', '--query', 'stopped.1'], { cwd: root, core });
+		assert.strictEqual(absent.code, 0, absent.stderr);
+		assert.strictEqual(absent.stdout, '\n');
 		const noJson = await runCli(['dev', '--query', 'port'], { cwd: fixtureApp() });
 		assert.strictEqual(noJson.code, 2);
 		assert.match(

@@ -13,7 +13,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { UsageError, unknownField } from './errors.js';
+import { UsageError } from './errors.js';
 import {
 	ALIASES,
 	type AliasSpec,
@@ -24,6 +24,8 @@ import {
 	type FlagValues,
 	findCommand,
 	GLOBAL_FLAGS,
+	type JsonObjectShape,
+	type JsonShape,
 	subcommandsOf,
 } from './registry.js';
 
@@ -302,6 +304,37 @@ interface PathWord {
 }
 
 /**
+ * Check a `--query` path against the declared shape of a command's result.
+ *
+ * @throws {UsageError} When the result can never have the path: an unknown
+ * field, a field of a plain value, or a list element not named by its index.
+ */
+function checkQueryPath(path: string, json: JsonObjectShape, name: string): void {
+	let shape: JsonShape = json;
+	const walked: string[] = [];
+	for (const segment of path.split('.')) {
+		const at = walked.join('.');
+		let problem: string | undefined;
+		if (shape === null) {
+			problem = `${at} is a value, with no fields.`;
+		} else if (Array.isArray(shape)) {
+			if (/^(0|[1-9]\d*)$/.test(segment)) shape = (shape as readonly [JsonShape])[0];
+			else problem = `${at} is a list; name an element by its index, as ${at}.0.`;
+		} else {
+			const fields = shape as JsonObjectShape;
+			if (Object.hasOwn(fields, segment)) shape = fields[segment];
+			else problem = `${at === '' ? 'Fields' : `Fields of ${at}`}: ${Object.keys(fields).join(', ')}.`;
+		}
+		if (problem) {
+			throw new UsageError(`no field "${path}" in the result of ${name}. ${problem}`, {
+				hint: `${name} --output json`,
+			});
+		}
+		walked.push(segment);
+	}
+}
+
+/**
  * Parse a full argv (without the node and script entries).
  *
  * @throws {UsageError} On an unknown command or option, a missing value or
@@ -429,10 +462,8 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				{ hint: `${name} --help` },
 			);
 		}
-		// Check the top-level field before the command runs, so a typo never repeats a deploy.
-		const field = globals.query?.split('.')[0];
-		if (field !== undefined && !command.json.includes(field))
-			throw unknownField(globals.query ?? field, name, command.json);
+		// Check the whole path before the command runs, so a typo never repeats a deploy.
+		if (globals.query !== undefined) checkQueryPath(globals.query, command.json, name);
 	}
 	return parsed;
 }

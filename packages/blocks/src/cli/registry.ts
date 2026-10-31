@@ -42,6 +42,16 @@ export type HelpGroup = (typeof GROUPS)[number];
 
 export type FlagValues = Record<string, string | boolean | string[] | undefined>;
 
+/**
+ * The shape of a JSON result, so that a `--query` path is checked before the
+ * command runs: `null` for a value, an object's fields, or a one-element
+ * array for a list whose elements have that shape.
+ */
+export type JsonShape = null | readonly [JsonShape] | JsonObjectShape;
+export interface JsonObjectShape {
+	readonly [field: string]: JsonShape;
+}
+
 export interface CommandInput {
 	flags: FlagValues;
 	positionals: string[];
@@ -77,8 +87,8 @@ export interface CommandSpec {
 	 * which prints that verb's usage without side effects.
 	 */
 	verbs?: readonly string[];
-	/** The top-level fields of the `--output json` result; absent when the command has no JSON output. */
-	json?: readonly string[];
+	/** The shape of the `--output json` result; absent when the command has no JSON output. */
+	json?: JsonObjectShape;
 	/**
 	 * The command calls AWS or deploys to it, so an inherited AWS_REGION must be a
 	 * Region code. An explicit `--region` is checked for every command.
@@ -148,8 +158,8 @@ const STAGE_HELP =
 	'stored at <prefix>/<name>/<KEY>, and the app reads it only when its Hosting %STORE% sets\n' +
 	"stage: '<name>'. Without --stage, the value is shared: every stage falls back to it.";
 
-/** The fields of the deploy result: `{apiUrl, url, stack, account, region}`. */
-const DEPLOY_RESULT_FIELDS = ['apiUrl', 'url', 'stack', 'account', 'region'] as const;
+/** The deploy result: `{apiUrl, url, stack, account, region}`. */
+const DEPLOY_RESULT: JsonObjectShape = { apiUrl: null, url: null, stack: null, account: null, region: null };
 
 export const COMMANDS: readonly CommandSpec[] = [
 	// ── Develop ──────────────────────────────────────────────────────────────
@@ -210,7 +220,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			},
 			{ name: 'all', type: 'boolean', description: 'Stop every dev server this app recorded, on any port' },
 		],
-		json: ['stopped'],
+		json: { stopped: [{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null }] },
 		examples: [
 			{ command: 'blocks dev stop', description: 'Stop the dev server on the configured port' },
 			{ command: 'blocks dev stop --all', description: 'Stop every dev server this app started' },
@@ -233,7 +243,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ['sandbox', 'deploy'],
 		group: 'Develop',
 		summary: 'Deploy the sandbox once and exit (CI)',
-		json: DEPLOY_RESULT_FIELDS,
+		json: DEPLOY_RESULT,
 		examples: [
 			{ command: 'blocks sandbox deploy', description: 'Deploy once and exit' },
 			{
@@ -285,7 +295,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: 'Budget for --wait-live, in seconds (1-3600)',
 			},
 		],
-		json: DEPLOY_RESULT_FIELDS,
+		json: DEPLOY_RESULT,
 		examples: [
 			{ command: 'blocks deploy', description: 'Deploy to production' },
 			{ command: 'blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
@@ -319,7 +329,14 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'The identity and Region are the ones "blocks deploy" uses, with .env.production\n' +
 			'applied. A warning names the AWS settings that .env.local sets differently\n' +
 			'for the sandbox.',
-		json: ['account', 'arn', 'credentials', 'region', 'projectRoot', 'stacks'],
+		json: {
+			account: null,
+			arn: null,
+			credentials: null,
+			region: null,
+			projectRoot: null,
+			stacks: { sandbox: null, production: null },
+		},
 		examples: [
 			{ command: 'blocks whoami', description: 'Show the deployment target' },
 			{ command: 'blocks whoami --profile prod --output json', description: 'The same, as JSON' },

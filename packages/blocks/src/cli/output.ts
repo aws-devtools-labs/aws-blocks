@@ -7,8 +7,6 @@
  * Colour is used only on a TTY, never when `NO_COLOR` is set or `TERM=dumb`.
  */
 
-import { unknownField } from './errors.js';
-
 /** The part of a stream that the CLI writes to. */
 export interface OutputStream {
 	write(chunk: string): unknown;
@@ -24,25 +22,17 @@ export function colorEnabled(stream: OutputStream, env: NodeJS.ProcessEnv): bool
 	return stream.isTTY === true;
 }
 
-/** A `--query` request: a dotted path into the result of the named command. */
-export interface ResultQuery {
-	path: string;
-	/** The command, for example `blocks deploy`, named in the error for an unknown path. */
-	command: string;
-}
-
 /**
  * The value at a dotted `path` in `value`, or `undefined` when a segment is
  * missing. Array elements are addressed by index: `stopped.0.port`.
  */
-export function valueAtPath(value: unknown, path: string): { found: boolean; value?: unknown } {
+export function valueAtPath(value: unknown, path: string): unknown {
 	let current = value;
 	for (const segment of path.split('.')) {
-		if (current === null || typeof current !== 'object' || !Object.hasOwn(current, segment))
-			return { found: false };
+		if (current === null || typeof current !== 'object' || !Object.hasOwn(current, segment)) return undefined;
 		current = (current as Record<string, unknown>)[segment];
 	}
-	return { found: true, value: current };
+	return current;
 }
 
 export class Output {
@@ -56,7 +46,8 @@ export class Output {
 		format: OutputFormat,
 		private readonly quiet: boolean,
 		env: NodeJS.ProcessEnv,
-		private readonly query?: ResultQuery,
+		/** The `--query` path, checked against the result's shape before the command ran. */
+		private readonly query?: string,
 	) {
 		this.stderrColor = colorEnabled(stderr, env);
 		this.format = query ? 'json' : format;
@@ -64,19 +55,13 @@ export class Output {
 
 	/**
 	 * Print a command result: with `--query`, the value at the path, raw (a string
-	 * without quotes, `null` as an empty line, an object as JSON); with
-	 * `--output json`, `value` as one JSON document; otherwise `text`. Results
-	 * print under `--quiet` too.
-	 *
-	 * @throws {UsageError} When the `--query` path is not in `value` (exit 2).
+	 * without quotes, `null` or an absent value such as a list element past the
+	 * end as an empty line, an object as JSON); with `--output json`, `value` as
+	 * one JSON document; otherwise `text`. Results print under `--quiet` too.
 	 */
 	result(value: unknown, text: string): void {
 		if (this.query) {
-			const { found, value: selected } = valueAtPath(value, this.query.path);
-			if (!found) {
-				const fields = value !== null && typeof value === 'object' ? Object.keys(value) : [];
-				throw unknownField(this.query.path, this.query.command, fields);
-			}
+			const selected = valueAtPath(value, this.query);
 			const raw =
 				selected === null || selected === undefined
 					? ''

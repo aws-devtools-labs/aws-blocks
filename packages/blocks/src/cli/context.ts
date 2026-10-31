@@ -178,17 +178,14 @@ export class Context {
 			);
 		}
 		this.logLevel = logLevelFor(this.globals, this.env);
-		const query =
-			this.globals.query !== undefined && parsed.command
-				? { path: this.globals.query, command: `blocks ${parsed.command.path.join(' ')}` }
-				: undefined;
 		this.out = new Output(
 			deps.stdout,
 			deps.stderr,
 			this.globals.output,
 			this.logLevel === 'quiet',
 			this.env,
-			query,
+			// --version prints only the version; it does not query it.
+			parsed.command && !this.globals.version ? this.globals.query : undefined,
 		);
 		this.interactive = !this.globals.noInput && deps.stdinIsTTY && !isCi(this.env);
 
