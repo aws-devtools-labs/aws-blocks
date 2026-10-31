@@ -438,6 +438,42 @@ describe('help for passthrough subcommands', () => {
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /unknown command "sandbox destory"\. Did you mean "sandbox destroy"\?/);
 	});
+
+	it('shows the help of a db, secret or config verb outside an app', async () => {
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		const calls: string[][] = [];
+		const record = async (args: string[]) => {
+			calls.push(args);
+		};
+		const core = { runSecretCli: record, runConfigCli: record };
+		for (const argv of [
+			['secret', 'set', '-h'],
+			['help', 'secret', 'remove'],
+			['config', 'list', '--help'],
+		]) {
+			const run = await runCli(argv, { cwd: outside, core });
+			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.deepStrictEqual(run.chdirs, [], argv.join(' '));
+		}
+		assert.deepStrictEqual(calls, [
+			['set', '--help'],
+			['remove', '--help'],
+			['list', '--help'],
+		]);
+		for (const argv of [
+			['db', 'migrate', '--help'],
+			['help', 'db', 'pull'],
+		]) {
+			const run = await runCli(argv, { cwd: outside });
+			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.match(run.spawned[0].args[0], /bb-data[\\/]dist[\\/]cli\.js$/);
+			assert.strictEqual(run.spawned[0].cwd, outside);
+		}
+		// Running a verb still needs the app.
+		const run = await runCli(['secret', 'list'], { cwd: outside, core });
+		assert.strictEqual(run.code, 1);
+		assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+	});
 });
 
 describe('destroy safety', () => {

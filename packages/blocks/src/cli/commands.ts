@@ -551,13 +551,14 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 }
 
 export async function secret(ctx: Context, input: CommandInput): Promise<number> {
-	ctx.enterRoot();
+	// A verb's help works outside an app too, with the default store prefix.
+	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
 	return inProcess(() => core.runSecretCli(input.passthrough, valueCliOptions(ctx)));
 }
 
 export async function config(ctx: Context, input: CommandInput): Promise<number> {
-	ctx.enterRoot();
+	if (input.flags.help !== true || ctx.findRoot()) ctx.enterRoot();
 	const core = await ctx.core();
 	return inProcess(() => core.runConfigCli(input.passthrough, valueCliOptions(ctx)));
 }
@@ -671,14 +672,15 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 			{ hint: 'blocks db --help' },
 		);
 	}
-	const help = input.passthrough.length === 2 && input.passthrough[1] === '--help';
+	const help = input.flags.help === true;
 	if (verb === 'pull' && !help && !ctx.interactive) {
 		throw new UsageError(
 			'"blocks db pull" asks for the database and its connection string, and this run cannot prompt (no TTY, --no-input or CI).',
 			{ hint: 'run "blocks db pull" in a terminal' },
 		);
 	}
-	const root = ctx.requireRoot();
+	// A verb's help works outside an app too: the bb-data CLI of @aws-blocks/blocks prints it.
+	const root = help ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
 	const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
 	if (!cli) throw new CliError('cannot find the bb-data CLI of @aws-blocks/bb-data.', { hint: 'npm install' });
 	return runChild(ctx, {
@@ -739,7 +741,7 @@ export function verbHelp(ctx: Context, command: CommandSpec, verb: string): Prom
 	if (!command.handler || !command.verbs?.includes(verb)) {
 		throw new Error(`"blocks ${command.path.join(' ')}" has no verb "${verb}".`);
 	}
-	return command.handler(ctx, { flags: {}, positionals: [], passthrough: [verb, '--help'] });
+	return command.handler(ctx, { flags: { help: true }, positionals: [], passthrough: [verb, '--help'] });
 }
 
 /**
