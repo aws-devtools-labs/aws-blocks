@@ -389,18 +389,33 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	}
 	const root = ctx.enterRoot();
 	const core = await ctx.core();
+	const dir = join(root, '.blocks-sandbox');
+	const recorded = existsSync(dir)
+		? readdirSync(dir)
+				.map((name) => /^dev-server\.(\d+)\.pid$/.exec(name)?.[1])
+				.filter((port): port is string => port !== undefined)
+				.map(Number)
+		: [];
 	let ports: number[];
 	if (input.flags.all === true) {
-		const dir = join(root, '.blocks-sandbox');
-		ports = existsSync(dir)
-			? readdirSync(dir)
-					.map((name) => /^dev-server\.(\d+)\.pid$/.exec(name)?.[1])
-					.filter((port): port is string => port !== undefined)
-					.map(Number)
-			: [];
+		ports = recorded;
 	} else {
-		ports = [resolveDevPort(root, input.flags)];
+		const port = resolveDevPort(root, input.flags);
 		for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
+		ports = [port];
+		// Without --port, a server started with `blocks dev --port N` is still the one to stop when it is
+		// the only one recorded. With several, the user picks.
+		if (input.flags.port === undefined && !recorded.includes(port)) {
+			if (recorded.length === 1) {
+				ports = recorded;
+				ctx.out.progress(`No dev server is recorded on :${port}; stopping the one on :${recorded[0]}.`);
+			} else if (recorded.length > 1) {
+				ctx.out.warn(
+					`No dev server is recorded on :${port}, but this app recorded ones on ${recorded.map((p) => `:${p}`).join(', ')}. ` +
+						'Stop one with blocks dev stop --port <port>, or all of them with blocks dev stop --all.',
+				);
+			}
+		}
 	}
 	const results = [];
 	for (const port of ports) results.push(await core.stopDevServer(port));

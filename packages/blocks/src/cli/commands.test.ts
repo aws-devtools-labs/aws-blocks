@@ -1795,4 +1795,28 @@ describe('blocks dev stop', () => {
 			assert.doesNotMatch(run.stderr, /generateClient/);
 		}
 	});
+
+	it('without --port, stops the only dev server recorded on another port, and lists several', async () => {
+		const cwd = fixtureApp();
+		mkdirSync(join(cwd, '.blocks-sandbox'));
+		writeFileSync(join(cwd, '.blocks-sandbox', 'dev-server.4000.pid'), '');
+		const one = stopCore();
+		const run = await runCli(['dev', 'stop'], { cwd, core: one.core });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(one.stops, [4000]);
+		assert.match(run.stderr, /No dev server is recorded on :3000; stopping the one on :4000\./);
+		// An explicit --port is what the user asked for.
+		const explicit = stopCore();
+		await runCli(['dev', 'stop', '--port', '3000'], { cwd, core: explicit.core });
+		assert.deepStrictEqual(explicit.stops, [3000]);
+		writeFileSync(join(cwd, '.blocks-sandbox', 'dev-server.4001.pid'), '');
+		const several = stopCore();
+		const listed = await runCli(['dev', 'stop'], { cwd, core: several.core });
+		assert.strictEqual(listed.code, 0, listed.stderr);
+		assert.deepStrictEqual(several.stops, [3000]);
+		assert.match(
+			listed.stderr,
+			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with blocks dev stop --port <port>, or all of them with blocks dev stop --all\./,
+		);
+	});
 });

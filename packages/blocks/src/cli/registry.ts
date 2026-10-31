@@ -210,7 +210,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Stop the local dev server this app started',
 		description:
 			'Stop the local dev server that this app started on the port. It acts only on the process\n' +
-			'that the dev server recorded for itself, never on another process that holds the port.',
+			'that the dev server recorded for itself, never on another process that holds the port.\n' +
+			'Without --port, when nothing is recorded on the configured port but exactly one dev server\n' +
+			'is recorded on another (blocks dev --port N), it stops that one.',
 		flags: [
 			{
 				name: 'port',
