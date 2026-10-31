@@ -9,7 +9,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import { resolveDevConfig } from './config.js';
@@ -632,13 +632,20 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 }
 
 export async function generateTypes(ctx: Context, input: CommandInput): Promise<number> {
-	ctx.enterRoot();
+	const root = ctx.enterRoot();
 	const { flags } = input;
 	const argv: string[] = [];
 	if (flags.check === true) argv.push('--check');
 	if (flags.watch === true) argv.push('--watch');
-	if (typeof flags.out === 'string') argv.push('--out', flags.out);
-	for (const glob of Array.isArray(flags.include) ? flags.include : []) argv.push('--include', glob);
+	// typegen runs from the root; a relative --out or --include names a path from where the user is.
+	if (typeof flags.out === 'string') argv.push('--out', resolve(ctx.startDir, flags.out));
+	for (const glob of Array.isArray(flags.include) ? flags.include : []) {
+		const negated = glob.startsWith('!');
+		const fromRoot = relative(root, resolve(ctx.startDir, negated ? glob.slice(1) : glob))
+			.split(sep)
+			.join('/');
+		argv.push('--include', `${negated ? '!' : ''}${fromRoot}`);
+	}
 	for (const spec of Array.isArray(flags.module) ? flags.module : []) argv.push('--module', spec);
 	const core = await ctx.core();
 	let code: number;
@@ -679,7 +686,10 @@ export function resolvePackageBin(root: string, packageName: string, bin: string
 
 export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const verbs = findCommand(['db'])?.verbs ?? [];
-	const [verb] = input.passthrough;
+	// bb-data reads no `--`: drop the one that ended the CLI's own options.
+	const dashes = input.passthrough.indexOf('--');
+	const passthrough = input.passthrough.filter((_, i) => i !== dashes);
+	const [verb] = passthrough;
 	if (verb === undefined) {
 		throw new UsageError('"blocks db" needs a verb: migrate, status, generate-types or pull.', {
 			hint: 'blocks db --help',
@@ -704,12 +714,36 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
 	if (!cli) throw new CliError('cannot find the bb-data CLI of @aws-blocks/bb-data.', { hint: 'npm install' });
 	return runChild(ctx, {
-		operation: `blocks db ${input.passthrough[0]}`,
+		operation: `blocks db ${verb}`,
 		tool: 'bb-data',
 		command: process.execPath,
-		args: [cli, ...input.passthrough],
+		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough))],
 		cwd: root,
 	});
+}
+
+/**
+ * The bb-data arguments, with each path made absolute from `startDir`: bb-data
+ * runs from the project root, and a path such as `./migrations` names the
+ * user's own directory. The values of `--url` and `--stage` are not paths.
+ */
+function dbArgsFrom(startDir: string, passthrough: readonly string[]): string[] {
+	const [verb, ...rest] = passthrough;
+	const args = [verb];
+	for (let i = 0; i < rest.length; i++) {
+		const token = rest[i];
+		if (token === '--url' || token === '--stage') {
+			args.push(token);
+			if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('--')) args.push(rest[++i]);
+		} else if (token.startsWith('--regenerate-types=')) {
+			args.push(`--regenerate-types=${resolve(startDir, token.slice('--regenerate-types='.length))}`);
+		} else if (token.startsWith('-') || /^[a-z][a-z0-9+.-]*:\/\//i.test(token)) {
+			args.push(token);
+		} else {
+			args.push(resolve(startDir, token));
+		}
+	}
+	return args;
 }
 
 // ── Project ──────────────────────────────────────────────────────────────────

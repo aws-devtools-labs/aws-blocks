@@ -142,6 +142,51 @@ describe('passthrough commands', () => {
 		assert.strictEqual(spec.cwd, root);
 	});
 
+	it('resolves the relative paths of db and generate types from the directory the command runs in', async () => {
+		const root = fixtureApp();
+		const sub = join(root, 'aws-blocks');
+		const db = await runCli(['db', 'status', './migrations', '--url', 'postgres://x', '--stage', 's'], {
+			cwd: sub,
+		});
+		assert.strictEqual(db.code, 0, db.stderr);
+		assert.deepStrictEqual(db.spawned[0].args.slice(1), [
+			'status',
+			join(sub, 'migrations'),
+			'--url',
+			'postgres://x',
+			'--stage',
+			's',
+		]);
+		assert.strictEqual(db.spawned[0].cwd, root);
+		const types = await runCli(['db', 'generate-types', 'out.ts', '--regenerate-types=gen'], { cwd: sub });
+		assert.deepStrictEqual(types.spawned[0].args.slice(1), [
+			'generate-types',
+			join(sub, 'out.ts'),
+			`--regenerate-types=${join(sub, 'gen')}`,
+		]);
+		// bb-data reads no `--`; the CLI drops the one that ends its own options.
+		const dashes = await runCli(['db', 'migrate', '--', 'dir'], { cwd: root });
+		assert.deepStrictEqual(dashes.spawned[0].args.slice(1), ['migrate', 'dir']);
+
+		const argvs: string[][] = [];
+		const run = await runCli(
+			['generate', 'types', '--out', 'mine.d.ts', '--include', '*.ts', '--include', '!skip/**'],
+			{
+				cwd: sub,
+				core: {
+					runTypegenCli: async (argv: string[]) => {
+						argvs.push(argv);
+						return 0;
+					},
+				},
+			},
+		);
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(argvs, [
+			['--out', join(sub, 'mine.d.ts'), '--include', 'aws-blocks/*.ts', '--include', '!aws-blocks/skip/**'],
+		]);
+	});
+
 	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
 		const root = fixtureApp();
 		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });

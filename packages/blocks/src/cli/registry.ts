@@ -467,7 +467,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'a "--". "blocks db <verb> --help" shows its options.',
 		args: [
 			{ name: 'verb', description: 'migrate | status | generate-types | pull', required: true },
-			{ name: 'args', description: 'Forwarded unchanged', variadic: true },
+			{ name: 'args', description: 'Forwarded; a relative path is resolved from your directory', variadic: true },
 		],
 		passthrough: true,
 		verbs: ['migrate', 'status', 'generate-types', 'pull'],
