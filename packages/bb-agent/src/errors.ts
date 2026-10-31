@@ -27,6 +27,8 @@ export const AgentErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	StreamFailed: 'StreamFailedException',
 	InterruptRequired: 'InterruptRequiredException',
+	/** The conversation does not exist or does not belong to the calling user. */
+	ConversationNotFound: 'ConversationNotFoundException',
 	/** A client-side usage precondition was violated (e.g. subscribe() with no channel). */
 	InvalidUsage: 'InvalidUsageException',
 } as const;

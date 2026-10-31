@@ -697,6 +697,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
+		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
 		return {
@@ -753,6 +754,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		}
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
+		// Before anything is persisted or dispatched: a non-owner must not be able to
+		// approve (or `trust`) someone else's pending tool call.
+		await this.assertOwnsConversation(conversationId, userId);
 		// Persist each decision to conversation history
 		if (conversationId && this.messages) {
 			for (const r of responses) {
@@ -767,6 +771,30 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		}));
 		const context = this.resolveContext(options?.context);
 		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
+	}
+
+	/**
+	 * Whether `userId` owns `conversationId`. The messages table is partitioned by
+	 * conversationId and snapshot storage is keyed by sessionId alone, so neither is
+	 * user-scoped on its own. The conversation record IS keyed by { userId, conversationId }
+	 * (written by createConversationId), so its presence is the ownership proof.
+	 */
+	private async ownsConversation(conversationId: string, userId: string): Promise<boolean> {
+		if (!this.conversations) return false;
+		return !!(await this.conversations.get({ userId, conversationId }));
+	}
+
+	/**
+	 * Throws ConversationNotFound unless `userId` owns `conversationId`. A no-op for
+	 * inferenceOnly agents, which keep no conversation records to check against.
+	 * "Not found" covers both a missing and a foreign conversation so the error
+	 * doesn't confirm that another user's conversation exists.
+	 */
+	private async assertOwnsConversation(conversationId: string, userId: string): Promise<void> {
+		if (!this.conversations) return;
+		if (!(await this.ownsConversation(conversationId, userId))) {
+			throw blocksAgentError(AgentErrors.ConversationNotFound, `Conversation '${conversationId}' was not found for this user. Create it with createConversationId(userId) and pass the same userId to stream()/resume().`);
+		}
 	}
 
 	/**
@@ -799,15 +827,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 	/** Check if a conversation has pending (unanswered) interrupts by checking DynamoDB history.
 	 *
-	 * ⚠️ Does NOT verify ownership — it reads by conversationId alone. The caller must
-	 * authorize the request (e.g. confirm the conversation belongs to the authenticated
-	 * user via listConversations(userId)) before exposing the result. See the
-	 * "Authorization (caller responsibility)" section in the README.
+	 * Owner-scoped: returns an empty array unless `userId` owns the conversation, so a
+	 * non-owner can't read another user's pending tool calls (or their interrupt IDs).
 	 *
 	 * TODO: optimize — query in reverse with limit instead of loading all messages.
 	 */
-	async getPendingInterrupts(conversationId: string): Promise<Array<{ id: string; name: string; reason?: any }>> {
+	async getPendingInterrupts(conversationId: string, userId: string): Promise<Array<{ id: string; name: string; reason?: any }>> {
 		if (!this.messages) return [];
+		if (!(await this.ownsConversation(conversationId, userId))) return [];
 		// Single pass in reverse: collect approval IDs until we hit the interrupt
 		const approvedIds = new Set<string>();
 		let lastInterrupt: any = null;
@@ -842,7 +869,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * ⚠️ Does NOT verify ownership — it reads by conversationId alone. The caller must
 	 * authorize the request (e.g. confirm the conversation belongs to the authenticated
 	 * user via listConversations(userId)) before returning messages. See the
-	 * "Authorization (caller responsibility)" section in the README.
+	 * "Authorization" section in the README.
 	 *
 	 * @param options.limit - Maximum number of (most recent) messages to return.
 	 *   A `limit` of `0` returns an empty array, and any negative value is treated
@@ -877,16 +904,11 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Delete a conversation and its agent state. */
 	async deleteConversation(id: string, userId: string): Promise<void> {
 		if (!this.messages || !this.conversations) throw blocksAgentError(AgentErrors.PersistenceRequired, 'deleteConversation() requires persistence. Set inferenceOnly: false (default).');
-		// Verify ownership before any destructive work. The messages table is
-		// partitioned by conversationId (not userId) and snapshot storage is keyed
-		// by sessionId alone, so deleting them is NOT user-scoped on its own. The
-		// conversation record IS keyed by { userId, conversationId }, so its absence
-		// means the caller is not the owner (or the conversation doesn't exist).
-		// Without this guard, a non-owner could wipe another user's message history
-		// and session state while the owner's conversation record (a no-op keyed
-		// delete) survived. Bail out unless the caller owns the conversation.
-		const owned = await this.conversations.get({ userId, conversationId: id });
-		if (!owned) return;
+		// Verify ownership before any destructive work: deleting messages and session
+		// state is NOT user-scoped on its own (see ownsConversation). Without this guard,
+		// a non-owner could wipe another user's message history and session state while
+		// the owner's conversation record (a no-op keyed delete) survived.
+		if (!(await this.ownsConversation(id, userId))) return;
 		// Delete conversation record first — if it fails mid-way, orphaned messages are invisible (better than broken conversation with missing messages)
 		await this.conversations.delete({ userId, conversationId: id });
 		// Delete all messages in batch

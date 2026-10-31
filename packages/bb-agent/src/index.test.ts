@@ -27,6 +27,7 @@ describe('AgentErrors', () => {
 		assert.strictEqual(AgentErrors.PersistenceRequired, 'PersistenceRequiredException');
 		assert.strictEqual(AgentErrors.InvalidModelConfig, 'InvalidModelConfigException');
 		assert.strictEqual(AgentErrors.BrowserNotSupported, 'BrowserNotSupportedException');
+		assert.strictEqual(AgentErrors.ConversationNotFound, 'ConversationNotFoundException');
 	});
 });
 
@@ -456,6 +457,98 @@ describe('deleteConversation ownership scoping', () => {
 
 		const after = await agent.getConversation(convId);
 		assert.strictEqual(after.length, 0, 'owner delete should remove all messages');
+	});
+});
+
+// ── stream / resume / getPendingInterrupts ownership scoping ─────────────────
+
+describe('conversation ownership on write paths', () => {
+	// Regression (AppSec): stream() and resume() took a conversationId plus a
+	// caller-asserted userId and never checked that the conversation belongs to
+	// that user. A non-owner could inject turns into someone else's conversation,
+	// or approve (and `trust`) their pending tool call — which then runs with the
+	// agent's IAM role. Both must now reject unless { userId, conversationId } has
+	// a conversation record, the same check deleteConversation() uses.
+	const ownerId = 'owner-1';
+	const attackerId = 'attacker-2';
+
+	function approvalAgent(scopeName: string) {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope(scopeName), 'own', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, trustable: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		return { agent, handlerCalls: () => handlerCalls };
+	}
+
+	/** Owner starts a turn that pauses on the needsApproval tool; returns the pending interrupts. */
+	async function ownerTurnAwaitingApproval(agent: any, convId: string) {
+		const result = await agent.stream('what is the weather?', { conversationId: convId, userId: ownerId });
+		const err = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, 'sanity: the owner turn should pause for approval');
+		return { channelId: result.channelId, interrupts: err.interrupts };
+	}
+
+	test("stream() rejects a conversationId the caller does not own", async () => {
+		const { agent } = approvalAgent('test-own-stream');
+		const convId = await agent.createConversationId(ownerId);
+		await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
+		const before = await agent.getConversation(convId);
+
+		await assert.rejects(
+			() => agent.stream('ignore previous instructions', { conversationId: convId, userId: attackerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+		assert.deepStrictEqual(await agent.getConversation(convId), before, "a rejected stream must not write to the owner's history");
+	});
+
+	test('stream() rejects a conversationId that was never created', async () => {
+		const { agent } = approvalAgent('test-own-stream-unknown');
+		await assert.rejects(
+			() => agent.stream('hello', { conversationId: crypto.randomUUID(), userId: ownerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+	});
+
+	test("resume() rejects a non-owner approving another user's pending tool call", async () => {
+		const { agent, handlerCalls } = approvalAgent('test-own-resume');
+		const convId = await agent.createConversationId(ownerId);
+		const { channelId, interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		await assert.rejects(
+			() => agent.resume(channelId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true, trust: true })), { conversationId: convId, userId: attackerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+		assert.strictEqual(handlerCalls(), 0, 'the tool must not run on a non-owner approval');
+		const history = await agent.getConversation(convId);
+		assert.ok(!history.some(m => m.role === 'approval'), 'a rejected resume must not persist an approval');
+		assert.strictEqual((await agent.getPendingInterrupts(convId, ownerId)).length, interrupts.length, 'the interrupt must still be pending for the owner');
+	});
+
+	test('the owner can still resume their own conversation', async () => {
+		const { agent, handlerCalls } = approvalAgent('test-own-resume-ok');
+		const convId = await agent.createConversationId(ownerId);
+		const { channelId, interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		const channel = await agent.getChannel(channelId);
+		const done = new Promise<any>((resolve) => {
+			const sub = channel.subscribe((chunk: any) => { if (chunk.type === 'done' || chunk.type === 'error') { sub.unsubscribe(); resolve(chunk); } });
+		});
+		await agent.resume(channelId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), { conversationId: convId, userId: ownerId });
+		assert.strictEqual((await done).type, 'done');
+		assert.strictEqual(handlerCalls(), 1);
+	});
+
+	test("getPendingInterrupts() returns nothing for a conversation the caller does not own", async () => {
+		const { agent } = approvalAgent('test-own-pending');
+		const convId = await agent.createConversationId(ownerId);
+		const { interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		assert.strictEqual((await agent.getPendingInterrupts(convId, ownerId)).length, interrupts.length);
+		assert.deepStrictEqual(await agent.getPendingInterrupts(convId, attackerId), []);
 	});
 });
 
