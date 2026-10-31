@@ -381,6 +381,11 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 }
 
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {
+	if (input.flags.all === true && input.flags.port !== undefined) {
+		throw new UsageError('--all stops every dev server this app recorded: it cannot be combined with --port.', {
+			hint: 'blocks dev stop --port <port>, or blocks cleanup (dev stop --all)',
+		});
+	}
 	const root = ctx.enterRoot();
 	const core = await ctx.core();
 	let ports: number[];

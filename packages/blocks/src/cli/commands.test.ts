@@ -1726,3 +1726,43 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 		});
 	});
 });
+
+describe('blocks dev stop', () => {
+	/** A core whose stopDevServer records the ports it is asked to stop, and finds nothing running. */
+	function stopCore() {
+		const stops: number[] = [];
+		return {
+			stops,
+			core: {
+				stopDevServer: async (port = 3000) => {
+					stops.push(port);
+					return {
+						port,
+						stopped: false,
+						alreadyStopped: true,
+						portFree: true,
+						record: null,
+						pids: [],
+						via: 'none' as const,
+					};
+				},
+			},
+		};
+	}
+
+	it('rejects --port with --all, and with blocks cleanup, before it stops anything (exit 2)', async () => {
+		for (const argv of [
+			['dev', 'stop', '--all', '--port', '41020'],
+			['cleanup', '--port', '41020'],
+		]) {
+			const { stops, core } = stopCore();
+			const run = await runCli(argv, { cwd: fixtureApp(), core });
+			assert.strictEqual(run.code, 2, argv.join(' '));
+			assert.match(
+				run.stderr,
+				/^Error: --all stops every dev server this app recorded: it cannot be combined with --port\./,
+			);
+			assert.deepStrictEqual(stops, []);
+		}
+	});
+});
