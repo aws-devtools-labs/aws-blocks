@@ -15,7 +15,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type DevServerOptions, devPidfilePath, stopDevServer } from './dev-server.js';
+import { type DevServerOptions, devPidfilePath, readDevGenerateClient, stopDevServer } from './dev-server.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tsxCli = join(__dirname, '..', '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -307,5 +307,39 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.strictEqual(response.headers.get('access-control-allow-origin'), page);
     const foreign = await fetch(`http://${host}:${port}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } });
     assert.strictEqual(foreign.headers.get('access-control-allow-origin'), `http://${host}:${port}`);
+  });
+
+  it('keeps a hand-written client.js when package.json sets blocks.dev.generateClient to false', async () => {
+    const handWritten = '// Amplify overlay client: reads amplify_outputs.json\nexport const api = {};\n';
+    const run = async (blocksDev: Record<string, unknown> | undefined): Promise<string> => {
+      const dir = makeApp();
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'app', private: true, type: 'module', blocks: blocksDev && { dev: blocksDev } }));
+      writeFileSync(join(dir, 'client.js'), handWritten);
+      const port = await freePort();
+      const dev = startDev(dir, { port });
+      await waitFor('the server', () => serving(port), [dev]);
+      killGroup(dev.child, 'SIGTERM');
+      await dev.exited;
+      return readFileSync(join(dir, 'client.js'), 'utf-8');
+    };
+    assert.strictEqual(await run({ generateClient: false }), handWritten);
+    assert.notStrictEqual(await run(undefined), handWritten, 'by default the dev server regenerates it');
+  });
+});
+
+describe('readDevGenerateClient', () => {
+  const withPackage = (body: string): boolean | undefined => {
+    const dir = makeApp();
+    writeFileSync(join(dir, 'package.json'), body);
+    return readDevGenerateClient(dir);
+  };
+
+  it('reads a boolean, and treats anything else as unset', () => {
+    assert.strictEqual(withPackage(JSON.stringify({ blocks: { dev: { generateClient: false } } })), false);
+    assert.strictEqual(withPackage('\uFEFF' + JSON.stringify({ blocks: { dev: { generateClient: true } } })), true);
+    assert.strictEqual(withPackage(JSON.stringify({ blocks: { dev: { port: 3001 } } })), undefined);
+    assert.strictEqual(withPackage(JSON.stringify({ blocks: { dev: { generateClient: 'no' } } })), undefined);
+    assert.strictEqual(withPackage('not json'), undefined);
+    assert.strictEqual(readDevGenerateClient(join(tmpdir(), 'no-such-app-dir')), undefined);
   });
 });
