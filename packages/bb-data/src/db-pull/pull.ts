@@ -393,42 +393,106 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
 
 // ── Interactive CLI ────────────────────────────────────────────────────
 
-function prompt(question: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
-    rl.question(question, answer => { rl.close(); resolve(answer.trim()); });
+/** Streams an interactive prompt reads from and writes to (stdin/stdout by default). */
+export interface PromptIO {
+  input: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?(mode: boolean): unknown };
+  output: NodeJS.WritableStream;
+}
+
+/** A prompt ended without an answer: Ctrl-C (exit code 130) or stdin closed (exit code 1). */
+export class PromptAbortedError extends Error {
+  constructor(message: string, readonly exitCode: number) {
+    super(message);
+    this.name = 'PromptAbortedError';
+  }
+}
+
+const INTERRUPTED = 'Interrupted.';
+const STDIN_CLOSED = 'stdin closed before an answer was given.';
+
+/** Reads one line. Rejects with {@link PromptAbortedError} on Ctrl-C or EOF. */
+export function readAnswer(question: string, io: PromptIO = { input: process.stdin, output: process.stdout }): Promise<string> {
+  let resolve!: (answer: string) => void, reject!: (err: PromptAbortedError) => void;
+  const promise = new Promise<string>((res, rej) => { resolve = res; reject = rej; });
+  const rl = readline.createInterface({ input: io.input, output: io.output, terminal: io.input.isTTY === true });
+  let settled = false;
+  rl.on('SIGINT', () => {
+    io.output.write('\n');
+    settled = true;
+    reject(new PromptAbortedError(INTERRUPTED, 130));
+    rl.close();
   });
+  rl.on('close', () => {
+    if (settled) return;
+    io.output.write('\n');
+    reject(new PromptAbortedError(STDIN_CLOSED, 1));
+  });
+  rl.question(question, answer => {
+    settled = true;
+    resolve(answer.trim());
+    rl.close();
+  });
+  return promise;
+}
+
+/**
+ * Reads a secret without echoing it. Input is handled one character at a time,
+ * so a paste that ends in Enter is submitted at once; anything after the Enter
+ * in the same chunk is discarded. Rejects with {@link PromptAbortedError} on
+ * Ctrl-C, or on Ctrl-D / EOF before anything was typed.
+ */
+export function readSecret(question: string, io: PromptIO = { input: process.stdin, output: process.stdout }): Promise<string> {
+  const { input, output } = io;
+  let resolve!: (answer: string) => void, reject!: (err: PromptAbortedError) => void;
+  const promise = new Promise<string>((res, rej) => { resolve = res; reject = rej; });
+  output.write(question);
+  const raw = input.isTTY === true && typeof input.setRawMode === 'function';
+  if (raw) input.setRawMode!(true);
+  let secret = '';
+  const finish = (err?: PromptAbortedError) => {
+    input.removeListener('data', onData);
+    input.removeListener('end', onEnd);
+    if (raw) input.setRawMode!(false);
+    input.pause();
+    output.write('\n');
+    if (err) reject(err);
+    else resolve(secret);
+  };
+  const onEnd = () => finish(secret ? undefined : new PromptAbortedError(STDIN_CLOSED, 1));
+  const onData = (chunk: Buffer | string) => {
+    for (const c of chunk.toString()) {
+      if (c === '\x03') return finish(new PromptAbortedError(INTERRUPTED, 130));
+      if (c === '\r' || c === '\n') return finish();
+      if (c === '\x04') {
+        if (!secret) return finish(new PromptAbortedError(STDIN_CLOSED, 1));
+      } else if (c === '\x7f' || c === '\b') {
+        secret = [...secret].slice(0, -1).join('');
+      } else if (c >= ' ') {
+        secret += c;
+      }
+    }
+  };
+  input.on('data', onData);
+  input.on('end', onEnd);
+  input.resume();
+  return promise;
+}
+
+/** CLI prompt boundary: an aborted prompt exits with its exit code. */
+function exitOnAbort(err: unknown): never {
+  if (err instanceof PromptAbortedError) {
+    console.error(`✗ ${err.message}`);
+    process.exit(err.exitCode);
+  }
+  throw err;
+}
+
+function prompt(question: string): Promise<string> {
+  return readAnswer(question).catch(exitOnAbort);
 }
 
 function promptPassword(question: string): Promise<string> {
-  return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    process.stdout.write(question);
-    const stdin = process.stdin;
-    if (stdin.isTTY) stdin.setRawMode(true);
-    let password = '';
-    const onData = (ch: Buffer) => {
-      const c = ch.toString();
-      if (c === '\x03') {
-        if (stdin.isTTY) stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        rl.close();
-        process.exit(130);
-      } else if (c === '\n' || c === '\r') {
-        if (stdin.isTTY) stdin.setRawMode(false);
-        stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        rl.close();
-        resolve(password);
-      } else if (c === '\u007f' || c === '\b') {
-        password = password.slice(0, -1);
-      } else {
-        password += c;
-      }
-    };
-    stdin.on('data', onData);
-    stdin.resume();
-  });
+  return readSecret(question).catch(exitOnAbort);
 }
 
 // ── Provider detection + dev/prod routing helpers ──────────────────────
