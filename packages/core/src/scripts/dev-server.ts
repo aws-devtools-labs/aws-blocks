@@ -345,14 +345,23 @@ export function shouldCreditFrontendReady(
 
 // ── Startup / EADDRINUSE port reclaim ──────────────────────────────────────
 
+/** A process holding a port that the dev server can't prove it started. */
+export interface PortHolder {
+  pid: number;
+  /** Its command line; '' when it can't be read. */
+  command: string;
+}
+
 /** Outcome of {@link reclaimPort}. */
 export interface ReclaimResult {
   /** Whether the port was bound when reclaim started. */
   wasOpen: boolean;
   /** Whether the port is free once reclaim finishes (true when it was never open). */
   reclaimed: boolean;
-  /** Listener PIDs discovered (and signalled). Empty when the port was free, or no owner PID was found. */
+  /** Listener PIDs signalled. Empty when the port was free, or nothing on it was ours. */
   pids: number[];
+  /** Listeners left alone because they aren't this app's (see {@link ReclaimPortDeps.owned}). */
+  foreign: PortHolder[];
 }
 
 /** Injectable seams for {@link reclaimPort} (real implementations by default). */
@@ -361,6 +370,14 @@ export interface ReclaimPortDeps {
   probe: (port: number) => Promise<boolean>;
   /** PIDs of the listener(s) holding the port. */
   listPids: (port: number) => number[];
+  /**
+   * True iff a listener is provably this app's leftover — in practice a process
+   * in the frontend process group the app's previous dev server recorded.
+   * Default: nothing is, so nothing is ever signalled.
+   */
+  owned: (pid: number) => boolean;
+  /** A listener's command line, to name a foreign holder. */
+  commandOf: (pid: number) => string;
   /** Terminate a listener PID's tree (POSIX group kill / Windows taskkill). */
   killTree: (pid: number, signal: NodeJS.Signals) => void;
   /** Wait (bounded) for the port to be released. */
@@ -368,77 +385,81 @@ export interface ReclaimPortDeps {
 }
 
 /**
- * Free a port left bound by a crashed / SIGKILL'd predecessor so a fresh dev
- * server can bind the `:3000` front door — or spawn its `--strictPort` frontend
- * on `:3100` — instead of colliding on it and crashing.
+ * Free a port left bound by this app's crashed / SIGKILL'd previous dev server
+ * (typically its detached Vite group on `:3100`), so a fresh start can bind the
+ * front door or spawn its `--strictPort` frontend instead of colliding.
  *
- * No-op when the port is already free. Otherwise it discovers the listener PID(s)
- * ({@link findListenerPids}, an `lsof`/`netstat` probe — the same fuser-style
- * mechanism `cleanup` uses), SIGTERMs each ({@link killListenerTree}, which
- * reuses the frontend process-group kill), waits (bounded) for release
- * ({@link waitForPortFree}), then escalates to SIGKILL if the port is still held.
- * This deliberately mirrors the respawn path (process-group kill + port-free
- * wait) rather than inventing a new teardown mechanism.
+ * Only listeners that {@link ReclaimPortDeps.owned} proves are ours are ever
+ * signalled. If anything else holds the port — an unrelated process, another
+ * app's dev server or frontend — nothing is signalled and the holders come
+ * back in `foreign`, for the caller to report. A port held by a listener whose
+ * pid can't be found is left alone too.
  *
- * The caller is responsible for NOT reclaiming a *healthy peer* dev server — the
- * singleton guard ({@link evaluateSingleton}) runs first and bows out when a live
- * peer owns the front door, so anything still holding these ports here is an
- * orphan. Dependencies are injected for tests; returns what it did for
- * logging/assertions. Best-effort: never throws.
+ * Owned listeners get a SIGTERM ({@link killListenerTree}, the frontend
+ * process-group kill), a bounded wait for release ({@link waitForPortFree}),
+ * then a SIGKILL for whichever owned listeners still hold it. Dependencies are
+ * injected for tests. Best-effort: never throws.
  *
  * Probe contract: the default `probe` is {@link isPortOpen} with no host, which
- * checks BOTH `127.0.0.1` and `::1`, so an orphan holding the port on either
- * loopback family is detected (and thus reclaimed) — a single-family `localhost`
- * probe could miss it and no-op.
+ * checks BOTH `127.0.0.1` and `::1`, so a listener on either loopback family is
+ * detected — a single-family `localhost` probe could miss it.
  */
 export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> = {}): Promise<ReclaimResult> {
   const probe = deps.probe ?? ((p) => isPortOpen(p));
   const listPids = deps.listPids ?? ((p) => findListenerPids(p));
+  const owned = deps.owned ?? (() => false);
+  const commandOf = deps.commandOf ?? ((pid) => pidCommand(pid));
   const killTree = deps.killTree ?? ((pid, sig) => killListenerTree(pid, sig));
   const waitFree = deps.waitFree ?? ((p, t) => waitForPortFree(p, t));
 
-  if (!(await probe(port))) return { wasOpen: false, reclaimed: true, pids: [] };
+  if (!(await probe(port))) return { wasOpen: false, reclaimed: true, pids: [], foreign: [] };
 
+  const foreignOf = (pids: number[]): PortHolder[] =>
+    pids.filter((pid) => !owned(pid)).map((pid) => ({ pid, command: commandOf(pid) }));
   const pids = listPids(port);
+  const foreign = foreignOf(pids);
+  if (pids.length === 0 || foreign.length > 0) return { wasOpen: true, reclaimed: false, pids: [], foreign };
+
   for (const pid of pids) killTree(pid, 'SIGTERM');
   await waitFree(port, 2000);
 
   if (await probe(port)) {
     // Still held after a graceful SIGTERM — escalate to SIGKILL. ALWAYS re-list
-    // first: the owner set can change during the wait — the original process may
-    // have exited and a NEW one grabbed the port, so SIGKILLing the stale `pids`
-    // would miss the real owner. Fall back to the stale list only if the re-list
-    // comes back empty (e.g. lsof was momentarily unavailable).
-    const killPids = listPids(port);
-    for (const pid of killPids.length ? killPids : pids) killTree(pid, 'SIGKILL');
+    // first: the original process may have exited and a NEW one grabbed the
+    // port, which must be judged afresh, not killed on the old verdict.
+    const holders = listPids(port);
+    const now = foreignOf(holders);
+    if (now.length > 0) return { wasOpen: true, reclaimed: false, pids, foreign: now };
+    for (const pid of holders) killTree(pid, 'SIGKILL');
     await waitFree(port, 2000);
   }
 
-  return { wasOpen: true, reclaimed: !(await probe(port)), pids };
+  return { wasOpen: true, reclaimed: !(await probe(port)), pids, foreign: [] };
 }
 
 /**
- * Build the console message for a startup reclaim of a port that was in use,
- * distinguishing the three meaningfully different outcomes so the operator knows
- * what (if anything) to do next:
- *  - reclaimed → we freed it; startup continues.
- *  - not reclaimed but owner PID(s) known → tell the operator exactly which
- *    process(es) to stop and retry.
- *  - not reclaimed and no owner PID found → nothing to point at (lsof/netstat
- *    found no listener), so surface the generic "in use" message.
- * `subject` describes what was reclaimed (e.g. 'a stale/orphaned listener'). Pure.
+ * Describe who holds a port that {@link reclaimPort} could not free, for an
+ * error: `port 3100 is in use by pid 4242 (python3 -m http.server 3100)`. Pure.
+ */
+export function describePortHolders(port: number, result: ReclaimResult): string {
+  if (result.foreign.length > 0) {
+    const holders = result.foreign.map(({ pid, command }) => `pid ${pid}${command ? ` (${command})` : ''}`);
+    return `port ${port} is in use by ${holders.join(', ')}`;
+  }
+  if (result.pids.length > 0) return `port ${port} is still held by pid(s) ${result.pids.join(', ')} after SIGKILL`;
+  return `port ${port} is in use (its owner could not be found)`;
+}
+
+/**
+ * The console line for a reclaim of a port that was in use: `♻️` when it was
+ * freed, else a `⚠️` with {@link describePortHolders}. `subject` names what was
+ * reclaimed (e.g. "this app's previous dev server"). Pure.
  */
 export function reclaimMessage(port: number, result: ReclaimResult, subject: string): string {
   if (result.reclaimed) {
     return `♻️  Reclaimed port ${port} from ${subject} before startup.`;
   }
-  if (result.pids.length > 0) {
-    return (
-      `⚠️  Port ${port} held by pid(s) [${result.pids.join(', ')}] and could not be freed — ` +
-      `stop that process and retry.`
-    );
-  }
-  return `⚠️  Port ${port} is in use and could not be reclaimed automatically (no owner PID found).`;
+  return `⚠️  ${describePortHolders(port, result)}; not stopping it.`;
 }
 
 /** Bounded retry policy for binding the `:3000` front door under EADDRINUSE. */
@@ -553,6 +574,12 @@ export interface DevServerPidRecord {
   command?: string;
   /** `ppid`'s command line when the record was written; see {@link command}. */
   parentCommand?: string;
+  /**
+   * The frontend dev server this process started (POSIX only): its process
+   * group and port. A later start of this app may reclaim the port from
+   * processes in that group — and from nothing else (see {@link reclaimPort}).
+   */
+  frontend?: { pgid: number; port: number };
 }
 
 /** Parse a pidfile body into a {@link DevServerPidRecord}; `null` if absent/corrupt/incomplete. */
@@ -563,6 +590,9 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
       const record: DevServerPidRecord = { pid: o.pid, ppid: o.ppid, port: o.port };
       if (typeof o.command === 'string') record.command = o.command;
       if (typeof o.parentCommand === 'string') record.parentCommand = o.parentCommand;
+      if (o.frontend && Number.isInteger(o.frontend.pgid) && o.frontend.pgid > 1 && Number.isInteger(o.frontend.port)) {
+        record.frontend = { pgid: o.frontend.pgid, port: o.frontend.port };
+      }
       return record;
     }
   } catch {
@@ -594,6 +624,18 @@ function pidCommand(pid: number): string {
     return (stdout ?? '').trim();
   } catch {
     return '';
+  }
+}
+
+/** `pid`'s process group (`ps -o pgid=`), or undefined when it can't be read (or on Windows). */
+function processGroupOf(pid: number): number | undefined {
+  if (process.platform === 'win32') return undefined;
+  try {
+    const { stdout } = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf-8', timeout: 3000 });
+    const pgid = Number((stdout ?? '').trim());
+    return Number.isInteger(pgid) && pgid > 1 ? pgid : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -887,20 +929,33 @@ export async function startDevServer(options: DevServerOptions) {
     }
     try { unlinkSync(claimPath); } catch { /* already gone */ }
   };
-  {
-    mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
-    const claim = claimDevPidfile(pidfilePath, {
-      pid: process.pid,
-      ppid: process.ppid,
-      port,
-      command: pidCommand(process.pid),
-      parentCommand: pidCommand(process.ppid),
-    });
-    if (!claim.acquired) {
-      failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(port)}\`, or use another --port.`);
-      return;
-    }
+  const selfRecord: DevServerPidRecord = {
+    pid: process.pid,
+    ppid: process.ppid,
+    port,
+    command: pidCommand(process.pid),
+    parentCommand: pidCommand(process.ppid),
+  };
+  mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
+  const claim = claimDevPidfile(pidfilePath, selfRecord);
+  if (!claim.acquired) {
+    failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(port)}\`, or use another --port.`);
+    return;
   }
+  // The only processes this start may stop to free a port: those in the
+  // frontend group that the record it took over (a crashed predecessor, or its
+  // own `tsx watch` predecessor) wrote down.
+  const leftoverGroup = claim.previous?.frontend?.pgid;
+  const ownedLeftover = (pid: number): boolean => leftoverGroup !== undefined && processGroupOf(pid) === leftoverGroup;
+  /** Rewrite our pidfile with the frontend group we now run, while the pidfile is still ours. */
+  const recordFrontend = (pgid: number): void => {
+    try {
+      if (parsePidRecord(readFileSync(pidfilePath, 'utf-8'))?.pid !== process.pid) return;
+      const tmp = `${pidfilePath}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ ...selfRecord, frontend: { pgid, port: frontendPort } }));
+      renameSync(tmp, pidfilePath);
+    } catch { /* best effort: only a later reclaim of this frontend's port depends on it */ }
+  };
 
   // Load .env.local if present (connection strings, project refs, etc.)
   try { process.loadEnvFile('.env.local'); } catch (e: any) {
@@ -1047,6 +1102,8 @@ export async function startDevServer(options: DevServerOptions) {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
     frontendProcess = child;
+    // Detached on POSIX, so its pid is its group id: what a later start of this app may reclaim the port from.
+    if (usePosixProcessGroups && child.pid) recordFrontend(child.pid);
 
     // Suppress frontend output — only show errors.
     child.stderr?.on('data', (d: Buffer) => {
@@ -1270,26 +1327,29 @@ export async function startDevServer(options: DevServerOptions) {
   const stopTypegen = options.typegen === false ? undefined : await startTypegenWatch();
 
   // ── Startup reclaim ──────────────────────────────────────────────────────
-  // Free any port left bound by a crashed / SIGKILL'd predecessor before we bind
-  // the front door or spawn the `--strictPort` frontend. tsx-watch only gives the
-  // previous process ~5s to run cleanup(); if it was SIGKILL'd or crashed, its
-  // detached Vite grandchild (or an orphaned backend) can still hold :3100/:3000
-  // and a fresh `--strictPort` start would collide and crash. The singleton guard
-  // above already ruled out a live *peer* supervisor, so anything still holding
-  // these ports is an orphan — reclaim it (see {@link reclaimPort}).
-  // A successful reclaim (♻️) is an informational confirmation → stdout; a
-  // failed reclaim (⚠️) is a warning the operator must act on → stderr. Keeping
-  // healthy-startup output off stderr avoids false alarms in CI pipelines that
-  // treat any stderr line as a failure.
-  const r3000 = await reclaimPort(port);
-  if (r3000.wasOpen) {
-    (r3000.reclaimed ? log.progress : console.error)(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
-  }
-  if (frontendCommand) {
-    const rFrontend = await reclaimPort(frontendPort);
-    if (rFrontend.wasOpen) {
-      (rFrontend.reclaimed ? log.progress : console.error)(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
+  // Free a port left bound by this app's crashed / SIGKILL'd predecessor before
+  // we bind the front door or spawn the `--strictPort` frontend: tsx watch gives
+  // the previous process ~5s to run cleanup(), and if it was SIGKILL'd its
+  // detached Vite group can still hold :3100. Only that recorded group is ever
+  // stopped. Any other holder — an unrelated process, another app's dev server
+  // or frontend on the same port — ends the start with its pid and command
+  // (see {@link reclaimPort}).
+  const reclaimDeps = {
+    owned: ownedLeftover,
+    killTree: (pid: number, signal: NodeJS.Signals) => killListenerTree(leftoverGroup ?? pid, signal),
+  };
+  const ports: Array<[number, string]> = [[port, '--port']];
+  if (frontendCommand) ports.push([frontendPort, '--frontend-port']);
+  for (const [p, option] of ports) {
+    const result = await reclaimPort(p, reclaimDeps);
+    if (!result.wasOpen) continue;
+    if (result.reclaimed) {
+      log.progress(reclaimMessage(p, result, "this app's previous dev server"));
+      continue;
     }
+    removeOwnPidfile();
+    failDevStartup(describePortHolders(p, result), `Stop that process, or choose another port with ${option}.`);
+    return;
   }
 
   // ── Start listening ────────────────────────────────────────────────────
@@ -1314,7 +1374,7 @@ export async function startDevServer(options: DevServerOptions) {
   // and listen); the retry closes that window. The retry wiring lives in the
   // testable {@link createBindRetryController}; telemetry stays here.
   const onEaddrinuse = createBindRetryController(port, {
-    reclaim: (p) => reclaimPort(p),
+    reclaim: (p) => reclaimPort(p, reclaimDeps),
     relisten: () => server.listen(port, host, onListening),
     scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => failDevStartup(`port ${port} is still in use`, 'Stop the process that holds it, or use another --port.'),
