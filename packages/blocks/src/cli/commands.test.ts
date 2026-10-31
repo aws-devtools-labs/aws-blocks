@@ -187,6 +187,28 @@ describe('passthrough commands', () => {
 		]);
 	});
 
+	it('rejects generate types flags that typegen cannot use, as usage errors', async () => {
+		const cwd = fixtureApp();
+		const argvs: string[][] = [];
+		const core = {
+			runTypegenCli: async (argv: string[]) => {
+				argvs.push(argv);
+				return 0;
+			},
+		};
+		for (const [argv, message] of [
+			[['--check', '--watch'], /^Error: choose --check or --watch, not both\.\n/],
+			[['--out='], /^Error: option --out needs a non-empty value\.\n/],
+			[['--include='], /option --include needs a non-empty value/],
+			[['--module=', '--out', 'x.d.ts'], /option --module needs a non-empty value/],
+		] as const) {
+			const run = await runCli(['generate', 'types', ...argv], { cwd, core });
+			assert.strictEqual(run.code, 2, argv.join(' '));
+			assert.match(run.stderr, message);
+		}
+		assert.deepStrictEqual(argvs, []);
+	});
+
 	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
 		const root = fixtureApp();
 		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });

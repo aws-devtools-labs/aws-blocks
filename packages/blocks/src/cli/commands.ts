@@ -632,8 +632,17 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 }
 
 export async function generateTypes(ctx: Context, input: CommandInput): Promise<number> {
-	const root = ctx.enterRoot();
 	const { flags } = input;
+	if (flags.check === true && flags.watch === true) {
+		throw new UsageError('choose --check or --watch, not both.', { hint: 'blocks generate types --help' });
+	}
+	for (const name of ['out', 'include', 'module']) {
+		const values = ([] as unknown[]).concat(flags[name] ?? []);
+		if (values.some((value) => value === '')) {
+			throw new UsageError(`option --${name} needs a non-empty value.`, { hint: 'blocks generate types --help' });
+		}
+	}
+	const root = ctx.enterRoot();
 	const argv: string[] = [];
 	if (flags.check === true) argv.push('--check');
 	if (flags.watch === true) argv.push('--watch');
