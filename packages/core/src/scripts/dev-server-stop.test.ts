@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import {
   stopDevServer,
   stopMessage,
+  isStopWarning,
   runStopCli,
   devPidfilePath,
   parsePortArg,
@@ -155,6 +156,45 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   });
 });
 
+describe('stopDevServer — what it reports when nothing of this app runs', () => {
+  it('names the foreign process that holds the port, without signalling it', async () => {
+    const { deps, sigs } = makeDeps({
+      readPidfile: () => null,
+      probe: async () => true,
+      listPids: () => [4321],
+      commandOf: (pid) => (pid === 4321 ? 'python3 -m http.server 3000' : ''),
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(r.holders, [{ pid: 4321, command: 'python3 -m http.server 3000' }]);
+    assert.deepEqual(sigs, []);
+    const message = stopMessage(r);
+    assert.doesNotMatch(message, /nothing to stop/);
+    assert.match(message, /held by another process, which was not stopped: pid 4321 \(python3 -m http\.server 3000\)/);
+  });
+
+  it('removes an unreadable pidfile, so --all stops listing its port', async () => {
+    const { deps, removed } = makeDeps({ readPidfile: () => 'garbage' });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it('treats a recorded child whose pid now runs another command as gone', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 777, ppid: 500, port: 3000, command: 'node run-dev.ts' }),
+      isAlive: (pid) => pid === 777,
+      commandOf: () => 'postgres: writer',
+      probe: async () => true,
+      listPids: () => [777],
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)], 'the stale record is cleared');
+  });
+});
+
 /** Per-call probe sequencer shared across both ports (front door only here). */
 function seqProbe(states: boolean[]): (port: number) => Promise<boolean> {
   const s = seq(states);
@@ -162,7 +202,7 @@ function seqProbe(states: boolean[]): (port: number) => Promise<boolean> {
 }
 
 describe('stopMessage', () => {
-  const base: StopResult = { port: 3000, stopped: false, alreadyStopped: true, record: null, via: 'none', pids: [], portFree: true };
+  const base: StopResult = { port: 3000, stopped: false, alreadyStopped: true, record: null, via: 'none', pids: [], portFree: true, holders: [] };
   it('says nothing-to-stop when already stopped', () => {
     assert.match(stopMessage(base), /nothing to stop/);
   });
@@ -196,6 +236,13 @@ describe('runStopCli', () => {
     assert.ok(logs.some((l) => /:3999/.test(l)));
     assert.notEqual(process.exitCode, 1);
     process.exitCode = prev;
+  });
+
+  it('sends the still-bound warning to stderr and only that case is a warning', () => {
+    const base: StopResult = { port: 3000, stopped: true, alreadyStopped: false, record: null, via: 'watcher', pids: [1], portFree: false, holders: [] };
+    assert.equal(isStopWarning(base), true);
+    assert.equal(isStopWarning({ ...base, portFree: true }), false);
+    assert.equal(isStopWarning({ ...base, alreadyStopped: true, stopped: false, via: 'none', pids: [] }), false);
   });
 
   it('parsePortArg feeds the CLI', () => {

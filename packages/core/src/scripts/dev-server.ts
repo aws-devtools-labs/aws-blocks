@@ -437,15 +437,17 @@ export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> =
   return { wasOpen: true, reclaimed: !(await probe(port)), pids, foreign: [] };
 }
 
+/** `pid 4242 (python3 -m http.server 3100), pid 4243` */
+function formatHolders(holders: readonly PortHolder[]): string {
+  return holders.map(({ pid, command }) => `pid ${pid}${command ? ` (${command})` : ''}`).join(', ');
+}
+
 /**
  * Describe who holds a port that {@link reclaimPort} could not free, for an
  * error: `port 3100 is in use by pid 4242 (python3 -m http.server 3100)`. Pure.
  */
 export function describePortHolders(port: number, result: ReclaimResult): string {
-  if (result.foreign.length > 0) {
-    const holders = result.foreign.map(({ pid, command }) => `pid ${pid}${command ? ` (${command})` : ''}`);
-    return `port ${port} is in use by ${holders.join(', ')}`;
-  }
+  if (result.foreign.length > 0) return `port ${port} is in use by ${formatHolders(result.foreign)}`;
   if (result.pids.length > 0) return `port ${port} is still held by pid(s) ${result.pids.join(', ')} after SIGKILL`;
   return `port ${port} is in use (its owner could not be found)`;
 }
@@ -1517,6 +1519,11 @@ export interface StopResult {
   pids: number[];
   /** True when, after signalling, the front-door port is confirmed free. */
   portFree: boolean;
+  /**
+   * When nothing of this app was stopped but the port is bound: the processes
+   * holding it, which `dev stop` never signals. Empty otherwise.
+   */
+  holders: PortHolder[];
 }
 
 /** Injectable seams for {@link stopDevServer} (real implementations by default). */
@@ -1609,17 +1616,29 @@ export async function stopDevServer(
     via,
     pids,
     portFree,
+    holders: [],
   });
+  const nothingToStop = async (): Promise<StopResult> => {
+    const portFree = !(await d.probe(port));
+    const holders = portFree ? [] : d.listPids(port).map((pid) => ({ pid, command: d.commandOf(pid) }));
+    return { ...result('none', [], portFree), holders };
+  };
 
-  if (!record) return result('none', [], !(await d.probe(port)));
+  if (!record) {
+    // An unreadable pidfile can't name anything to stop, and would keep `--all` listing this port.
+    if (body != null) d.removePidfile(pidfilePath);
+    return nothingToStop();
+  }
 
   const watcherAlive = record.ppid > 1 && d.isAlive(record.ppid);
-  const childAlive = d.isAlive(record.pid);
+  // A recorded child whose pid now runs another command is gone (the pid was reused).
+  const childAlive =
+    d.isAlive(record.pid) && (record.command === undefined || d.commandOf(record.pid) === record.command);
 
   // Nothing we recorded is alive — stale pidfile. Clear it, report no-op.
   if (!watcherAlive && !childAlive) {
     d.removePidfile(pidfilePath);
-    return result('none', [], !(await d.probe(port)));
+    return nothingToStop();
   }
 
   // Primary path: SIGTERM the recorded tsx watch supervisor.
@@ -1652,14 +1671,28 @@ export async function stopDevServer(
 
   // The recorded owner is alive but no longer holds the port (e.g. already
   // shutting down). Clear the pidfile if the port is free.
-  const portFree = !(await d.probe(port));
-  if (portFree) d.removePidfile(pidfilePath);
-  return result('none', [], portFree);
+  const none = await nothingToStop();
+  if (none.portFree) d.removePidfile(pidfilePath);
+  return none;
+}
+
+/** True when {@link stopMessage} reports a problem (a warning, for stderr) rather than an outcome. */
+export function isStopWarning(result: StopResult): boolean {
+  return !result.alreadyStopped && !result.portFree;
 }
 
 /** Human-readable one-liner describing a {@link StopResult}, for the CLI. */
 export function stopMessage(result: StopResult): string {
   if (result.alreadyStopped) {
+    if (result.holders.length > 0) {
+      return (
+        `No dev server of this app is running on :${result.port}. The port is held by another process, ` +
+        `which was not stopped: ${formatHolders(result.holders)}.`
+      );
+    }
+    if (!result.portFree) {
+      return `No dev server of this app is running on :${result.port}. The port is held by another process, which was not stopped.`;
+    }
     return `No dev server was running on :${result.port} (nothing to stop).`;
   }
   const who = result.pids.length ? ` (pid${result.pids.length > 1 ? 's' : ''} ${result.pids.join(', ')})` : '';
@@ -1674,15 +1707,15 @@ export function stopMessage(result: StopResult): string {
 
 /**
  * CLI entry for the `dev:stop` template script. Stops the dev server on the
- * front-door port (`--port N`, default 3000), prints one {@link stopMessage},
- * and sets a non-zero exit code when the stop did not free the port (agents read
- * the exit status, not the emoji). Never throws.
+ * front-door port (`--port N`, default 3000), prints one {@link stopMessage}
+ * (a warning goes to stderr), and sets a non-zero exit code when the stop did
+ * not free the port (agents read the exit status, not the emoji). Never throws.
  */
 export async function runStopCli(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const port = parsePortArg(argv) ?? 3000;
   const r = await stopDevServer(port);
-  console.log(stopMessage(r));
-  if (!r.alreadyStopped && !r.portFree) process.exitCode = 1;
+  (isStopWarning(r) ? console.error : console.log)(stopMessage(r));
+  if (isStopWarning(r)) process.exitCode = 1;
 }
 
 /** Parse `--port <n>` / `--port=<n>` from argv; `null` when absent/invalid. Pure. */

@@ -16,6 +16,7 @@ export { type DeploymentTarget, resolveDeploymentTarget } from './deployment-tar
 export { type DeployedStackOptions, type DestroyOptions, deployedStackExists, destroy } from './destroy.js';
 export {
 	type DevServerOptions,
+	isStopWarning,
 	runStopCli,
 	type StopResult,
 	startDevServer,

@@ -1875,6 +1875,7 @@ describe('JSON output', () => {
 					record: null,
 					pids: [],
 					via: 'watcher' as const,
+					holders: [],
 				};
 			},
 		};
@@ -2066,6 +2067,7 @@ describe('cdk-blocks dev stop', () => {
 						record: null,
 						pids: [],
 						via: 'none' as const,
+						holders: [],
 					};
 				},
 			},
