@@ -175,7 +175,8 @@ function main(): void {
       console.log(`\n=== Keeping work dir: ${workDir} ===`);
     } else {
       console.log("\n=== Cleanup ===");
-      rmSync(workDir, { recursive: true, force: true });
+      // A process the e2e stopped can still be exiting; retry rather than fail a passing run on ENOTEMPTY.
+      rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       console.log(`  Removed ${workDir}`);
     }
   }
