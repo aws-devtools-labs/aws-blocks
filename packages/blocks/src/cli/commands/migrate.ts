@@ -333,7 +333,8 @@ function gitStatus(root: string): string | null {
 
 /** Plan the migration of `root`. Pure apart from reading files. */
 export function planMigration(root: string): { result: MigrateResult; pkg: PackageJson } {
-	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')) as PackageJson;
+	// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
+	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
 	const wrappers = findWrappers(root);
 	const byFile = new Map(wrappers.map((w) => [w.file, w]));
 	const result: MigrateResult = { changed: [], removed: [], kept: [], scriptsRewritten: {}, devConfig: null };
@@ -341,7 +342,8 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	const stackless = hasStackId(root) ? [] : STACK_ID_WRAPPERS;
 
 	for (const [name, value] of Object.entries(scripts)) {
-		const rewrite = SCRIPT_REWRITES[value];
+		// Own keys only: a script whose value is "toString" or "constructor" is not a generated command.
+		const rewrite = Object.hasOwn(SCRIPT_REWRITES, value) ? SCRIPT_REWRITES[value] : undefined;
 		if (rewrite) {
 			const wrapper = byFile.get(rewrite.wrapper);
 			// A customized wrapper keeps its script: the alias would drop the customization.
@@ -389,7 +391,8 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 	}
 
 	const server = byFile.get('server.ts');
-	if (server?.generated && pkg.blocks?.dev === undefined) result.devConfig = SERVER_DEV_OPTIONS[server.hash] ?? {};
+	if (server?.generated && pkg.blocks?.dev === undefined)
+		result.devConfig = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash) ? SERVER_DEV_OPTIONS[server.hash] : {};
 
 	// Delete generated wrappers that nothing references after the rewrite. A
 	// kept wrapper can import another one (sandbox.ts names server.ts), or start
@@ -457,7 +460,7 @@ function writePackageJson(root: string, pkg: PackageJson, devConfig: MigratedDev
 	const original = readFileSync(path, 'utf-8');
 	const indent = /^([ \t]+)"/m.exec(original)?.[1] ?? '  ';
 	if (devConfig) pkg.blocks = { ...pkg.blocks, dev: devConfig };
-	const text = JSON.stringify(pkg, null, indent);
+	const text = `${original.startsWith('\uFEFF') ? '\uFEFF' : ''}${JSON.stringify(pkg, null, indent)}`;
 	// Keep the file's line endings, so that the diff shows only the lines migrate changed.
 	const eol = original.includes('\r\n') ? '\r\n' : '\n';
 	const out = text.replace(/\n/g, eol);

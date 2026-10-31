@@ -557,6 +557,31 @@ describe('blocks migrate', () => {
 		assert.doesNotMatch(text, /[^\r]\n/, 'every line ends with CRLF');
 	});
 
+	it('reads and keeps a package.json byte order mark', async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const path = join(root, 'package.json');
+		writeFileSync(path, `\uFEFF${readFileSync(path, 'utf-8')}`);
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const text = readFileSync(path, 'utf-8');
+		assert.ok(text.startsWith('\uFEFF{'), 'the BOM is kept');
+		assert.strictEqual(JSON.parse(text.slice(1)).scripts.deploy, 'blocks deploy');
+	});
+
+	it('treats script values named like Object.prototype members as unrelated', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.packageJson.scripts.a = 'toString';
+			app.packageJson.scripts.b = 'constructor';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.strictEqual(result.scriptsRewritten.a, undefined);
+		assert.strictEqual(result.scriptsRewritten.b, undefined);
+		assert.strictEqual(readPkg(root).scripts.a, 'toString');
+		assert.strictEqual(readPkg(root).scripts.b, 'constructor');
+	});
+
 	it('knows every fixture wrapper and maps each generated command to a real blocks command', () => {
 		for (const [name, app] of Object.entries(FIXTURES)) {
 			if (name.startsWith('_')) continue;
