@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
 import type { api as apiType } from '../aws-blocks/index.js';
@@ -11,7 +12,9 @@ const isWin = process.platform === 'win32';
 // Basic e2e test for the Next.js template
 // Run with: npm run test:e2e
 
-const baseUrl = process.env.TEST_URL || 'http://localhost:3000';
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
+const baseUrl = process.env.TEST_URL || `http://localhost:${serverPort}`;
 let server: ChildProcess | null = null;
 
 async function isServerReady() {

@@ -16,3 +16,4 @@ The scaffolded `AGENTS.md` describes the Blocks CLI (`--output json`, `--query`,
 Also in the scaffolded apps:
 
 - `AGENTS.md` backgrounds the dev server with `npm run dev > dev.log 2>&1 &`: without the redirect, a background dev server stops at its next log line once the shell that started it closes. Every template's `.gitignore` now ignores `*.log`, so `dev.log` and `deploy.log` are not committed.
+- `npm run test:e2e` finds the dev server on `package.json#blocks.dev.port` (default 3000, or 3001 for the backend-only templates) instead of a hard-coded port, so it reuses a server on the configured port rather than starting a second one. `AGENTS.md` says to stop a server started with `npm run dev -- --port <n>` with the same flag, or with `npm run cleanup`.

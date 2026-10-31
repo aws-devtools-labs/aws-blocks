@@ -266,6 +266,23 @@ describe('create-blocks-app template metadata', () => {
     }
   });
 
+  it('every template e2e test finds the dev server on package.json "blocks.dev.port"', () => {
+    // A hard-coded port misses a server started on the app's configured port, and starts a second one.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const source = readFileSync(testPath, 'utf-8');
+      const port = JSON.parse(readFileSync(join(templatesDir, entry.name, 'package.json'), 'utf-8')).blocks?.dev?.port ?? 3000;
+      const read = source.match(/JSON\.parse\(readFileSync\('package\.json', 'utf-8'\)\)\.blocks\?\.dev\?\.port \?\? (\d+);/);
+      if (!read) problems.push(`${entry.name}: does not read the port from package.json`);
+      else if (Number(read[1]) !== port) problems.push(`${entry.name}: falls back to ${read[1]}, not ${port}`);
+      if (/localhost:\d/.test(source)) problems.push(`${entry.name}: hard-codes a localhost port`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('AGENTS.md backgrounds long-running scripts into a log file that every template ignores', () => {
     // A background `npm run dev &` without a redirect dies at its next log line once
     // the agent's shell closes; the log it writes instead must not be committed.
