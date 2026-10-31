@@ -887,6 +887,10 @@ if (entryArg) {
     entryUrl = pathToFileURL(entryArg).href;
   }
   if (import.meta.url === entryUrl) {
-    create().catch(console.error);
+    // A failed step (such as `npm install`) must fail the command, so `create-blocks-app app && cd app` stops there.
+    create().catch((error: unknown) => {
+      console.error(error instanceof Error ? `Error: ${error.message}` : error);
+      process.exitCode = 1;
+    });
   }
 }

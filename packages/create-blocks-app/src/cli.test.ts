@@ -827,6 +827,22 @@ describe('create-blocks-app auto-detection', () => {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  it('exits non-zero when npm install fails', { skip: process.platform === 'win32' && 'uses a POSIX npm stand-in' }, () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-install-fails-'));
+    try {
+      // An `npm` that fails, first on PATH: the scaffold's `npm install` runs it.
+      const bin = join(tmpDir, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'npm'), '#!/bin/sh\necho "npm ERR! install failed" >&2\nexit 1\n', { mode: 0o755 });
+      const result = run([join(tmpDir, 'app'), '-y'], undefined, { PATH: `${bin}:${process.env.PATH}` });
+      assert.strictEqual(result.exitCode, 1, result.stdout);
+      assert.match(result.stderr, /Error: Command failed: npm install/);
+      assert.doesNotMatch(result.stdout, /Blocks app created/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 describe('create-blocks-app scaffold allowlist safety', () => {
