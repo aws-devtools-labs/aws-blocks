@@ -1336,6 +1336,24 @@ describe('JSON output', () => {
 		assert.match(run.stderr, /Try: blocks whoami --region <region>/);
 	});
 
+	it('whoami tells a malformed .blocks/config.json from a missing one or a missing stackId', async () => {
+		const root = fixtureApp();
+		const core = { readAwsIdentity: async () => IDENTITY };
+		const config = join(root, '.blocks', 'config.json');
+		writeFileSync(config, '{bad json');
+		const bad = await runCli(['whoami'], { cwd: root, core });
+		assert.strictEqual(bad.code, 0, bad.stderr);
+		assert.match(bad.stdout, /Production: {2}\(invalid \.blocks\/config\.json\)/);
+		assert.match(bad.stderr, /Warning: \.blocks\/config\.json is not valid JSON/);
+		const deploy = await runCli(['deploy'], { cwd: root, env: AWS_ENV });
+		assert.match(deploy.stderr, /^Error: \.blocks\/config\.json is not valid JSON/);
+		assert.doesNotMatch(deploy.stderr, /Try:/);
+		writeFileSync(config, '{}');
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.blocks\/config\.json\)/);
+		rmSync(config);
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.blocks\/config\.json\)/);
+	});
+
 	/** Write `.blocks-sandbox/last-deploy.json`, as the deploy runners do. */
 	const writeLastDeploy = (root: string, file: Partial<Record<'production' | 'sandbox', LastDeploy>>) => {
 		mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });

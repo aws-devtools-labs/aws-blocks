@@ -249,11 +249,14 @@ async function productionStack(ctx: Context, root: string): Promise<string> {
 	try {
 		return core.getStackName({ sandbox: false, projectRoot: root });
 	} catch (error) {
-		throw new CliError(error instanceof Error ? error.message : String(error), {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new CliError(message, {
 			cause: error,
 			where: [`project: ${root}`],
 			// Lists the production stacks, so that the id can be the one whose `<id>-prod` exists.
-			hint: `aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
+			hint: /not valid JSON/.test(message)
+				? undefined
+				: `aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
 		});
 	}
 }
@@ -645,11 +648,18 @@ export async function whoami(ctx: Context): Promise<number> {
 		});
 	}
 	let production: string | null = null;
+	let noProduction = '(not in an AWS Blocks app)';
 	if (root) {
 		try {
 			production = core.getStackName({ sandbox: false, projectRoot: root });
-		} catch {
-			// No .blocks/config.json; reported as null.
+		} catch (error) {
+			// Reported as null, with the reason in the text.
+			const message = error instanceof Error ? error.message : String(error);
+			if (!existsSync(join(root, '.blocks', 'config.json'))) noProduction = '(no .blocks/config.json)';
+			else if (/not valid JSON/.test(message)) {
+				noProduction = '(invalid .blocks/config.json)';
+				ctx.out.warn(message);
+			} else noProduction = '(no stackId in .blocks/config.json)';
 		}
 	}
 	const sandboxName = root ? await sandboxStack(ctx, root) : null;
@@ -668,7 +678,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
 		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "blocks sandbox")' : '(not in an AWS Blocks app)')}`,
-		`Production:  ${production ?? (root ? '(no .blocks/config.json)' : '(not in an AWS Blocks app)')}`,
+		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);
 	return ExitCode.Ok;

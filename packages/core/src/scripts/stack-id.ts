@@ -22,18 +22,25 @@ function randomSuffix(length: number): string {
 export function getStackId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
   const configPath = join(root, '.blocks', 'config.json');
-  try {
-    const config: BlocksConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (!config.stackId) throw new Error('missing key');
-    return config.stackId;
-  } catch {
-    throw new Error(
+  const missing = () =>
+    new Error(
       `.blocks/config.json not found or missing stackId — it is created by create-blocks-app and should be committed. ` +
       `To fix manually, create ${configPath} with: { "stackId": "<id>" }. ` +
       `For an app that is already deployed, <id>-prod must be the name of its existing production stack ` +
       `(the stack that aws-blocks/index.cdk.ts names); any other id makes the next deploy create a second production stack.`
     );
+  let config: BlocksConfig | null;
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch (error) {
+    // A file that exists but does not parse is not a missing file: say what is wrong with it.
+    if (error instanceof SyntaxError) {
+      throw new Error(`.blocks/config.json is not valid JSON (${error.message}): fix ${configPath}.`);
+    }
+    throw missing();
   }
+  if (!config?.stackId) throw missing();
+  return config.stackId;
 }
 
 /**
