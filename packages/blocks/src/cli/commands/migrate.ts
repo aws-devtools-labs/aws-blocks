@@ -458,7 +458,10 @@ function writePackageJson(root: string, pkg: PackageJson, devConfig: MigratedDev
 	const indent = /^([ \t]+)"/m.exec(original)?.[1] ?? '  ';
 	if (devConfig) pkg.blocks = { ...pkg.blocks, dev: devConfig };
 	const text = JSON.stringify(pkg, null, indent);
-	writeFileSync(path, original.endsWith('\n') ? `${text}\n` : text);
+	// Keep the file's line endings, so that the diff shows only the lines migrate changed.
+	const eol = original.includes('\r\n') ? '\r\n' : '\n';
+	const out = text.replace(/\n/g, eol);
+	writeFileSync(path, original.endsWith('\n') ? `${out}${eol}` : out);
 }
 
 function describe(result: MigrateResult, dryRun: boolean): string {
