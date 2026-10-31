@@ -119,14 +119,16 @@ function workspaceGlobMatches(pattern: string, path: string): boolean {
 }
 
 /**
- * Refuses to scaffold into a member of an enclosing npm workspace unless that workspace
- * also lists the app's `aws-blocks/` folder. npm installs a member's dependencies at the
- * workspace root and ignores the member's own `"workspaces": ["aws-blocks"]` (it does not
- * nest workspaces), so `aws-blocks` would never be linked and the app could not import it.
- * The check runs before anything is written. It follows npm's own lookup: the nearest
- * ancestor `package.json` whose `workspaces` include the app is the workspace root.
+ * The npm workspace root that `appDir` is a workspace of, following npm's own lookup: the
+ * nearest ancestor `package.json` whose `workspaces` include the app. `undefined` when the
+ * app is not a workspace of any root, so it installs on its own.
+ *
+ * npm installs a workspace's dependencies at that root and does not nest workspaces, so it
+ * ignores the app's own `"workspaces": ["aws-blocks"]`: `aws-blocks` is linked only when the
+ * root lists the app's `aws-blocks/` folder too, and only by an install at the root. When the
+ * root does not list it, this refuses (exit 1) before anything is written, with the entry to add.
  */
-async function refuseUnlinkedWorkspaceMember(appDir: string): Promise<void> {
+async function enclosingWorkspaceRoot(appDir: string): Promise<string | undefined> {
   for (let root = dirname(appDir); ; root = dirname(root)) {
     const pkg = await readFile(join(root, 'package.json'), 'utf-8').then((text) => JSON.parse(text), () => undefined);
     const workspaces: unknown = Array.isArray(pkg?.workspaces) ? pkg.workspaces : pkg?.workspaces?.packages;
@@ -134,19 +136,25 @@ async function refuseUnlinkedWorkspaceMember(appDir: string): Promise<void> {
       const patterns = workspaces.filter((p): p is string => typeof p === 'string' && !p.startsWith('!'));
       const member = relative(root, appDir).split(sep).join('/');
       if (patterns.some((p) => workspaceGlobMatches(p, member))) {
-        if (patterns.some((p) => workspaceGlobMatches(p, `${member}/aws-blocks`))) return;
+        if (patterns.some((p) => workspaceGlobMatches(p, `${member}/aws-blocks`))) return root;
         console.error(`Error: ${appDir} is a workspace of the npm workspace root ${root}.`);
         console.error('npm installs its dependencies at that root and does not read the app\'s own');
         console.error('"workspaces": ["aws-blocks"], so the app\'s aws-blocks/ package would never be linked.');
         console.error('');
         console.error(`Add the app's aws-blocks/ folder to "workspaces" in ${join(root, 'package.json')}:`);
         console.error(`  "workspaces": [${[...workspaces.map((p) => JSON.stringify(p)), JSON.stringify(`${member}/aws-blocks`)].join(', ')}]`);
-        console.error('then run this command again. Nothing was written.');
+        console.error('then run this command again; it installs at that root. Nothing was written.');
         process.exit(1);
       }
     }
-    if (dirname(root) === root) return;
+    if (dirname(root) === root) return undefined;
   }
+}
+
+/** Runs `npm install` for the app: at its workspace root when it has one, since npm links workspaces only there. */
+function installDependencies(appDir: string, workspaceRoot: string | undefined): void {
+  console.log(workspaceRoot ? `\nInstalling dependencies at the npm workspace root ${workspaceRoot}...` : '\nInstalling dependencies...');
+  execSync('npm install', { cwd: workspaceRoot ?? appDir, stdio: 'inherit' });
 }
 
 /**
@@ -180,8 +188,10 @@ async function addBlocksWorkspace(targetDir: string, options: {
   blocksConfig?: Record<string, unknown>;
   gitignoreEntries: string[];
   skipInstall?: boolean;
+  /** The npm workspace root the project is a workspace of, from {@link enclosingWorkspaceRoot}; it installs there. */
+  workspaceRoot?: string;
 }): Promise<void> {
-  const { devDeps, deps, scripts, blocksConfig, gitignoreEntries, skipInstall } = options;
+  const { devDeps, deps, scripts, blocksConfig, gitignoreEntries, skipInstall, workspaceRoot } = options;
 
   // Modify package.json
   const pkgPath = join(targetDir, 'package.json');
@@ -253,10 +263,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 
   // Install dependencies
-  if (!skipInstall) {
-    console.log('\nInstalling dependencies...');
-    execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
-  }
+  if (!skipInstall) installDependencies(targetDir, workspaceRoot);
 }
 
 // ─── Template discovery ─────────────────────────────────────────────────────
@@ -377,7 +384,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     process.exit(1);
   }
 
-  await refuseUnlinkedWorkspaceMember(targetDir);
+  const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -445,10 +452,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  if (!skipInstall) {
-    console.log('Installing dependencies...');
-    execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
-  }
+  if (!skipInstall) installDependencies(targetDir, workspaceRoot);
   
   // The local server port the template's `blocks dev` listens on: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
@@ -456,7 +460,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   console.log(`\nNext steps:`);
   console.log(`  cd ${quoteForShell(targetDir)}`);
   if (skipInstall) {
-    console.log(`  npm install`);
+    console.log(workspaceRoot ? `  (cd ${quoteForShell(workspaceRoot)} && npm install)` : `  npm install`);
   }
   console.log(`  npm run dev`);
   if (templatePkg.blocks?.dev?.frontend === false) {
@@ -478,7 +482,7 @@ function quoteForShell(path: string): string {
 // ─── Amplify Gen 2 integration ──────────────────────────────────────────────
 
 async function integrateWithAmplify(targetDir: string, skipConfirm = false, skipInstall = false) {
-  await refuseUnlinkedWorkspaceMember(targetDir);
+  const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
   console.log('This will add Blocks to your existing Amplify project:');
   console.log('');
@@ -576,6 +580,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     blocksConfig: { dev: { port: 3001, frontend: false } },
     gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
+    workspaceRoot,
   });
 
   // 5. Handle amplify.yml
@@ -686,7 +691,7 @@ function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined 
 }
 
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
-  await refuseUnlinkedWorkspaceMember(targetDir);
+  const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
@@ -763,6 +768,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     blocksConfig: backendDevConfig(templatePkg.blocks),
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
+    workspaceRoot,
   });
 
   console.log('\n✓ AWS Blocks backend added to your project!\n');

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
 import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
 
@@ -918,11 +918,27 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(readFileSync(join(mono, 'apps', 'site', 'package.json'), 'utf-8'), sitePkg);
       assert.ok(!existsSync(join(mono, 'apps', 'site', 'aws-blocks')));
 
-      // With the aws-blocks/ folder listed, or with a directory outside the workspaces, it scaffolds.
+      // With the aws-blocks/ folder listed, it scaffolds and installs at the workspace root,
+      // the one place where npm links the app's aws-blocks/ workspace.
       writeRoot(['apps/*', 'apps/web/aws-blocks']);
-      assert.strictEqual(run(['apps/web', '-y', '--skip-install'], mono).exitCode, 0);
+      const listed = run(['apps/web', '-y', '--skip-install'], mono);
+      assert.strictEqual(listed.exitCode, 0, listed.stderr);
+      assert.ok(listed.stdout.includes(`\n  (cd ${mono} && npm install)\n`), listed.stdout);
+      if (process.platform !== 'win32') {
+        // An `npm` stand-in that records the directory it installs in.
+        const bin = join(mono, '.bin');
+        mkdirSync(bin);
+        writeFileSync(join(bin, 'npm'), `#!/bin/sh\npwd -P > ${JSON.stringify(join(mono, 'npm-cwd'))}\n`, { mode: 0o755 });
+        rmSync(join(mono, 'apps', 'web'), { recursive: true, force: true });
+        const installed = run(['apps/web', '-y'], mono, { PATH: `${bin}:${process.env.PATH}` });
+        assert.strictEqual(installed.exitCode, 0, installed.stderr);
+        assert.strictEqual(readFileSync(join(mono, 'npm-cwd'), 'utf-8').trim(), realpathSync(mono));
+      }
+      // A directory outside the workspaces is a project of its own.
       writeRoot(['packages/**']);
-      assert.strictEqual(run(['tools/app', '-y', '--skip-install'], mono).exitCode, 0);
+      const outside = run(['tools/app', '-y', '--skip-install'], mono);
+      assert.strictEqual(outside.exitCode, 0, outside.stderr);
+      assert.match(outside.stdout, /\n {2}npm install\n/);
     } finally {
       rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
