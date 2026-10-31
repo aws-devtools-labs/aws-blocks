@@ -300,6 +300,22 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
+  it('every template README says to commit the generated types before gating CI on typegen --check', () => {
+    // A fresh app has no .blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const readmePath = join(templatesDir, entry.name, 'README.md');
+      if (!entry.isDirectory() || !existsSync(readmePath)) continue;
+      for (const line of readFileSync(readmePath, 'utf-8').split('\n')) {
+        if (line.includes('--check') && !line.includes('commit `.blocks/hosting-values.d.ts`') && !line.includes('commit .blocks/hosting-values.d.ts')) {
+          problems.push(`${entry.name}: ${line.trim()}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('every HTML template declares a UTF-8 charset', () => {
     // Without it, a host that sends `Content-Type: text/html` with no charset
     // (S3, most static servers) makes the browser decode the page as
