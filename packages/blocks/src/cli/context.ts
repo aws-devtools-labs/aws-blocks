@@ -104,6 +104,16 @@ export function isCi(env: NodeJS.ProcessEnv): boolean {
 /** An AWS Region code: `us-east-1`, `eu-central-2`, `us-gov-west-1`, `cn-north-1`, `eusc-de-east-1`. */
 export const REGION_PATTERN = /^[a-z]{2,}(-[a-z]+)+-\d+$/;
 
+/** The environment variables that hold access keys, which CDK reads before AWS_PROFILE. */
+const ACCESS_KEY_VARIABLES = [
+	'AWS_ACCESS_KEY_ID',
+	'AWS_SECRET_ACCESS_KEY',
+	'AWS_SESSION_TOKEN',
+	'AMAZON_ACCESS_KEY_ID',
+	'AMAZON_SECRET_ACCESS_KEY',
+	'AMAZON_SESSION_TOKEN',
+] as const;
+
 /**
  * The project root: the nearest directory at or above `start` that holds both a
  * `package.json` and an `aws-blocks/` directory.
@@ -194,7 +204,17 @@ export class Context {
 		);
 		this.interactive = !this.globals.noInput && deps.stdinIsTTY && !isCi(this.env);
 
-		if (this.globals.profile) this.env.AWS_PROFILE = this.globals.profile;
+		if (this.globals.profile) {
+			this.env.AWS_PROFILE = this.globals.profile;
+			// CDK and the AWS SDK use access keys from the environment before AWS_PROFILE, so an explicit
+			// --profile would lose to exported keys. Set to empty, not deleted, so that a stage env file
+			// (`.env.production`, `.env.local`), which never overrides a set variable, cannot bring them back.
+			const keys = ACCESS_KEY_VARIABLES.filter((name) => this.env[name]);
+			for (const name of ACCESS_KEY_VARIABLES) this.env[name] = '';
+			if (keys.length > 0 && parsed.command?.aws) {
+				this.out.warn(`--profile ${this.globals.profile} is given, so this run ignores ${keys.join(', ')}.`);
+			}
+		}
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
 		// so a stray one does not stop local commands. Help (`--help`, `blocks help`) and --version never use it.

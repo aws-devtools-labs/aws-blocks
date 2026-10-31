@@ -253,8 +253,8 @@ async function sandboxStack(ctx: Context, root: string): Promise<string | null> 
  * only, with the same credentials label as the deploy's own target line. `env`
  * is the environment the runner deploys with: {@link stageEnv} for a stage
  * whose env file core loads. When environment access keys take precedence over
- * an exported AWS_PROFILE (or --profile), it says so on stderr, even with
- * --quiet: the command is about to act on whatever account those keys belong to.
+ * an exported AWS_PROFILE, it says so on stderr, even with --quiet: the command
+ * is about to act on whatever account those keys belong to.
  */
 async function targetLabel(
 	ctx: Context,
@@ -264,14 +264,17 @@ async function targetLabel(
 	const core = await ctx.core();
 	const target = await core.describeDeploymentCredentials({ env, projectRoot: root });
 	const region = target.region && /^[a-z0-9-]+$/.test(target.region) ? target.region : null;
-	if (target.keysOverrideProfile) {
-		const profile = env.AWS_PROFILE ?? env.AWS_DEFAULT_PROFILE;
-		ctx.out.error(
-			`Warning: access keys in the environment are set, so CDK uses them instead of the profile ${JSON.stringify(profile)}.\n` +
-				'  Unset AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to use the profile.\n',
-		);
-	}
+	if (target.keysOverrideProfile) warnKeysOverrideProfile(ctx, env);
 	return { region, label: `Region ${region ?? 'not set'}, credentials: ${target.credentials}` };
+}
+
+/** Say on stderr, even with --quiet, that environment access keys win over the exported profile. */
+function warnKeysOverrideProfile(ctx: Context, env: NodeJS.ProcessEnv): void {
+	const profile = env.AWS_PROFILE ?? env.AWS_DEFAULT_PROFILE;
+	ctx.out.error(
+		`Warning: access keys in the environment are set, so CDK uses them instead of the profile ${JSON.stringify(profile)}.\n` +
+			'  Unset AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or pass --profile, to use the profile.\n',
+	);
 }
 
 export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'account' | 'region'>;
@@ -516,13 +519,14 @@ export async function whoami(ctx: Context): Promise<number> {
 			);
 		}
 	}
+	const projectRoot = root ?? ctx.startDir;
+	// The same warning as the deploy commands: the identity below is that of the keys, not of the profile.
+	if ((await core.describeDeploymentCredentials({ env, projectRoot })).keysOverrideProfile) {
+		warnKeysOverrideProfile(ctx, env);
+	}
 	let identity: AwsIdentity;
 	try {
-		identity = await core.readAwsIdentity({
-			invocation: 'blocks whoami',
-			env,
-			projectRoot: root ?? ctx.startDir,
-		});
+		identity = await core.readAwsIdentity({ invocation: 'blocks whoami', env, projectRoot });
 	} catch (error) {
 		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
 	}

@@ -741,15 +741,53 @@ describe('destroy safety', () => {
 		for (const argv of [
 			['--quiet', 'destroy', '--yes'],
 			['--quiet', 'deploy'],
-			['--profile', 'other', '-q', 'deploy'],
+			['-q', 'whoami'],
 		]) {
-			const run = await runCli(argv, { cwd, env: { ...AWS_ENV, ...keys } });
+			const run = await runCli(argv, {
+				cwd,
+				env: { ...AWS_ENV, ...keys },
+				core: { readAwsIdentity: async () => ({ ...IDENTITY, credentials: 'access keys in AWS_ACCESS_KEY_ID' }) },
+			});
 			assert.match(run.stderr, /Warning: access keys in the environment are set/, argv.join(' '));
 		}
 		// A profile alone is named as the profile, with no warning.
 		const profile = await runCli(['destroy', '--yes'], { cwd, env: { ...AWS_ENV, AWS_PROFILE: 'dev' } });
 		assert.match(profile.stderr, /credentials: AWS profile dev/);
 		assert.doesNotMatch(profile.stderr, /Warning/);
+	});
+
+	it('uses an explicit --profile instead of the access keys in the environment, in every command', async () => {
+		const keys = { AWS_ACCESS_KEY_ID: 'AKIAEXAMPLE', AWS_SECRET_ACCESS_KEY: 'secret', AWS_SESSION_TOKEN: 'token' };
+		const cwd = fixtureApp();
+		// A stage env file cannot bring the keys back either.
+		writeFileSync(join(cwd, '.env.production'), 'AWS_ACCESS_KEY_ID=AKIAFILE\nAWS_SECRET_ACCESS_KEY=file\n');
+		const seen: NodeJS.ProcessEnv[] = [];
+		const core = {
+			readAwsIdentity: async ({ env, projectRoot }: { env?: NodeJS.ProcessEnv; projectRoot?: string }) => {
+				seen.push({ ...env });
+				const target = await describeDeploymentCredentials({ env, projectRoot });
+				return { credentials: target.credentials, region: target.region, account: '123456789012' };
+			},
+		};
+		for (const argv of [['destroy', '--yes'], ['deploy'], ['whoami']]) {
+			const run = await runCli(['--profile', 'prod', ...argv], { cwd, env: { ...AWS_ENV, ...keys }, core });
+			assert.strictEqual(run.code, 0, run.stderr);
+			assert.match(run.stdout + run.stderr, /credentials: AWS profile prod|Credentials: AWS profile prod/, argv.join(' '));
+			assert.doesNotMatch(run.stderr, /access keys in the environment are set/, argv.join(' '));
+			assert.match(
+				run.stderr,
+				/Warning: --profile prod is given, so this run ignores AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN\./,
+			);
+			const env = run.spawned[0]?.env ?? seen.at(-1) ?? {};
+			assert.deepStrictEqual(
+				[env.AWS_PROFILE, env.AWS_ACCESS_KEY_ID, env.AWS_SECRET_ACCESS_KEY, env.AWS_SESSION_TOKEN],
+				['prod', '', '', ''],
+				argv.join(' '),
+			);
+		}
+		// Without keys in the environment there is nothing to say.
+		const plain = await runCli(['--profile', 'prod', 'deploy'], { cwd: fixtureApp(), env: AWS_ENV });
+		assert.doesNotMatch(plain.stderr, /Warning/);
 	});
 });
 
@@ -1046,11 +1084,11 @@ describe('whoami with the real credential chain', () => {
 	}
 
 	/** Run the built `blocks` bin, with only these variables and an empty HOME. */
-	async function whoami(root: string, env: NodeJS.ProcessEnv) {
+	async function whoami(root: string, env: NodeJS.ProcessEnv, args: string[] = []) {
 		signedWith = [];
 		const child = spawn(
 			process.execPath,
-			[fileURLToPath(new URL('./bin.js', import.meta.url)), 'whoami', '--output', 'json'],
+			[fileURLToPath(new URL('./bin.js', import.meta.url)), ...args, 'whoami', '--output', 'json'],
 			{
 				cwd: root,
 				env: {
@@ -1095,6 +1133,17 @@ describe('whoami with the real credential chain', () => {
 		const staged = await whoami(root, {});
 		assert.deepStrictEqual(staged.signedWith, ['AKIDPROD']);
 		assert.strictEqual(staged.result.account, '222222222222');
+	});
+
+	it('signs with an explicit --profile, not with the access keys in the environment', async () => {
+		const keys = { AWS_ACCESS_KEY_ID: 'AKIDDEFAULT', AWS_SECRET_ACCESS_KEY: 'secret' };
+		const flag = await whoami(fixtureApp(), { ...awsFiles(), ...keys }, ['--profile', 'prod']);
+		assert.deepStrictEqual(flag.signedWith, ['AKIDPROD']);
+		assert.strictEqual(flag.result.account, '222222222222');
+		assert.strictEqual(flag.result.credentials, 'AWS profile prod');
+		// An exported AWS_PROFILE loses to the keys, as it does in CDK.
+		const exported = await whoami(fixtureApp(), { ...awsFiles(), ...keys, AWS_PROFILE: 'prod' });
+		assert.deepStrictEqual(exported.signedWith, ['AKIDDEFAULT']);
 	});
 });
 
