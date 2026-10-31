@@ -14,7 +14,7 @@ import { generateDeployClient } from './deploy-client-codegen.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
-import { log } from './log.js';
+import { ignoreClosedOutput, log } from './log.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -226,6 +226,8 @@ export function makeInvalidationProbe(
 }
 
 export async function deploy(options: DeployOptions) {
+  // A closed terminal (SIGHUP, then EIO) or output pipe must not end the deploy (see ignoreClosedOutput).
+  ignoreClosedOutput();
   return trackCommand('deploy', async () => {
     log.progress('🏗️  Preparing deployment...');
 
