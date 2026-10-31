@@ -13,7 +13,8 @@
  *   command a template generated (`tsx aws-blocks/scripts/deploy.ts`) and the
  *   wrapper it runs is generated or absent, and the wrapper does not start a
  *   customized one (`sandbox.ts` starts `server.ts`; see
- *   {@link WRAPPER_RUNTIME_DEPENDENCIES}). Every other script stays as it is.
+ *   {@link WRAPPER_RUNTIME_DEPENDENCIES}) or match one ({@link VERSION_DEPENDENCIES}:
+ *   the Amplify `stop.ts` stops the port of `server.ts`). Every other script stays as it is.
  * - The options of a generated `server.ts` move to `package.json#blocks.dev`.
  * - A generated wrapper is deleted once nothing references it any more.
  *
@@ -140,6 +141,17 @@ export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: 
  */
 export const WRAPPER_RUNTIME_DEPENDENCIES: Readonly<Partial<Record<WrapperFile, readonly WrapperFile[]>>> = {
 	'sandbox.ts': ['server.ts'],
+};
+
+/**
+ * Generated wrapper versions, by hash, that equal their alias only while
+ * another wrapper is generated. The Amplify overlay's `stop.ts` defaults to the
+ * port of the overlay's `server.ts`; `blocks dev stop` takes the port from
+ * `package.json#blocks.dev`, which migrate writes from a generated `server.ts`
+ * only, so with a customized `server.ts` the alias would stop the wrong port.
+ */
+export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[]>> = {
+	cce9579010fa07686477746f78d6fa6c461da5fead9666c0ac6b86616a8b6030: ['server.ts'],
 };
 
 const SCRIPTS_DIR = join('aws-blocks', 'scripts');
@@ -320,6 +332,19 @@ export function planMigration(root: string): { result: MigrateResult; pkg: Packa
 				result.kept.push({
 					file: `package.json#scripts.${name}`,
 					reason: `"${value}" runs ${rewrite.wrapper}, which starts the customized ${customizedDependency.path}; "${rewrite.alias}" would bypass it, so move that change by hand`,
+				});
+				continue;
+			}
+			// So does a generated version that equals its alias only while another wrapper is generated.
+			const partners =
+				wrapper && Object.hasOwn(VERSION_DEPENDENCIES, wrapper.hash) ? VERSION_DEPENDENCIES[wrapper.hash] : [];
+			const customizedPartner = partners
+				.map((file) => byFile.get(file))
+				.find((partner) => partner !== undefined && !partner.generated);
+			if (customizedPartner) {
+				result.kept.push({
+					file: `package.json#scripts.${name}`,
+					reason: `"${value}" runs ${rewrite.wrapper}, which stops the dev server of the customized ${customizedPartner.path} on its port; "${rewrite.alias}" stops the blocks.dev port instead, which migrate only sets from a generated server.ts, so move that change by hand`,
 				});
 				continue;
 			}

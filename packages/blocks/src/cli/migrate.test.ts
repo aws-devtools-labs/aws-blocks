@@ -243,6 +243,32 @@ describe('blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
 	});
 
+	it('keeps the amplify stop.ts and blocks:stop when server.ts is customized', async () => {
+		// The amplify stop.ts stops the port of the amplify server.ts. `blocks dev stop`
+		// takes that port from the blocks.dev config, which only a generated server.ts gives.
+		const root = writeApp('amplify@0ab6b047', (app) => {
+			app.files['aws-blocks/scripts/server.ts'] += "\nconsole.log('custom middleware');\n";
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.scriptsRewritten, {});
+		assert.strictEqual(result.devConfig, null);
+		const pkg = readPkg(root);
+		assert.strictEqual(pkg.scripts['blocks:stop'], 'tsx aws-blocks/scripts/stop.ts');
+		const kept = result.kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
+			'aws-blocks/scripts/server.ts',
+			'aws-blocks/scripts/stop.ts',
+			'package.json#scripts.blocks:stop',
+		]);
+		assert.match(
+			kept.find((k) => k.file === 'package.json#scripts.blocks:stop')?.reason ?? '',
+			/customized aws-blocks\/scripts\/server\.ts/,
+		);
+		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts', 'server.ts', 'stop.ts']);
+	});
+
 	it('keeps and reports a customized deploy.ts, and exits 1', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['aws-blocks/scripts/deploy.ts'] += "\nconsole.log('notify the team');\n";
