@@ -427,7 +427,9 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			}
 			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage, region: effRegion });
 			const scope = effStage ? ` (stage '${effStage}')` : '';
-			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${label} set <KEY> <value>`);
+			// A secret value is never a positional (it would land in shell history): it is prompted for or piped.
+			const add = kind === 'secret' ? `${label} set <KEY>` : `${label} set <KEY> <value>`;
+			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${add}`);
 			else {
 				console.log(`${kind} values${scope}:`);
 				for (const key of keys) console.log(`  ${key}`);

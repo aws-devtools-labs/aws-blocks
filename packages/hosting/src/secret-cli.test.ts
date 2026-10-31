@@ -319,3 +319,15 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 		assert.match(String(log.mock.calls.at(-1)?.arguments[0]), /'ZZ_NOPE' was not set/);
 	});
 });
+
+void describe('runValueCli() — list', () => {
+	void it('suggests an add command that the kind accepts when nothing is set', async () => {
+		fakeSecretsManager(() => ({ SecretList: [] }));
+		const log = mock.method(console, 'log', () => {});
+		await runValueCli(['list'], { kind: 'secret', label: 'blocks secret', prefix: 'blocks/secrets' });
+		assert.strictEqual(
+			log.mock.calls.at(-1)?.arguments[0],
+			'No secret values set. Add one: blocks secret set <KEY>',
+		);
+	});
+});
