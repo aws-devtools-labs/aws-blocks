@@ -368,16 +368,32 @@ function refersTo(text: string, sourcePath: string, wrapperPath: string): boolea
 
 /**
  * What git knows about the project directory: `outside` a git work tree (or
- * without git); `unseen` when the work tree does not list the app's
- * `package.json` (a parent repo ignores the app's directory), so git could not
- * undo the migration; or the files git lists for the project, from
- * {@link gitFiles}.
+ * without git); `refused` when git fails to read the repository (it does not
+ * trust a directory another user owns), with git's first error line; `unseen`
+ * when the work tree does not list the app's `package.json` (a parent repo
+ * ignores the app's directory), so git could not undo the migration; or the
+ * files git lists for the project, from {@link gitFiles}.
  */
-type GitView = { kind: 'outside' } | { kind: 'unseen' } | { kind: 'listed'; files: string[] };
+type GitView =
+	| { kind: 'outside' }
+	| { kind: 'refused'; message: string }
+	| { kind: 'unseen' }
+	| { kind: 'listed'; files: string[] };
 
 function gitView(root: string): GitView {
-	const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf-8' });
-	if (inside.error || inside.status !== 0 || inside.stdout.trim() !== 'true') return { kind: 'outside' };
+	// The C locale keeps "not a git repository" in English.
+	const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+		cwd: root,
+		encoding: 'utf-8',
+		env: { ...process.env, LC_ALL: 'C' },
+	});
+	if ((inside.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return { kind: 'outside' };
+	if (inside.error || inside.status !== 0) {
+		if (!inside.error && inside.stderr.includes('not a git repository')) return { kind: 'outside' };
+		const message = inside.stderr.trim().split('\n')[0] || inside.error?.message || `exit code ${inside.status}`;
+		return { kind: 'refused', message };
+	}
+	if (inside.stdout.trim() !== 'true') return { kind: 'outside' };
 	const files = gitFiles(root);
 	return files.includes('package.json') ? { kind: 'listed', files } : { kind: 'unseen' };
 }
@@ -574,6 +590,11 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 	const dryRun = input.flags['dry-run'] === true;
 	const git = gitView(root);
 	if (!dryRun && input.flags.force !== true) {
+		if (git.kind === 'refused') {
+			throw new CliError(`git failed in ${root}: ${git.message}`, {
+				hint: 'fix what git reports, or "blocks migrate --force" to migrate without git',
+			});
+		}
 		if (git.kind === 'unseen') {
 			throw new CliError(
 				'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
