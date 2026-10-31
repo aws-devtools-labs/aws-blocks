@@ -556,6 +556,8 @@ describe('help for passthrough subcommands', () => {
 		const unknown = await runCli(['help', 'sandbox', 'destory'], { cwd });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /unknown command "sandbox destory"\. Did you mean "sandbox destroy"\?/);
+		const alias = await runCli(['help', 'typegn'], { cwd });
+		assert.match(alias.stderr, /unknown command "typegn"\. Did you mean "generate types"\?/);
 	});
 
 	it('shows the help of a db, secret or config verb outside an app', async () => {

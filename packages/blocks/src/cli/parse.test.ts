@@ -78,6 +78,13 @@ describe('parseArgv', () => {
 		usageError(['zzzzzzzz'], /^unknown command "zzzzzzzz"\.$/);
 	});
 
+	it('suggests the canonical command for a typo of a hidden alias', () => {
+		usageError(['consol'], /^unknown command "consol"\. Did you mean "sandbox console"\?$/);
+		usageError(['typegn'], /Did you mean "generate types"\?/);
+		usageError(['dev:stp'], /Did you mean "dev stop"\?/);
+		usageError(['cleanu'], /Did you mean "dev stop --all"\?/);
+	});
+
 	it('rejects an unknown flag with a suggestion', () => {
 		usageError(['destroy', '--yse'], /unknown option "--yse" for "blocks destroy"\. Did you mean "--yes"\?/);
 		usageError(['--prfile', 'x', 'deploy'], /unknown option "--prfile"\. Did you mean "--profile"\?/);

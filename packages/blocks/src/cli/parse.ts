@@ -95,6 +95,17 @@ export function suggest(input: string, candidates: readonly string[]): string | 
 	return bestDistance <= Math.max(2, Math.floor(input.length / 3)) ? best : undefined;
 }
 
+/**
+ * The command closest to `input` among `names` (canonical paths and alias
+ * names), as its canonical spelling: aliases are hidden, so a typo of
+ * `console` suggests `sandbox console`.
+ */
+export function suggestCommand(input: string, names: readonly string[]): string | undefined {
+	const hit = suggest(input, names);
+	const alias = ALIASES.find((a) => a.name.join(' ') === hit);
+	return alias ? [...alias.target, ...(alias.args ?? [])].join(' ') : hit;
+}
+
 const didYouMean = (suggestion: string | undefined) => (suggestion ? ` Did you mean "${suggestion}"?` : '');
 
 /** A command, and the alias that names it, in the name index. */
@@ -391,9 +402,12 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 	}
 	if (!match) {
 		const topLevel = [...index.keys()].filter((key) => !key.includes(' '));
-		throw new UsageError(`unknown command "${words[0].value}".${didYouMean(suggest(words[0].value, topLevel))}`, {
-			hint: 'blocks --help',
-		});
+		throw new UsageError(
+			`unknown command "${words[0].value}".${didYouMean(suggestCommand(words[0].value, topLevel))}`,
+			{
+				hint: 'blocks --help',
+			},
+		);
 	}
 	const last = words[used - 1].index;
 	for (const token of between) {

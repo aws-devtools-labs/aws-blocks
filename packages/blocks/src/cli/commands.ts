@@ -26,7 +26,7 @@ import {
 } from './context.js';
 import { CliError, ExitCode, type ExitCodeValue, exitCodeForChild, UsageError } from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
-import { suggest } from './parse.js';
+import { suggest, suggestCommand } from './parse.js';
 import { ALIASES, COMMANDS, type CommandInput, type CommandSpec, findCommand } from './registry.js';
 import {
 	type DeployStage,
@@ -813,7 +813,7 @@ export function helpTarget(tokens: readonly string[]): HelpTarget {
 		break;
 	}
 	const names = [...COMMANDS.map((c) => c.path.join(' ')), ...ALIASES.map((a) => a.name.join(' '))];
-	const hint = suggest(asked, names);
+	const hint = suggestCommand(asked, names);
 	throw new UsageError(`unknown command "${asked}".${hint ? ` Did you mean "${hint}"?` : ''}`, {
 		hint: 'blocks --help',
 	});
