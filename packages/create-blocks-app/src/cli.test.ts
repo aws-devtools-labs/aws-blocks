@@ -876,6 +876,40 @@ describe('create-blocks-app auto-detection', () => {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  it('refuses to scaffold into an npm workspace that does not list the app\'s aws-blocks/ folder', () => {
+    // npm installs a workspace's dependencies at the root and ignores the app's own nested
+    // "workspaces": ["aws-blocks"], so the app could never import `aws-blocks`.
+    const mono = mkdtempSync(join(tmpdir(), 'create-blocks-app-monorepo-'));
+    const writeRoot = (workspaces: string[]) =>
+      writeFileSync(join(mono, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces }));
+    try {
+      writeRoot(['apps/*']);
+      const fresh = run(['apps/web', '-y', '--skip-install'], mono);
+      assert.strictEqual(fresh.exitCode, 1, fresh.stdout);
+      assert.match(fresh.stderr, /is a workspace of the npm workspace root/);
+      assert.ok(fresh.stderr.includes('"workspaces": ["apps/*", "apps/web/aws-blocks"]'), fresh.stderr);
+      assert.ok(!existsSync(join(mono, 'apps', 'web')), 'nothing is written');
+
+      // An existing workspace app is refused the same way, before any change.
+      mkdirSync(join(mono, 'apps', 'site'), { recursive: true });
+      const sitePkg = JSON.stringify({ name: 'site', version: '1.0.0' });
+      writeFileSync(join(mono, 'apps', 'site', 'package.json'), sitePkg);
+      const existing = run(['apps/site', '-y', '--skip-install'], mono);
+      assert.strictEqual(existing.exitCode, 1, existing.stdout);
+      assert.ok(existing.stderr.includes('"apps/site/aws-blocks"'), existing.stderr);
+      assert.strictEqual(readFileSync(join(mono, 'apps', 'site', 'package.json'), 'utf-8'), sitePkg);
+      assert.ok(!existsSync(join(mono, 'apps', 'site', 'aws-blocks')));
+
+      // With the aws-blocks/ folder listed, or with a directory outside the workspaces, it scaffolds.
+      writeRoot(['apps/*', 'apps/web/aws-blocks']);
+      assert.strictEqual(run(['apps/web', '-y', '--skip-install'], mono).exitCode, 0);
+      writeRoot(['packages/**']);
+      assert.strictEqual(run(['tools/app', '-y', '--skip-install'], mono).exitCode, 0);
+    } finally {
+      rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 describe('create-blocks-app scaffold allowlist safety', () => {

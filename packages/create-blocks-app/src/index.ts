@@ -4,7 +4,7 @@
 
 import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -105,6 +105,48 @@ async function isEmptyDir(dir: string): Promise<boolean> {
 
 async function isAmplifyGen2Project(dir: string): Promise<boolean> {
   return exists(join(dir, 'amplify', 'backend.ts'));
+}
+
+/** Whether an npm `workspaces` glob (`apps/*`, `packages/**`, `./web`) matches `path`, relative to the workspace root with `/` separators. */
+function workspaceGlobMatches(pattern: string, path: string): boolean {
+  const glob = pattern.replace(/^\.\//, '').replace(/\/+$/, '');
+  const source = glob
+    .split('/')
+    .map((segment) => (segment === '**' ? '.*' : segment.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')))
+    .join('/')
+    .replace(/\.\*\//g, '(?:.*/)?');
+  return new RegExp(`^${source}$`).test(path);
+}
+
+/**
+ * Refuses to scaffold into a member of an enclosing npm workspace unless that workspace
+ * also lists the app's `aws-blocks/` folder. npm installs a member's dependencies at the
+ * workspace root and ignores the member's own `"workspaces": ["aws-blocks"]` (it does not
+ * nest workspaces), so `aws-blocks` would never be linked and the app could not import it.
+ * The check runs before anything is written. It follows npm's own lookup: the nearest
+ * ancestor `package.json` whose `workspaces` include the app is the workspace root.
+ */
+async function refuseUnlinkedWorkspaceMember(appDir: string): Promise<void> {
+  for (let root = dirname(appDir); ; root = dirname(root)) {
+    const pkg = await readFile(join(root, 'package.json'), 'utf-8').then((text) => JSON.parse(text), () => undefined);
+    const workspaces: unknown = Array.isArray(pkg?.workspaces) ? pkg.workspaces : pkg?.workspaces?.packages;
+    if (Array.isArray(workspaces)) {
+      const patterns = workspaces.filter((p): p is string => typeof p === 'string' && !p.startsWith('!'));
+      const member = relative(root, appDir).split(sep).join('/');
+      if (patterns.some((p) => workspaceGlobMatches(p, member))) {
+        if (patterns.some((p) => workspaceGlobMatches(p, `${member}/aws-blocks`))) return;
+        console.error(`Error: ${appDir} is a workspace of the npm workspace root ${root}.`);
+        console.error('npm installs its dependencies at that root and does not read the app\'s own');
+        console.error('"workspaces": ["aws-blocks"], so the app\'s aws-blocks/ package would never be linked.');
+        console.error('');
+        console.error(`Add the app's aws-blocks/ folder to "workspaces" in ${join(root, 'package.json')}:`);
+        console.error(`  "workspaces": [${[...workspaces.map((p) => JSON.stringify(p)), JSON.stringify(`${member}/aws-blocks`)].join(', ')}]`);
+        console.error('then run this command again. Nothing was written.');
+        process.exit(1);
+      }
+    }
+    if (dirname(root) === root) return;
+  }
 }
 
 /**
@@ -335,6 +377,8 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     process.exit(1);
   }
 
+  await refuseUnlinkedWorkspaceMember(targetDir);
+
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
   const templatePkgPath = join(templateDir, 'package.json');
@@ -434,6 +478,7 @@ function quoteForShell(path: string): string {
 // ─── Amplify Gen 2 integration ──────────────────────────────────────────────
 
 async function integrateWithAmplify(targetDir: string, skipConfirm = false, skipInstall = false) {
+  await refuseUnlinkedWorkspaceMember(targetDir);
   console.log('\n🔍 Detected Amplify Gen 2 project (amplify/backend.ts found)\n');
   console.log('This will add Blocks to your existing Amplify project:');
   console.log('');
@@ -641,6 +686,7 @@ function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined 
 }
 
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
+  await refuseUnlinkedWorkspaceMember(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');

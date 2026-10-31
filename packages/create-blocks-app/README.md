@@ -36,6 +36,8 @@ Template descriptions are sourced from each template's `package.json` (`blocksTe
 npx @aws-blocks/create-blocks-app .
 ```
 
+In an npm workspaces monorepo, the app's `aws-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["aws-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/aws-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
+
 ### Add Blocks to an Amplify Gen 2 Project
 
 Already have an Amplify Gen 2 app? Run from your project root:
