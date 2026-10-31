@@ -3,7 +3,16 @@
 
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -200,6 +209,59 @@ describe('blocks migrate references', () => {
 		);
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
 	});
+
+	it('refuses an app that a parent repo ignores unless --force, and then reads its files', async () => {
+		const app = writeApp('api-only@0ab6b047', (app) => {
+			app.files.Dockerfile = 'CMD ["npx", "tsx", "watch", "aws-blocks/scripts/server.ts"]\n';
+			app.files['tools/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
+		});
+		const parent = mkdtempSync(join(tmpdir(), 'blocks-migrate-parent-'));
+		writeFileSync(join(parent, '.gitignore'), 'examples/\n');
+		git(parent, 'init', '-q');
+		git(parent, 'add', '-A');
+		git(parent, 'commit', '-q', '-m', 'init');
+		mkdirSync(join(parent, 'examples'));
+		const root = join(parent, 'examples', 'app');
+		renameSync(app, root);
+		const before = snapshot(root);
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.match(run.stderr, /^Error: git does not track this app/);
+		assert.match(run.stderr, /\nTry: .*blocks migrate --force/);
+		assert.deepStrictEqual(snapshot(root), before);
+
+		const forced = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(forced.code, 1, forced.stderr);
+		const kept = JSON.parse(forced.stdout).kept as { file: string; reason: string }[];
+		assert.deepStrictEqual(kept.map((k) => [k.file, k.reason]).sort(), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by tools/release.sh'],
+			['aws-blocks/scripts/server.ts', 'generated, but still used by Dockerfile'],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'server.ts']);
+	});
+
+	for (const nested of ['an untracked nested repo', 'a submodule'] as const) {
+		it(`in a git work tree, reads the files of ${nested}`, async () => {
+			const root = writeApp('api-only@0ab6b047', (app) => {
+				app.files['ops/release.sh'] = '#!/bin/sh\nnpx tsx aws-blocks/scripts/deploy.ts\n';
+			});
+			git(join(root, 'ops'), 'init', '-q');
+			git(join(root, 'ops'), 'add', '-A');
+			git(join(root, 'ops'), 'commit', '-q', '-m', 'init');
+			git(root, 'init', '-q');
+			// `git add` records a repository inside the work tree as a gitlink, as `git submodule add` does.
+			git(root, 'add', '-A', ...(nested === 'a submodule' ? [] : [':!ops']));
+			git(root, 'commit', '-q', '-m', 'init');
+			const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+			assert.strictEqual(run.code, 1, run.stderr);
+			const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
+			assert.deepStrictEqual(
+				kept.map((k) => [k.file, k.reason]),
+				[['aws-blocks/scripts/deploy.ts', 'generated, but still used by ops/release.sh']],
+			);
+			assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
+		});
+	}
 
 	it('does not follow symbolic links', {
 		skip: process.platform === 'win32' && 'symlinks need privileges',
