@@ -310,6 +310,11 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
+  it('nextjs template ignores what next build and the deploy write', () => {
+    const lines = readFileSync(join(__dirname, '..', 'templates', 'nextjs', 'gitignore'), 'utf-8').split('\n');
+    for (const entry of ['.next/', '.open-next/', '*.tsbuildinfo']) assert.ok(lines.includes(entry), entry);
+  });
+
   it('every template README says to commit the generated types before gating CI on typegen --check', () => {
     // A fresh app has no .blocks/hosting-values.d.ts, so `npm run typegen -- --check` exits 1 until it is committed.
     const templatesDir = join(__dirname, '..', 'templates');
