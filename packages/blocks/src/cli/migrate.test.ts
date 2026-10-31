@@ -545,6 +545,18 @@ describe('blocks migrate', () => {
 		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 4000 } });
 	});
 
+	it('keeps the line endings of a CRLF package.json', async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const path = join(root, 'package.json');
+		writeFileSync(path, readFileSync(path, 'utf-8').replace(/\n/g, '\r\n'));
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const text = readFileSync(path, 'utf-8');
+		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy');
+		assert.ok(text.endsWith('}\r\n'), 'the trailing newline is CRLF');
+		assert.doesNotMatch(text, /[^\r]\n/, 'every line ends with CRLF');
+	});
+
 	it('knows every fixture wrapper and maps each generated command to a real blocks command', () => {
 		for (const [name, app] of Object.entries(FIXTURES)) {
 			if (name.startsWith('_')) continue;
