@@ -249,7 +249,12 @@ async function productionStack(ctx: Context, root: string): Promise<string> {
 	try {
 		return core.getStackName({ sandbox: false, projectRoot: root });
 	} catch (error) {
-		throw new CliError(error instanceof Error ? error.message : String(error), { cause: error });
+		throw new CliError(error instanceof Error ? error.message : String(error), {
+			cause: error,
+			where: [`project: ${root}`],
+			// Lists the production stacks, so that the id can be the one whose `<id>-prod` exists.
+			hint: `aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
+		});
 	}
 }
 
@@ -566,7 +571,16 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 		args,
 		where: [`stack: ${stack}`, label, `project: ${root}`],
 	});
-	if (code === ExitCode.Ok) emitDeployResult(ctx, root, 'production', 'blocks deploy');
+	if (code !== ExitCode.Ok) return code;
+	// CDK deploys the stacks that index.cdk.ts defines, whatever .blocks/config.json says.
+	const deployed = readLastDeploy(root, 'production')?.stack;
+	if (deployed && deployed !== stack) {
+		ctx.out.error(
+			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .blocks/config.json names.\n` +
+				`  blocks destroy and blocks whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
+		);
+	}
+	emitDeployResult(ctx, root, 'production', 'blocks deploy');
 	return code;
 }
 

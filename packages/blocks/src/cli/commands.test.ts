@@ -840,13 +840,43 @@ describe('destroy safety', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(run.prompts, []);
 		assert.strictEqual(run.spawned.length, 1);
-		// Core reports "nothing to delete" when this stack does not exist.
+		// Core refuses when the CDK app does not define this stack, and says "nothing to delete" when it does not exist.
 		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'destroy'), {
 			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			stackName: 'demo-prod',
 			invocation: 'blocks destroy',
 		});
+	});
+
+	it('says when CDK deployed another stack than the one .blocks/config.json names', async () => {
+		const root = fixtureApp();
+		const record = (stack: string) => () => {
+			mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+			const entry: LastDeploy = { stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' };
+			writeFileSync(join(root, '.blocks-sandbox', 'last-deploy.json'), JSON.stringify({ production: entry }));
+			return undefined;
+		};
+		const other = await runCli(['-q', 'deploy'], { cwd: root, env: AWS_ENV, onSpawn: record('my-blocks-stack-prod') });
+		assert.strictEqual(other.code, 0, other.stderr);
+		assert.match(
+			other.stderr,
+			/Warning: CDK deployed the stack my-blocks-stack-prod, not demo-prod, which \.blocks\/config\.json names\.\n.*so that <stackId>-prod is my-blocks-stack-prod\./,
+		);
+		const same = await runCli(['deploy'], { cwd: root, env: AWS_ENV, onSpawn: record('demo-prod') });
+		assert.doesNotMatch(same.stderr, /Warning/);
+	});
+
+	it('without a stackId, says <id>-prod must be the existing production stack, with a Try line', async () => {
+		const root = fixtureApp();
+		writeFileSync(join(root, '.blocks', 'config.json'), '{}');
+		for (const argv of [['deploy'], ['destroy', '--yes']]) {
+			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
+			assert.strictEqual(run.code, 1, argv.join(' '));
+			assert.deepStrictEqual(run.spawned, []);
+			assert.match(run.stderr, /<id>-prod must be the name of its existing production stack/);
+			assert.match(run.stderr, /\nTry: aws cloudformation describe-stacks --query "Stacks\[\?ends_with\(StackName, '-prod'\)\]\.StackName"\n/);
+		}
 	});
 
 	it('names environment access keys that override AWS_PROFILE, and warns even with --quiet', async () => {

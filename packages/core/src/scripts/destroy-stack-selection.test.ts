@@ -43,7 +43,9 @@ before(() => {
     // whether a stale file was still in that directory when it ran.
     writeFileSync(
       file,
-      `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvLog}"\necho "cwd=$PWD" > "${cdkLog}"\n` +
+      // `cdk ls` prints the stacks in ZZ_STACKS and records nothing.
+      `#!/bin/sh\nif [ "$2" = ls ]; then printf '%s\\n' "$ZZ_STACKS"; exit 0; fi\n` +
+        `printf '%s\\n' "$@" > "${argvLog}"\necho "cwd=$PWD" > "${cdkLog}"\n` +
         `echo "stage=$BLOCKS_STAGE mark=$ZZ_MARK" >> "${cdkLog}"\n` +
         `prev=\nfor a in "$@"; do if [ "$prev" = --output ]; then ` +
         `if [ -e "$a/stale.json" ]; then echo stale-seen >> "${cdkLog}"; fi; ` +
@@ -144,13 +146,16 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
   });
   after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  /** Run the production destroy in a child; the server must keep answering, so not execFileSync. */
-  async function runDestroy(stackName: string): Promise<{ stdout: string; cdkRan: boolean }> {
+  /**
+   * Run the production destroy in a child, with a CDK app that defines `stacks`;
+   * the server must keep answering, so not execFileSync.
+   */
+  async function runDestroy(stackName: string, stacks = stackName): Promise<{ failed: boolean; output: string; cdkRan: boolean }> {
     rmSync(argvLog, { force: true });
     const moduleUrl = new URL('./destroy.js', import.meta.url).href;
     const options = JSON.stringify({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: root, stackName });
     const script = `const mod = await import(${JSON.stringify(moduleUrl)}); await mod.destroy(${options});`;
-    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+    const run = promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       env: {
         PATH: join(root, 'bin'),
@@ -161,20 +166,39 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
         AWS_SECRET_ACCESS_KEY: 'secret',
         AWS_ENDPOINT_URL_STS: endpoint,
         AWS_ENDPOINT_URL_CLOUDFORMATION: endpoint,
+        ZZ_STACKS: stacks,
       },
       timeout: 60_000,
     });
-    return { stdout, cdkRan: existsSync(argvLog) };
+    const { failed, stdout, stderr } = await run.then(
+      (result) => ({ failed: false, ...result }),
+      (error: { stdout: string; stderr: string }) => ({ failed: true, stdout: error.stdout, stderr: error.stderr }),
+    );
+    return { failed, output: `${stdout}${stderr}`, cdkRan: existsSync(argvLog) };
   }
 
   it('says there is nothing to delete, and runs no cdk destroy', async () => {
     const missing = await runDestroy('gone-prod');
-    assert.match(missing.stdout, /There is no stack gone-prod in Region us-east-1; nothing to delete\./);
-    assert.doesNotMatch(missing.stdout, /destroyed/);
+    assert.strictEqual(missing.failed, false, missing.output);
+    assert.match(missing.output, /There is no stack gone-prod in Region us-east-1; nothing to delete\./);
+    assert.doesNotMatch(missing.output, /destroyed/);
     assert.strictEqual(missing.cdkRan, false);
     const live = await runDestroy('live-prod');
     assert.strictEqual(live.cdkRan, true);
-    assert.match(live.stdout, /Production stack destroyed/);
+    assert.match(live.output, /Production stack destroyed/);
+  });
+
+  it('refuses, and deletes nothing, when the CDK app does not define the named stack', async () => {
+    const other = await runDestroy('live-prod', 'my-blocks-stack-prod');
+    assert.strictEqual(other.failed, true);
+    assert.strictEqual(other.cdkRan, false);
+    assert.match(
+      other.output,
+      /The CDK app \(aws-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.blocks\/config\.json names; nothing was deleted\./,
+    );
+    // A construct id that differs from the stack name is listed as `id (name)`.
+    const named = await runDestroy('live-prod', 'Edge\nApp (live-prod)');
+    assert.strictEqual(named.cdkRan, true, named.output);
   });
 
   it('reads only "does not exist" as a missing stack', async () => {

@@ -96,6 +96,37 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
   }
 }
 
+/**
+ * Refuse to destroy when the CDK app does not define `stackName`. `cdk destroy`
+ * acts on the stacks the app defines, not on the name the caller printed and
+ * confirmed, so an app whose `index.cdk.ts` names its stack differently (an app
+ * created before `.blocks/config.json`, or a stackId that does not match) would
+ * delete another stack than the one named. `cdk ls` prints a stack as its
+ * construct id, followed by `(name)` when the stack name differs.
+ */
+function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEnv: NodeJS.ProcessEnv): void {
+  let out: string;
+  try {
+    // runCapture (cross-platform, captures stderr) as listProductionStackNames uses.
+    out = runCapture('npx', ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`], {
+      cwd: options.projectRoot,
+      env: cdkEnv,
+    });
+  } catch (e) {
+    const stderr = e instanceof Error && 'stderr' in e ? String(e.stderr ?? '') : '';
+    const detail = stderr || (e instanceof Error ? e.message : String(e));
+    throw new Error(`Could not list the stacks of the CDK app with 'cdk ls', so nothing was deleted: ${detail}`);
+  }
+  const stacks = out.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (stacks.some((s) => s === stackName || s.endsWith(` (${stackName})`))) return;
+  throw new Error(
+    `The CDK app (aws-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
+      `not ${stackName}, the production stack that .blocks/config.json names; nothing was deleted. ` +
+      `Set "stackId" in .blocks/config.json so that <stackId>-prod is the app's production stack, ` +
+      `or name the stack in index.cdk.ts with getStackName().`,
+  );
+}
+
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
@@ -118,17 +149,20 @@ export async function destroy(options: DestroyOptions) {
       accountDetails: false,
     });
 
-    if (options.stackName && (await productionStackExists(options.projectRoot, options.stackName)) === false) {
-      const { region } = await resolveDeploymentTarget({ projectRoot: options.projectRoot });
-      console.log(`\nℹ️  There is no stack ${options.stackName} in Region ${region}; nothing to delete.`);
-      return;
-    }
-
     const cdkEnv = {
       ...process.env,
       NODE_OPTIONS: '--conditions=cdk',
       ...getCdkTelemetryEnv('production'),
     };
+
+    if (options.stackName) {
+      assertAppDefinesStack(options, options.stackName, cdkEnv);
+      if ((await productionStackExists(options.projectRoot, options.stackName)) === false) {
+        const { region } = await resolveDeploymentTarget({ projectRoot: options.projectRoot });
+        console.log(`\nℹ️  There is no stack ${options.stackName} in Region ${region}; nothing to delete.`);
+        return;
+      }
+    }
     // Reuse the sandbox path's shipped teardown-retry machinery: on a failed
     // destroy, empty the stacks' versioned S3 buckets (the autoDeleteObjects
     // Lambda never provisions on a failed CREATE, so the bucket blocks the
