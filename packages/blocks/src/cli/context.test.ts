@@ -582,4 +582,26 @@ describe('per-app dev config', () => {
 			/cannot be combined/,
 		);
 	});
+
+	it('accepts only decimal port numbers from 1 to 65535 in --port and --frontend-port (exit 2)', async () => {
+		const cwd = fixtureApp();
+		for (const value of ['1e3', '0x10', '0b1010000001011010', ' 41082 ', '-1', '0', '65536', '1.5']) {
+			for (const flag of ['--port', '--frontend-port']) {
+				const run = await runCli(['dev', flag, value], { cwd });
+				assert.strictEqual(run.code, 2, `${flag} ${value}: ${run.stderr}`);
+				assert.ok(
+					run.stderr.includes(
+						`option ${flag} must be a port number from 1 to 65535, not ${JSON.stringify(value)}.`,
+					),
+					run.stderr,
+				);
+				assert.strictEqual(run.spawned.length, 0);
+			}
+		}
+		assert.strictEqual(resolveDevConfig(cwd, { port: '4000', 'frontend-port': '65535' }).port, 4000);
+		assert.throws(
+			() => resolveDevConfig(fixtureApp({ blocks: { dev: { port: '1e3' } } })),
+			/"blocks\.dev\.port" must be a port number/,
+		);
+	});
 });
