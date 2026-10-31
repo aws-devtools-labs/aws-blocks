@@ -57,7 +57,7 @@ export function ClientGreeting() {
           className="bb-input"
           style={{ flex: 1 }}
         />
-        <button onClick={handleGreet} disabled={loading} className="bb-button bb-button-primary">
+        <button type="button" onClick={handleGreet} disabled={loading} className="bb-button bb-button-primary">
           {loading ? '...' : 'Greet'}
         </button>
       </div>
