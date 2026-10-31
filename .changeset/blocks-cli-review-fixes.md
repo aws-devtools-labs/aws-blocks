@@ -48,3 +48,4 @@ fix(blocks): `blocks` output streams, non-interactive runs and usage errors
 - Ctrl-C or Ctrl-D at the hidden prompt of `blocks secret set` or `blocks config set` exits 130 with `Interrupted; nothing was set.`, instead of exit 13 and Node's "unsettled top-level await" warning.
 - `blocks secret set KEY` and `config set KEY` with stdin that is not a terminal say `stdin is not a TTY`, instead of blaming `--no-input or CI` when neither was set.
 - A bare `blocks secret` or `blocks config` exits 2 with `needs a verb: set, list or remove` and its help command, instead of `Unknown subcommand undefined`. An invalid key and an empty value exit 2, with no `--verbose` hint.
+- The first-run telemetry notice and the `blocks-telemetry` usage text name `npx blocks telemetry disable` / `blocks telemetry [status|enable|disable]`, the CLI command, instead of only `npx blocks-telemetry --disable`.
