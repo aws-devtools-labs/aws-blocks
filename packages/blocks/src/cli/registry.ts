@@ -480,10 +480,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the blocks\n' +
 			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
 			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
-			'generated server.ts move to package.json "blocks.dev". Generated wrappers that nothing uses any\n' +
-			'more are deleted; a customized wrapper is never deleted, only reported.\n' +
+			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
+			'text file in the app directory uses any more are deleted; a customized wrapper is never deleted,\n' +
+			'only reported.\n' +
 			'It refuses a git working tree with uncommitted changes unless you pass --force.\n' +
-			'Exit code 1 means customized items remain for you to finish by hand; it is not a crash.',
+			'Exit code 1 means kept items remain for you to finish by hand; it is not a crash.',
 		flags: [
 			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
 			{
