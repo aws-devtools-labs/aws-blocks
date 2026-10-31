@@ -532,8 +532,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
 			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
-			'app file other than Markdown docs uses any more are deleted; a customized wrapper is never\n' +
-			'deleted, only reported. In a git repository the app files are the tracked and not-ignored ones,\n' +
+			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
+			'create-blocks-app releases are recognised; any other version is reported as unrecognised and is\n' +
+			'never deleted. In a git repository the app files are the tracked and not-ignored ones,\n' +
 			'and the files of a submodule or nested repository inside the app; outside git, or where git does\n' +
 			'not track the app, the files under the app directory other than node_modules and build output.\n' +
 			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +

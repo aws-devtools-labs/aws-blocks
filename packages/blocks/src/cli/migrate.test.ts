@@ -463,7 +463,9 @@ describe('blocks migrate', () => {
 			result.kept.map((k: { file: string }) => k.file),
 			['aws-blocks/scripts/deploy.ts'],
 		);
-		assert.match(result.kept[0].reason, /customized/);
+		// A file that matches no known hash may be an unmodified wrapper from a release migrate does not know.
+		assert.match(result.kept[0].reason, /^unrecognised version \(only public create-blocks-app releases are recognised\)/);
+		assert.doesNotMatch(result.kept[0].reason, /customized/);
 		const pkg = readPkg(root);
 		assert.strictEqual(pkg.scripts.deploy, 'tsx aws-blocks/scripts/deploy.ts', 'its script still runs it');
 		assert.strictEqual(pkg.scripts.destroy, 'blocks destroy');
@@ -472,7 +474,7 @@ describe('blocks migrate', () => {
 		const text = await runCli(['migrate'], { cwd: root });
 		assert.strictEqual(text.code, 1);
 		assert.match(text.stdout, /finish by hand/);
-		assert.match(text.stdout, /aws-blocks\/scripts\/deploy\.ts: customized/);
+		assert.match(text.stdout, /aws-blocks\/scripts\/deploy\.ts: unrecognised version/);
 	});
 
 	for (const template of ['default@0ab6b047', 'api-only@0ab6b047']) {

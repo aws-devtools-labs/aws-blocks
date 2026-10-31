@@ -8,7 +8,8 @@
  * - A wrapper is "generated" when its text, with whitespace normalised, matches
  *   a version that a create-blocks-app template shipped (the hashes below come
  *   from the git history of `packages/create-blocks-app/templates/<name>/aws-blocks/scripts/`).
- *   Any other text is "customized", and migrate never deletes it.
+ *   Any other text is "customized" (reported as an unrecognised version: only
+ *   the public create-blocks-app releases are recognised), and migrate never deletes it.
  * - A `package.json` script is rewritten only when its value is exactly the
  *   command a template generated (`tsx aws-blocks/scripts/deploy.ts`) and the
  *   wrapper it runs is generated or absent, and the wrapper does not start a
@@ -542,7 +543,8 @@ export function planMigration(
 		if (!wrapper.generated) {
 			result.kept.push({
 				file: wrapper.path,
-				reason: 'customized: it matches no version that create-blocks-app generated; move its changes by hand',
+				reason:
+					'unrecognised version (only public create-blocks-app releases are recognised): it matches no wrapper that a public create-blocks-app release generated, so migrate keeps it; move any changes you made to it by hand, then delete it',
 			});
 		}
 	}
