@@ -209,6 +209,30 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(argvs, []);
 	});
 
+	it('runs generate client and spec outside an app when the paths are given', async () => {
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		writeFileSync(join(outside, 'backend.ts'), 'export {};\n');
+		const client = await runCli(['generate', 'client', 'backend.ts', 'client.js'], { cwd: outside });
+		assert.strictEqual(client.code, 0, client.stderr);
+		assert.deepStrictEqual(client.spawned[0].args.slice(1), [
+			join(outside, 'backend.ts'),
+			join(outside, 'client.js'),
+		]);
+		assert.strictEqual(client.spawned[0].cwd, outside);
+		const spec = await runCli(['generate', 'spec', 'backend.ts'], { cwd: outside });
+		assert.strictEqual(spec.code, 0, spec.stderr);
+		assert.strictEqual(spec.spawned[0].cwd, outside);
+		// The defaults are the app's files, so they still need the app.
+		for (const argv of [
+			['generate', 'client', 'backend.ts'],
+			['generate', 'spec'],
+		]) {
+			const run = await runCli(argv, { cwd: outside });
+			assert.strictEqual(run.code, 1, argv.join(' '));
+			assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+		}
+	});
+
 	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
 		const root = fixtureApp();
 		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });

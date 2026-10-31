@@ -140,6 +140,8 @@ interface RunnerRun extends Pick<SpawnSpec, 'longRunning'>, Pick<RunnerLaunch, '
 	args?: string[];
 	env?: NodeJS.ProcessEnv;
 	where?: string[];
+	/** The directory the runner runs from. Default: the project root, which the command then requires. */
+	cwd?: string;
 }
 
 /**
@@ -171,7 +173,7 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
  * sandbox) loads the same `tsx`.
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
-	const root = ctx.requireRoot();
+	const root = run.cwd ?? ctx.requireRoot();
 	const options = run.options === undefined ? [] : [JSON.stringify(run.options)];
 	return runChild(ctx, {
 		operation: run.operation,
@@ -608,7 +610,8 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 const BLOCKS_DIST = fileURLToPath(new URL('..', import.meta.url));
 
 export function generateClient(ctx: Context, input: CommandInput): Promise<number> {
-	const root = ctx.requireRoot();
+	// With both paths given, the tool needs no app, as \`blocks-generate-client <foundation> <output>\` does not.
+	const root = input.positionals.length === 2 ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
 	return runChild(ctx, {
 		operation: 'blocks generate client',
 		tool: 'blocks-generate-client',
@@ -619,8 +622,9 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 }
 
 export function generateSpec(ctx: Context, input: CommandInput): Promise<number> {
-	const root = ctx.requireRoot();
 	const [backendArg, outputArg] = input.positionals;
+	// With the backend given, the spec needs no app; its default output sits next to the backend.
+	const root = backendArg ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
 	const backendPath = resolve(backendArg ? ctx.startDir : root, backendArg ?? 'aws-blocks/index.ts');
 	const outputPath = outputArg ? resolve(ctx.startDir, outputArg) : join(dirname(backendPath), 'blocks.spec.json');
 	requireFile(backendPath, 'the backend entry');
@@ -628,6 +632,7 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 		runner: 'generate-spec',
 		operation: 'blocks generate spec',
 		options: { backendPath, outputPath },
+		cwd: root,
 	});
 }
 
