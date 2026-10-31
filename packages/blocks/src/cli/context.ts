@@ -28,15 +28,21 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
-	 * Forward a SIGHUP to the child as SIGTERM, on which it cleans up (`tsx watch`,
-	 * the dev server's parent, passes on SIGTERM but not SIGHUP): for the watch
-	 * commands, `blocks dev` and `blocks sandbox`. Otherwise the CLI ignores
-	 * SIGHUP, does not forward it, and waits for the child. Core's production
-	 * deploy defers SIGHUP and runs to its end, so after a closed terminal the CLI
-	 * still reports its result; a runner that does not defer it ends with the
-	 * hangup, and the CLI reports that.
+	 * The child runs until it is stopped: `blocks dev` and `blocks sandbox` in
+	 * watch mode. Its process group gets the SIGTERM or SIGHUP that a supervisor,
+	 * `timeout` or a closed terminal sends, so the CLI handles both as it does a
+	 * SIGINT: it waits, and forwards one SIGTERM (`tsx watch`, the dev server's
+	 * parent, passes on SIGTERM but not SIGHUP) only if the child is still
+	 * running after the grace period. A second SIGTERM makes `tsx watch` SIGKILL
+	 * the dev server before it stops its frontend.
+	 *
+	 * Otherwise the CLI forwards a SIGTERM at once, and ignores SIGHUP, does not
+	 * forward it and waits for the child. Core's production deploy defers SIGHUP
+	 * and runs to its end, so after a closed terminal the CLI still reports its
+	 * result; a runner that does not defer it ends with the hangup, and the CLI
+	 * reports that.
 	 */
-	terminateOnHangup?: boolean;
+	longRunning?: boolean;
 }
 
 export interface ChildResult {
@@ -245,12 +251,12 @@ export class Context {
 	}
 }
 
-/** How long the CLI waits after a SIGINT for the child to exit before it forwards one SIGINT. */
-export const SIGINT_GRACE_MS = 10_000;
+/** How long the CLI waits after a SIGINT (or, for a long-running child, a SIGTERM or SIGHUP) for the child to exit before it forwards one. */
+export const STOP_GRACE_MS = 10_000;
 
 export interface SpawnChildOptions {
-	/** Default: {@link SIGINT_GRACE_MS}. */
-	sigintGraceMs?: number;
+	/** Default: {@link STOP_GRACE_MS}. */
+	graceMs?: number;
 }
 
 /**
@@ -265,12 +271,14 @@ export interface SpawnChildOptions {
  * one SIGINT. It never forwards one sooner, and never a second: on a second
  * SIGINT, `tsx watch` SIGKILLs the dev server before it cleans up.
  *
- * SIGTERM is forwarded. Core's deploy coalesces the duplicate SIGTERM that a
- * process-group signal and this forward produce, and treats the first one as a
- * warning. SIGHUP follows {@link SpawnSpec.terminateOnHangup}.
+ * SIGTERM and SIGHUP follow {@link SpawnSpec.longRunning}: a long-running child
+ * gets at most one forwarded signal, whichever of the three arrives first.
+ * Otherwise SIGTERM is forwarded at once: core's deploy coalesces the duplicate
+ * SIGTERM that a process-group signal and this forward produce, and treats the
+ * first one as a warning.
  */
 export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
-	const graceMs = options.sigintGraceMs ?? SIGINT_GRACE_MS;
+	const graceMs = options.graceMs ?? STOP_GRACE_MS;
 	return (spec) =>
 		new Promise((resolvePromise, reject) => {
 			const child = spawnProcess(spec.command, spec.args, {
@@ -280,15 +288,16 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			});
 			let interrupted = false;
 			let escalation: NodeJS.Timeout | undefined;
+			const escalate = (signal: NodeJS.Signals) => {
+				escalation ??= setTimeout(() => child.kill(signal), graceMs);
+			};
 			const onInterrupt = () => {
 				interrupted = true;
-				escalation ??= setTimeout(() => child.kill('SIGINT'), graceMs);
+				escalate('SIGINT');
 			};
-			const onTerm = () => {
-				child.kill('SIGTERM');
-			};
-			// Ignored unless the spec asks for SIGTERM; the listener keeps a hangup from ending the CLI.
-			const onHangup = spec.terminateOnHangup ? onTerm : () => {};
+			const onTerm = spec.longRunning ? () => escalate('SIGTERM') : () => child.kill('SIGTERM');
+			// Ignored unless the child is long-running; the listener keeps a hangup from ending the CLI.
+			const onHangup = spec.longRunning ? onTerm : () => {};
 			process.on('SIGINT', onInterrupt);
 			process.on('SIGTERM', onTerm);
 			process.on('SIGHUP', onHangup);

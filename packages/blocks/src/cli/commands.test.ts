@@ -259,7 +259,7 @@ describe('lifecycle commands', () => {
 		// The fake runner records no deploy result, so the deploy-only path exits 1 after it ran.
 		const options = runnerOptions(run.spawned[0], 'sandbox') as { deployOnly: boolean };
 		assert.strictEqual(options.deployOnly, true, run.stderr);
-		assert.strictEqual(run.spawned[0].terminateOnHangup, false);
+		assert.strictEqual(run.spawned[0].longRunning, false);
 	});
 
 	it('exports a configured dev host as BLOCKS_DEV_HOST, which opts /realtime into it', async () => {
@@ -302,9 +302,9 @@ describe('lifecycle commands', () => {
 		assert.match(failed.stderr, /^Error: blocks vendorize failed \(exit code 7\)\.\n {2}project: /);
 	});
 
-	it('turns a SIGHUP into a SIGTERM only for the watch runners: dev and sandbox', async () => {
+	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
 		const cwd = fixtureApp();
-		for (const [argv, terminate] of [
+		for (const [argv, longRunning] of [
 			[['dev'], true],
 			[['sandbox'], true],
 			[['sandbox', 'deploy'], false],
@@ -314,7 +314,7 @@ describe('lifecycle commands', () => {
 		] as const) {
 			const run = await runCli([...argv], { cwd, env: AWS_ENV });
 			assert.strictEqual(run.code, 0, run.stderr);
-			assert.strictEqual(run.spawned[0].terminateOnHangup ?? false, terminate, argv.join(' '));
+			assert.strictEqual(run.spawned[0].longRunning ?? false, longRunning, argv.join(' '));
 		}
 	});
 
