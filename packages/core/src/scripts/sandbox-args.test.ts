@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import {
   buildSandboxCdkEnv,
@@ -20,6 +21,7 @@ import {
   findExpressUnsafeStacks,
   quoteCdkAppPath,
   sandboxFailureRecoveryHint,
+  cdkAppCommand,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
@@ -381,5 +383,28 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
     );
     assert.strictEqual(previewRemovalWarning(join(tmpdir(), 'no-such-dir', 'outputs.json'), false), undefined);
     assert.strictEqual(previewRemovalWarning(outputsWith('{not json'), false), undefined);
+  });
+});
+
+describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
+  it('passes a project path with a space, or a quote, to tsx as one word', { skip: process.platform === 'win32' }, () => {
+    const path = "/work/sp ace/it's app/aws-blocks/index.cdk.ts";
+    const command = cdkAppCommand(path, 'linux');
+    // Run the quoted path through sh, as CDK does, and see what arrives.
+    const echoed = spawnSync('sh', ['-c', command.replace('npm exec tsx -- -C cdk', "printf '%s\\n'")], { encoding: 'utf-8' });
+    assert.strictEqual(echoed.stdout, `${path}\n`);
+  });
+
+  it('is used by synth, deploy (without an assembly), cdk watch and destroy', () => {
+    const path = '/work/sp ace/aws-blocks/index.cdk.ts';
+    const options = { outDir: '.blocks-sandbox', projectRoot: '/work/sp ace', backendPath: path };
+    const quoted = cdkAppCommand(path);
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs(options), '--app'), quoted);
+    assert.strictEqual(valueAfter(buildSandboxDeployArgs(options), '--app'), quoted);
+    assert.strictEqual(valueAfter(buildSandboxWatchArgs(options), '--app'), quoted);
+  });
+
+  it('double-quotes on Windows', () => {
+    assert.strictEqual(cdkAppCommand('C:\\sp ace\\index.cdk.ts', 'win32'), 'npm exec tsx -- -C cdk "C:\\sp ace\\index.cdk.ts"');
   });
 });
