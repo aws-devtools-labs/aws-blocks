@@ -170,6 +170,8 @@ Both env vars are normally written for you: `Hosting` injects them into every SS
 
 A deploy never rewrites `.blocks-sandbox/config.json`, so it never changes where local tooling points while `npm run dev` runs. It records its API URL in a file of its own, which only code that means to target that stage reads: `.blocks-sandbox/config.sandbox.json` for a sandbox deploy, `.blocks-sandbox/config.production.json` for `npm run deploy`. The template e2e tests call the dev server on `blocks.dev.port`, or the deployed app you name with `TEST_URL`.
 
+An app deployed with an older version still has the deploy's URL in `config.json`. The client refuses that file, with an error, and never calls the stack it names: start the dev server, which rewrites it, or set `BLOCKS_API_URL` to call that stack on purpose. The next deploy or destroy moves it to `config.<stage>.json`.
+
 Two things about that path burn time when debugging:
 
 - The directory is **dotted**: `/.blocks-sandbox/config.json`. `/config.json` is not a route and never was: locally the dev server only answers `GET /.blocks-sandbox/config.json`, and in production the Hosting construct only adds a `/.blocks-sandbox/*` static behaviour. A `404` from `curl http://localhost:3000/config.json` says nothing about your config.

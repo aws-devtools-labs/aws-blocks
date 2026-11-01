@@ -3,7 +3,7 @@
 
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { readFileSync, existsSync, rmSync } from "node:fs";
-import { writeDeployedConfig } from './deployed-config.js';
+import { migrateLegacyDeployedConfig, writeDeployedConfig } from './deployed-config.js';
 import { join, resolve, dirname } from "node:path";
 import { deleteSandboxSecrets, ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
@@ -566,6 +566,7 @@ export async function startSandbox(options: SandboxOptions) {
   ignoreClosedOutput();
   // Before anything reaches AWS: a running `blocks sandbox` already deploys every change.
   assertNoRunningSandbox(process.cwd(), invocation);
+  migrateLegacyDeployedConfig(outDir);
 
   // Load .env.local so CDK can read secret ARNs and other config.
   try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -1558,6 +1559,7 @@ export async function runSandboxDestroy(
   log.progress("🗑️  Destroying sandbox...");
   // Its `cdk watch` would redeploy what this deletes, and shares the cloud assembly directory.
   assertNoRunningSandbox(process.cwd(), invocation);
+  migrateLegacyDeployedConfig(join(process.cwd(), '.blocks-sandbox'));
 
   // Load .env.local first, as the sandbox deploy does: an AWS_PROFILE or
   // AWS_REGION set there selects the target, so the pre-check below must see it.

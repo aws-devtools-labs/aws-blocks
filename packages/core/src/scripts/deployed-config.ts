@@ -1,8 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { legacyDeployedStage } from '../client/legacy-config.js';
 
 /** The stages a deploy records its API URL for. */
 export type DeployedStage = 'sandbox' | 'production';
@@ -28,4 +29,27 @@ export function writeDeployedConfig(outDir: string, stage: DeployedStage, apiUrl
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ apiUrl, environment: stage }, null, 2));
   renameSync(tmp, path);
+}
+
+/**
+ * Move a `config.json` that a deploy from before core 0.8 wrote in `outDir`
+ * (see `legacyDeployedStage`) to the `config.<stage>.json` of its stage, unless
+ * a newer deploy already recorded that stage, and remove it, so the local loop
+ * no longer finds an AWS URL there. A dev server's own `config.json` stays.
+ * Deploy, sandbox deploy and both destroys run it first. Never throws.
+ */
+export function migrateLegacyDeployedConfig(outDir: string): void {
+  const legacy = join(outDir, 'config.json');
+  try {
+    const config = JSON.parse(readFileSync(legacy, 'utf-8')) as { apiUrl?: unknown };
+    const stage = legacyDeployedStage(config);
+    if (!stage) return;
+    if (!existsSync(join(outDir, deployedConfigFile(stage))) && typeof config.apiUrl === 'string') {
+      writeDeployedConfig(outDir, stage, config.apiUrl);
+    }
+    rmSync(legacy, { force: true });
+    console.error(`ℹ️  Moved the ${stage} API URL an older deploy wrote to .blocks-sandbox/config.json into ${deployedConfigFile(stage)}.`);
+  } catch {
+    // No config.json, or one that does not parse: nothing a deploy wrote.
+  }
 }

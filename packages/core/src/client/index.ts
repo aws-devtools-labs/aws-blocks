@@ -5,6 +5,7 @@ export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
+import { legacyDeployedStage } from './legacy-config.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -106,15 +107,32 @@ async function resolveApiUrl(): Promise<string> {
   // 3. Node.js: read the config file a local dev server writes (`npm run dev`, or
   //    the one `npm run sandbox` runs). A deploy never writes it: it records its
   //    URL in `config.<stage>.json`, so the local loop never targets AWS by accident.
+  //    A file an older deploy wrote is refused, never used (see legacyDeployedStage).
   if (typeof process !== 'undefined' && process.versions?.node) {
+    let config: { apiUrl?: unknown } | undefined;
     try {
+      // Dynamic: this module also runs in browsers, which have no node:fs.
       const fs = await import(/* webpackIgnore: true */ 'node:fs');
-      const config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-      const validated = validateAndCache(config.apiUrl, 'config.json file');
-      console.log('[Blocks] Using API (config.json file):', validated);
-      return validated;
+      config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
     } catch {
       // Config doesn't exist or not in Node.js
+    }
+    if (config) {
+      const stage = legacyDeployedStage(config);
+      if (stage) {
+        throw new Error(
+          `.blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
+            'Start the dev server (`npx --no -- blocks dev`), which rewrites it, ' +
+            'or set BLOCKS_API_URL to target that stack on purpose.',
+        );
+      }
+      try {
+        const validated = validateAndCache(config.apiUrl, 'config.json file');
+        console.log('[Blocks] Using API (config.json file):', validated);
+        return validated;
+      } catch {
+        // No usable apiUrl in the file — fall through, as before
+      }
     }
   }
   
