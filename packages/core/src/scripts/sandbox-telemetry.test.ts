@@ -49,7 +49,7 @@ interface SandboxRun {
 		product: { buildingBlocks?: Array<{ name: string; version: string }> };
 		counters?: { blocksCount: number };
 	}>;
-	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; clientExisted: boolean }>;
+	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; appEntry: string | undefined; clientExisted: boolean }>;
 	/** `.blocks-sandbox/config.json` and `aws-blocks/client.js` after the run, if written. */
 	configJson?: string;
 	clientJs?: string;
@@ -163,7 +163,7 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 			`import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 const argv = process.argv.slice(2);
-appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, clientExisted: existsSync('aws-blocks/client.js') }) + '\\n');
+appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, appEntry: process.env.BLOCKS_CDK_APP_ENTRY, clientExisted: existsSync('aws-blocks/client.js') }) + '\\n');
 if (process.env.FAKE_NPM_FAIL) process.exit(1);
 // \`cdk synth\` writes no outputs file; only \`cdk deploy\` is given one.
 const outputsAt = argv.indexOf('--outputs-file');
@@ -228,7 +228,7 @@ try {
 	it('deploys as `sandbox` does: `cdk synth`, then `cdk deploy` of that assembly, both under `--conditions=cdk`', () => {
 		// Since #778 the sandbox synthesizes first (to check the assembly for
 		// resources Express Mode can't update), then deploys the assembly.
-		const options = { outDir: '.blocks-sandbox', projectRoot: appDir, backendPath: BACKEND_PATH };
+		const options = { outDir: '.blocks-sandbox', projectRoot: appDir };
 		assert.strictEqual(success.npmCalls.length, 2);
 		const [synth, deploy] = success.npmCalls;
 		assert.deepStrictEqual(synth.argv, buildSandboxSynthArgs(options));
@@ -238,6 +238,8 @@ try {
 		);
 		assert.strictEqual(synth.nodeOptions, '--conditions=cdk');
 		assert.strictEqual(deploy.nodeOptions, '--conditions=cdk');
+		// The --app command reads the backend entry from the environment (see cdkAppCommand).
+		assert.strictEqual(synth.appEntry, BACKEND_PATH);
 	});
 
 	it('writes the same outputs: config.json and the aws-runtime client (generated before the deploy)', () => {
