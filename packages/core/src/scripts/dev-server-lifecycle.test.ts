@@ -249,6 +249,43 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.strictEqual(await serving(port), false);
   });
 
+  /** Whether `pid` is still running. */
+  function running(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it('leaves no pidfile after the blocks CLI stop: SIGTERM to the dev server, then to its tsx watch', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    await waitFor('the server', () => serving(port), [dev]);
+    const pidfile = join(dir, devPidfilePath(port));
+    const runner = JSON.parse(readFileSync(pidfile, 'utf-8')).pid as number;
+    assert.notStrictEqual(runner, dev.child.pid, 'the pidfile names the dev server under tsx watch');
+    // The CLI's stop: SIGTERM the runner (the same signal tsx restarts it with), wait for it, then stop tsx watch.
+    process.kill(runner, 'SIGTERM');
+    await waitFor('the dev server to exit', () => !running(runner), [dev]);
+    dev.child.kill('SIGTERM');
+    await waitFor('tsx watch to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
+    await waitFor('the pidfile to be removed', () => !existsSync(pidfile), [dev]);
+  });
+
+  it('leaves no pidfile after a SIGTERM to its tsx watch, which relays it', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    await waitFor('the server', () => serving(port), [dev]);
+    const pidfile = join(dir, devPidfilePath(port));
+    dev.child.kill('SIGTERM');
+    await waitFor('tsx watch to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
+    await waitFor('the pidfile to be removed', () => !existsSync(pidfile), [dev]);
+  });
+
   it('refuses to start when an unrelated process holds its port, and leaves that process alone', async () => {
     const dir = makeApp();
     const port = await freePort();

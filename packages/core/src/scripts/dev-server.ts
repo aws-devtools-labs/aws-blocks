@@ -712,6 +712,50 @@ function isTsxWatcher(command: string): boolean {
   return /\btsx\b/.test(command) && /\bwatch\b/.test(command);
 }
 
+/**
+ * The script {@link watchPidfileHandoff} runs (`node -e`, CommonJS): every
+ * 100 ms, while the pidfile still names the exited dev server, check its
+ * `tsx watch`; once that has exited too, the session is over, so remove the
+ * pidfile with the same rename-check-restore as `removeOwnPidfile` (a start
+ * that claimed it in between keeps its record). It ends as soon as the pidfile
+ * names another process (the successor took over) or is gone, and after ten
+ * minutes at most.
+ */
+const PIDFILE_HANDOFF_WATCH = `
+const fs = require('node:fs');
+const [file, pid, watcher] = process.argv.slice(1);
+const owner = (path) => { try { return String(JSON.parse(fs.readFileSync(path, 'utf-8')).pid); } catch { return undefined; } };
+const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const deadline = Date.now() + 600000;
+const timer = setInterval(() => {
+  if (owner(file) !== pid || Date.now() > deadline) return clearInterval(timer);
+  if (alive(watcher)) return;
+  clearInterval(timer);
+  const claim = file + '.' + pid + '.gc';
+  try { fs.renameSync(file, claim); } catch { return; }
+  if (owner(claim) !== pid) { try { fs.linkSync(claim, file); } catch {} }
+  try { fs.unlinkSync(claim); } catch {}
+}, 100);
+`;
+
+/**
+ * Leave the pidfile at `pidfilePath` to this dev server's `tsx watch`
+ * successor, but remove it if there is none: a detached watcher
+ * ({@link PIDFILE_HANDOFF_WATCH}) removes it once the `tsx watch` parent
+ * exits while the pidfile still names this process. A reload keeps the
+ * pidfile (the successor takes it over); a stop of the session does not.
+ */
+function watchPidfileHandoff(pidfilePath: string): void {
+  try {
+    spawn(process.execPath, ['-e', PIDFILE_HANDOFF_WATCH, resolve(pidfilePath), String(process.pid), String(process.ppid)], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    }).unref();
+  } catch { /* best effort: a later start or `dev stop` still treats a dead owner as gone */ }
+}
+
 /** Which of a record's processes are still the ones it recorded. */
 export interface RecordLiveness {
   /** The recorded dev server is alive, with the command line it had. */
@@ -1491,6 +1535,9 @@ export async function startDevServer(options: DevServerOptions) {
   // pidfile stays: a `dev stop` run before the successor has booted must still
   // find it. The successor takes it over (see evaluateSingleton), and `dev stop`
   // removes it once the port is free. Every other signal ends the session.
+  // A SIGTERM that was a stop looks the same to us (the `blocks` CLI SIGTERMs
+  // this process, then its `tsx watch`), so a handoff watch removes the kept
+  // pidfile once `tsx watch` exits without a successor (see watchPidfileHandoff).
   const underTsxWatch = isTsxWatcher(pidCommand(process.ppid));
   let keepPidfile = false;
   let cleaningUp = false;
@@ -1517,7 +1564,8 @@ export async function startDevServer(options: DevServerOptions) {
     if (typeof backend.__cleanup === 'function') {
       try { await backend.__cleanup(); } catch {}
     }
-    if (!keepPidfile) removeOwnPidfile();
+    if (keepPidfile) watchPidfileHandoff(pidfilePath);
+    else removeOwnPidfile();
     frontendProxy?.close();
     frontendAgent?.destroy();
     apiProxy?.close();
