@@ -548,7 +548,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'  0  fully migrated, or nothing to do\n' +
 			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
 			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
-			'     instead of the result\n' +
+			'     instead of the result (with --query, only the error on stderr)\n' +
 			'  2  usage error',
 		flags: [
 			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },

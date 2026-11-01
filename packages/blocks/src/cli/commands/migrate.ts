@@ -744,7 +744,8 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 		git = checkGit(root, dryRun, input.flags.force === true);
 	} catch (error) {
 		// A JSON consumer tells a refusal (nothing written) from kept items (also exit 1) by this document.
-		if (error instanceof CliError && ctx.out.format === 'json') {
+		// `--query` prints one field of the result, which a refusal does not have: the error goes to stderr only.
+		if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {
 			ctx.out.text(JSON.stringify({ error: { message: error.message, hint: error.hint ?? null } }, null, 2));
 		}
 		throw error;

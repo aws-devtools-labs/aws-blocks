@@ -729,6 +729,14 @@ describe('blocks migrate', () => {
 		assert.match(json.stderr, /^Error: the git working tree has uncommitted changes/);
 		assert.deepStrictEqual(snapshot(root), before);
 
+		// --query prints one field of the result; a refusal has none, so stdout stays empty and the error is on stderr.
+		for (const args of [['--query', 'changed'], ['--output', 'json', '--query', 'changed']]) {
+			const query = await runCli(['migrate', ...args], { cwd: root });
+			assert.strictEqual(query.code, 1, args.join(' '));
+			assert.strictEqual(query.stdout, '', args.join(' '));
+			assert.match(query.stderr, /^Error: the git working tree has uncommitted changes/);
+		}
+
 		const help = await runCli(['migrate', '-h'], { cwd: root });
 		assert.match(help.stdout, /Exit codes:\n {2}0 {2}fully migrated, or nothing to do\n {2}1 {2}kept items remain/);
 		assert.match(help.stdout, /\{"error": \{"message", "hint"\}\}/);
