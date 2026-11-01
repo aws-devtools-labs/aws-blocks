@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
-import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync } from "node:fs";
+import { writeDeployedConfig } from './deployed-config.js';
 import { join, resolve, dirname } from "node:path";
 import { deleteSandboxSecrets, ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
@@ -764,18 +765,17 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     duration: Date.now() - sandboxStartTime,
   });
 
-  // Write config — just apiUrl. Client middleware gets service-specific
+  // Record the API URL for explicit sandbox targets, never in the dev server's
+  // config.json (see deployedConfigFile). Client middleware gets service-specific
   // config from transferables in API responses, not from static config.
-  const config: Record<string, string> = { apiUrl, environment: 'sandbox' };
-  mkdirSync(outDir, { recursive: true });
-  writeFileSync(`${outDir}/config.json`, JSON.stringify(config, null, 2));
+  writeDeployedConfig(outDir, 'sandbox', apiUrl);
 
   // Same machine-readable completion line as `npm run deploy`, so a caller can
   // grep one stable line after a sandbox deploy instead of parsing streamed
   // output. A plain sandbox serves the frontend locally, so its signal is
   // backend-only (`BLOCKS_DEPLOYED api=…`); a preview adds the hosted site's
   // `url=…`. Emitted
-  // AFTER config.json is written (matching `deploy()`), so the signal always
+  // AFTER config.sandbox.json is written (matching `deploy()`), so the signal always
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
   console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);

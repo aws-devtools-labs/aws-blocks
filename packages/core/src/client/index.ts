@@ -104,7 +104,9 @@ async function resolveApiUrl(): Promise<string> {
     }
   }
 
-  // 3. Node.js: read config file from filesystem.
+  // 3. Node.js: read the config file a local dev server writes (`npm run dev`, or
+  //    the one `npm run sandbox` runs). A deploy never writes it: it records its
+  //    URL in `config.<stage>.json`, so the local loop never targets AWS by accident.
   // `process.getBuiltinModule` (Node.js 22.3 or later) loads `fs` synchronously
   // without a dynamic `import()`. This module is also the browser / React
   // Native entry: a static `node:fs` import breaks those bundles, and a dynamic
@@ -145,9 +147,9 @@ async function resolveApiUrl(): Promise<string> {
   // Fallback — no config found
   throw new Error(
     'Blocks API URL not configured. Ensure:\n' +
-    '1. You ran `npm run deploy` (deploys config.json)\n' +
-    '2. SSR Lambda has BLOCKS_API_URL env var, OR\n' +
-    '3. config.json exists at /.blocks-sandbox/config.json' +
+    '1. A dev server is running (`npm run dev` writes .blocks-sandbox/config.json), OR\n' +
+    '2. BLOCKS_API_URL is set (Hosting sets it on SSR functions), OR\n' +
+    '3. config.json is served at /.blocks-sandbox/config.json (the dev server and Hosting serve it)' +
     (configFileNeedsNewerNode
       ? `\nNode.js ${process.versions.node} cannot read .blocks-sandbox/config.json from the working directory; ` +
         'that needs Node.js 22.3 or later. Upgrade Node.js or set BLOCKS_API_URL.'
