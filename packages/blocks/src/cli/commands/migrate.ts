@@ -426,7 +426,7 @@ function refersTo(
 	const escaped = target.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 	if (new RegExp(`${escaped}(\\.[cm]?[jt]sx?)?(?![\\w.-])`).test(text)) return true;
 	if (bare) {
-		const name = wrapper.file.replace(/[.-]/g, '\\$&');
+		const name = wrapper.file.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 		// Only at the start of a word: `src/server.ts` is another file.
 		if (new RegExp(`(?<![^\\s'"\`=;&|()])(\\./)?(scripts/)?${name}(?![\\w.-])`).test(text)) return true;
 	}
