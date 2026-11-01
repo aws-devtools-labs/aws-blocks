@@ -159,10 +159,28 @@ function installDependencies(appDir: string, workspaceRoot: string | undefined):
 
 /**
  * Copies shared resources (maintained once in `resources/`) into the scaffolded project.
+ * `AGENTS.md` is written for the default template, so it is rewritten to the app's
+ * dev port (`package.json#blocks.dev.port`) and, for a backend-only app, to say there
+ * is no frontend.
  */
 async function copySharedResources(targetDir: string): Promise<void> {
   const resourcesDir = join(__dirname, '../resources');
-  await cp(join(resourcesDir, 'AGENTS.md'), join(targetDir, 'AGENTS.md'));
+  const pkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  const guide = await readFile(join(resourcesDir, 'AGENTS.md'), 'utf-8');
+  await writeFile(join(targetDir, 'AGENTS.md'), tailorAgentsGuide(guide, pkg.blocks?.dev));
+}
+
+/** Rewrites the shared `AGENTS.md` for an app's `blocks.dev` settings. */
+function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unknown } | undefined): string {
+  const port = typeof dev?.port === 'number' ? dev.port : 3000;
+  let out = guide.replaceAll('http://localhost:3000/', `http://localhost:${port}/`);
+  if (dev?.frontend === false) {
+    out = out.replace(
+      '1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)',
+      '1. Make changes to the backend (`aws-blocks/index.ts`). This app has no frontend (`"blocks.dev.frontend": false`): its clients call the API',
+    );
+  }
+  return out;
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────

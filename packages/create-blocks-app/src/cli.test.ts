@@ -722,6 +722,35 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('writes an api-only app\'s AGENTS.md for its backend-only dev server on 3001', () => {
+    const tmpDir = join(__dirname, '../.test-fresh-project-api-only-agents');
+    try {
+      const result = run([tmpDir, '--template', 'api-only', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
+      assert.doesNotMatch(guide, /localhost:3000/);
+      assert.match(guide, /curl -X POST http:\/\/localhost:3001\/aws-blocks\/api/);
+      assert.match(guide, /\(locally `http:\/\/localhost:3001\/aws-blocks\/api`\)/);
+      assert.doesNotMatch(guide, /or frontend \(`src\/`\)/);
+      assert.match(guide, /This app has no frontend/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('keeps the default template\'s AGENTS.md on port 3000 with its frontend', () => {
+    const tmpDir = join(__dirname, '../.test-fresh-project-default-agents');
+    try {
+      const result = run([tmpDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const guide = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf-8');
+      assert.match(guide, /curl -X POST http:\/\/localhost:3000\/aws-blocks\/api/);
+      assert.match(guide, /or frontend \(`src\/`\)/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('runs an existing project\'s own frontend dev server, whichever template is added', async () => {
     // The template's frontend settings describe the template's frontend, so they are not
     // copied: a Next.js project with the default (Vite) template still runs `next dev`.
