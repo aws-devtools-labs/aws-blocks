@@ -16,6 +16,11 @@ const { version, dependencies } = JSON.parse(readFileSync(join(PACKAGE, 'package
 	dependencies: Record<string, string>;
 };
 
+/** `text` as a regular expression that matches it literally. */
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * An app with this CLI installed and an `@aws-blocks/core` 0.0.1 that has none of the
  * entries the CLI loads, as an upgrade that kept an older core leaves it.
@@ -52,7 +57,7 @@ describe('an installed @aws-blocks/core that does not match the CLI', () => {
 		assert.match(
 			lines[0],
 			new RegExp(
-				`^Error: @aws-blocks/blocks ${version.replace(/\./g, '\\.')} cannot load @aws-blocks/core 0\\.0\\.1, which does not match it: Package subpath '\\./scripts' is not defined by "exports"`,
+				`^Error: @aws-blocks/blocks ${escapeRegExp(version)} cannot load @aws-blocks/core 0\\.0\\.1, which does not match it: Package subpath '\\./scripts' is not defined by "exports"`,
 			),
 		);
 		assert.ok(
