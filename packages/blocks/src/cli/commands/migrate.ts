@@ -97,16 +97,23 @@ export const GENERATED_WRAPPERS: Readonly<Record<WrapperFile, readonly string[]>
 	'typegen.ts': ['80a25e1754a7d2607f440d306aeea970a59b9480eefa7b1e17b73c88b2b4cdbe'],
 };
 
-/** The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`. */
-export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'>;
+/**
+ * The `package.json#blocks.dev` settings that migrate moves out of a generated `server.ts`.
+ * `generateClient` is read by the dev server in `@aws-blocks/core`, not by the CLI.
+ */
+export type MigratedDevConfig = Pick<DevPackageConfig, 'port' | 'frontendCommand' | 'frontendPort' | 'frontend'> & {
+	generateClient?: false;
+};
 
 /**
  * The `startDevServer` options of each generated `server.ts`, as `package.json#blocks.dev`.
  * A backend-only `server.ts` passed no frontend, so it ran none whatever the app installed:
- * `"frontend": false` keeps that.
+ * `"frontend": false` keeps that. The Amplify overlay's `server.ts` (the first entry) also
+ * gets `"generateClient": false`: its app commits its own `aws-blocks/client.js` (the Cognito
+ * token and the `amplify_outputs.json` API URL), which the dev server would otherwise replace.
  */
 export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
-	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false },
+	'89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415': { port: 3001, frontend: false, generateClient: false },
 	'08368ac37a213cd51b519c6e36f31b0c278185661c2d72cc7ebe1255f8ac5ec7': { port: 3001, frontend: false },
 	dec68f268cc8295cae77c9a3fa073dff55e429dbfb5aeeee60facf081edb8b21: {
 		frontendCommand: 'npx vite --port 3100 --strictPort',

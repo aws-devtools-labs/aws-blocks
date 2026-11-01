@@ -785,7 +785,11 @@ describe('cdk-blocks migrate', () => {
 		assert.strictEqual(pkg.scripts['blocks:dev'], 'cdk-blocks dev');
 		assert.strictEqual(pkg.scripts['blocks:stop'], 'cdk-blocks dev stop');
 		assert.match(pkg.scripts['blocks:generate-client'], /tsx aws-blocks\/scripts\/generate-client\.ts$/);
-		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false } });
+		// generateClient: false keeps the overlay's own client.js under the dev server
+		// (the Cognito token and the amplify_outputs.json API URL).
+		assert.deepStrictEqual(pkg.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		const json = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: writeApp('amplify@0ab6b047') });
+		assert.deepStrictEqual(JSON.parse(json.stdout).devConfig, { port: 3001, frontend: false, generateClient: false });
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
 	});
 
