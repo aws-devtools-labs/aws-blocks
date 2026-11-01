@@ -10,9 +10,12 @@
  * goes through {@link updateBlocksConfigFile}:
  * - a file that can't be parsed is never rewritten — it might hold a `stackId` the
  *   writer can't see;
- * - the file is re-read immediately before writing and only the caller's keys change;
+ * - the whole read-modify-write runs under an exclusive cross-process lock
+ *   (`<config>.lock`, see `./blocks-config-lock.ts`), so concurrent writers of
+ *   different keys (a `projectId` and `telemetry.enabled`) can't undo each other;
+ * - the file is re-read under the lock and only the caller's keys change;
  * - the new content is written to a temp file in the same directory and renamed over
- *   the original, so a concurrent reader sees the old or the new file, never a
+ *   the original, so a lock-free reader sees the old or the new file, never a
  *   truncated one.
  *
  * A UTF-8 BOM (which some Windows editors add) is stripped before parsing.
@@ -22,8 +25,9 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { acquireBlocksConfigLock } from './blocks-config-lock.js';
 
 /** A parsed Blocks config file: always a plain JSON object. */
 export type BlocksConfigObject = Record<string, unknown>;
@@ -63,32 +67,68 @@ export function readBlocksConfigFile(path: string): BlocksConfigRead {
 }
 
 /**
+ * Test-only hooks, enabled by `BLOCKS_TEST_CONFIG_LOCK_HOOKS=<dir>`, run while the
+ * lock is held. `read`: if `<dir>/pause` exists, create `<dir>/paused-<pid>` and
+ * wait (at most 30 s) until `pause` is removed. `written`: append the written
+ * `telemetry` object as one JSON line to `<dir>/log`, in lock (= commit) order.
+ */
+function runTestHook(stage: 'read' | 'written', config: BlocksConfigObject): void {
+	const dir = process.env.BLOCKS_TEST_CONFIG_LOCK_HOOKS;
+	if (!dir) return;
+	if (stage === 'written') {
+		appendFileSync(join(dir, 'log'), `${JSON.stringify({ pid: process.pid, telemetry: config.telemetry })}\n`);
+		return;
+	}
+	const pause = join(dir, 'pause');
+	if (!existsSync(pause)) return;
+	writeFileSync(join(dir, `paused-${process.pid}`), '');
+	const cell = new Int32Array(new SharedArrayBuffer(4));
+	for (const deadline = Date.now() + 30_000; existsSync(pause) && Date.now() < deadline; )
+		Atomics.wait(cell, 0, 0, 10);
+}
+
+/**
  * Apply `mutate` to the current content of a Blocks config file and write it back
  * atomically. A missing file (and its directory) is created from `{}`.
+ *
+ * The read, `mutate` and write run under the exclusive lock `<path>.lock`, waited
+ * for at most `options.lockTimeoutMs`.
  *
  * `mutate` edits the object in place and returns whether to write it; `false` skips
  * the write (e.g. the value it would add is already there).
  *
- * @throws when the existing file can't be parsed (the file is left unchanged), or
- *   when the write itself fails.
+ * @throws when the existing file can't be parsed (the file is left unchanged), when
+ *   the lock can't be taken in time (`BlocksConfigLockTimeoutError`; nothing is
+ *   written), or when the write itself fails.
  */
-export function updateBlocksConfigFile(path: string, mutate: (config: BlocksConfigObject) => boolean): void {
-	const current = readBlocksConfigFile(path);
-	if (current.status === 'invalid') {
-		throw new Error(
-			`${path} could not be read: ${current.reason}. It was left unchanged; fix or remove it and re-run.`,
-		);
-	}
-	const config = current.status === 'ok' ? current.config : {};
-	if (!mutate(config)) return;
-
+export function updateBlocksConfigFile(
+	path: string,
+	mutate: (config: BlocksConfigObject) => boolean,
+	options: { lockTimeoutMs: number },
+): void {
 	mkdirSync(dirname(path), { recursive: true });
-	const tempPath = `${path}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`;
+	const lock = acquireBlocksConfigLock(`${path}.lock`, options.lockTimeoutMs);
 	try {
-		writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
-		renameSync(tempPath, path);
-	} catch (error: unknown) {
-		rmSync(tempPath, { force: true });
-		throw error;
+		const current = readBlocksConfigFile(path);
+		if (current.status === 'invalid') {
+			throw new Error(
+				`${path} could not be read: ${current.reason}. It was left unchanged; fix or remove it and re-run.`,
+			);
+		}
+		const config = current.status === 'ok' ? current.config : {};
+		runTestHook('read', config);
+		if (!mutate(config)) return;
+
+		const tempPath = `${path}.${process.pid}-${randomBytes(4).toString('hex')}.tmp`;
+		try {
+			writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+			renameSync(tempPath, path);
+		} catch (error: unknown) {
+			rmSync(tempPath, { force: true });
+			throw error;
+		}
+		runTestHook('written', config);
+	} finally {
+		lock.release();
 	}
 }
