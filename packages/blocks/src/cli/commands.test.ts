@@ -644,6 +644,8 @@ describe('lifecycle commands', () => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		// A failed destroy forgets nothing.
@@ -655,6 +657,8 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['production']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.ok(!existsSync(join(dir, 'config.sandbox.json')), 'the sandbox deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
 		// No record names the deleted sandbox any more, and CloudFormation no longer has it.
 		const console = await runCli(['sandbox', 'console'], {
@@ -681,6 +685,8 @@ describe('lifecycle commands', () => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://p', environment: 'production' });
 		// A failed or declined destroy forgets nothing.
@@ -691,11 +697,14 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
 		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
 		assert.ok(existsSync(join(dir, 'config.json')));
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
+		assert.ok(!existsSync(join(dir, 'config.production.json')), 'the production deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.sandbox.json')));
 		// A sandbox config.json stays; an outputs.json with only the production stack goes.
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		write('outputs.json', { 'demo-prod': { ApiUrl: 'https://p' } });

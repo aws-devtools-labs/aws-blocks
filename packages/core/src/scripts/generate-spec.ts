@@ -32,6 +32,7 @@ import {
 } from './native-catalogs.js';
 import { validateNativeCatalogs } from './validate-native-catalogs.js';
 import { type SpecValidationError, validateSpec } from './validate-spec.js';
+import { deployedConfigFile } from './deployed-config.js';
 
 // ── OpenRPC types (subset) ──────────────────────────────────────────────────
 
@@ -818,6 +819,16 @@ function sharedRequiredProperties(members: JsonSchema[]): string[] {
 }
 
 /**
+ * The `.blocks-sandbox/` file whose `apiUrl` {@link writeSpec} puts in the
+ * spec's `servers`: `config.sandbox.json` / `config.production.json` for
+ * `stage` `sandbox` / `production` (what a deploy of that stage records, see
+ * `deployedConfigFile`), else the dev server's `config.json`.
+ */
+export function specConfigFile(stage: string | undefined): string {
+	return stage === 'sandbox' || stage === 'production' ? deployedConfigFile(stage) : 'config.json';
+}
+
+/**
  * Generate the OpenRPC spec, validate it, and write it to disk as `blocks.spec.json`.
  * Conformance issues are warnings; the spec is still written. Invalid native
  * declarations throw `NativeCatalogError` before any write.
@@ -830,9 +841,11 @@ export async function writeSpec(
 ): Promise<void> {
 	const doc = await generateSpec(foundationPath, loader, options);
 
-	// Populate servers array from deployed config if available
+	// Populate the servers array: from the dev server's config.json by default,
+	// or from the deployed stage that BLOCKS_SPEC_STAGE names (config.<stage>.json,
+	// which only a deploy writes), so a spec never targets AWS by accident.
 	const projectRoot = dirname(dirname(foundationPath));
-	const configPath = join(projectRoot, '.blocks-sandbox', 'config.json');
+	const configPath = join(projectRoot, '.blocks-sandbox', specConfigFile(process.env.BLOCKS_SPEC_STAGE));
 	if (existsSync(configPath)) {
 		try {
 			const config = JSON.parse(readFileSync(configPath, 'utf-8'));

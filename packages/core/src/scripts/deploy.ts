@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
@@ -15,6 +15,7 @@ import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
 import { ignoreClosedOutput, log } from './log.js';
+import { writeDeployedConfig } from './deployed-config.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -369,11 +370,8 @@ export async function deploy(options: DeployOptions) {
     }
     options.onDeployed?.({ stack, apiUrl, hostingUrl });
     
-    // Write config.json with API endpoint
-    const config: Record<string, string> = { apiUrl, environment: 'production' };
-    const outDir = join(options.projectRoot, '.blocks-sandbox');
-    mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, 'config.json'), JSON.stringify(config, null, 2));
+    // Record the API URL for explicit production targets, never in the dev server's config.json (see deployedConfigFile).
+    writeDeployedConfig(join(options.projectRoot, '.blocks-sandbox'), 'production', apiUrl);
 
     console.log('\n✅ Deployment complete!');
     console.log(`\n📡 API URL: ${apiUrl}`);

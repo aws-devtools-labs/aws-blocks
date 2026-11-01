@@ -11,7 +11,7 @@ import assert from 'node:assert';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -194,6 +194,33 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.match(readFileSync(failureFile, 'utf-8'), new RegExp(`already running on :${port} \\(pid \\d+\\)`));
     assert.ok(await serving(port), 'the first server still serves');
     assert.strictEqual(first.child.exitCode, null);
+  });
+
+  it("gives its frontend BLOCKS_API_URL = its own front door, whatever a deploy recorded", async () => {
+    // A Next.js Server Component resolves the API from BLOCKS_API_URL before .blocks-sandbox/config.json,
+    // which a deploy used to point at AWS while `npm run dev` ran.
+    const dir = makeApp();
+    const [port, frontendPort] = [await freePort(), await freePort()];
+    const script = join(dir, 'frontend.mjs');
+    writeFileSync(
+      script,
+      "import { createServer } from 'node:http';\n" +
+        "createServer((_q, r) => r.end(String(process.env.BLOCKS_API_URL))).listen(Number(process.argv[2]), '127.0.0.1');\n",
+    );
+    mkdirSync(join(dir, '.blocks-sandbox'));
+    writeFileSync(
+      join(dir, '.blocks-sandbox', 'config.production.json'),
+      JSON.stringify({ apiUrl: 'https://prod.example/aws-blocks/api', environment: 'production' }),
+    );
+    const frontend = `${quote(process.execPath)} ${quote(script)} ${frontendPort}`;
+    // No BLOCKS_API_URL from the caller: with one, the dev server runs in sandbox mode.
+    const dev = startDev(dir, { port, frontendPort, frontendCommand: frontend }, { env: { BLOCKS_API_URL: '' } });
+    const seen = await waitFor('the frontend', () => fetchText(port).then((t) => t?.startsWith('http') && t), [dev]);
+    assert.strictEqual(seen, `http://localhost:${port}/aws-blocks/api`);
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.blocks-sandbox', 'config.json'), 'utf-8')), {
+      apiUrl: `http://localhost:${port}/aws-blocks/api`,
+      environment: 'local',
+    });
   });
 
   it('starts exactly one of two dev servers started at the same moment', async () => {

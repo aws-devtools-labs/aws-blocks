@@ -631,10 +631,11 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 
 /**
  * Remove what this machine recorded about the deleted stack of `stage`, so that
- * `sandbox console`, `--output json` and the frontend no longer point at it: its
- * entry in `last-deploy.json`, its stack in `outputs.json`, and `config.json`
- * when a deploy of that stage wrote it. The other stage's records stay, and so
- * does the sandbox id: the next deploy reuses it.
+ * `sandbox console`, `--output json` and tests that target that stage no longer
+ * point at it: its entry in `last-deploy.json`, its stack in `outputs.json`, its
+ * `config.<stage>.json` (see core's `deployedConfigFile`), and a `config.json`
+ * that an older deploy of that stage wrote. The other stage's records stay, and
+ * so does the sandbox id: the next deploy reuses it.
  */
 function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
 	forgetLastDeploy(root, stage);
@@ -656,6 +657,8 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
 		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
 	}
+	rmSync(join(dir, `config.${stage}.json`), { force: true });
+	// Before core 0.8, a deploy wrote its URL to the dev server's config.json.
 	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 

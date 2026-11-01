@@ -2,16 +2,18 @@
 
 ## Finding the API URL
 
-The API URL is always in `.blocks-sandbox/config.json`:
+Each target has its own file in `.blocks-sandbox/`:
 
 ```bash
-cat .blocks-sandbox/config.json
-# Local dev:  {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
-# Sandbox:    {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"sandbox"}
-# Production: {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"production"}
+cat .blocks-sandbox/config.json             # the running dev server (npm run dev, or the one npm run sandbox runs)
+# {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+cat .blocks-sandbox/config.sandbox.json     # the last sandbox deploy
+# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"sandbox"}
+cat .blocks-sandbox/config.production.json  # the last production deploy
+# {"apiUrl":"https://<id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api","environment":"production"}
 ```
 
-In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.json` still contains the underlying API Gateway URL.
+Only a dev server writes `config.json`, and the Node.js client reads it, so a deploy never redirects local tests or scripts to AWS. In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.production.json` still contains the underlying API Gateway URL.
 
 ### Over HTTP the config lives at `/.blocks-sandbox/config.json`
 
@@ -80,7 +82,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 | `-32600` `Invalid Request: an RPC call goes to /aws-blocks/api or /aws-blocks/api/<namespace>, not a deeper path` | Extra path segments after the namespace | Post to `/aws-blocks/api/<namespace>` exactly |
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
-| `config.json` not found | Server not started or not deployed yet | Run `npm run dev` or `npm run sandbox` first |
+| `config.json` not found | No dev server has started in this app | Run `npm run dev`, or set `BLOCKS_API_URL` to the API you mean to call |
 | 404 on `/config.json` | Wrong path, the config is served from a dotted directory | Use `GET /.blocks-sandbox/config.json` |
 | Config body is `{"_placeholder":true}` | Build-time stub in the frontend build output; the real config is uploaded at deploy | Nothing to fix pre-deploy. If a deployed origin serves it, re-run the deploy |
 | HTTP 200 but `{"error":{"code":-32600}}` on a batch | JSON-RPC batching (a top-level JSON array body) is not supported | Send one call per request |

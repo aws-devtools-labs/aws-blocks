@@ -184,6 +184,18 @@ export function buildServedBlocksConfig(port: number, isSandbox: boolean, host =
 }
 
 /**
+ * The environment the dev server runs its frontend command with: its own, with
+ * `BLOCKS_API_URL` set to this server's front door. Server-side frontend code
+ * (a Next.js Server Component, an SSR loader) resolves the API from
+ * `BLOCKS_API_URL` first, so it calls this server, whatever a deploy recorded
+ * meanwhile. In sandbox mode this replaces the deployed URL the sandbox gave
+ * the dev server: the front door proxies to it, as it does for the browser.
+ */
+export function frontendEnv(env: NodeJS.ProcessEnv, config: BlocksRuntimeConfig): NodeJS.ProcessEnv {
+  return { ...env, NODE_OPTIONS: '', BLOCKS_API_URL: config.apiUrl };
+}
+
+/**
  * True for the reserved runtime-config request the dev server answers itself
  * (mirroring production, where CloudFront serves `${BLOCKS_SANDBOX_PREFIX}/*`
  * statically) instead of proxying it to the framework dev server — which only
@@ -989,7 +1001,7 @@ export async function startDevServer(options: DevServerOptions) {
       // Own process group on POSIX so we can reap the Vite grandchild too.
       detached: usePosixProcessGroups,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NODE_OPTIONS: '' },
+      env: frontendEnv(process.env, blocksConfig),
     });
     frontendProcess = child;
     // Detached on POSIX, so its pid is its group id: what a later start of this app may reclaim the port from.
