@@ -796,6 +796,46 @@ describe('lifecycle commands', () => {
 		assert.match(sigkill.stderr, /^Error: blocks dev failed \(signal SIGKILL\)\./);
 	});
 
+	it('exits 143 when a forwarded SIGTERM ends a deploy or a destroy, and 130 on an abort by SIGINT', async () => {
+		const cwd = withSandboxId(fixtureApp());
+		for (const argv of [['sandbox', 'deploy'], ['sandbox', 'destroy'], ['deploy'], ['destroy', '--yes']]) {
+			for (const [result, expected] of [
+				// Core aborted on the operator's signal (exit 143 or 130), or the runner had no handler yet.
+				[{ code: 143, terminated: true }, 143],
+				[{ code: null, signal: 'SIGTERM' as const, terminated: true }, 143],
+				[{ code: 130, interrupted: true }, 130],
+				// A SIGTERM that the CLI did not receive is a failure.
+				[{ code: null, signal: 'SIGTERM' as const }, 1],
+				[{ code: 1, terminated: true }, 1],
+			] as const) {
+				const run = await runCli([...argv], { cwd, env: AWS_ENV, onSpawn: () => result });
+				assert.strictEqual(run.code, expected, `${argv.join(' ')} ${JSON.stringify(result)}`);
+				if (expected === 143) {
+					assert.match(run.stderr, new RegExp(`blocks ${argv[0]}.* stopped by SIGTERM\\.\\n$`));
+					assert.doesNotMatch(run.stderr, /Error:|--verbose/);
+				}
+			}
+		}
+	});
+
+	it("exits a runner 143 or 130 when core aborted its operation on the operator's signal, else 1", () => {
+		const fail = new URL('./runners/fail.js', import.meta.url).href;
+		for (const [operatorSignal, expected] of [
+			['SIGTERM', 143],
+			['SIGINT', 130],
+			[undefined, 1],
+		] as const) {
+			const error = `Object.assign(new Error('the deploy was aborted'), { operatorSignal: ${JSON.stringify(operatorSignal)} })`;
+			const run = spawnSync(
+				process.execPath,
+				['--input-type=module', '-e', `const { exitWithError } = await import(${JSON.stringify(fail)}); exitWithError(${error});`],
+				{ encoding: 'utf-8' },
+			);
+			assert.strictEqual(run.status, expected, `${operatorSignal}: ${run.stderr}`);
+			assert.match(run.stderr, /^❌ the deploy was aborted\n/);
+		}
+	});
+
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
 		const cwd = withSandboxId(fixtureApp());
 		for (const [argv, longRunning] of [
@@ -1774,7 +1814,13 @@ describe('JSON output', () => {
 		].join('\n');
 		const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf-8' });
 		assert.strictEqual(result.status, 0, result.stderr);
-		assert.deepStrictEqual(JSON.parse(result.stdout), { code: 0, signal: null, interrupted: false, stopped: false });
+		assert.deepStrictEqual(JSON.parse(result.stdout), {
+			code: 0,
+			signal: null,
+			interrupted: false,
+			stopped: false,
+			terminated: false,
+		});
 		assert.match(result.stderr, /child says hi/);
 	});
 });

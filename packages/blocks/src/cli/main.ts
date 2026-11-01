@@ -13,7 +13,7 @@ import { type ParsedInvocation, parseArgv } from './parse.js';
 /**
  * Run the CLI with `argv` (without the node and script entries).
  *
- * @returns The process exit code: 0 success, 1 failure, 2 usage error, 130 interrupted.
+ * @returns The process exit code: 0 success, 1 failure, 2 usage error, 130 interrupted, 143 terminated.
  */
 export async function main(argv: readonly string[], deps: CliDeps = processDeps()): Promise<number> {
 	const report = (error: unknown) => {

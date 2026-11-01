@@ -26,6 +26,8 @@ export const ExitCode = {
 	Usage: 2,
 	/** Interrupted with SIGINT. */
 	Interrupted: 130,
+	/** Stopped by a SIGTERM to the CLI, which the operation it ran ended on (`blocks sandbox deploy`, `blocks deploy`). */
+	Terminated: 143,
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];

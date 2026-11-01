@@ -65,6 +65,8 @@ export interface ChildResult {
 	interrupted: boolean;
 	/** The CLI stopped a long-running child on a SIGTERM or SIGHUP: the stop was requested. */
 	stopped?: boolean;
+	/** The CLI received SIGTERM while a child that is not long-running ran, and forwarded it. */
+	terminated?: boolean;
 }
 
 /** Run a child process to completion. */
@@ -365,6 +367,7 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			});
 			let interrupted = false;
 			let stopping = false;
+			let terminated = false;
 			let exited = false;
 			let reaping = false;
 			let escalation: NodeJS.Timeout | undefined;
@@ -412,7 +415,11 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 				child.kill('SIGTERM');
 				await reapWatcher(runners);
 			};
-			const onTerm = spec.longRunning ? () => void stop() : () => child.kill('SIGTERM');
+			const forward = () => {
+				terminated = true;
+				child.kill('SIGTERM');
+			};
+			const onTerm = spec.longRunning ? () => void stop() : forward;
 			// Ignored unless the child is long-running; the listener keeps a hangup from ending the CLI.
 			const onHangup = spec.longRunning ? onTerm : () => {};
 			process.on('SIGINT', onInterrupt);
@@ -431,7 +438,7 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			});
 			child.on('exit', (code, signal) => {
 				cleanup();
-				resolvePromise({ code, signal, interrupted, stopped: stopping });
+				resolvePromise({ code, signal, interrupted, stopped: stopping, terminated });
 			});
 		});
 }

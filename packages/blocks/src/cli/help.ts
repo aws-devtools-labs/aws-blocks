@@ -50,7 +50,7 @@ export function rootHelp(version: string): string {
 		'Global options',
 		...table(GLOBAL_FLAGS.map((flag) => [flagLabel(flag), flag.description])),
 		'',
-		'Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted.',
+		'Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM.',
 		'Run "blocks help <command>" or "blocks <command> --help" for details.',
 	);
 	return `${lines.join('\n')}\n`;

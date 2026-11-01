@@ -185,6 +185,11 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		return code;
 	}
 	if (result.interrupted) ctx.out.progress(`${run.operation} finished before the interrupt stopped it.`);
+	// The CLI forwarded a SIGTERM, which the child ended on: core aborted the deploy (exit 143), or it had no handler.
+	if (result.terminated && (result.code === 128 + 15 || result.signal === 'SIGTERM')) {
+		ctx.out.progress(`${run.operation} stopped by SIGTERM.`);
+		return ExitCode.Terminated;
+	}
 	if (code !== ExitCode.Ok) {
 		const where = run.where ?? [`project: ${run.cwd}`];
 		if (run.tool) {

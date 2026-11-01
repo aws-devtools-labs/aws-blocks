@@ -7,6 +7,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { log } from '@aws-blocks/core/scripts';
 import { DEV_FAILURE_FILE_ENV, DEV_STATE } from './launch.js';
 
+/** The exit code of an operation that the operator stopped, by core's `operatorSignal`: 128 + the signal number. */
+const OPERATOR_EXIT_CODES: Readonly<Record<string, number>> = { SIGINT: 130, SIGTERM: 143 };
+
 /** The dev server session that {@link trackDevSession} records for `blocks dev`. */
 let devSession: { file: string; firstRun: boolean; starting: boolean } | undefined;
 
@@ -78,12 +81,18 @@ export function trackDevSession(): { started(): void } {
  * `BLOCKS_LOG_LEVEL=debug` (`--debug`), as the CLI's own errors do: core has
  * usually printed its guidance for the failure already.
  *
- * A failed first start of the dev server ends `blocks dev` (see {@link trackDevSession}).
+ * An operation that the operator stopped (core's `operatorSignal`: a deploy
+ * aborted by a second SIGTERM or a SIGINT) exits 143 or 130 instead. A failed
+ * first start of the dev server ends `blocks dev` (see {@link trackDevSession}).
  */
 export function exitWithError(error: unknown): never {
 	const message = error instanceof Error ? error.message : String(error);
 	console.error(`❌ ${message}`);
 	log.debugError(error);
 	failDevSession(message);
-	process.exit(1);
+	const signal =
+		typeof error === 'object' && error !== null && 'operatorSignal' in error && typeof error.operatorSignal === 'string'
+			? error.operatorSignal
+			: undefined;
+	process.exit((signal === undefined ? undefined : OPERATOR_EXIT_CODES[signal]) ?? 1);
 }

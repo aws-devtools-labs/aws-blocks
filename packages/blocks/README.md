@@ -266,6 +266,7 @@ npx --no -- blocks whoami --query stacks.production
 | 1 | The operation failed |
 | 2 | Usage error: unknown command or option, missing argument, or a confirmation that a non-interactive run cannot give |
 | 130 | Interrupted (Ctrl-C) |
+| 143 | Stopped by a SIGTERM to `blocks`, which ended the operation it ran (a deploy, a destroy, a sandbox deploy or destroy that core aborted) |
 
 Errors print as `Error: <what failed>`, then where it failed and a `Try:` line with the next step. An unknown command or option suggests the closest name. Colour is used only on a terminal, and never when `NO_COLOR` is set.
 

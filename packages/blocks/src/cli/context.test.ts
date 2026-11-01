@@ -483,6 +483,7 @@ setInterval(() => {}, 1000);
 				signal: null,
 				interrupted: false,
 				stopped: false,
+				terminated: false,
 			});
 			assert.strictEqual(readFileSync(join(dir, 'done'), 'utf-8'), 'SIGHUP');
 		} finally {
