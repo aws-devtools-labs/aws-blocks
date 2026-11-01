@@ -82,6 +82,47 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.deepEqual(removed, [devPidfilePath(3000)]);
   });
 
+  it("SIGKILLs a tsx watch that outlives its dead runner, and says so (H4)", async () => {
+    // A runner killed by a signal: tsx waits for an exit that already happened, and ignores SIGTERM.
+    let watcher = true;
+    const waits: Array<[number, number]> = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
+      isAlive: (pid) => pid === 4000 && watcher,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      signal: (pid, signal) => {
+        sigs.push({ pid, signal, via: 'signal' });
+        if (signal === 'SIGKILL') watcher = false;
+      },
+      waitExit: async (pid, ms) => { waits.push([pid, ms]); return !watcher; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'watcher');
+    assert.equal(r.killed, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(sigs, [
+      { pid: 4000, signal: 'SIGTERM', via: 'signal' },
+      { pid: 4000, signal: 'SIGKILL', via: 'signal' },
+    ]);
+    assert.equal(waits[0][1], 2000, 'a watcher without a runner gets a short grace, not the runner budget');
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /its tsx watch had lost its runner and ignored SIGTERM, so it was killed/);
+  });
+
+  it('never SIGKILLs a watcher whose runner is still shutting down, and warns that the session goes on', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
+      isAlive: (pid) => pid === 4000 || pid === 4242,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      waitExit: async () => false,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 4000, signal: 'SIGTERM', via: 'signal' }]);
+    assert.equal(r.portFree, false, 'reported as a warning: the session has not ended');
+    assert.equal(isStopWarning(r), true);
+    assert.deepEqual(removed, [], 'a live session keeps its record');
+  });
+
   it('does NOT signal the ppid when it is a bare shell, not a tsx watcher (self-kill guard)', async () => {
     // Started as `node server.ts` from a shell → ppid is the shell. Child holds
     // the port, so we fall back to the recorded CHILD's listener tree — never the

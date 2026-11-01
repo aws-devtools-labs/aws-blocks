@@ -302,6 +302,29 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     }
   }
 
+  it('dev stop ends the tsx watch of a runner that a signal killed, before it reports the stop (H4)', async () => {
+    const dir = makeApp();
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    await waitFor('the server', () => serving(port), [dev]);
+    const runner = JSON.parse(readFileSync(join(dir, devPidfilePath(port)), 'utf-8')).pid as number;
+    process.kill(runner, 'SIGKILL'); // the OOM killer
+    await waitFor('the runner to die', () => !running(runner), [dev]);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    let result: StopResult;
+    try {
+      result = await stopDevServer(port);
+    } finally {
+      process.chdir(cwd);
+    }
+    assert.strictEqual(result.stopped, true, JSON.stringify(result));
+    assert.strictEqual(result.portFree, true, JSON.stringify(result));
+    // Reported only once the session is over: its tsx watch is gone too, not still waiting for the dead runner.
+    assert.ok(dev.child.pid && !running(dev.child.pid), `tsx watch outlived dev stop: ${JSON.stringify(result)}`);
+    assert.ok(!existsSync(join(dir, devPidfilePath(port))));
+  });
+
   it('leaves no pidfile after the blocks CLI stop: SIGTERM to the dev server, then to its tsx watch', async () => {
     const dir = makeApp();
     const port = await freePort();
