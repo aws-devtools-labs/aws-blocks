@@ -88,6 +88,58 @@ export async function ensureSecrets(
   return result;
 }
 
+/** The one SSM call {@link deleteSandboxSecrets} makes; injectable for tests. */
+export type DeleteParameterSender = (name: string) => Promise<void>;
+
+/**
+ * Delete the SSM parameters a sandbox deploy wrote outside CloudFormation
+ * (see {@link ensureSecrets}): the sandbox's `/<sandbox stack>-db-url`
+ * SecureString. CloudFormation never owned it, so deleting the stack leaves it,
+ * with the database password inside. Only the sandbox name is ever derived
+ * here, never the production one. Returns the names that were deleted; a name
+ * that does not exist (the app has no external database) is skipped, and so is
+ * an app whose `.blocks/config.json` gives no stack name: the deploy derives the
+ * name the same way, so it wrote no parameter for such an app.
+ *
+ * @throws {Error} When SSM refuses the delete, naming the parameter and the
+ * command that deletes it.
+ */
+export async function deleteSandboxSecrets(
+  projectRoot?: string,
+  send?: DeleteParameterSender,
+): Promise<string[]> {
+  let stackName: string;
+  try {
+    stackName = getStackName({ sandbox: true, projectRoot });
+  } catch {
+    return [];
+  }
+  const parameterName = dbConnectionParameterName(stackName);
+  const deleteParameter = send ?? (await ssmDeleteParameter(projectRoot));
+  try {
+    await deleteParameter(parameterName);
+  } catch (e: unknown) {
+    const name = e instanceof Error ? e.name : 'Error';
+    if (name === 'ParameterNotFound') return [];
+    throw new Error(
+      'The sandbox stack was deleted, but its database connection string is still stored in the SSM ' +
+        `parameter ${parameterName} (${name}). Delete it with: aws ssm delete-parameter --name ${parameterName}`,
+    );
+  }
+  return [parameterName];
+}
+
+/** DeleteParameter with the Region and CDK profile the sandbox deploy wrote the parameter with. */
+async function ssmDeleteParameter(projectRoot: string | undefined): Promise<DeleteParameterSender> {
+  // Loaded on demand, as in ensureSecrets, so importing this module stays cheap.
+  const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
+  const target = await resolveDeploymentTarget({ projectRoot });
+  const client = new SSMClient({ region: target.region ?? undefined, profile: target.profile });
+  return async (name) => {
+    await client.send(new DeleteParameterCommand({ Name: name }));
+  };
+}
+
 /**
  * Load environment for production deployment.
  *

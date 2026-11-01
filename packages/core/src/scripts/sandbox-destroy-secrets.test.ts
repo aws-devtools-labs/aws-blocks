@@ -1,0 +1,122 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// `sandbox destroy` deletes the database connection string that the sandbox
+// deploy wrote to SSM outside CloudFormation, and only the sandbox's own name.
+
+import assert from 'node:assert';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import { deleteSandboxSecrets } from './ensure-secrets.js';
+import { runSandboxDestroy, type SandboxDestroySteps } from './sandbox.js';
+
+function awsError(name: string): Error {
+	const error = new Error(`${name}: detail`);
+	error.name = name;
+	return error;
+}
+
+describe('sandbox destroy deletes the sandbox SSM secrets', () => {
+	let root: string;
+	let savedCwd: string;
+
+	beforeEach(async () => {
+		savedCwd = process.cwd();
+		root = await mkdtemp(join(tmpdir(), 'blocks-destroy-secrets-'));
+		mkdirSync(join(root, '.blocks'));
+		writeFileSync(join(root, '.blocks', 'config.json'), JSON.stringify({ stackId: 'zz-app' }));
+		mkdirSync(join(root, '.blocks-sandbox'));
+		writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'dev-abc123\n');
+		mock.method(console, 'error', () => {});
+	});
+
+	afterEach(async () => {
+		mock.restoreAll();
+		process.chdir(savedCwd);
+		await rm(root, { recursive: true, force: true });
+	});
+
+	it("deletes the sandbox's connection-string parameter, never the production one", async () => {
+		const names: string[] = [];
+		const deleted = await deleteSandboxSecrets(root, async (name) => {
+			names.push(name);
+		});
+		assert.deepStrictEqual(names, ['/zz-app-dev-abc123-db-url']);
+		assert.deepStrictEqual(deleted, ['/zz-app-dev-abc123-db-url']);
+	});
+
+	it('skips an app whose .blocks/config.json gives no stack name, without calling SSM', async () => {
+		await rm(join(root, '.blocks'), { recursive: true, force: true });
+		const names: string[] = [];
+		const deleted = await deleteSandboxSecrets(root, async (name) => {
+			names.push(name);
+		});
+		assert.deepStrictEqual(deleted, []);
+		assert.deepStrictEqual(names, []);
+	});
+
+	it('skips a parameter that does not exist (an app without an external database)', async () => {
+		const deleted = await deleteSandboxSecrets(root, async () => {
+			throw awsError('ParameterNotFound');
+		});
+		assert.deepStrictEqual(deleted, []);
+	});
+
+	it('fails with the parameter name and the delete command when SSM refuses', async () => {
+		await assert.rejects(
+			deleteSandboxSecrets(root, async () => {
+				throw awsError('AccessDeniedException');
+			}),
+			(error: Error) => {
+				assert.match(error.message, /still stored in the SSM parameter \/zz-app-dev-abc123-db-url \(AccessDeniedException\)/);
+				assert.match(error.message, /aws ssm delete-parameter --name \/zz-app-dev-abc123-db-url/);
+				return true;
+			},
+		);
+	});
+
+	function steps(calls: string[], destroy: () => Promise<void>): SandboxDestroySteps {
+		return {
+			checkCredentials: async () => {
+				calls.push('check');
+			},
+			retryClients: async () => {
+				calls.push('clients');
+				return { cfnFor: () => ({}) as never, s3: {} as never };
+			},
+			destroy: async () => {
+				calls.push('destroy');
+				await destroy();
+			},
+			deleteSecrets: async (projectRoot) => {
+				calls.push(`secrets:${projectRoot}`);
+				return [];
+			},
+		};
+	}
+
+	it('runs the delete after the stack is destroyed, in the project root', async () => {
+		process.chdir(root);
+		const calls: string[] = [];
+		await runSandboxDestroy('aws-blocks/index.cdk.ts', steps(calls, async () => {}));
+		assert.deepStrictEqual(calls, ['check', 'clients', 'destroy', `secrets:${process.cwd()}`]);
+	});
+
+	it('keeps the parameter when the stack destroy fails, so the sandbox still works', async () => {
+		process.chdir(root);
+		const calls: string[] = [];
+		await assert.rejects(
+			runSandboxDestroy(
+				'aws-blocks/index.cdk.ts',
+				steps(calls, async () => {
+					throw new Error('destroy failed');
+				}),
+			),
+			/destroy failed/,
+		);
+		assert.deepStrictEqual(calls, ['check', 'clients', 'destroy']);
+	});
+});

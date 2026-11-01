@@ -212,6 +212,9 @@ describe('destroy fails fast on a deterministic error', () => {
 				destroy: async () => {
 					throw new Error('must not run');
 				},
+				deleteSecrets: async () => {
+					throw new Error('must not run');
+				},
 			}),
 			/stop after the check/,
 		);
