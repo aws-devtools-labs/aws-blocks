@@ -327,6 +327,14 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
+  it('AGENTS.md names the blocks db and blocks vendorize commands of the scaffolded app', () => {
+    const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
+    assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations')), 'the sql template keeps aws-blocks/migrations');
+    assert.match(guide, /`npx --no -- blocks db migrate aws-blocks\/migrations`/);
+    assert.match(guide, /`npx --no -- blocks db status aws-blocks\/migrations`/);
+    assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
+  });
+
   it('the backend README gives the dev server API URL with its /aws-blocks/api path', () => {
     const readme = readFileSync(join(__dirname, '..', 'templates', 'backend', 'README.md'), 'utf-8');
     const row = readme.split('\n').find((line) => line.startsWith('| `npm run dev` |'));
