@@ -104,6 +104,23 @@ test('pull refuses (exit 1) in a non-TTY context and does NOT run headless off S
   }
 });
 
+test('pull --help states the exit code that pull without a terminal really has', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    const env = { BB_DATA_COMMAND: '' };
+    const run = runCli(['pull'], dir, env);
+    assert.strictEqual(run.status, 1);
+    assert.match(runCli(['pull', '--help'], dir, env).stdout, new RegExp(`exits ${run.status} without one\\.`));
+    // `blocks db pull` refuses before bb-data runs, with exit 2: blocks' own test checks that code.
+    assert.match(
+      runCli(['pull', '--help'], dir, { BB_DATA_COMMAND: 'blocks db' }).stdout,
+      /Usage: blocks db pull[\s\S]*exits 2 without one \(or with --no-input or CI\)\./,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('--help and -h print the verb usage and exit 0 without touching any database', () => {
   // A dir with no migrations/ and an external-DB env var: running any verb would
   // exit 1 (missing dir, external guard, or no TTY). Help must short-circuit all of it.

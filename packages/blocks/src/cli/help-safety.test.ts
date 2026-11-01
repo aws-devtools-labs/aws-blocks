@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as realCore from '@aws-blocks/core/scripts';
+import { resolvePackageBin } from './commands.js';
 import type { SpawnSpec } from './context.js';
 import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 
@@ -241,5 +242,18 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			assert.match(run.stderr, /cannot prompt \(no TTY, --no-input or CI\)/);
 			assert.deepStrictEqual(run.spawned, []);
 		}
+	});
+
+	it('the help of "blocks db pull" states the exit code that it has without a terminal', async () => {
+		const root = fixtureApp();
+		const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
+		assert.ok(cli);
+		const help = spawnSync(process.execPath, [cli, 'pull', '--help'], {
+			encoding: 'utf-8',
+			env: { ...process.env, BB_DATA_COMMAND: 'blocks db' },
+		}).stdout;
+		const stated = Number(/exits (\d) without one/.exec(help)?.[1]);
+		const run = await runCli(['db', 'pull'], { cwd: root });
+		assert.strictEqual(run.code, stated);
 	});
 });

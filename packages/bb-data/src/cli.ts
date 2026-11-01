@@ -115,6 +115,13 @@ function takeFlagOrBool(args: string[], flag: string): { present: boolean; value
  */
 const COMMAND = process.env.BB_DATA_COMMAND || 'bb-data';
 
+/**
+ * What `pull` does without a terminal. `blocks db pull` refuses before it runs bb-data, as
+ * a usage error (exit 2), also under --no-input or CI; bb-data itself exits 1.
+ */
+const PULL_NO_TERMINAL =
+  COMMAND === 'blocks db' ? 'exits 2 without one (or with --no-input or CI)' : 'exits 1 without one';
+
 /** The verbs, with the usage that `bb-data <verb> --help` prints. */
 const VERB_HELP: Record<string, string> = {
   migrate: `
@@ -160,7 +167,7 @@ Usage: ${COMMAND} pull [output-dir]
 
 Interactive: asks whether the database is for development or production, then for its
 connection string, introspects it and writes the generated files to [output-dir]
-(default: ./aws-blocks). It needs a terminal and exits 1 without one.
+(default: ./aws-blocks). It needs a terminal, and ${PULL_NO_TERMINAL}.
 
 Options:
   -h, --help               Print this help and exit.
