@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { AwsCredentialIdentity } from '@smithy/types';
-import type { BootstrapTarget, BootstrapVersionReader } from './preflight-bootstrap.js';
+import { type BootstrapTarget, type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bootstrap.js';
 import { type AssertAwsCredentialsOptions, assertAwsCredentials } from './preflight-credentials.js';
 
 const CREDENTIALS: AwsCredentialIdentity = { accessKeyId: 'AKIAEXAMPLEFIXTURE', secretAccessKey: 'fixture-secret' };
@@ -173,5 +173,19 @@ describe('CDK bootstrap check', () => {
 		const message = await failure(reader(NOT_FOUND).read);
 		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app=$/m);
 		assert.doesNotMatch(message, /touch/);
+	});
+});
+
+describe('cdkBootstrapFailure', () => {
+	it('passes the profile the deploy used to the printed bootstrap command', async () => {
+		const message = await cdkBootstrapFailure({
+			invocation: 'blocks deploy --profile starter',
+			account: '123456789012',
+			region: 'eu-south-2',
+			profile: 'starter',
+			credentials: CREDENTIALS,
+			read: reader(NOT_FOUND).read,
+		});
+		assert.match(String(message), /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter$/m);
 	});
 });
