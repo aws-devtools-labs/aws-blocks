@@ -29,7 +29,9 @@ function runScript(scriptBody: string, env: Record<string, string>, cwd?: string
   const fullScript = `import { ApiNamespaceClient } from '${importPath}';\n${scriptBody}`;
   writeFileSync(scriptPath, fullScript);
   try {
+    // A fresh directory, so no `.blocks-sandbox/config.json` of the cwd answers before the browser fetch.
     return execSync(`node ${scriptPath}`, {
+      cwd: tmp,
       encoding: 'utf-8',
       env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
       cwd,
@@ -117,6 +119,27 @@ try {
 }
 `, { BLOCKS_API_URL: '/aws-blocks/api' });
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
+  });
+
+  it('calls a relative apiUrl from the fetched config.json at the page origin', () => {
+    // A dev server bound to all interfaces serves {"apiUrl": "/aws-blocks/api"}. The browser
+    // resolves each request against the page, so the client must pass the path on as it is.
+    const result = runScript(`
+const calls = [];
+globalThis.fetch = async (input) => {
+  calls.push(String(input));
+  const body = calls.length === 1
+    ? { apiUrl: '/aws-blocks/api', environment: 'local' }
+    : { jsonrpc: '2.0', result: 'ok', id: 1 };
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+const api = ApiNamespaceClient('greet');
+console.log(JSON.stringify({ result: await api.hello(), calls }));
+`, {});
+    assert.deepStrictEqual(JSON.parse(result.split('\n').at(-1) ?? ''), {
+      result: 'ok',
+      calls: ['/.blocks-sandbox/config.json', '/aws-blocks/api/greet'],
+    });
   });
 });
 
