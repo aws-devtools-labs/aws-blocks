@@ -17,6 +17,7 @@ import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/fra
 import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
+import { SANDBOX_SESSION_ENV } from './dev-pidfile.js';
 import { terminateProcessTree, type AwaitableChild } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
@@ -768,25 +769,45 @@ export async function startSandbox(options: SandboxOptions) {
     // great-grandchild — which a bare `devServer.kill()` (the shell only) never
     // triggers. Windows has no groups; terminateProcessTree reaps via taskkill.
     detached: process.platform !== 'win32',
-    env: { 
+    env: {
       ...process.env,
       NODE_OPTIONS: '',
       BLOCKS_API_URL: apiUrl,
+      // The dev server records this session in its pidfile, so `blocks dev stop` says it stopped the sandbox.
+      [SANDBOX_SESSION_ENV]: String(process.pid),
     },
   });
 
   let cleaningUp = false;
-  const cleanup = async () => {
+  const cleanup = async (exitCode = 0) => {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
     await stopSandboxProcesses({ cdkWatch, devServer }, terminateProcessTree, () => reportSandboxStopped(destroyInvocation));
-    process.exit(0);
+    process.exit(exitCode);
   };
 
-  process.on("SIGINT", cleanup);
-  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", () => cleanup());
+  process.on("SIGTERM", () => cleanup());
+  // The session is its dev server and its `cdk watch`: when the dev server ends
+  // (`blocks dev stop`, a crash), stop the watch too, which would otherwise go
+  // on hotswapping every save into the sandbox, out of reach of any command.
+  devServer.once('exit', (code, signal) => {
+    if (cleaningUp) return;
+    const exitCode = sandboxDevServerExitCode(code, signal);
+    if (exitCode !== 0) console.error(`\n❌ The local dev server exited (code ${code}); stopping the sandbox session.`);
+    void cleanup(exitCode);
+  });
 
   await new Promise(() => {});
+}
+
+/**
+ * The exit code of `blocks sandbox` when its dev server ends on its own: 0 when
+ * it was stopped (exit 0, a signal, or a shell's 128+n for one: `blocks dev
+ * stop` SIGTERMs or SIGKILLs it), 1 when it failed (a startup failure exits 1).
+ */
+export function sandboxDevServerExitCode(code: number | null, signal: NodeJS.Signals | null): number {
+  return signal !== null || code === null || code === 0 || code > 128 ? 0 : 1;
 }
 
 /**

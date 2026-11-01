@@ -123,6 +123,35 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.deepEqual(removed, [], 'a live session keeps its record');
   });
 
+  it("waits for the blocks sandbox session a dev server records, and says it stopped the sandbox (U2)", async () => {
+    let ended = false;
+    const waited: number[] = [];
+    const { deps, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, sandbox: { pid: 6000 } }),
+      isAlive: (pid) => !ended && [4000, 4242, 6000].includes(pid),
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      signal: () => { ended = true; },
+      waitExit: async (pid) => { waited.push(pid); return true; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(r.sandbox, { pid: 6000 });
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /^🛑 Stopped the blocks sandbox session on :3000 \(pid 4000\): its dev server and its cdk watch\. .*blocks sandbox destroy/);
+  });
+
+  it('warns when the sandbox session outlives its dev server', async () => {
+    const { deps } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, sandbox: { pid: 6000 } }),
+      isAlive: (pid) => pid === 4000 || pid === 6000,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      waitExit: async (pid) => pid !== 6000,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(isStopWarning(r), true);
+    assert.match(stopMessage(r), /Signalled the blocks sandbox session on :3000 .* has not ended yet/);
+  });
+
   it('does NOT signal the ppid when it is a bare shell, not a tsx watcher (self-kill guard)', async () => {
     // Started as `node server.ts` from a shell → ppid is the shell. Child holds
     // the port, so we fall back to the recorded CHILD's listener tree — never the

@@ -43,6 +43,7 @@ import {
   pidCommand,
   reapDevPidfile,
   releaseDevPidfile,
+  SANDBOX_SESSION_ENV,
 } from './dev-pidfile.js';
 export {
   type ClaimPidfileDeps,
@@ -870,6 +871,9 @@ export async function startDevServer(options: DevServerOptions) {
     parentCommand: pidCommand(process.ppid),
     token: randomUUID(),
   };
+  const sandboxSession = Number(process.env[SANDBOX_SESSION_ENV]);
+  delete process.env[SANDBOX_SESSION_ENV]; // not the frontend's to inherit
+  if (Number.isInteger(sandboxSession) && sandboxSession > 1) selfRecord.sandbox = { pid: sandboxSession };
   const session = Number(process.env[DEV_SESSION_ENV]);
   delete process.env[DEV_SESSION_ENV]; // not the frontend's to inherit
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
@@ -1484,6 +1488,12 @@ export interface StopResult {
    * was SIGKILLed.
    */
   killed?: true;
+  /**
+   * The `blocks sandbox` session whose dev server this was (see
+   * {@link DevServerPidRecord.sandbox}): it ends with its dev server, stopping
+   * its `cdk watch`, and the stop waited for it.
+   */
+  sandbox?: { pid: number };
 }
 
 /** Injectable seams for {@link stopDevServer} (real implementations by default). */
@@ -1551,6 +1561,13 @@ const CLI_STOP_TIMEOUT_MS = 12_000;
  * cleanup stops the frontend within that.
  */
 const WATCHER_EXIT_TIMEOUT_MS = 8000;
+
+/**
+ * How long {@link stopDevServer} waits for a `blocks sandbox` session to exit
+ * once its dev server has: it stops its `cdk watch` (2 s) and its dev server
+ * tree (6 s) at the same time, then exits.
+ */
+const SANDBOX_STOP_TIMEOUT_MS = 10_000;
 
 /**
  * How long {@link stopDevServer} gives a `tsx watch` whose runner is already
@@ -1713,12 +1730,16 @@ export async function stopDevServer(
     // A runner that died by a signal ran no cleanup: its frontend is still up.
     const left = childAlive ? null : await stopLeftFrontend();
     await d.waitFree(port, 3000);
+    // A `blocks sandbox` session ends with its dev server: it stops its `cdk watch` and exits. Wait for that.
+    const sandbox = record.sandbox;
+    const sandboxEnded = !sandbox || !d.isAlive(sandbox.pid) || (await d.waitExit(sandbox.pid, SANDBOX_STOP_TIMEOUT_MS));
     const portFree = !(await d.probe(port)) && (left === null || left.reclaim.reclaimed);
     if (portFree && exited) reapIfEnded(body);
     return {
-      ...result('watcher', [record.ppid, ...(left?.reclaim.pids ?? [])], portFree && exited),
+      ...result('watcher', [record.ppid, ...(left?.reclaim.pids ?? [])], portFree && exited && sandboxEnded),
       ...(killed ? { killed: true } : {}),
       ...(left ? { frontend: left.frontend } : {}),
+      ...(sandbox ? { sandbox } : {}),
     };
   }
 
@@ -1772,7 +1793,19 @@ export function stopMessage(result: StopResult): string {
   }
   if (result.portFree) {
     const how = result.killed ? '; its tsx watch had lost its runner and ignored SIGTERM, so it was killed' : '';
+    if (result.sandbox) {
+      return (
+        `🛑 Stopped the blocks sandbox session on :${result.port}${who}: its dev server and its cdk watch${how}. ` +
+        'Its AWS resources are still deployed; `npx --no -- blocks sandbox destroy` deletes them.'
+      );
+    }
     return `🛑 Stopped the dev server on :${result.port}${who}${how}.`;
+  }
+  if (result.sandbox) {
+    return (
+      `⚠️  Signalled the blocks sandbox session on :${result.port}${who}, but it has not ended yet: ` +
+      'its dev server or its cdk watch may still be shutting down.'
+    );
   }
   return (
     `⚠️  Signalled the dev server on :${result.port}${who}, but the port is still ` +

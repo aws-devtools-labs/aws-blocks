@@ -50,7 +50,19 @@ export interface DevServerPidRecord {
   starting?: true;
   /** Random, new for every record written: names the record's reap file (see {@link claimDevPidfile}). */
   token?: string;
+  /**
+   * The `blocks sandbox` session (its process) that started this dev server,
+   * set from {@link SANDBOX_SESSION_ENV}: that session ends with its dev
+   * server, so `dev stop` waits for it and says it stopped the sandbox.
+   */
+  sandbox?: { pid: number };
 }
+
+/**
+ * The environment variable carrying the pid of the `blocks sandbox` process to
+ * the dev server it starts, which records it (see {@link DevServerPidRecord.sandbox}).
+ */
+export const SANDBOX_SESSION_ENV = 'BLOCKS_SANDBOX_SESSION';
 
 /** Parse a pidfile body into a {@link DevServerPidRecord}; `null` if absent/corrupt/incomplete. */
 export function parsePidRecord(text: string): DevServerPidRecord | null {
@@ -65,6 +77,7 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
       if (o.frontend && Number.isInteger(o.frontend.pgid) && o.frontend.pgid > 1 && Number.isInteger(o.frontend.port)) {
         record.frontend = { pgid: o.frontend.pgid, port: o.frontend.port };
       }
+      if (o.sandbox && Number.isInteger(o.sandbox.pid) && o.sandbox.pid > 1) record.sandbox = { pid: o.sandbox.pid };
       return record;
     }
   } catch {
