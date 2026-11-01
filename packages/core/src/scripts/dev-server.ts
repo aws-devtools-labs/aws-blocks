@@ -214,22 +214,26 @@ export interface DevServerAddress {
  * Resolve the CORS origin for the dev server. Reflects back origins on
  * localhost/127.0.0.1, and — when the server binds one specific non-loopback
  * host — origins on that host (a page served from `http://10.0.0.5:5173` calling
- * the API on `10.0.0.5:3000`). Otherwise returns the server's own origin
- * (`http://localhost:3000` when `bound` is not given).
+ * the API on `10.0.0.5:3000`). It also reflects a same-origin request's Origin,
+ * the one that equals `http://<requestHost>`: a page that a server bound to all
+ * interfaces (`0.0.0.0`, `::`) served at one of the machine's addresses calls
+ * the API at that address. A browser grants a same-origin page that access
+ * whatever the header says, so reflecting it widens nothing. Otherwise returns
+ * the server's own origin (`http://localhost:3000` when `bound` is not given).
  */
-export function resolveDevCorsOrigin(origin: string, bound?: DevServerAddress): string {
+export function resolveDevCorsOrigin(origin: string, bound?: DevServerAddress, requestHost?: string): string {
   if (LOCALHOST_PATTERN.test(origin)) return origin;
   if (!bound) return 'http://localhost:3000';
   const urlHost = devUrlHost(bound.host);
-  if (urlHost !== 'localhost') {
-    try {
-      const url = new URL(origin);
-      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.origin === origin && url.hostname === urlHost.toLowerCase()) {
-        return origin;
-      }
-    } catch {
-      // Not a URL (`null`, empty): fall back.
+  try {
+    const url = new URL(origin);
+    if ((url.protocol === 'http:' || url.protocol === 'https:') && url.origin === origin) {
+      if (urlHost !== 'localhost' && url.hostname === urlHost.toLowerCase()) return origin;
+      // The dev server speaks plain HTTP, so its own origin is http://<Host header>.
+      if (requestHost && url.protocol === 'http:' && url.origin === new URL(`http://${requestHost}`).origin) return origin;
     }
+  } catch {
+    // Not a URL (`null`, empty), or a Host header that is none: fall back.
   }
   return `http://${urlHost}:${bound.port}`;
 }
@@ -241,9 +245,13 @@ export function resolveDevCorsOrigin(origin: string, bound?: DevServerAddress): 
  * same `Vary: Origin` — so the reflected `Access-Control-Allow-Origin` can't be
  * served across origins by a shared cache, and so the two sites can't drift.
  */
-export function buildDevCorsHeaders(requestOrigin: string, bound?: DevServerAddress): Record<string, string> {
+export function buildDevCorsHeaders(
+  requestOrigin: string,
+  bound?: DevServerAddress,
+  requestHost?: string,
+): Record<string, string> {
   return {
-    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin, bound),
+    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin, bound, requestHost),
     'Vary': 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
@@ -270,6 +278,19 @@ export function buildBlocksConfig(port: number, isSandbox: boolean, host = '127.
     apiUrl: `http://${devUrlHost(host)}:${port}${BLOCKS_RPC_PREFIX}`,
     environment: isSandbox ? 'sandbox' : 'local',
   };
+}
+
+/**
+ * The runtime config the dev server answers at `${BLOCKS_SANDBOX_PREFIX}/config.json`:
+ * {@link buildBlocksConfig}, except that a server bound to all interfaces (`0.0.0.0`, `::`)
+ * serves the same-origin `apiUrl` `/aws-blocks/api`. A browser can load the app at any of
+ * the machine's addresses, and the absolute `http://localhost:<port>` would send it to
+ * another origin, or to another machine. The `.blocks-sandbox/config.json` file keeps the
+ * absolute URL: Node.js reads it, and a relative URL has no origin there.
+ */
+export function buildServedBlocksConfig(port: number, isSandbox: boolean, host = '127.0.0.1'): BlocksRuntimeConfig {
+  const config = buildBlocksConfig(port, isSandbox, host);
+  return isWildcardHost(host) ? { ...config, apiUrl: BLOCKS_RPC_PREFIX } : config;
 }
 
 /**
@@ -1258,6 +1279,7 @@ export async function startDevServer(options: DevServerOptions) {
   // This makes sandbox single-origin, matching `npm run dev` and the prod
   // CloudFront proxy; `crossDomain` stays unnecessary.
   const blocksConfig = buildBlocksConfig(port, isSandbox, host);
+  const servedBlocksConfig = buildServedBlocksConfig(port, isSandbox, host);
   /** The front door's URL on the interface it binds (see {@link devUrlHost}). */
   const frontDoor = `http://${devUrlHost(host)}:${port}`;
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
@@ -1283,7 +1305,8 @@ export async function startDevServer(options: DevServerOptions) {
 
   // 5. Create the request dispatcher. It resolves APIs with the same rule as the
   // Lambda handler: no Building Block instances or `_`-private exports.
-  const dispatch = createDevDispatcher(backend, host);
+  const bound: DevServerAddress = { host, port };
+  const dispatch = createDevDispatcher(backend, bound);
 
   registerBuiltinRoutes({ localDev: true });
   lockRouteRegistry();
@@ -1523,7 +1546,7 @@ export async function startDevServer(options: DevServerOptions) {
 
     // CORS headers
     const requestOrigin = req.headers.origin || '';
-    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin, { host, port }))) {
+    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin, { host, port }, req.headers.host))) {
       res.setHeader(name, value);
     }
 
@@ -1544,7 +1567,7 @@ export async function startDevServer(options: DevServerOptions) {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store',
       });
-      res.end(JSON.stringify(blocksConfig));
+      res.end(JSON.stringify(servedBlocksConfig));
       return;
     }
 
@@ -1558,7 +1581,7 @@ export async function startDevServer(options: DevServerOptions) {
         apiProxy.web(req, res);
         return;
       }
-      handleApiRequest(req, res, url, method, dispatch);
+      handleApiRequest(req, res, url, method, dispatch, bound);
       return;
     }
 
@@ -2063,18 +2086,19 @@ export function devRequestLogging(env: NodeJS.ProcessEnv = process.env): {
 /**
  * The dispatcher behind the local API: the same RawRoute and JSON-RPC handling
  * as the deployed handlers, with the dev server's CORS policy (reflect a
- * localhost origin, never refuse one; refuse a state-changing request from a
- * foreign origin, see {@link isAllowedDevRequestOrigin}), its request logging,
- * and the available APIs named in an unknown-namespace error. `bindHost` is the
- * interface the dev server binds.
+ * localhost origin or the server's own, never refuse one; refuse a
+ * state-changing request from a foreign origin, see
+ * {@link isAllowedDevRequestOrigin}), its request logging, and the available
+ * APIs named in an unknown-namespace error. `bound` is the host and port the
+ * dev server binds.
  */
-function createDevDispatcher(backend: unknown, bindHost: string): Dispatcher {
+function createDevDispatcher(backend: unknown, bound: DevServerAddress): Dispatcher {
   return createDispatcher(backend, {
     cors: {
       // A state-changing request from a foreign origin is refused (see isAllowedDevRequestOrigin).
       rejects: (origin, request) =>
-        rejectsDevRequestOrigin(origin, request.method, request.headers().get('host') ?? undefined, bindHost),
-      headers: buildDevCorsHeaders,
+        rejectsDevRequestOrigin(origin, request.method, request.headers().get('host') ?? undefined, bound.host),
+      headers: (origin, request) => buildDevCorsHeaders(origin, bound, request.headers().get('host') ?? undefined),
     },
     listApisWhenNotFound: true,
     // A request's unhandled rejection is logged with its method (see installDevRejectionHandler).
@@ -2177,6 +2201,7 @@ function handleApiRequest(
   url: URL,
   method: string,
   dispatch: Dispatcher,
+  bound: DevServerAddress,
 ): void {
   const isRpc = method === 'POST' && isRpcPath(url.pathname);
   if (isRpc || matchRoute(method, url.pathname)) {
@@ -2184,7 +2209,7 @@ function handleApiRequest(
     // The server's request handler set these on `res`; a dispatcher 500 clears every header
     // set so far, so it is handed them again to keep the answer readable by the
     // browser.
-    const corsHeaders = buildDevCorsHeaders(req.headers.origin || '');
+    const corsHeaders = buildDevCorsHeaders(req.headers.origin || '', bound, req.headers.host);
     // JSON-RPC bodies are capped at MAX_RPC_BODY_BYTES, as in the deployed
     // handlers; RawRoute bodies are read whole.
     readBody(req, isRpc ? MAX_RPC_BODY_BYTES : Infinity).then(async (body) => {

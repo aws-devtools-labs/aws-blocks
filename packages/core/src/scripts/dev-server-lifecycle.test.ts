@@ -346,6 +346,35 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.strictEqual(foreign.headers.get('access-control-allow-origin'), `http://${host}:${port}`);
   });
 
+  it('serves a same-origin apiUrl and reflects a same-origin Origin when it binds all interfaces', { skip: !lanAddress && 'no non-loopback IPv4 address' }, async () => {
+    const lan = lanAddress ?? '';
+    const port = await freePort();
+    const dir = makeApp();
+    const dev = startDev(dir, { port, host: '0.0.0.0' });
+    await waitFor('the server', () => dev.out.stdout.includes('local server running'), [dev]);
+    // A page opened at the machine address calls the API at that address, not at localhost.
+    const config = await fetch(`http://${lan}:${port}/.blocks-sandbox/config.json`).then((r) => r.json());
+    assert.deepStrictEqual(config, { apiUrl: '/aws-blocks/api', environment: 'local' });
+    // Node.js readers of the file need an origin, so the file keeps the absolute URL.
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(dir, '.blocks-sandbox', 'config.json'), 'utf-8')), {
+      apiUrl: `http://localhost:${port}/aws-blocks/api`,
+      environment: 'local',
+    });
+    const page = `http://${lan}:${port}`;
+    const response = await fetch(`${page}/aws-blocks/api`, {
+      method: 'POST',
+      headers: { Origin: page, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'testApi.ping', params: [], id: 1 }),
+    });
+    assert.strictEqual(response.headers.get('access-control-allow-origin'), page);
+    const body: unknown = await response.json();
+    assert.ok(body && typeof body === 'object' && 'result' in body && body.result === 'pong', JSON.stringify(body));
+    for (const origin of ['https://evil.example', `http://${lan}:5173`]) {
+      const foreign = await fetch(`${page}/aws-blocks/api`, { method: 'OPTIONS', headers: { Origin: origin } });
+      assert.strictEqual(foreign.headers.get('access-control-allow-origin'), `http://localhost:${port}`, origin);
+    }
+  });
+
   it('keeps a hand-written client.js when package.json sets blocks.dev.generateClient to false', async () => {
     const handWritten = '// Amplify overlay client: reads amplify_outputs.json\nexport const api = {};\n';
     const run = async (blocksDev: Record<string, unknown> | undefined): Promise<string> => {

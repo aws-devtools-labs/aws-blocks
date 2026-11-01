@@ -89,6 +89,45 @@ describe('resolveDevCorsOrigin — the bound host and port', () => {
   });
 });
 
+describe('resolveDevCorsOrigin — a same-origin request', () => {
+  const wildcard = { host: '0.0.0.0', port: 41041 };
+
+  it('reflects the Origin that equals http://<Host header>, for a page loaded at the machine address', () => {
+    assert.strictEqual(
+      resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard, '10.253.66.118:41041'),
+      'http://10.253.66.118:41041',
+    );
+    assert.strictEqual(
+      resolveDevCorsOrigin('http://[fd00::5]:41041', { host: '::', port: 41041 }, '[fd00::5]:41041'),
+      'http://[fd00::5]:41041',
+    );
+    assert.strictEqual(
+      buildDevCorsHeaders('http://devbox.lan:41041', wildcard, 'DevBox.lan:41041')['Access-Control-Allow-Origin'],
+      'http://devbox.lan:41041',
+    );
+    // The default port is left out of the Origin, but a Host header may carry it.
+    assert.strictEqual(resolveDevCorsOrigin('http://devbox.lan', wildcard, 'devbox.lan:80'), 'http://devbox.lan');
+  });
+
+  it('does not reflect an Origin on another host, port or scheme than the Host header', () => {
+    for (const origin of [
+      'http://evil.example:41041',
+      'http://10.253.66.118:5173',
+      'https://10.253.66.118:41041',
+      'http://10.253.66.118:41041/',
+      'null',
+    ]) {
+      assert.strictEqual(resolveDevCorsOrigin(origin, wildcard, '10.253.66.118:41041'), 'http://localhost:41041', origin);
+    }
+  });
+
+  it('falls back when the Host header is missing or is not a host', () => {
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard), 'http://localhost:41041');
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard, ''), 'http://localhost:41041');
+    assert.strictEqual(resolveDevCorsOrigin('http://a:1', wildcard, 'a b:1'), 'http://localhost:41041');
+  });
+});
+
 describe('devUrlHost', () => {
   it('names loopback and wildcard binds localhost, and keeps any other host', () => {
     assert.strictEqual(devUrlHost('127.0.0.1'), 'localhost');
