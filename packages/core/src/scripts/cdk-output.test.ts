@@ -515,12 +515,15 @@ describe('createCdkOutput — deferSignals (a real cdk tree)', { skip: process.p
     let run: ChildProcess | undefined;
     try {
       const pidFile = join(dir, 'cdk.pid');
-      const grandchild = `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+      // A real process that only waits to be signalled (this test drives real POSIX signals, not a clock).
+      const grandchild = join(dir, 'cdk.cjs');
+      writeFileSync(grandchild, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
       const harness =
         `const { createCdkOutput } = await import(${JSON.stringify(new URL('./cdk-output.js', import.meta.url).href)});\n` +
         "const out = createCdkOutput({ label: 'cdk deploy', verb: 'deploy', level: 'verbose' });\n" +
         // The shell plays npx/npm: the cdk process is a grandchild, as in the real tree.
-        `try { await out.run('/bin/sh', ['-c', ${JSON.stringify(`${process.execPath} -e "${grandchild.replace(/"/g, '\\"')}"`)}], { deferSignals: true }); console.log('DONE'); }\n` +
+        // The paths reach the shell as its positional args, never inside the script, so nothing needs quoting.
+        `try { await out.run('/bin/sh', ['-c', '"$0" "$1"', ${JSON.stringify(process.execPath)}, ${JSON.stringify(grandchild)}], { deferSignals: true }); console.log('DONE'); }\n` +
         "catch (e) { console.log('ABORTED ' + JSON.stringify({ aborted: e.aborted, operatorSignal: e.operatorSignal })); process.exitCode = 3; }\n";
       run = spawn(process.execPath, ['--input-type=module', '-e', harness], { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
