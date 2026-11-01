@@ -318,7 +318,9 @@ export function buildSandboxDeployArgs({
 }
 
 /**
- * Operator-facing recovery guidance printed when a sandbox deploy fails.
+ * Operator-facing recovery guidance printed when a sandbox deploy left a stack
+ * in a failed state, or when that state could not be read (see
+ * {@link sandboxFailureHint}).
  *
  * Express Mode (see {@link buildSandboxDeployArgs}) disables CloudFormation's
  * automatic rollback, so a failed deploy does NOT clean up after itself: a
@@ -347,6 +349,119 @@ export function sandboxFailureRecoveryHint(
     "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
     "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
   ].join("\n");
+}
+
+/** The sandbox step that failed: the synth, or the deploy of its assembly. */
+export type SandboxFailurePhase = 'synth' | 'deploy';
+
+/**
+ * What a failed sandbox deploy needs from the operator, by cause:
+ * - `locked`: another CDK process is using the same `.blocks-sandbox` output;
+ * - `in-progress`: CloudFormation is still updating the stack (for example after an interrupted deploy);
+ * - `failed-stack`: a stack is left `*_FAILED` or `ROLLBACK_COMPLETE`, which Express Mode doesn't roll back;
+ * - `synth`: the app failed to synthesize, so no stack was touched;
+ * - `unknown`: the stack state could not be read;
+ * - `healthy`: every stack exists in a state that can be updated, or doesn't exist.
+ */
+export type SandboxFailureKind = 'locked' | 'in-progress' | 'failed-stack' | 'synth' | 'unknown' | 'healthy';
+
+/** CDK's lock errors when another CLI writes or reads the same cloud assembly directory. */
+const CDK_LOCK_LINE =
+  /Another CLI \(PID=\d+\) is currently synthing to|Other CLIs \(PID=[\d, ]+\) are currently reading from|\bConcurrent(?:Write|Read)Lock\b/;
+
+/** CloudFormation's refusal to update a stack that another operation is still changing. */
+const STACK_BUSY_LINE = /is in [A-Z_]+_IN_PROGRESS state and can not be updated/;
+
+/** A stack status that the next deploy can't update, so the stack has to be destroyed. */
+const FAILED_STACK_STATUS = /_FAILED$|^ROLLBACK_COMPLETE$/;
+
+export interface SandboxFailureInput {
+  phase: SandboxFailurePhase;
+  /** The failed step's retained CDK output ([] when the output was not retained). */
+  lines: readonly string[];
+  /** The stacks the failed deploy targeted ([] after a failed synth). */
+  stacks: readonly AssemblyStack[];
+  /** CloudFormation clients for those stacks; only called when there are stacks to read. */
+  cfnFor: () => Promise<(region: string | undefined) => CloudFormationClient>;
+}
+
+/**
+ * Classify a failed sandbox deploy from its output and, after a failed deploy
+ * step, its stacks' current status. Never throws: a status it can't read
+ * makes the result `unknown` unless the output already settles it.
+ */
+export async function sandboxFailureKind({ phase, lines, stacks, cfnFor }: SandboxFailureInput): Promise<SandboxFailureKind> {
+  if (lines.some((line) => CDK_LOCK_LINE.test(line))) return 'locked';
+  if (lines.some((line) => STACK_BUSY_LINE.test(line))) return 'in-progress';
+  if (phase === 'synth') return 'synth';
+  // The assembly the deploy used can't be read: nothing says which stacks to check.
+  if (stacks.length === 0) return 'unknown';
+  const statuses: Array<string | null | undefined> = [];
+  try {
+    const { DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+    const clientFor = await cfnFor();
+    for (const { stackName, region } of stacks) {
+      try {
+        const res = await clientFor(region).send(new DescribeStacksCommand({ StackName: stackName }));
+        statuses.push(res.Stacks?.[0]?.StackStatus ?? null);
+      } catch (e) {
+        // A stack that doesn't exist is no obstacle to the next deploy.
+        statuses.push(/does not exist/i.test((e as Error).message ?? '') ? null : undefined);
+      }
+    }
+  } catch {
+    return 'unknown';
+  }
+  if (statuses.some((s) => s?.endsWith('_IN_PROGRESS'))) return 'in-progress';
+  if (statuses.some((s) => s && FAILED_STACK_STATUS.test(s))) return 'failed-stack';
+  if (statuses.some((s) => s === undefined)) return 'unknown';
+  return 'healthy';
+}
+
+/**
+ * The recovery guidance for a failed sandbox deploy of `kind` (see
+ * {@link sandboxFailureKind}). Only a failed stack, or one whose state is
+ * unknown, gets the destroy advice: destroying a healthy sandbox throws its
+ * data away and fixes nothing. `invocation` and `destroyInvocation` are how the
+ * user runs the deploy and the destroy. Kept pure so it can be asserted in a unit test.
+ */
+export function sandboxFailureHint(
+  kind: SandboxFailureKind,
+  stackNames: readonly string[] = [],
+  invocation = "npm run sandbox",
+  destroyInvocation = "npm run sandbox:destroy",
+): string {
+  const stacks = stackNames.length > 0 ? stackNames.join(', ') : 'the sandbox stack';
+  switch (kind) {
+    case 'locked':
+      return [
+        "",
+        `ℹ️  Another CDK command is using this app's .blocks-sandbox output (another \`${invocation}\` or`,
+        `   \`${destroyInvocation}\`). Let it finish or stop it, then re-run: run one sandbox command at a time.`,
+      ].join("\n");
+    case 'in-progress':
+      return [
+        "",
+        `ℹ️  CloudFormation is still updating ${stacks}, for example after an interrupted deploy: the update`,
+        "   carries on without the CLI. Wait until the stack status no longer ends in _IN_PROGRESS",
+        `   (aws cloudformation describe-stacks --stack-name ${stackNames[0] ?? '<your-sandbox-stack>'}), then re-run`,
+        `   \`${invocation}\`. Nothing is broken, so don't destroy the sandbox.`,
+      ].join("\n");
+    case 'synth':
+      return [
+        "",
+        `ℹ️  The app failed to synthesize, so no AWS resource was changed. Fix the error above, then re-run \`${invocation}\`.`,
+      ].join("\n");
+    case 'healthy':
+      return [
+        "",
+        "ℹ️  No sandbox stack is left in a failed state, so there's nothing to destroy. Fix the error above,",
+        `   then re-run \`${invocation}\`.`,
+      ].join("\n");
+    case 'failed-stack':
+    case 'unknown':
+      return sandboxFailureRecoveryHint(invocation, destroyInvocation);
+  }
 }
 
 /**
@@ -493,12 +608,15 @@ export async function startSandbox(options: SandboxOptions) {
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
+  // Which step failed, for the recovery hint: a failed synth never touched a stack.
+  let phase: SandboxFailurePhase = 'synth';
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
     await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
+    phase = 'deploy';
 
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
@@ -526,9 +644,18 @@ export async function startSandbox(options: SandboxOptions) {
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
+    // Read before printRetained, which clears the retained lines.
+    const failureLines = cdkOutput.lastRunLines();
     cdkOutput.printRetained();
     console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
+    const stacks = phase === 'deploy' ? topLevelStacks(assemblyDir) : [];
+    const kind = await sandboxFailureKind({
+      phase,
+      lines: failureLines,
+      stacks,
+      cfnFor: async () => (await destroyRetryClients(process.cwd())).cfnFor,
+    });
+    console.error(sandboxFailureHint(kind, stacks.map((s) => s.stackName), invocation, destroyInvocation));
     throw error;
   }
 
