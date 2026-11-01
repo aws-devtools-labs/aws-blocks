@@ -184,6 +184,8 @@ export interface ClaimPidfileDeps {
   remove: (path: string) => void;
   /** The files next to `path` whose names start with `<path>.` (temp and reap files). */
   siblings: (path: string) => string[];
+  /** The other dev servers' pidfiles of the app: `dev-server.<port>.pid` files in `path`'s directory, `path` excluded. */
+  peers: (path: string) => string[];
   isAlive: (pid: number) => boolean;
   commandOf: (pid: number) => string;
   /** Wait before trying again while another live process holds a record's reap file. */
@@ -199,7 +201,12 @@ export type PidfileClaim =
       /** The stale record this start took over (a crashed predecessor, or our own `tsx watch` predecessor), if any. */
       previous: DevServerPidRecord | null;
     }
-  | { acquired: false; reason: string };
+  | {
+      acquired: false;
+      reason: string;
+      /** The port of the session that holds the app: the one `dev stop --port` stops. */
+      port: number;
+    };
 
 /** Write `body` to `path` only if `path` doesn't exist, atomically (temp file + hard link; `wx` where links fail). */
 function createFileExclusive(path: string, body: string): boolean {
@@ -242,6 +249,15 @@ function defaultClaimDeps(): ClaimPidfileDeps {
       try {
         const prefix = `${basename(p)}.`;
         return readdirSync(dirname(p)).filter((name) => name.startsWith(prefix)).map((name) => join(dirname(p), name));
+      } catch {
+        return [];
+      }
+    },
+    peers: (p) => {
+      try {
+        return readdirSync(dirname(p))
+          .filter((name) => /^dev-server\.\d+\.pid$/.test(name) && name !== basename(p))
+          .map((name) => join(dirname(p), name));
       } catch {
         return [];
       }
@@ -365,12 +381,34 @@ function removeOrphans(d: ClaimPidfileDeps, path: string): void {
 }
 
 /**
- * Take the per-port pidfile for `self`, so exactly one dev server runs on a
- * port even when several start at the same moment.
+ * A live session of this app on another port: the first record in the app's
+ * other pidfiles (see {@link ClaimPidfileDeps.peers}) whose process, or `tsx
+ * watch` session, still runs (see {@link recordLiveness}). Two dev servers of
+ * one app share its data directory (`.bb-data`), so a second one on another
+ * port must not start either.
+ */
+function livePeer(d: ClaimPidfileDeps, path: string): DevServerPidRecord | null {
+  for (const file of d.peers(path)) {
+    const text = d.read(file);
+    const record = text === null ? null : parsePidRecord(text);
+    if (!record) continue;
+    const live = recordLiveness(record, d.isAlive, d.commandOf);
+    if (live.pidAlive || live.watcherAlive) return record;
+  }
+  return null;
+}
+
+/**
+ * Take the per-port pidfile for `self`, so exactly one dev server runs in an
+ * app, whatever its port, even when several start at the same moment.
  *
- * The pidfile is created exclusively, so of two simultaneous starts only one
- * creates it. When it already exists, {@link evaluateSingleton} decides: a live
- * owner makes this start bow out; a stale (or unreadable) record is taken over.
+ * The pidfile is created exclusively, so of two simultaneous starts on one
+ * port only one creates it. When it already exists, {@link evaluateSingleton}
+ * decides: a live owner makes this start bow out; a stale (or unreadable)
+ * record is taken over. A start that created its pidfile then looks at the
+ * app's pidfiles for other ports, and bows out, removing its record, while one
+ * of them is live: each start writes its own record before it reads the
+ * others', so of two starts on two ports at least one sees the other.
  *
  * The record of our own `tsx watch` predecessor (same live watcher, exited
  * child) is replaced in place, so the pidfile exists throughout a reload and a
@@ -381,6 +419,7 @@ function removeOrphans(d: ClaimPidfileDeps, path: string): void {
  * Likewise the {@link DevServerPidRecord.starting} record of the `blocks dev`
  * CLI that started this dev server (`adopt`, its pid) is replaced in place: the
  * session it claimed is this one. Any other start sees the live CLI and bows out.
+ * Neither looks at the other ports again: the session that claimed the app did.
  *
  * Any other stale (or unreadable) record is removed by the reap-by-token
  * protocol above, and the pidfile created afresh. In-place replacement and
@@ -398,6 +437,13 @@ export function claimDevPidfile(
   let previous: DevServerPidRecord | null = null;
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
     if (d.createExclusive(path, body)) {
+      const peer = livePeer(d, path);
+      if (peer) {
+        underRecordLock(d, path, body, () => d.remove(path)); // ours, created just now
+        const pid = recordLiveness(peer, d.isAlive, d.commandOf).pidAlive ? peer.pid : peer.ppid;
+        const state = peer.starting ? 'starting' : 'running';
+        return { acquired: false, reason: `a dev server of this app is already ${state} on :${peer.port} (pid ${pid})`, port: peer.port };
+      }
       try { removeOrphans(d, path); } catch { /* best effort: the pidfile is ours either way */ }
       return { acquired: true, previous };
     }
@@ -411,7 +457,7 @@ export function claimDevPidfile(
       existing.ppid === self.ppid && existing.pid !== self.pid;
     if (!adopting && !reloading) {
       const decision = existing && liveness ? evaluateSingleton(existing, self, liveness) : { action: 'proceed' as const };
-      if (decision.action === 'exit') return { acquired: false, reason: decision.reason };
+      if (decision.action === 'exit') return { acquired: false, reason: decision.reason, port: existing?.port ?? self.port };
       d.hook('stale-inspected');
       previous = existing ?? previous;
     }
@@ -420,7 +466,7 @@ export function claimDevPidfile(
     if (outcome === 'done' && (adopting || reloading)) return { acquired: true, previous: existing };
     if (outcome === 'busy') d.sleep(REAP_BACKOFF_MS);
   }
-  return { acquired: false, reason: `other dev servers kept starting on :${self.port}` };
+  return { acquired: false, reason: `other dev servers kept starting on :${self.port}`, port: self.port };
 }
 
 /** The per-port pidfile path a dev server records its supervisor identity in. */
@@ -466,7 +512,12 @@ export type DevSessionClaim =
       /** Remove the starting record, unless the dev server has taken it over. Idempotent. */
       release: () => void;
     }
-  | { acquired: false; reason: string };
+  | {
+      acquired: false;
+      reason: string;
+      /** The port of the dev server that already runs in the app, which may differ from the one asked for. */
+      port: number;
+    };
 
 /**
  * Claim the dev session on `port` for this process, the `blocks dev` CLI of

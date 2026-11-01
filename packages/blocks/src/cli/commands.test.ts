@@ -2223,10 +2223,21 @@ describe('cdk-blocks dev stop', () => {
 			assert.match(
 				second.stderr,
 				new RegExp(
-					`^Error: a dev server is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- blocks dev stop --port 41966, or use another --port\\n`,
+					`^Error: a dev server is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- blocks dev stop --port 41966\\n`,
 				),
 			);
 			assert.deepStrictEqual(JSON.parse(readFileSync(pidfile, 'utf-8')), record, 'the first session keeps its record');
+			// One dev server per app: a blocks dev on another port is refused too, and told the running port.
+			const elsewhere = await runCli(['dev', '--port', '41967'], { cwd });
+			assert.strictEqual(elsewhere.code, 1, elsewhere.stderr);
+			assert.strictEqual(elsewhere.spawned.length, 0);
+			assert.match(
+				elsewhere.stderr,
+				new RegExp(
+					`^Error: a dev server of this app is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- blocks dev stop --port 41966\\n`,
+				),
+			);
+			assert.ok(!existsSync(join(cwd, '.blocks-sandbox', 'dev-server.41967.pid')), 'the refused start leaves no record');
 		} finally {
 			other.kill('SIGKILL');
 		}

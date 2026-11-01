@@ -196,6 +196,22 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.strictEqual(first.child.exitCode, null);
   });
 
+  it('refuses a second dev server of the same app on another port, naming the running port', async () => {
+    // Both would open the app's .bb-data: the second PGlite removed the first one's live postmaster.pid (H1).
+    const dir = makeApp();
+    const [port, other] = [await freePort(), await freePort()];
+    const first = startDev(dir, { port }, { watch: true });
+    await waitFor('the first server', () => serving(port), [first]);
+    const second = startDev(dir, { port: other }, { watch: true });
+    await waitFor('the second blocks dev to exit', () => second.child.exitCode !== null || second.child.signalCode !== null, [first, second]);
+    assert.strictEqual(second.child.exitCode, 1, second.out.stderr);
+    assert.match(second.out.stderr, new RegExp(`a dev server of this app is already running on :${port} \\(pid \\d+\\)`));
+    assert.match(second.out.stderr, new RegExp(`npx --no -- blocks dev stop --port ${port}\``));
+    assert.ok(!existsSync(join(dir, devPidfilePath(other))), 'the refused start leaves no pidfile');
+    assert.strictEqual(await fetchText(other), undefined, 'nothing listens on the second port');
+    assert.ok(await serving(port), 'the first server still serves');
+  });
+
   it("gives its frontend BLOCKS_API_URL = its own front door, whatever a deploy recorded", async () => {
     // A Next.js Server Component resolves the API from BLOCKS_API_URL before .blocks-sandbox/config.json,
     // which a deploy used to point at AWS while `npm run dev` ran.
@@ -311,6 +327,29 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     dev.child.kill('SIGTERM');
     await waitFor('tsx watch to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
     await waitFor('the pidfile to be removed', () => !existsSync(pidfile), [dev]);
+  });
+
+  it("closes the app's local data engines before it exits on a stop", async () => {
+    // process.exit() skips the beforeExit hook that closes PGlite, which then left postmaster.pid on every
+    // stop, so a leftover one could not mean a crash. A stand-in engine registers its closer as bb-data does;
+    // its close takes a real 200 ms, as PGlite's shutdown does, so the test shows the dev server waits for it.
+    const dir = makeApp();
+    writeFileSync(
+      join(dir, 'backend.ts'),
+      "import { writeFileSync } from 'node:fs';\n" +
+        "const key = Symbol.for('aws-blocks.local-engine-closers');\n" +
+        '(globalThis[key] ??= new Set()).add(async () => {\n' +
+        '  await new Promise((r) => setTimeout(r, 200));\n' +
+        "  writeFileSync('engine-closed', 'yes');\n" +
+        '});\n' +
+        "export const testApi = { ping: async () => 'pong' };\n",
+    );
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    await waitFor('the server', () => serving(port), [dev]);
+    dev.child.kill('SIGTERM');
+    await waitFor('tsx watch to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
+    assert.strictEqual(readFileSync(join(dir, 'engine-closed'), 'utf-8'), 'yes');
   });
 
   it('refuses to start when an unrelated process holds its port, and leaves that process alone', async () => {

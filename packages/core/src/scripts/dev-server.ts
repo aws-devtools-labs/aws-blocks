@@ -750,9 +750,35 @@ function watchPidfileHandoff(pidfilePath: string): void {
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
 
-/** `blocks dev stop`, with `--port` when the port isn't the default. */
-function devStopCommand(port: number): string {
-  return port === 3000 ? 'blocks dev stop' : `blocks dev stop --port ${port}`;
+/** `npx --no -- blocks dev stop`, with `--port` when the port isn't the default: a command an app's shell runs as is. */
+export function devStopCommand(port: number): string {
+  return port === 3000 ? 'npx --no -- blocks dev stop' : `npx --no -- blocks dev stop --port ${port}`;
+}
+
+/** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/data-common`). */
+const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
+
+/** How long {@link closeLocalEngines} waits for the engines: within `tsx watch`'s 5 s, with the frontend's teardown. */
+const ENGINE_CLOSE_TIMEOUT_MS = 3000;
+
+/**
+ * Close every local data engine of this process (PGlite for `bb-data` and the
+ * DSQL mock), as their `beforeExit` hook would: the dev server ends with
+ * `process.exit()`, which skips that hook. A closed engine shuts PostgreSQL
+ * down and removes its `postmaster.pid`. Waits at most `timeoutMs`; never throws.
+ */
+export async function closeLocalEngines(timeoutMs = ENGINE_CLOSE_TIMEOUT_MS): Promise<void> {
+  const closers = (globalThis as Record<symbol, unknown>)[LOCAL_ENGINE_CLOSERS];
+  if (!(closers instanceof Set) || closers.size === 0) return;
+  const pending = [...closers] as Array<() => Promise<void>>;
+  closers.clear();
+  const timeout = new AbortController();
+  await Promise.race([
+    // async: a close that throws synchronously rejects, so the rest still run.
+    Promise.allSettled(pending.map(async (close) => close())),
+    sleep(timeoutMs, undefined, { signal: timeout.signal }).catch(() => {}),
+  ]);
+  timeout.abort();
 }
 
 /** How long {@link failDevStartup} waits for `tsx watch` to relay its SIGTERM back before exiting anyway. */
@@ -837,7 +863,8 @@ export async function startDevServer(options: DevServerOptions) {
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
   const claim = claimDevPidfile(pidfilePath, selfRecord, {}, Number.isInteger(session) && session > 1 ? session : undefined);
   if (!claim.acquired) {
-    failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(port)}\`, or use another --port.`);
+    // One dev server per app, whatever its port: the claim names the port of the one that runs.
+    failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(claim.port)}\`.`);
     return;
   }
   // The only processes this start may stop to free a port: those in the
@@ -1344,10 +1371,13 @@ export async function startDevServer(options: DevServerOptions) {
     // cleanup short and leave the frontend running.
 
     // Kill the frontend process *group* and wait for the port to free before
-    // we exit, so a tsx-watch restart can rebind `:3100` cleanly.
+    // we exit, so a tsx-watch restart can rebind `:3100` cleanly. Meanwhile,
+    // close the local data engines: `process.exit()` below skips the
+    // `beforeExit` hook that would, so PGlite would leave its `postmaster.pid`
+    // behind on every stop, and a leftover one would not mean a crash.
     const child = frontendProcess;
     frontendProcess = null;
-    await terminateFrontend(child);
+    await Promise.all([terminateFrontend(child), closeLocalEngines()]);
 
     if (typeof backend.__cleanup === 'function') {
       try { await backend.__cleanup(); } catch {}
