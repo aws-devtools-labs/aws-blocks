@@ -172,6 +172,17 @@ async function main() {
   const regen = takeFlagOrBool(args, '--regenerate-types');
   const regenerateTypesDir = regen.present ? (regen.value ?? './aws-blocks') : undefined;
 
+  // The [dir] / [output] positional: an option-looking token there is a stray flag
+  // (e.g. a global `cdk-blocks` option placed after `cdk-blocks db <verb>`), never a path to
+  // create or read. A usage error exits 2.
+  if (['migrate', 'status', 'generate-types', 'pull'].includes(command) && args[0]?.startsWith('-')) {
+    console.error(
+      `Error: bb-data ${command}: unexpected option "${args[0]}" where a path is expected. ` +
+        'Pass a path, or leave it out for the default. If the option is for `cdk-blocks`, put it before `db`.',
+    );
+    process.exit(2);
+  }
+
   switch (command) {
     case 'migrate':
       await migrate(args, url, stage, regenerateTypesDir, block);
