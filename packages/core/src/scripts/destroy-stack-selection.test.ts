@@ -75,11 +75,19 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
   return readFileSync(argvLog, 'utf-8').split('\n').filter(Boolean);
 }
 
+/**
+ * `destroySandbox`'s body with the real cdk destroy (the fake npm binary) and retry, but no AWS:
+ * no Region or credentials check, and no SSM delete (this app has no `.blocks/config.json`).
+ */
+const SANDBOX_DESTROY =
+  "mod.runSandboxDestroy('aws-blocks/index.ts', { checkCredentials: async () => {}, " +
+  'retryClients: mod.destroyRetryClients, destroy: mod.runDestroyWithRetries, deleteSecrets: async () => [] })';
+
 describe('destroy selects the stacks its deploy creates', { skip }, () => {
   it('destroySandbox runs `cdk destroy --all`, like the sandbox deploy', () => {
     const deployArgs = buildSandboxDeployArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'a.ts' });
     assert.ok(deployArgs.includes('--all'), `expected --all in the sandbox deploy: ${deployArgs.join(' ')}`);
-    const argv = recordDestroyArgv('./sandbox.js', `mod.destroySandbox('aws-blocks/index.ts')`);
+    const argv = recordDestroyArgv('./sandbox.js', SANDBOX_DESTROY);
     assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
     assert.ok(argv.includes('--all'), `expected --all in: ${argv.join(' ')}`);
     assert.ok(argv.includes('--force'), `expected --force in: ${argv.join(' ')}`);
@@ -98,7 +106,7 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     const assemblyDir = join(root, '.blocks-sandbox', 'sandbox-destroy.out');
     mkdirSync(assemblyDir, { recursive: true });
     writeFileSync(join(assemblyDir, 'stale.json'), '{}');
-    const argv = recordDestroyArgv('./sandbox.js', `mod.destroySandbox('aws-blocks/index.ts')`);
+    const argv = recordDestroyArgv('./sandbox.js', SANDBOX_DESTROY);
     // CDK ran in the project root, where the relative `--output` and the cleanup point at the same directory ...
     assert.ok(argv.includes('.blocks-sandbox/sandbox-destroy.out'), argv.join(' '));
     const cdk = readFileSync(cdkLog, 'utf-8');
