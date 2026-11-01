@@ -81,3 +81,35 @@ describe('blocks generate spec output streams', () => {
 		assert.strictEqual(stderr, header);
 	});
 });
+
+describe('blocks generate spec failure', () => {
+	it('reports a backend that does not load in one line and exits 1, with the stack only at debug', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-runner-'));
+		try {
+			const backendPath = join(dir, 'index.ts');
+			writeFileSync(backendPath, 'export const api = {;\n');
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
+			const args = runnerArgs(dir, runnerPath('generate-spec'), {
+				args: [JSON.stringify({ backendPath, outputPath: join(dir, 'blocks.spec.json') })],
+			});
+			const env = { PATH: process.env.PATH, BLOCKS_LOG_STREAM: 'stderr' };
+			const normal = spawnSync(process.execPath, args, {
+				cwd: dir,
+				encoding: 'utf-8',
+				env: { ...env, BLOCKS_LOG_LEVEL: 'normal' },
+			});
+			assert.strictEqual(normal.status, 1, normal.stderr);
+			assert.match(normal.stderr, /^❌ Spec generation failed: /m);
+			assert.doesNotMatch(normal.stderr, /^\s+at /m);
+			const debug = spawnSync(process.execPath, args, {
+				cwd: dir,
+				encoding: 'utf-8',
+				env: { ...env, BLOCKS_LOG_LEVEL: 'debug' },
+			});
+			assert.strictEqual(debug.status, 1, debug.stderr);
+			assert.match(debug.stderr, /^\s+at /m);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

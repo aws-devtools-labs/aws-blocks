@@ -82,6 +82,20 @@ describe('blocks-generate-client output', () => {
 		});
 	});
 
+	it('reports a backend that does not load in one line and exits 1, with the stack only at debug', async () => {
+		await withApp('export const api = {;\n', (root) => {
+			const run = generate(root);
+			assert.strictEqual(run.status, 1, run.stderr);
+			assert.match(run.stderr, /^❌ Client generation failed: .*Transform failed/m);
+			assert.doesNotMatch(run.stderr, /^\s+at /m);
+			assert.doesNotMatch(run.stderr, /triggerUncaughtException/);
+			const debug = generate(root, { BLOCKS_LOG_LEVEL: 'debug' });
+			assert.strictEqual(debug.status, 1, debug.stderr);
+			assert.match(debug.stderr, /^❌ Client generation failed: /m);
+			assert.match(debug.stderr, /^\s+at /m);
+		});
+	});
+
 	for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
 		it(`passes a ${signal} sent to its pid alone on to the worker, and ends after it`, async () => {
 			// The backend prints the worker's pid, then keeps the import pending. Its timer runs in

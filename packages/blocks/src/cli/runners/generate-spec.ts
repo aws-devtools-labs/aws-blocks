@@ -27,5 +27,6 @@ try {
 	console.log('✅ OpenRPC spec written to', outputPath);
 } catch (error) {
 	console.error('❌ Spec generation failed:', error instanceof Error ? error.message : String(error));
+	log.debugError(error);
 	process.exit(1);
 }

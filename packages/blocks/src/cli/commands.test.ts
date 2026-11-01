@@ -240,6 +240,19 @@ describe('passthrough commands', () => {
 		}
 	});
 
+	it('reports a missing backend the same way for generate client and spec, before anything runs', async () => {
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		for (const argv of [
+			['generate', 'client', 'missing.ts', 'client.js'],
+			['generate', 'spec', 'missing.ts'],
+		]) {
+			const run = await runCli(argv, { cwd: outside });
+			assert.strictEqual(run.code, 1, argv.join(' '));
+			assert.match(run.stderr, /^Error: cannot find the backend entry at .*missing\.ts\.\n/, argv.join(' '));
+			assert.strictEqual(run.spawned.length, 0, argv.join(' '));
+		}
+	});
+
 	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
 		const root = fixtureApp();
 		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });

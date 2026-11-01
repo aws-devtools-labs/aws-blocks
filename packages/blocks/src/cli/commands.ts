@@ -830,6 +830,9 @@ const BLOCKS_DIST = fileURLToPath(new URL('..', import.meta.url));
 export function generateClient(ctx: Context, input: CommandInput): Promise<number> {
 	// With both paths given, the tool needs no app, as \`blocks-generate-client <foundation> <output>\` does not.
 	const root = input.positionals.length === 2 ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
+	// Checked here, as generate spec checks it, so both report a missing backend the same way.
+	const [backendArg] = input.positionals;
+	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
 	return runChild(ctx, {
 		operation: 'blocks generate client',
 		tool: 'blocks-generate-client',
