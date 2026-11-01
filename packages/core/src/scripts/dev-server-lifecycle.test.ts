@@ -371,6 +371,27 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     await waitFor('the pidfile to be removed', () => !existsSync(pidfile), [dev]);
   });
 
+  it('leaves no pidfile after a group SIGTERM while its backend is still loading (JA-6)', async () => {
+    // The pidfile is claimed before the backend loads; the cleanup was installed only once the server
+    // listened, so a stop in between ended the dev server by the default disposition, record and all.
+    const dir = makeApp();
+    writeFileSync(
+      join(dir, 'backend.ts'),
+      "import { writeFileSync } from 'node:fs';\n" +
+        "writeFileSync('loading', 'yes');\n" +
+        // A real wait: the window between the claim and the cleanup is the backend's load.
+        'await new Promise((r) => setTimeout(r, 10_000));\n' +
+        "export const testApi = { ping: async () => 'pong' };\n",
+    );
+    const port = await freePort();
+    const dev = startDev(dir, { port }, { watch: true });
+    const pidfile = join(dir, devPidfilePath(port));
+    await waitFor('the backend to start loading', () => existsSync(join(dir, 'loading')) && existsSync(pidfile), [dev]);
+    killGroup(dev.child, 'SIGTERM');
+    await waitFor('tsx watch to exit', () => dev.child.exitCode !== null || dev.child.signalCode !== null, [dev]);
+    await waitFor('the pidfile to be removed', () => !existsSync(pidfile), [dev]);
+  });
+
   it("closes the app's local data engines before it exits on a stop", async () => {
     // process.exit() skips the beforeExit hook that closes PGlite, which then left postmaster.pid on every
     // stop, so a leftover one could not mean a crash. A stand-in engine registers its closer as bb-data does;

@@ -567,7 +567,9 @@ export type DevSessionClaim =
  * once the dev server had loaded, and a stop in between found nothing to stop.
  * The dev server, started with {@link DEV_SESSION_ENV} set to this pid, takes
  * the record over. A stale record's frontend group carries over, so the dev
- * server may still reclaim its port from that predecessor's frontend.
+ * server may still reclaim its port from that predecessor's frontend. The
+ * `release` the CLI calls once its dev server has ended removes its own
+ * record, and the dev server's if that died without removing it.
  */
 export function claimDevSession(root: string, port: number): DevSessionClaim {
   const path = join(root, devPidfilePath(port));
@@ -590,5 +592,16 @@ export function claimDevSession(root: string, port: number): DevSessionClaim {
     writeFileSync(tmp, JSON.stringify({ ...self, frontend }));
     renameSync(tmp, path);
   }
-  return { acquired: true, release: () => releaseDevPidfile(path, process.pid) };
+  const release = (): void => {
+    releaseDevPidfile(path, process.pid);
+    // The dev server took the record over and may have died without removing
+    // it (a backend that throws while it loads): the session is over once
+    // this CLI releases it, so a record that nothing alive names goes too.
+    const d = defaultClaimDeps();
+    const raw = d.read(path);
+    const record = raw === null ? null : parsePidRecord(raw);
+    const live = record && recordLiveness(record, d.isAlive, d.commandOf);
+    if (raw !== null && !(live && (live.pidAlive || live.watcherAlive))) reapDevPidfile(path, raw);
+  };
+  return { acquired: true, release };
 }

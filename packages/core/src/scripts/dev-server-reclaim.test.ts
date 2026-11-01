@@ -27,6 +27,7 @@ import {
   stopDevServer,
 } from './dev-server.js';
 import { findListenerPids, killListenerTree } from './process-tree.js';
+import { claimDevSession, pidCommand } from './dev-pidfile.js';
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -799,5 +800,30 @@ describe('scheduleBindRetry — front-door retry timer', () => {
     assert.strictEqual(delay, 250);
     assert.ok(callback);
     assert.strictEqual(unrefCalls, 0, 'front-door bind retry must keep the event loop alive');
+  });
+});
+
+describe('claimDevSession — release', () => {
+  it("removes the dev server's record once its session is over, and never a live one", () => {
+    // A backend that throws while it loads ends its dev server before it removes the record it took over.
+    const root = mkdtempSync(join(tmpdir(), 'dev-session-release-'));
+    try {
+      const pidfile = join(root, '.blocks-sandbox', 'dev-server.41951.pid');
+      const first = claimDevSession(root, 41951);
+      assert.ok(first.acquired);
+      writeFileSync(pidfile, JSON.stringify({ pid: 4194302, ppid: 4194303, port: 41951, command: 'node gone.js', token: 'dead-run' }));
+      first.release();
+      assert.throws(() => readFileSync(pidfile), 'the dead record is gone');
+
+      const second = claimDevSession(root, 41951);
+      assert.ok(second.acquired);
+      // Another live process (our parent) plays a dev server that runs: release removes only this CLI's own record.
+      const live = JSON.stringify({ pid: process.ppid, ppid: 1, port: 41951, command: pidCommand(process.ppid), token: 'live-run' });
+      writeFileSync(pidfile, live);
+      second.release();
+      assert.strictEqual(readFileSync(pidfile, 'utf-8'), live, 'a live record stays');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
