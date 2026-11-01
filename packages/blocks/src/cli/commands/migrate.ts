@@ -133,7 +133,27 @@ export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
 	},
 };
 
-/** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one. */
+/** The hash of the Amplify overlay's generated `server.ts`, whose dev config every overlay app gets. */
+const AMPLIFY_SERVER = '89f85b0d08c86a4abf19d4da337d47edde6c83f59091bf901035fe7e40940415';
+
+/**
+ * SHA-256, after {@link normalizeSource}, of every `aws-blocks/scripts/generate-client.ts` that the
+ * Amplify overlay of a public create-blocks-app release generated: 0.1.0-0.1.15, which shipped no
+ * `server.ts`, and 0.1.18-0.3.0. Migrate leaves the file alone; it only tells an overlay app apart
+ * when no generated `server.ts` does.
+ */
+const AMPLIFY_CLIENT_GENERATORS: readonly string[] = [
+	'abb003e623cf19bc58a7cdd0eada2fb3308e01d88e86eea04c82ff5885f2d413',
+	'31bde1264d310c54c68a3105dd3a78cd506b48970ffb98767898102334c7625e',
+];
+
+/** True when the app has the generated client generator of the Amplify overlay. */
+function isAmplifyOverlay(root: string): boolean {
+	const text = unlessGone(() => readFileSync(join(root, SCRIPTS_DIR, 'generate-client.ts'), 'utf-8'));
+	return text !== undefined && AMPLIFY_CLIENT_GENERATORS.includes(sourceHash(text));
+}
+
+/** The generated npm-script commands, and the `blocks` alias that replaces each one. */
 export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: WrapperFile }>> = {
 	'tsx watch aws-blocks/scripts/server.ts': { alias: 'cdk-blocks dev', wrapper: 'server.ts' },
 	'tsx aws-blocks/scripts/stop.ts': { alias: 'cdk-blocks dev stop', wrapper: 'stop.ts' },
@@ -793,6 +813,10 @@ export function planMigration(
 				? detectFrontend(root)?.command(options.frontendPort)
 				: undefined;
 		result.devConfig = frontendCommand !== undefined && frontendCommand === detected ? rest : options;
+	} else if (server === undefined && pkg.blocks?.dev === undefined && isAmplifyOverlay(root)) {
+		// The overlays from before it shipped a server.ts (0.1.0-0.1.15) need the same config:
+		// without it, `blocks dev` would replace the overlay's own client.js.
+		result.devConfig = { ...SERVER_DEV_OPTIONS[AMPLIFY_SERVER] };
 	}
 
 	// Delete generated wrappers that nothing references after the rewrite. A

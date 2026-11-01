@@ -47,7 +47,7 @@ const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/template
  * Fixtures from before create-blocks-app wrote `.blocks/config.json` (f42c604b,
  * #51); every later app has one with a stackId, which the tests add.
  */
-const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
+const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50', 'amplify@0.1.0'];
 
 /**
  * The git these tests and `cdk-blocks migrate` run reads no system or user config,
@@ -768,6 +768,38 @@ describe('cdk-blocks migrate', () => {
 		const json = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: writeApp('amplify@0ab6b047') });
 		assert.deepStrictEqual(JSON.parse(json.stdout).devConfig, { port: 3001, frontend: false, generateClient: false });
 		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts']);
+	});
+
+	it('gives an amplify overlay without a server.ts the overlay dev config', async () => {
+		// Overlays 0.1.0-0.1.15 ship no server.ts, so no generated server.ts gives the dev config,
+		// but `blocks dev` would still replace the overlay's own client.js. Their generated
+		// generate-client.ts tells migrate that the app is the overlay.
+		const root = writeApp('amplify@0.1.0');
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.scriptsRewritten['blocks:dev'], {
+			from: 'tsx watch aws-blocks/scripts/server.ts',
+			to: 'blocks dev',
+		});
+		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false, generateClient: false });
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
+		assert.deepStrictEqual(scriptsDir(root), ['generate-client.ts', 'sandbox-id.ts']);
+
+		// An existing blocks.dev is the app's own choice, as with a generated server.ts.
+		const configured = writeApp('amplify@0.1.0', (app) => {
+			app.packageJson.blocks = { dev: { port: 4001 } };
+		});
+		const kept = await runCli(['migrate', '--force', '--output', 'json'], { cwd: configured });
+		assert.strictEqual(JSON.parse(kept.stdout).devConfig, null);
+		assert.deepStrictEqual(readPkg(configured).blocks, { dev: { port: 4001 } });
+
+		// --query checks its path against the declared result shape, which has generateClient.
+		const query = await runCli(['migrate', '--dry-run', '--query', 'devConfig.generateClient'], {
+			cwd: writeApp('amplify@0.1.0'),
+		});
+		assert.strictEqual(query.code, 0, query.stderr);
+		assert.strictEqual(query.stdout.trim(), 'false');
 	});
 
 	it('keeps the amplify stop.ts and blocks:stop when server.ts is customized', async () => {
