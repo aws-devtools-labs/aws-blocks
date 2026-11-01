@@ -16,6 +16,9 @@ dist/
 /.blocks-sandbox/
 cdk.out/
 .bb-data/
+# Left behind if a command is killed while updating .blocks/config.json (config.json itself stays tracked)
+.blocks/*.lock*
+.blocks/*.tmp
 
 # Secrets and key material — never commit
 .env
