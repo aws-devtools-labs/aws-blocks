@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type DevServerOptions, devPidfilePath, readDevGenerateClient, stopDevServer } from './dev-server.js';
+import { type DevServerOptions, devPidfilePath, readDevGenerateClient, type StopResult, stopDevServer } from './dev-server.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tsxCli = join(__dirname, '..', '..', '..', '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -393,6 +393,35 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     const next = startDev(dir, { port, frontendPort, frontendCommand: command });
     await waitFor('the new dev server', async () => (await fetchText(port)) === 'frontend' && (await serving(port)), [next]);
     assert.match(next.out.stdout, new RegExp(`Reclaimed port ${frontendPort} from this app's previous dev server`));
+  });
+
+  it("dev stop after a SIGKILLed dev server stops the frontend it left, so the next start runs", async () => {
+    // Stop first, then start: the natural recovery, which used to wedge on the orphaned frontend (JA-3).
+    const dir = makeApp();
+    const [port, frontendPort] = await Promise.all([freePort(), freePort()]);
+    const command = frontendCommand(dir, frontendPort, 'frontend');
+    const crashed = startDev(dir, { port, frontendPort, frontendCommand: command }, { watch: true });
+    await waitFor('the frontend', async () => (await fetchText(port)) === 'frontend', [crashed]);
+    killGroup(crashed.child);
+    await crashed.exited;
+    await waitFor('the front door to close', async () => !(await serving(port)));
+    assert.strictEqual(await fetchText(frontendPort), 'frontend', 'the orphaned frontend still holds its port');
+
+    const cwd = process.cwd();
+    process.chdir(dir);
+    let result: StopResult;
+    try {
+      result = await stopDevServer(port);
+    } finally {
+      process.chdir(cwd);
+    }
+    assert.strictEqual(result.via, 'frontend', JSON.stringify(result));
+    assert.strictEqual(result.portFree, true);
+    assert.strictEqual(await fetchText(frontendPort), undefined, 'the frontend is stopped');
+    assert.ok(!existsSync(join(dir, devPidfilePath(port))), 'the record is cleared');
+
+    const next = startDev(dir, { port, frontendPort, frontendCommand: command });
+    await waitFor('the new dev server', async () => (await fetchText(port)) === 'frontend' && (await serving(port)), [next]);
   });
 
   const lanAddress = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
