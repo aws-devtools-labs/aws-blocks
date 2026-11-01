@@ -28,6 +28,7 @@
     "deploy": "blocks deploy",
     "destroy": "blocks destroy",
     "secret": "blocks secret",
+    "config": "blocks config",
     "typegen": "blocks generate types",
     "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
     "vendorize": "blocks vendorize"

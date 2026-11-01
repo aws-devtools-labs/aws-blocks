@@ -24,6 +24,7 @@
     "cleanup": "blocks dev stop --all",
     "deploy": "blocks deploy",
     "secret": "blocks secret",
+    "config": "blocks config",
     "typegen": "blocks generate types",
     "destroy": "blocks destroy",
     "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",

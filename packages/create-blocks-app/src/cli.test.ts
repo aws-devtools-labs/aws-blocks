@@ -201,6 +201,7 @@ describe('create-blocks-app template metadata', () => {
       deploy: 'blocks deploy',
       destroy: 'blocks destroy',
       secret: 'blocks secret',
+      config: 'blocks config',
       typegen: 'blocks generate types',
       spec: 'blocks generate spec',
       vendorize: 'blocks vendorize',
@@ -214,7 +215,7 @@ describe('create-blocks-app template metadata', () => {
       if (!existsSync(pkgPath)) continue;
       const scripts: Record<string, string> = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
       if (!scripts.sandbox) continue;
-      for (const name of ['dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:destroy', 'deploy', 'destroy']) {
+      for (const name of ['dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:destroy', 'deploy', 'destroy', 'secret', 'config']) {
         if (!(name in scripts)) problems.push(`${entry.name}: missing "${name}"`);
       }
       for (const [name, value] of Object.entries(scripts)) {

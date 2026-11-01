@@ -52,6 +52,7 @@ npm run test:e2e    # Run end-to-end tests against the dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a terminal; -- --yes skips it)
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
 npm run secret -- set KEY # Set a secret (also list, remove KEY)
+npm run config -- set KEY value # Set a config value (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 

@@ -61,6 +61,7 @@ email.
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
 | `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
 | `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
 Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
