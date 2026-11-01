@@ -272,7 +272,7 @@ describe('passthrough commands', () => {
 		const refused = await runCli(['generate', 'client'], { cwd: root });
 		assert.strictEqual(refused.code, 2);
 		assert.match(refused.stderr, /generates its own aws-blocks\/client\.js/);
-		assert.match(refused.stderr, /Try: npm run blocks:generate-client, or blocks generate client --force/);
+		assert.match(refused.stderr, /Try: npm run blocks:generate-client, or npx --no -- blocks generate client --force/);
 		assert.strictEqual(refused.spawned.length, 0);
 		const forced = await runCli(['generate', 'client', '--force'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
@@ -346,7 +346,7 @@ describe('passthrough commands', () => {
 		for (const [argv, message] of [
 			[
 				['vendorize'],
-				/^Error: "blocks vendorize" needs the <package> argument\.\nTry: blocks vendorize --help\n$/,
+				/^Error: "blocks vendorize" needs the <package> argument\.\nTry: npx --no -- blocks vendorize --help\n$/,
 			],
 			[['vendorize', '--force'], /needs the <package> argument/],
 			[['vendorize', 'a', 'b'], /unexpected argument "b" for "blocks vendorize"/],
@@ -412,8 +412,8 @@ describe('lifecycle commands', () => {
 				deployOnly: false,
 				devCommand: undefined,
 				clientPort: 3005,
-				invocation: 'blocks sandbox',
-				destroyInvocation: 'blocks sandbox destroy',
+				invocation: 'npx --no -- blocks sandbox',
+				destroyInvocation: 'npx --no -- blocks sandbox destroy',
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
@@ -444,7 +444,7 @@ describe('lifecycle commands', () => {
 		]);
 		assert.deepStrictEqual(runnerOptions(spec, 'sandbox-destroy'), {
 			backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
-			invocation: 'blocks sandbox destroy',
+			invocation: 'npx --no -- blocks sandbox destroy',
 		});
 		assert.match(run.stderr, /production stack is not affected/);
 		assert.deepStrictEqual(run.prompts, []);
@@ -471,7 +471,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(runnerOptions(spec, 'deploy'), {
 			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 			projectRoot: root,
-			invocation: 'blocks deploy',
+			invocation: 'npx --no -- blocks deploy',
 		});
 		assert.deepStrictEqual(spec.args.slice(-2), ['--wait-live', '--wait-live-timeout=30']);
 		assert.match(run.stderr, /Deploying the production stack demo-prod; Region us-east-1/);
@@ -485,13 +485,13 @@ describe('lifecycle commands', () => {
 		const globals = ['-C', 'my app', '--profile', 'prod', '--region', 'eu-west-1'];
 		const suffix = "-C 'my app' --profile prod --region eu-west-1";
 		for (const [argv, runner, expected] of [
-			[['deploy'], 'deploy', { invocation: `blocks deploy ${suffix}` }],
-			[['destroy', '--yes'], 'destroy', { invocation: `blocks destroy ${suffix}` }],
-			[['sandbox', 'destroy'], 'sandbox-destroy', { invocation: `blocks sandbox destroy ${suffix}` }],
+			[['deploy'], 'deploy', { invocation: `npx --no -- blocks deploy ${suffix}` }],
+			[['destroy', '--yes'], 'destroy', { invocation: `npx --no -- blocks destroy ${suffix}` }],
+			[['sandbox', 'destroy'], 'sandbox-destroy', { invocation: `npx --no -- blocks sandbox destroy ${suffix}` }],
 			[
 				['sandbox', 'deploy'],
 				'sandbox',
-				{ invocation: `blocks sandbox deploy ${suffix}`, destroyInvocation: `blocks sandbox destroy ${suffix}` },
+				{ invocation: `npx --no -- blocks sandbox deploy ${suffix}`, destroyInvocation: `npx --no -- blocks sandbox destroy ${suffix}` },
 			],
 		] as const) {
 			const run = await runCli([...globals, ...argv], { cwd: shell });
@@ -505,7 +505,7 @@ describe('lifecycle commands', () => {
 			env: AWS_ENV,
 			core: { readAwsIdentity: async ({ invocation }) => (seen.push(invocation), IDENTITY) },
 		});
-		assert.deepStrictEqual(seen, ['blocks whoami --profile prod']);
+		assert.deepStrictEqual(seen, ['npx --no -- blocks whoami --profile prod']);
 	});
 
 	it('checks the --wait-live budget before anything runs, and passes core one budget', async () => {
@@ -528,8 +528,8 @@ describe('lifecycle commands', () => {
 			[['--wait-live=1.5'], /not "1\.5"/],
 			[['--wait-live='], /not ""/],
 			[['--wait-live', '--wait-live-timeout=abc'], /option --wait-live-timeout must be .*, not "abc"\./],
-			[['--wait-live-timeout=20'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: blocks deploy --wait-live=20\n/],
-			[['--wait-live-timeout=0'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: blocks deploy --wait-live=SECONDS\n/],
+			[['--wait-live-timeout=20'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: npx --no -- blocks deploy --wait-live=20\n/],
+			[['--wait-live-timeout=0'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: npx --no -- blocks deploy --wait-live=SECONDS\n/],
 			[['--wait-live=10', '--wait-live-timeout=20'], /give the --wait-live budget once/],
 		] as const) {
 			const run = await runCli(['deploy', ...argv], { cwd: root, env: AWS_ENV });
@@ -598,7 +598,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'ap-south-1' });
 		const gone = await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(false) });
 		assert.strictEqual(gone.code, 1);
-		assert.match(gone.stderr, /^Error: the sandbox stack demo-jdoe-abc123 does not exist in ap-south-1\.\n(.*\n)*Try: blocks sandbox deploy\n/);
+		assert.match(gone.stderr, /^Error: the sandbox stack demo-jdoe-abc123 does not exist in ap-south-1\.\n(.*\n)*Try: npx --no -- blocks sandbox deploy\n/);
 		assert.deepStrictEqual(opened, []);
 		// A recorded sandbox opens without a lookup.
 		lookups.splice(0);
@@ -1029,7 +1029,7 @@ describe('destroy safety', () => {
 		assert.strictEqual(run.spawned.length, 0);
 		assert.strictEqual(run.stdout, '');
 		assert.match(run.stderr, /This deletes the production stack demo-prod/);
-		assert.match(run.stderr, /Try: blocks destroy --yes\n/);
+		assert.match(run.stderr, /Try: npx --no -- blocks destroy --yes\n/);
 	});
 
 	it('treats CI and --no-input as non-interactive even with a TTY', async () => {
@@ -1074,7 +1074,7 @@ describe('destroy safety', () => {
 			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			stackName: 'demo-prod',
-			invocation: 'blocks destroy',
+			invocation: 'npx --no -- blocks destroy',
 		});
 	});
 
@@ -1583,7 +1583,7 @@ describe('JSON output', () => {
 		});
 		assert.strictEqual(run.code, 1);
 		assert.match(run.stderr, /^Error: no AWS Region is set/);
-		assert.match(run.stderr, /Try: blocks whoami --region <region>/);
+		assert.match(run.stderr, /Try: npx --no -- blocks whoami --region <region>/);
 	});
 
 	it('whoami tells a malformed .blocks/config.json from a missing one or a missing stackId', async () => {
@@ -1869,7 +1869,7 @@ describe('JSON output', () => {
 		assert.strictEqual(noJson.code, 2);
 		assert.match(
 			noJson.stderr,
-			/^Error: --query is not supported for "blocks dev": it has no JSON result\.\nTry: blocks dev --help\n$/,
+			/^Error: --query is not supported for "blocks dev": it has no JSON result\.\nTry: npx --no -- blocks dev --help\n$/,
 		);
 	});
 
@@ -2034,7 +2034,36 @@ describe('blocks dev stop', () => {
 				run.stderr,
 				/^Error: --all stops every dev server this app recorded: it cannot be combined with --port\./,
 			);
+			// The hidden `cleanup` alias is never suggested.
+			assert.match(run.stderr, /\nTry: npx --no -- blocks dev stop --port <port>, or npx --no -- blocks dev stop --all\n/);
+			assert.doesNotMatch(run.stderr, /cleanup/);
 			assert.deepStrictEqual(stops, []);
+		}
+	});
+
+	it('prints every Try: command as it runs in an app shell, where blocks is not on PATH', async () => {
+		const cwd = withSandboxId(fixtureApp());
+		const core = { deployedStackExists: async () => false, openConsole: async () => {} };
+		for (const argv of [
+			['deplyo'],
+			['dev', '--nope'],
+			['dev', 'stop', '--all', '--port', '1'],
+			['destroy'],
+			['sandbox', 'console'],
+			['deploy', '--wait-live-timeout=5'],
+			['secret'],
+			['db'],
+			['vendorize'],
+			['--profile', 'deploy'],
+			['generate', 'types', '--check', '--watch'],
+		]) {
+			const run = await runCli(argv, { cwd, env: AWS_ENV, core });
+			const tries = run.stderr.split('\n').filter((line) => line.startsWith('Try: '));
+			assert.strictEqual(tries.length, 1, `${argv.join(' ')}: ${run.stderr}`);
+			for (const command of tries[0].slice('Try: '.length).split(/, or |; /)) {
+				if (/^(run ")?blocks\b/.test(command)) assert.fail(`${argv.join(' ')}: bare blocks in ${tries[0]}`);
+			}
+			assert.match(tries[0], /npx --no -- blocks /, argv.join(' '));
 		}
 	});
 
@@ -2088,7 +2117,7 @@ describe('blocks dev stop', () => {
 		assert.deepStrictEqual(several.stops, [3000]);
 		assert.match(
 			listed.stderr,
-			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with blocks dev stop --port <port>, or all of them with blocks dev stop --all\./,
+			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with npx --no -- blocks dev stop --port <port>, or all of them with npx --no -- blocks dev stop --all\./,
 		);
 	});
 });
@@ -2131,7 +2160,7 @@ describe('blocks secret and config', () => {
 			assert.strictEqual(bare.code, 2);
 			assert.strictEqual(
 				bare.stderr,
-				`Error: "blocks ${name}" needs a verb: set, list or remove.\nTry: blocks ${name} --help\n`,
+				`Error: "blocks ${name}" needs a verb: set, list or remove.\nTry: npx --no -- blocks ${name} --help\n`,
 			);
 		}
 		// The real tool: the key is checked before any store call.

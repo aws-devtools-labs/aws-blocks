@@ -16,6 +16,19 @@
  * stack trace to show.
  */
 
+/**
+ * How a printed `blocks` command runs in an app's shell, where the app's CLI is
+ * not on PATH, as the app's AGENTS.md says: `--no` never downloads a package
+ * (`blocks` on npm is an unrelated one), and `--` keeps npm from reading the
+ * command's options as its own.
+ */
+export const BLOCKS_COMMAND = 'npx --no -- blocks';
+
+/** `blocks <words>` as a command to copy into the app's shell; see {@link BLOCKS_COMMAND}. */
+export function blocksCommand(...words: string[]): string {
+	return [BLOCKS_COMMAND, ...words].join(' ');
+}
+
 /** Process exit codes. */
 export const ExitCode = {
 	/** The command succeeded. */
@@ -35,7 +48,7 @@ export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 export interface CliErrorDetails {
 	/** Where it failed: the command, the stack, the account and Region. */
 	where?: string[];
-	/** The next step, for example `blocks destroy --yes`. */
+	/** The next step, for example `npx --no -- blocks destroy --yes` (see {@link blocksCommand}). */
 	hint?: string;
 	/** The exit code. Default: 1. */
 	exitCode?: ExitCodeValue;

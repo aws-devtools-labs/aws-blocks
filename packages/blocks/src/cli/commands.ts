@@ -33,7 +33,15 @@ import {
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
-import { CliError, ExitCode, type ExitCodeValue, exitCodeForChild, UsageError } from './errors.js';
+import {
+	BLOCKS_COMMAND,
+	blocksCommand,
+	CliError,
+	ExitCode,
+	type ExitCodeValue,
+	exitCodeForChild,
+	UsageError,
+} from './errors.js';
 import { commandHelp, rootHelp } from './help.js';
 import { suggest, suggestCommand } from './parse.js';
 import { ALIASES, COMMANDS, type CommandInput, type CommandSpec, findCommand } from './registry.js';
@@ -139,7 +147,7 @@ function awsOptions(ctx: Context): string[] {
  */
 function invocation(ctx: Context, ...words: string[]): string {
 	const { cwd } = ctx.globals;
-	return ['blocks', ...words, ...(cwd === undefined ? [] : ['-C', cwd].map(shellWord)), ...awsOptions(ctx)].join(' ');
+	return blocksCommand(...words, ...(cwd === undefined ? [] : ['-C', cwd].map(shellWord)), ...awsOptions(ctx));
 }
 
 /**
@@ -439,7 +447,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 export async function devStop(ctx: Context, input: CommandInput): Promise<number> {
 	if (input.flags.all === true && input.flags.port !== undefined) {
 		throw new UsageError('--all stops every dev server this app recorded: it cannot be combined with --port.', {
-			hint: 'blocks dev stop --port <port>, or blocks cleanup (dev stop --all)',
+			hint: `${BLOCKS_COMMAND} dev stop --port <port>, or ${BLOCKS_COMMAND} dev stop --all`,
 		});
 	}
 	const root = ctx.enterRoot();
@@ -467,7 +475,7 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 			} else if (recorded.length > 1) {
 				ctx.out.warn(
 					`No dev server is recorded on :${port}, but this app recorded ones on ${recorded.map((p) => `:${p}`).join(', ')}. ` +
-						'Stop one with blocks dev stop --port <port>, or all of them with blocks dev stop --all.',
+						`Stop one with ${BLOCKS_COMMAND} dev stop --port <port>, or all of them with ${BLOCKS_COMMAND} dev stop --all.`,
 				);
 			}
 		}
@@ -564,7 +572,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	ctx.out.progress('The production stack is not affected.');
 	// A sandbox is disposable, and scripts run `sandbox destroy` unattended: ask only in a terminal.
 	const declined = ctx.interactive
-		? await confirm(ctx, 'Delete the sandbox stack?', 'blocks sandbox destroy --yes', where)
+		? await confirm(ctx, 'Delete the sandbox stack?', blocksCommand('sandbox', 'destroy', '--yes'), where)
 		: undefined;
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
@@ -623,7 +631,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	if (stack === null) {
 		throw new CliError('no sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing).', {
 			where: [`project: ${root}`],
-			hint: 'blocks sandbox deploy',
+			hint: blocksCommand('sandbox', 'deploy'),
 		});
 	}
 	const last = readLastDeploy(root, 'sandbox');
@@ -645,7 +653,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	if (!recorded && (await core.deployedStackExists({ stackName: stack, region, env, projectRoot: root })) === false) {
 		throw new CliError(`the sandbox stack ${stack} does not exist${region ? ` in ${region}` : ''}.`, {
 			where: [`project: ${root}`, `credentials: ${configured.credentials}`],
-			hint: 'blocks sandbox deploy',
+			hint: blocksCommand('sandbox', 'deploy'),
 		});
 	}
 	await core.openConsole({ stackId: stack, region });
@@ -666,7 +674,7 @@ function waitLiveArgs(flags: CommandInput['flags']): string[] {
 		// Suggest the value only when --wait-live accepts it.
 		const valid = /^\d+$/.test(String(timeout)) && Number(timeout) >= 1 && Number(timeout) <= 3600;
 		throw new UsageError('option --wait-live-timeout needs --wait-live.', {
-			hint: `blocks deploy --wait-live=${valid ? String(timeout) : 'SECONDS'}`,
+			hint: `${BLOCKS_COMMAND} deploy --wait-live=${valid ? String(timeout) : 'SECONDS'}`,
 		});
 	}
 	if (typeof waitLive === 'string' && timeout !== undefined) {
@@ -731,7 +739,7 @@ export async function destroy(ctx: Context): Promise<number> {
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	const where = [`stack: ${stack} (production)`, label, `project: ${root}`];
 	ctx.out.progress(`This deletes the production stack ${stack}; ${label}; project ${root}.`);
-	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where);
+	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, blocksCommand('destroy', '--yes'), where);
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
 		runner: 'destroy',
@@ -782,7 +790,7 @@ export async function whoami(ctx: Context): Promise<number> {
 	if (!identity.region) {
 		throw new CliError('no AWS Region is set, so the identity cannot be checked.', {
 			where: [`credentials: ${identity.credentials}`],
-			hint: 'blocks whoami --region <region>, or set region in your AWS profile',
+			hint: `${BLOCKS_COMMAND} whoami --region <region>, or set region in your AWS profile`,
 		});
 	}
 	let production: string | null = null;
@@ -856,7 +864,7 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 /** A bare `blocks secret` or `blocks config` is a usage error that points to its help, as a bare `blocks db` is. */
 function requireValueVerb(name: 'secret' | 'config', input: CommandInput): void {
 	if (input.flags.help !== true && input.passthrough.length === 0) {
-		throw new UsageError(`"blocks ${name}" needs a verb: set, list or remove.`, { hint: `blocks ${name} --help` });
+		throw new UsageError(`"blocks ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
 	}
 }
 
@@ -883,7 +891,7 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 		if (!['status', 'enable', 'disable'].includes(positional)) {
 			const hint = suggest(positional, ['status', 'enable', 'disable']);
 			throw new UsageError(`unknown telemetry action "${positional}".${hint ? ` Did you mean "${hint}"?` : ''}`, {
-				hint: 'blocks telemetry --help',
+				hint: blocksCommand('telemetry', '--help'),
 			});
 		}
 		actions.add(positional);
@@ -895,7 +903,7 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 	// A project setting needs a project: never write .blocks/config.json into a directory that is not an app.
 	if (!root && action !== 'status' && !global) {
 		throw new UsageError(`not inside an AWS Blocks app, so there is no project to ${action} telemetry for.`, {
-			hint: `blocks telemetry ${action} --global, or run it in your app directory`,
+			hint: `${BLOCKS_COMMAND} telemetry ${action} --global, or run it in your app directory`,
 		});
 	}
 	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
@@ -920,7 +928,7 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
 		throw new UsageError(
 			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "blocks generate client" would replace it with the generic client.',
-			{ where: [`project: ${app}`], hint: 'npm run blocks:generate-client, or blocks generate client --force' },
+			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or ${BLOCKS_COMMAND} generate client --force` },
 		);
 	}
 	return runChild(ctx, {
@@ -954,12 +962,12 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 export async function generateTypes(ctx: Context, input: CommandInput): Promise<number> {
 	const { flags } = input;
 	if (flags.check === true && flags.watch === true) {
-		throw new UsageError('choose --check or --watch, not both.', { hint: 'blocks generate types --help' });
+		throw new UsageError('choose --check or --watch, not both.', { hint: blocksCommand('generate', 'types', '--help') });
 	}
 	for (const name of ['out', 'include', 'module']) {
 		const values = ([] as unknown[]).concat(flags[name] ?? []);
 		if (values.some((value) => value === '')) {
-			throw new UsageError(`option --${name} needs a non-empty value.`, { hint: 'blocks generate types --help' });
+			throw new UsageError(`option --${name} needs a non-empty value.`, { hint: blocksCommand('generate', 'types', '--help') });
 		}
 	}
 	const root = ctx.enterRoot();
@@ -971,7 +979,7 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 		const out = resolve(ctx.startDir, flags.out);
 		if (existsSync(out) && statSync(out).isDirectory()) {
 			throw new UsageError(`option --out names a directory (${out}); give the .d.ts file to write.`, {
-				hint: `blocks generate types --out ${join(flags.out, 'hosting-values.d.ts')}`,
+				hint: blocksCommand('generate', 'types', '--out', shellWord(join(flags.out, 'hosting-values.d.ts'))),
 			});
 		}
 		argv.push('--out', out);
@@ -1029,21 +1037,21 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const [verb] = passthrough;
 	if (verb === undefined) {
 		throw new UsageError('"blocks db" needs a verb: migrate, status, generate-types or pull.', {
-			hint: 'blocks db --help',
+			hint: blocksCommand('db', '--help'),
 		});
 	}
 	if (!verbs.includes(verb)) {
 		const hint = suggest(verb, verbs);
 		throw new UsageError(
 			`unknown db verb "${verb}"; expected migrate, status, generate-types or pull.${hint ? ` Did you mean "${hint}"?` : ''}`,
-			{ hint: 'blocks db --help' },
+			{ hint: blocksCommand('db', '--help') },
 		);
 	}
 	const help = input.flags.help === true;
 	if (verb === 'pull' && !help && !ctx.interactive) {
 		throw new UsageError(
 			'"blocks db pull" asks for the database and its connection string, and this run cannot prompt (no TTY, --no-input or CI).',
-			{ hint: 'run "blocks db pull" in a terminal' },
+			{ hint: `run "${BLOCKS_COMMAND} db pull" in a terminal` },
 		);
 	}
 	// A verb's help works outside an app too: the bb-data CLI of @aws-blocks/blocks prints it.
@@ -1093,16 +1101,16 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 	const option = tokens.find((token) => token.startsWith('-') && token !== '--force');
 	if (option !== undefined) {
 		throw new UsageError(`unknown option "${option}" for "blocks vendorize"; it takes only --force.`, {
-			hint: 'blocks vendorize --help',
+			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const packages = tokens.filter((token) => !token.startsWith('-'));
 	if (packages.length === 0) {
-		throw new UsageError('"blocks vendorize" needs the <package> argument.', { hint: 'blocks vendorize --help' });
+		throw new UsageError('"blocks vendorize" needs the <package> argument.', { hint: blocksCommand('vendorize', '--help') });
 	}
 	if (packages.length > 1) {
 		throw new UsageError(`unexpected argument "${packages[1]}" for "blocks vendorize".`, {
-			hint: 'blocks vendorize --help',
+			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const root = ctx.requireRoot();
@@ -1140,7 +1148,7 @@ export function helpTarget(tokens: readonly string[]): HelpTarget {
 	const names = [...COMMANDS.map((c) => c.path.join(' ')), ...ALIASES.map((a) => a.name.join(' '))];
 	const hint = suggestCommand(asked, names);
 	throw new UsageError(`unknown command "${asked}".${hint ? ` Did you mean "${hint}"?` : ''}`, {
-		hint: 'blocks --help',
+		hint: blocksCommand('--help'),
 	});
 }
 

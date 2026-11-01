@@ -288,7 +288,7 @@ describe('usage errors through main', () => {
 		const run = await runCli(['deplyo'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 2);
 		assert.strictEqual(run.stdout, '');
-		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: blocks --help\n$/);
+		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- blocks --help\n$/);
 	});
 
 	it('exits 2 for a command group without a subcommand', async () => {

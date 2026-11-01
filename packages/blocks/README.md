@@ -268,7 +268,7 @@ npx --no -- blocks whoami --query stacks.production
 | 130 | Interrupted (Ctrl-C) |
 | 143 | Stopped by a SIGTERM to `blocks`, which ended the operation it ran (a deploy, a destroy, a sandbox deploy or destroy that core aborted) |
 
-Errors print as `Error: <what failed>`, then where it failed and a `Try:` line with the next step. An unknown command or option suggests the closest name. Colour is used only on a terminal, and never when `NO_COLOR` is set.
+Errors print as `Error: <what failed>`, then where it failed and a `Try:` line with the next step. A command in the `Try:` line, or in the "re-run" guidance of a deploy, is written `npx --no -- blocks …`, so it runs as printed in the app's shell, where `blocks` is not on `PATH`. An unknown command or option suggests the closest name. Colour is used only on a terminal, and never when `NO_COLOR` is set.
 
 `blocks destroy` prints the stack it deletes, then asks for confirmation in a terminal. Without a terminal (no TTY, `--no-input`, or `CI` set) it needs `--yes`, and exits 2 otherwise: `npx --no -- blocks destroy --yes`.
 

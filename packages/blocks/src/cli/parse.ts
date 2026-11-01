@@ -13,7 +13,7 @@
  */
 
 import { parseArgs } from 'node:util';
-import { UsageError } from './errors.js';
+import { BLOCKS_COMMAND, blocksCommand, UsageError } from './errors.js';
 import {
 	ALIASES,
 	type AliasSpec,
@@ -150,6 +150,11 @@ interface OptionScope {
 	command?: string;
 }
 
+/** A `blocks …` command line as it runs in an app's shell (see {@link BLOCKS_COMMAND}). */
+function runnable(command: string): string {
+	return command.replace(/^blocks\b/, BLOCKS_COMMAND);
+}
+
 /**
  * Validate one option token against its scope and record its value.
  * `arg` is the argv entry the token came from.
@@ -159,7 +164,7 @@ interface OptionScope {
  */
 function applyOption(token: OptionToken, arg: string, scope: OptionScope, values: FlagValues): void {
 	const spec = scope.specs.find((s) => s.name === token.name);
-	const hint = scope.command ? `${scope.command} --help` : 'blocks --help';
+	const hint = runnable(`${scope.command ?? 'blocks'} --help`);
 	if (!spec) {
 		const candidates = scope.specs.map((s) => `--${s.name}`);
 		const where = scope.command ? ` for "${scope.command}"` : '';
@@ -294,18 +299,18 @@ function checkPositionals(command: CommandSpec, positionals: string[]): void {
 			if (findCommand([...command.path, extra])) {
 				throw new UsageError(
 					`"${extra}" must follow "${name}" directly: put the options of "blocks ${asked}" after the whole command.`,
-					{ hint: `blocks ${asked} --help` },
+					{ hint: blocksCommand(asked, '--help') },
 				);
 			}
 			const candidates = subcommands.map((s) => s.path.join(' '));
 			throw new UsageError(`unknown command "${asked}".${didYouMean(suggest(asked, candidates))}`, {
-				hint: `${name} --help`,
+				hint: runnable(`${name} --help`),
 			});
 		}
-		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: `${name} --help` });
+		throw new UsageError(`unexpected argument "${extra}" for "${name}".`, { hint: runnable(`${name} --help`) });
 	}
 	const missing = args.find((a, i) => a.required && positionals[i] === undefined);
-	if (missing) throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: `${name} --help` });
+	if (missing) throw new UsageError(`"${name}" needs the <${missing.name}> argument.`, { hint: runnable(`${name} --help`) });
 }
 
 /** A command path word, and its argv index. */
@@ -338,7 +343,7 @@ function checkQueryPath(path: string, json: JsonObjectShape, name: string): void
 		}
 		if (problem) {
 			throw new UsageError(`no field "${path}" in the result of ${name}. ${problem}`, {
-				hint: `${name} --output json`,
+				hint: runnable(`${name} --output json`),
 			});
 		}
 		walked.push(segment);
@@ -382,7 +387,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		if (!globals.help && !globals.version && (globals.output === 'json' || globals.query !== undefined)) {
 			throw new UsageError(
 				`${globals.query === undefined ? '--output json' : '--query'} needs a command whose result it prints.`,
-				{ hint: 'blocks --help' },
+				{ hint: blocksCommand('--help') },
 			);
 		}
 		// `blocks --profile deploy`: the option took the command as its value, and nothing would run.
@@ -394,7 +399,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				swallowed
 					? `no command given: --${swallowed} took "${values[swallowed]}" as its value.`
 					: `no command given for --${given[0]}.`,
-				{ hint: swallowed ? `blocks --${swallowed} <${swallowed}> ${values[swallowed]}` : 'blocks --help' },
+				{ hint: swallowed ? blocksCommand(`--${swallowed}`, `<${swallowed}>`, String(values[swallowed])) : blocksCommand('--help') },
 			);
 		}
 		return { globals, flags: values, positionals: [], passthrough: [] };
@@ -417,7 +422,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 		throw new UsageError(
 			`unknown command "${words[0].value}".${didYouMean(suggestCommand(words[0].value, topLevel))}`,
 			{
-				hint: 'blocks --help',
+				hint: blocksCommand('--help'),
 			},
 		);
 	}
@@ -473,7 +478,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 			// Only passthrough commands forward arguments after `--`; elsewhere they would be dropped.
 			if (passthrough.length > 0) {
 				throw new UsageError(`unexpected arguments after --: ${passthrough.join(' ')}`, {
-					hint: `blocks ${command.path.join(' ')} --help`,
+					hint: blocksCommand(...command.path, '--help'),
 				});
 			}
 		}
@@ -491,7 +496,7 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				globals.query === undefined
 					? `--output json is not supported for "${name}": it prints text only.`
 					: `--query is not supported for "${name}": it has no JSON result.`,
-				{ hint: `${name} --help` },
+				{ hint: runnable(`${name} --help`) },
 			);
 		}
 		// Check the whole path before the command runs, so a typo never repeats a deploy.
