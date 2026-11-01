@@ -89,15 +89,16 @@ describe('CDK bootstrap check', () => {
 			const { read, calls } = reader(NOT_FOUND);
 			const message = await failure(read, { command });
 			// The same Region, profile and verified credentials as the deploy, and the default qualifier.
+			// The profile is AWS_PROFILE, which `blocks --profile` sets (PN2): cdk.json selects none here.
 			assert.deepEqual(calls, [
 				[
-					{ region: 'eu-south-2', profile: undefined, credentials: CREDENTIALS },
+					{ region: 'eu-south-2', profile: 'starter', credentials: CREDENTIALS },
 					'/cdk-bootstrap/hnb659fds/version',
 				],
 			]);
 			assert.match(message, /CDK is not bootstrapped in Region eu-south-2 of account 123456789012/);
 			// `--app=` keeps `cdk bootstrap` from synthesizing the Blocks app to find environments.
-			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app=$/m);
+			assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter$/m);
 			assert.match(message, new RegExp(`Then re-run \`npm run ${command}\`\\.$`));
 			// The deployment target is printed before the deploy stops, so the user sees where it was going.
 			assert.match(log.join('\n'), /Deployment target: AWS profile starter, Region eu-south-2/);
@@ -109,6 +110,13 @@ describe('CDK bootstrap check', () => {
 		assert.match(message, /so `cdk-blocks deploy --profile starter` cannot deploy there/);
 		assert.match(message, /Then re-run `cdk-blocks deploy --profile starter`\.$/);
 		assert.doesNotMatch(message, /npm run/);
+	});
+
+	it('prints no --profile when the deploy uses access keys from the environment', async () => {
+		env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE';
+		env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const message = await failure(reader(NOT_FOUND).read);
+		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app=$/m);
 	});
 
 	it('checks the qualifier from the cdk.json context and passes the cdk.json profile', async () => {
@@ -171,7 +179,7 @@ describe('CDK bootstrap check', () => {
 	it('prints a placeholder instead of a Region that a shell could interpret', async () => {
 		await writeFile(join(directory, 'cdk.json'), JSON.stringify({ region: 'eu-west-1$(touch x)' }));
 		const message = await failure(reader(NOT_FOUND).read);
-		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app=$/m);
+		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app= --profile starter$/m);
 		assert.doesNotMatch(message, /touch/);
 	});
 });
