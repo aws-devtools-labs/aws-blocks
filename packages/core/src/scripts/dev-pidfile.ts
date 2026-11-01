@@ -12,8 +12,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 
 /** Persisted identity of the dev server that owns a given front-door port. */
@@ -47,6 +48,8 @@ export interface DevServerPidRecord {
    * starts replaces it with its own record (see {@link claimDevPidfile}).
    */
   starting?: true;
+  /** Random, new for every record written: names the record's reap file (see {@link claimDevPidfile}). */
+  token?: string;
 }
 
 /** Parse a pidfile body into a {@link DevServerPidRecord}; `null` if absent/corrupt/incomplete. */
@@ -58,6 +61,7 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
       if (typeof o.command === 'string') record.command = o.command;
       if (typeof o.parentCommand === 'string') record.parentCommand = o.parentCommand;
       if (o.starting === true) record.starting = true;
+      if (typeof o.token === 'string') record.token = o.token;
       if (o.frontend && Number.isInteger(o.frontend.pgid) && o.frontend.pgid > 1 && Number.isInteger(o.frontend.port)) {
         record.frontend = { pgid: o.frontend.pgid, port: o.frontend.port };
       }
@@ -174,14 +178,18 @@ export interface ClaimPidfileDeps {
   createExclusive: (path: string, body: string) => boolean;
   /** The file's body, or null when it doesn't exist. */
   read: (path: string) => string | null;
-  /** Rename `from` to `to`; false when `from` doesn't exist. */
-  rename: (from: string, to: string) => boolean;
   /** Replace `path` with `body` in one step (temp file + rename): readers see the old body or the new one, never no file. */
   replace: (path: string, body: string) => void;
   /** Delete `path` if it exists. */
   remove: (path: string) => void;
+  /** The files next to `path` whose names start with `<path>.` (temp and reap files). */
+  siblings: (path: string) => string[];
   isAlive: (pid: number) => boolean;
   commandOf: (pid: number) => string;
+  /** Wait before trying again while another live process holds a record's reap file. */
+  sleep: (ms: number) => void;
+  /** Test seam: called at each step of the protocol, so a test can run another claimant in between. */
+  hook: (step: 'stale-inspected' | 'takeover') => void;
 }
 
 /** Outcome of {@link claimDevPidfile}. */
@@ -222,9 +230,6 @@ function defaultClaimDeps(): ClaimPidfileDeps {
     read: (p) => {
       try { return readFileSync(p, 'utf-8'); } catch { return null; }
     },
-    rename: (from, to) => {
-      try { renameSync(from, to); return true; } catch { return false; }
-    },
     replace: (p, body) => {
       const tmp = `${p}.${process.pid}.tmp`;
       writeFileSync(tmp, body);
@@ -233,13 +238,131 @@ function defaultClaimDeps(): ClaimPidfileDeps {
     remove: (p) => {
       try { unlinkSync(p); } catch { /* already gone */ }
     },
+    siblings: (p) => {
+      try {
+        const prefix = `${basename(p)}.`;
+        return readdirSync(dirname(p)).filter((name) => name.startsWith(prefix)).map((name) => join(dirname(p), name));
+      } catch {
+        return [];
+      }
+    },
     isAlive: (pid) => isPidAlive(pid),
     commandOf: (pid) => pidCommand(pid),
+    sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+    hook: () => {},
   };
 }
 
+// ── Changing the pidfile: reap by token ─────────────────────────────────────
+// Records. Every file of the protocol (the pidfile `P`, and the reap files next
+// to it) holds one complete record `{pid, ppid, port, command, token, …}`; token
+// is random and new for every record written. A file is created only by
+// hard-linking a complete temp file (link(2) fails with EEXIST when the path
+// exists, never replaces it, and a reader never sees half a record).
+//
+// A record is live while its process, or its `tsx watch` session, is (see
+// recordLiveness), and a dead record stays dead: liveness checks the recorded
+// command lines, so a reused pid does not revive it.
+//
+// Changing P from a record X that this process does not own, whether to remove
+// a stale X or to replace X in place, happens only while holding
+// `P.reap-<X.token>` (one holder per record: it is created by link). Holding it,
+// the holder re-reads P and acts only if P still holds X. A reap file whose
+// holder died is removed by the same rule, one level up. Nothing moves the
+// pidfile aside, and a claimant that sees a live record never touches it.
+//
+// In place, P changes only from a live X to its rightful successor: the dev
+// server that `X.starting`'s CLI started (adopt), or the `tsx watch` successor
+// of X's exited dev server, whose watcher X names (reload). Both replace X with
+// one rename onto P, under X's reap file, so P never goes missing, and an owner
+// rewrites its own live record (the frontend group) the same way.
+//
+// Safety: take a live record X at P. Its owner removes it only after checking P
+// holds its own record (releaseDevPidfile), under the same reap file. Any other
+// process removes X only as a reaper of X, after it saw X dead, but X is live,
+// and was at every moment before. It is replaced only by its successor, which
+// holds X's reap file, so no reaper of X can act at the same time. While a
+// holder of `P.reap-<X.token>` acts, P still holds X: X leaves P only through
+// that holder (its owner and its successor both need the reap file, and the
+// owner of a stale X is dead), and nothing else can appear at P while X is
+// there (link fails). Hence a live record is never removed, and two live
+// sessions never both own P.
+
 /** How many times {@link claimDevPidfile} retries when other starts keep changing the pidfile under it. */
-const CLAIM_ATTEMPTS = 5;
+const CLAIM_ATTEMPTS = 40;
+/** How long a claimant waits while another live process holds a record's reap file. */
+const REAP_BACKOFF_MS = 25;
+const MAX_REAP_DEPTH = 4;
+
+/** The reap file of the record `inspected` at `path`: named by its token, or by a hash of a record without one. */
+function reapPath(path: string, inspected: string): string {
+  const token = parsePidRecord(inspected)?.token;
+  const key =
+    token !== undefined && /^[\w-]{1,64}$/.test(token)
+      ? token
+      : createHash('sha256').update(inspected).digest('hex').slice(0, 32);
+  return `${path}.reap-${key}`;
+}
+
+/** The record of this process as the holder of a reap file: only its own process keeps it alive. */
+function reaperRecord(): string {
+  return JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 0, command: pidCommand(process.pid), token: randomUUID() });
+}
+
+/** True when the holder of a reap file (`raw`) still runs: its own pid, with the command it had. */
+function reaperAlive(raw: string, d: Pick<ClaimPidfileDeps, 'isAlive' | 'commandOf'>): boolean {
+  const holder = parsePidRecord(raw);
+  return holder !== null && d.isAlive(holder.pid) && (holder.command === undefined || d.commandOf(holder.pid) === holder.command);
+}
+
+/**
+ * Run `action` while holding the reap file of the record `inspected` at `path`,
+ * and only if `path` still holds it (see the protocol above). `changed`: the
+ * record or its reap file changed meanwhile, so look again; `busy`: another live
+ * process holds the reap file.
+ */
+function underRecordLock(
+  d: ClaimPidfileDeps,
+  path: string,
+  inspected: string,
+  action: () => void,
+  depth = 0,
+): 'done' | 'changed' | 'busy' {
+  const lock = reapPath(path, inspected);
+  if (!d.createExclusive(lock, reaperRecord())) {
+    const other = d.read(lock);
+    if (other === null) return 'changed'; // that holder finished
+    if (reaperAlive(other, d)) return 'busy';
+    if (depth < MAX_REAP_DEPTH) underRecordLock(d, lock, other, () => d.remove(lock), depth + 1);
+    return 'changed';
+  }
+  try {
+    d.hook('takeover');
+    if (d.read(path) !== inspected) return 'changed';
+    action();
+    return 'done';
+  } finally {
+    d.remove(lock); // ours: nobody else removes it while we live
+  }
+}
+
+/**
+ * After taking the pidfile: remove the reap files of reapers that died, by the
+ * same rule, and the temp files of processes that died.
+ */
+function removeOrphans(d: ClaimPidfileDeps, path: string): void {
+  for (const file of d.siblings(path)) {
+    const rest = file.slice(path.length + 1);
+    if (rest.startsWith('reap-')) {
+      const raw = d.read(file);
+      if (raw !== null && !reaperAlive(raw, d)) underRecordLock(d, file, raw, () => d.remove(file));
+      continue;
+    }
+    // `<path>.<pid>.tmp`, and `<path>.<pid>.gc` of the previous protocol: a link to a temp file is a separate name and stays.
+    const pid = /^(\d+)\.(tmp|gc)$/.exec(rest)?.[1];
+    if (pid !== undefined && !d.isAlive(Number(pid))) d.remove(file);
+  }
+}
 
 /**
  * Take the per-port pidfile for `self`, so exactly one dev server runs on a
@@ -259,12 +382,10 @@ const CLAIM_ATTEMPTS = 5;
  * CLI that started this dev server (`adopt`, its pid) is replaced in place: the
  * session it claimed is this one. Any other start sees the live CLI and bows out.
  *
- * Any other stale record is taken over by first renaming it to a private
- * path — of two starts that both found it stale, only one rename succeeds —
- * then checking that what it took is the record it judged (a racer may have
- * replaced it, in which case that record is put back and judged again), then
- * creating the pidfile afresh. No session is running then, so nothing needs to
- * find the pidfile in between.
+ * Any other stale (or unreadable) record is removed by the reap-by-token
+ * protocol above, and the pidfile created afresh. In-place replacement and
+ * removal both hold the record's reap file and act only while the pidfile still
+ * holds that record, so a live record is never moved or removed, even briefly.
  */
 export function claimDevPidfile(
   path: string,
@@ -274,40 +395,30 @@ export function claimDevPidfile(
 ): PidfileClaim {
   const d = { ...defaultClaimDeps(), ...deps };
   const body = JSON.stringify(self);
-  const judge = (record: DevServerPidRecord | null): SingletonDecision =>
-    record ? evaluateSingleton(record, self, recordLiveness(record, d.isAlive, d.commandOf)) : { action: 'proceed' };
   let previous: DevServerPidRecord | null = null;
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
-    if (d.createExclusive(path, body)) return { acquired: true, previous };
+    if (d.createExclusive(path, body)) {
+      try { removeOrphans(d, path); } catch { /* best effort: the pidfile is ours either way */ }
+      return { acquired: true, previous };
+    }
     const text = d.read(path);
     if (text === null) continue; // removed since: create again
     const existing = parsePidRecord(text);
-    if (existing?.starting && adopt !== undefined && existing.pid === adopt) {
-      d.replace(path, body);
-      return { acquired: true, previous: existing };
-    }
     const liveness = existing ? recordLiveness(existing, d.isAlive, d.commandOf) : null;
-    const decision = existing && liveness ? evaluateSingleton(existing, self, liveness) : { action: 'proceed' as const };
-    if (decision.action === 'exit') return { acquired: false, reason: decision.reason };
-    if (existing && liveness?.watcherAlive && !liveness.pidAlive && existing.ppid === self.ppid && existing.pid !== self.pid) {
-      d.replace(path, body);
-      return { acquired: true, previous: existing };
+    const adopting = existing?.starting === true && adopt !== undefined && existing.pid === adopt;
+    const reloading =
+      existing !== null && liveness !== null && liveness.watcherAlive && !liveness.pidAlive &&
+      existing.ppid === self.ppid && existing.pid !== self.pid;
+    if (!adopting && !reloading) {
+      const decision = existing && liveness ? evaluateSingleton(existing, self, liveness) : { action: 'proceed' as const };
+      if (decision.action === 'exit') return { acquired: false, reason: decision.reason };
+      d.hook('stale-inspected');
+      previous = existing ?? previous;
     }
-    const claimPath = `${path}.${self.pid}.gc`;
-    if (!d.rename(path, claimPath)) continue; // another start took it first
-    const claimedText = d.read(claimPath);
-    const claimed = claimedText === null ? null : parsePidRecord(claimedText);
-    if (claimedText !== text) {
-      const again = judge(claimed);
-      if (again.action === 'exit') {
-        // A racer's live record: put it back unless yet another start has created one since.
-        if (claimedText !== null && !d.createExclusive(path, claimedText)) { /* the newer one stays */ }
-        d.remove(claimPath);
-        return { acquired: false, reason: again.reason };
-      }
-    }
-    d.remove(claimPath);
-    previous = claimed ?? previous;
+    // A live record goes to its successor in one step; a stale one is removed.
+    const outcome = underRecordLock(d, path, text, () => (adopting || reloading ? d.replace(path, body) : d.remove(path)));
+    if (outcome === 'done' && (adopting || reloading)) return { acquired: true, previous: existing };
+    if (outcome === 'busy') d.sleep(REAP_BACKOFF_MS);
   }
   return { acquired: false, reason: `other dev servers kept starting on :${self.port}` };
 }
@@ -318,25 +429,27 @@ export function devPidfilePath(port: number): string {
 }
 
 /**
- * Remove the pidfile at `path` if it still holds `owner`'s record. The
- * pidfile is renamed to a private path first (rename(2) is atomic), and put
- * back when the snapshot is someone else's record: a `tsx watch` successor or
- * the dev server that took a CLI's record over may write it between a read and
- * an unlink, and must keep its record. Only the private copy is ever unlinked.
+ * Remove the pidfile at `path` if it still holds `owner`'s record, under that
+ * record's reap file (see the protocol above), so a successor that is taking
+ * the record over in place, or has, keeps its record.
  */
-export function releaseDevPidfile(path: string, owner: number): void {
-  const claimPath = `${path}.${owner}.gc`;
-  try {
-    renameSync(path, claimPath);
-  } catch {
-    return; // No pidfile to remove (already gone / never written).
+export function releaseDevPidfile(path: string, owner: number, deps: Partial<ClaimPidfileDeps> = {}): void {
+  const d = { ...defaultClaimDeps(), ...deps };
+  const raw = d.read(path);
+  if (raw === null || parsePidRecord(raw)?.pid !== owner) return;
+  underRecordLock(d, path, raw, () => d.remove(path));
+}
+
+/**
+ * Remove the record `inspected` from `path`, which its reader saw dead (or
+ * unreadable): never any other record (see the protocol above). For `dev stop`
+ * and the dev server's hand-off watcher.
+ */
+export function reapDevPidfile(path: string, inspected: string, deps: Partial<ClaimPidfileDeps> = {}): void {
+  const d = { ...defaultClaimDeps(), ...deps };
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS && d.read(path) === inspected; attempt++) {
+    if (underRecordLock(d, path, inspected, () => d.remove(path)) === 'busy') d.sleep(REAP_BACKOFF_MS);
   }
-  let record: DevServerPidRecord | null = null;
-  try { record = parsePidRecord(readFileSync(claimPath, 'utf-8')); } catch { /* unreadable snapshot */ }
-  if (record && record.pid !== owner) {
-    try { linkSync(claimPath, path); } catch { /* a newer pidfile stays */ }
-  }
-  try { unlinkSync(claimPath); } catch { /* already gone */ }
 }
 
 /**
@@ -376,6 +489,7 @@ export function claimDevSession(root: string, port: number): DevSessionClaim {
     command: pidCommand(process.pid),
     parentCommand: pidCommand(process.ppid),
     starting: true,
+    token: randomUUID(),
   };
   const claim = claimDevPidfile(path, self);
   if (!claim.acquired) return claim;

@@ -60,9 +60,12 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   });
 
   it('SIGTERMs the recorded tsx-watch ppid (the clean watcher path)', async () => {
+    // The session ends while the stop waits for the port: only then does its record go.
+    let ended = false;
     const { deps, sigs, removed } = makeDeps({
       readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
-      isAlive: (pid) => pid === 4000 || pid === 4242,
+      isAlive: (pid) => !ended && (pid === 4000 || pid === 4242),
+      waitFree: async () => { ended = true; },
       commandOf: (pid) => (pid === 4000 ? TSX : ''),
       // The watcher path probes once, after the SIGTERM: free ⇒ clean stop.
       probe: seqProbe([false]),

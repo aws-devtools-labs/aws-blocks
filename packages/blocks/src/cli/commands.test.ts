@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
+import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
 import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
@@ -2216,17 +2216,19 @@ describe('cdk-blocks dev stop', () => {
 	it('blocks dev claims the session before it starts anything, and releases it after', async () => {
 		const cwd = fixtureApp({ blocks: { dev: { port: 41966 } } });
 		const pidfile = join(cwd, '.blocks-sandbox', 'dev-server.41966.pid');
-		let during: unknown;
+		let during: DevServerPidRecord | null = null;
 		const run = await runCli(['dev'], {
 			cwd,
 			onSpawn: () => {
-				during = JSON.parse(readFileSync(pidfile, 'utf-8'));
+				during = parsePidRecord(readFileSync(pidfile, 'utf-8'));
 				return { code: 143 };
 			},
 		});
 		assert.strictEqual(run.code, 0, run.stderr);
 		// `dev stop` during startup finds this record, and SIGTERMs this process; the dev server takes it over.
-		assert.deepStrictEqual(during, {
+		const { token, ...record } = during ?? { token: undefined };
+		assert.match(token ?? '', /^[0-9a-f-]{36}$/, 'a token names the record for the reap protocol');
+		assert.deepStrictEqual(record, {
 			pid: process.pid,
 			ppid: process.ppid,
 			port: 41966,
