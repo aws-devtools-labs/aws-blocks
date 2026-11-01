@@ -446,10 +446,12 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	const session = claimDevSession(root, port);
 	if (!session.acquired) {
 		process.off('SIGTERM', keepAlive);
-		const stop = port === 3000 ? blocksCommand('dev', 'stop') : blocksCommand('dev', 'stop', '--port', String(port));
+		// One dev server per app, whatever its port: stop the one that runs, on its port.
+		const running = session.port;
+		const stop = running === 3000 ? blocksCommand('dev', 'stop') : blocksCommand('dev', 'stop', '--port', String(running));
 		throw new CliError(`${session.reason}. Not starting a second one.`, {
 			where: [`project: ${root}`],
-			hint: `${stop}, or use another --port`,
+			hint: stop,
 		});
 	}
 	try {
