@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
+import type * as DevPidfileModule from '@aws-blocks/core/scripts/dev-pidfile';
 import { CliError } from './errors.js';
 
 const CORE = '@aws-blocks/core';
@@ -77,6 +78,17 @@ export async function loadCoreScripts(): Promise<typeof CoreScriptsModule> {
 	try {
 		// Loaded on demand, not imported: `cdk-blocks --help` and usage errors never load core (about 0.6 s).
 		return await import('@aws-blocks/core/scripts');
+	} catch (error) {
+		throw coreMismatchError(error) ?? error;
+	}
+}
+
+/** Load `@aws-blocks/core/scripts/dev-pidfile` (what `blocks dev` needs of core); a core that does not match fails with {@link coreMismatchError}. */
+export async function loadDevPidfile(): Promise<typeof DevPidfileModule> {
+	try {
+		// Loaded on demand, not imported: a static import would fail every command, `--version` and `--help` too,
+		// on an installed core that lacks this entry; this way only `blocks dev` fails, with the reinstall message.
+		return await import('@aws-blocks/core/scripts/dev-pidfile');
 	} catch (error) {
 		throw coreMismatchError(error) ?? error;
 	}

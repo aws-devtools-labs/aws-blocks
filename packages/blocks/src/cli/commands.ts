@@ -12,7 +12,6 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { claimDevSession, DEV_SESSION_ENV } from '@aws-blocks/core/scripts/dev-pidfile';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import {
 	frontendPortWarning,
@@ -34,6 +33,7 @@ import {
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
+import { loadDevPidfile } from './core-load.js';
 import {
 	BLOCKS_COMMAND,
 	blocksCommand,
@@ -436,6 +436,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	}
 	const { source: _source, ...devConfig } = config;
 	const port = config.port ?? 3000;
+	const { claimDevSession, DEV_SESSION_ENV } = await loadDevPidfile();
 	// Claim the session before anything starts, so that a `dev stop` from now on finds it: until the dev
 	// server has loaded and taken the record over, the stop SIGTERMs this process, which stops what it started.
 	// A listener keeps that SIGTERM from ending the CLI before it spawns `tsx watch`; from then on the spawn's
