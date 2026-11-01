@@ -4,7 +4,7 @@
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
+import { deleteSandboxSecrets, ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -1440,12 +1440,14 @@ export interface SandboxDestroySteps {
   checkCredentials: (options: AssertAwsCredentialsOptions) => Promise<void>;
   retryClients: (projectRoot: string) => Promise<Required<EmptyBucketsClients>>;
   destroy: (deps: DestroyRetryDeps) => Promise<void>;
+  deleteSecrets: (projectRoot: string) => Promise<string[]>;
 }
 
 const SANDBOX_DESTROY_STEPS: SandboxDestroySteps = {
   checkCredentials: assertAwsCredentials,
   retryClients: destroyRetryClients,
   destroy: runDestroyWithRetries,
+  deleteSecrets: deleteSandboxSecrets,
 };
 
 /**
@@ -1486,6 +1488,13 @@ export async function runSandboxDestroy(
   const clients = await steps.retryClients(process.cwd());
   await steps.destroy(sandboxDestroyDeps(backendPath, cdkEnv, clients, invocation));
   rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
+
+  // The deploy wrote the database connection string to SSM outside
+  // CloudFormation (ensureSecrets), so deleting the stack left it behind, with
+  // the password inside. Deleted only once the stack is gone, so a failed
+  // destroy leaves a sandbox that still works.
+  const deleted = await steps.deleteSecrets(process.cwd());
+  if (deleted.length > 0) log.progress(`🔐 Deleted secrets: ${deleted.join(', ')}`);
 }
 
 /**
