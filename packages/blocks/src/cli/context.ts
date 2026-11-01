@@ -49,7 +49,11 @@ export interface SpawnSpec {
 	 * it one while the runner lives: it SIGTERMs the runner, which the group
 	 * signal may have reached already (the dev server's cleanup is idempotent
 	 * and keeps its listeners until it exits), and SIGTERMs `tsx watch` once the
-	 * runner is gone. With no runner, `tsx watch` exits 143 at once.
+	 * runner is gone. With no runner left, `tsx watch` exits 143 at once, except
+	 * after a runner that a signal ended (one that a SIGTERM reached before it
+	 * could handle signals, a `kill -9`, the OOM killer): `tsx watch` then waits for
+	 * it forever, on a SIGTERM and on a Ctrl-C alike, so the CLI SIGKILLs it after
+	 * {@link WATCHER_EXIT_MS}.
 	 */
 	watcher?: boolean;
 }
@@ -301,6 +305,9 @@ export class Context {
 /** How long the CLI waits after a SIGINT for the child to exit before it forwards one, and for a runner to stop before it signals its `tsx watch`. */
 export const STOP_GRACE_MS = 10_000;
 
+/** How long the CLI waits for `tsx watch` to exit once no runner is left under it, before it SIGKILLs it (see {@link SpawnSpec.watcher}). */
+export const WATCHER_EXIT_MS = 1000;
+
 /** The pids of the children of `pid` (POSIX `ps`); none when `ps` fails. */
 function childPids(pid: number): number[] {
 	try {
@@ -338,7 +345,8 @@ export interface SpawnChildOptions {
  * PID alone (a supervisor, an IDE, `kill -INT`) does not reach the child, so
  * when the child is still running after the grace period, the CLI forwards
  * one SIGINT. It never forwards one sooner, and never a second: on a second
- * SIGINT, `tsx watch` SIGKILLs the dev server before it cleans up.
+ * SIGINT, `tsx watch` SIGKILLs the dev server before it cleans up. A `tsx watch`
+ * left with no runner that does not exit is SIGKILLed (see {@link SpawnSpec.watcher}).
  *
  * SIGTERM and SIGHUP follow {@link SpawnSpec.longRunning} and
  * {@link SpawnSpec.watcher}: a long-running child is stopped at once, once.
@@ -358,15 +366,30 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			let interrupted = false;
 			let stopping = false;
 			let exited = false;
+			let reaping = false;
 			let escalation: NodeJS.Timeout | undefined;
 			const escalate = (signal: NodeJS.Signals) => {
 				escalation ??= setTimeout(() => {
 					if (!stopping) child.kill(signal);
 				}, graceMs);
 			};
+			/**
+			 * Once none of `runners` lives, give `tsx watch` WATCHER_EXIT_MS to exit, then SIGKILL it:
+			 * after a runner that a signal ended, it waits for that runner's exit forever. With no
+			 * runner, it has nothing to clean up.
+			 */
+			const reapWatcher = async (runners: number[]) => {
+				if (reaping) return;
+				reaping = true;
+				while (!exited && runners.some(isAlive)) await sleep(25);
+				for (const deadline = Date.now() + WATCHER_EXIT_MS; !exited && Date.now() < deadline; ) await sleep(25);
+				if (!exited) child.kill('SIGKILL');
+			};
 			const onInterrupt = () => {
 				interrupted = true;
 				escalate('SIGINT');
+				// The Ctrl-C reached the runner, which exits after its cleanup, and `tsx watch` after it.
+				if (spec.watcher && child.pid !== undefined) void reapWatcher(childPids(child.pid));
 			};
 			const stop = async () => {
 				if (stopping) return;
@@ -385,7 +408,9 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 				}
 				for (const deadline = Date.now() + graceMs; !exited && Date.now() < deadline && runners.some(isAlive); )
 					await sleep(25);
-				if (!exited) child.kill('SIGTERM');
+				if (exited) return;
+				child.kill('SIGTERM');
+				await reapWatcher(runners);
 			};
 			const onTerm = spec.longRunning ? () => void stop() : () => child.kill('SIGTERM');
 			// Ignored unless the child is long-running; the listener keeps a hangup from ending the CLI.

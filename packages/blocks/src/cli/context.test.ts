@@ -559,6 +559,32 @@ setInterval(() => {}, 1000);
 		}
 	});
 
+	it('ends on a Ctrl-C after its runner was killed, which leaves tsx watch waiting forever', {
+		timeout: 60_000,
+	}, async () => {
+		const { root, port } = await devApp();
+		const dev = startCli(root);
+		try {
+			await listening(port, dev.output);
+			const [watcher] = childrenOf(dev.cli.pid ?? 0);
+			const [runner] = childrenOf(watcher);
+			assert.ok(watcher && runner, dev.output());
+			// The OOM killer, or `kill -9` of the runner.
+			process.kill(runner, 'SIGKILL');
+			// Until tsx watch has reaped it, and seen it exit: a Ctrl-C before that would find it running.
+			while (childrenOf(watcher).includes(runner)) await sleep(25);
+			await sleep(250);
+			const started = Date.now();
+			process.kill(-(dev.cli.pid ?? 0), 'SIGINT');
+			const [code] = await within(dev.exited, 10_000, dev.output);
+			assert.strictEqual(code, 130, dev.output());
+			assert.ok(Date.now() - started < 5000, `exited ${Date.now() - started} ms after the Ctrl-C`);
+			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
+		} finally {
+			dev.kill();
+		}
+	});
+
 	it('records how its dev server runner ended, for blocks dev', { timeout: 60_000 }, async () => {
 		const { root, port } = await devApp();
 		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-state-')), 'failure');
@@ -591,7 +617,7 @@ setInterval(() => {}, 1000);
 			await listening(port, () => '');
 			const [runner] = childrenOf(second.watcher.pid ?? 0);
 			process.kill(runner, 'SIGKILL');
-			while (isGroupRunning(runner)) await sleep(25);
+			while (childrenOf(second.watcher.pid ?? 0).includes(runner)) await sleep(25);
 			// Nothing ran in the runner: `blocks dev` reads `running` as a runner that a signal killed.
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
 		} finally {
