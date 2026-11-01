@@ -508,7 +508,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(packageJson.scripts['blocks:stop'], 'cdk-blocks dev stop');
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
-      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      // generateClient: false keeps the overlay's own aws-blocks/client.js (Cognito token,
+      // amplify_outputs.json API URL) instead of the dev server's generic one.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
       const dev = await resolvedDevConfig(tmpDir);
       assert.strictEqual(dev.frontendCommand, undefined);
       assert.strictEqual(dev.port, 3001);
