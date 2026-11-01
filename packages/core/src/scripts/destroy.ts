@@ -235,7 +235,7 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
   // the retry loop prints it once the destroy finally fails.
   const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv, deferSignals: true }),
     printRetainedOutput: () => cdkOutput.printRetained(),
     attemptOutput: () => cdkOutput.lastRunOutput(),
     listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),

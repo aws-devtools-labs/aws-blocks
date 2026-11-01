@@ -14,7 +14,7 @@ import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
-import { formatDeploySignal } from './deploy-stream.js';
+import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
 import { BACKEND_OUTPUT_KEY, outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
@@ -690,7 +690,9 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
-    await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
+    // Each cdk step runs under the deploy's signal policy (see CdkRunOptions.deferSignals): a stray
+    // SIGTERM must neither kill this process mid-deploy nor leave cdk running unwatched.
+    await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv, deferSignals: true });
     phase = 'deploy';
 
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
@@ -709,7 +711,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
       buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir, hotswap }),
-      { env: cdkEnv },
+      { env: cdkEnv, deferSignals: true },
     );
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
@@ -723,7 +725,8 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
     // Read before printRetained, which clears the retained lines.
     const failureLines = cdkOutput.lastRunOutput();
     cdkOutput.printRetained();
-    console.error("\n❌ Deployment failed.");
+    const stoppedBy = error instanceof DeployProcessError && error.aborted ? error.operatorSignal : null;
+    console.error(stoppedBy ? `\n🛑 The sandbox deploy was stopped by ${stoppedBy}.` : "\n❌ Deployment failed.");
     const stacks = phase === 'deploy' ? topLevelStacks(assemblyDir) : [];
     const kind = await sandboxFailureKind({
       phase,
@@ -1465,6 +1468,11 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
+			// An operator stopped the destroy (a second SIGTERM, Ctrl-C): no retry.
+			if (error instanceof DeployProcessError && error.aborted) {
+				deps.printRetainedOutput?.();
+				throw error;
+			}
 			const previousFailureAt = lastFailureAt;
 			lastFailureAt = now();
 			firstFailureAt ??= lastFailureAt;
@@ -1676,7 +1684,7 @@ export function sandboxDestroyDeps(
   // the retry loop prints it once the destroy finally fails.
   const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: { ...cdkEnv, ...cdkAppEnv(backendPath) } }),
+    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: { ...cdkEnv, ...cdkAppEnv(backendPath) }, deferSignals: true }),
     printRetainedOutput: () => cdkOutput.printRetained(),
     attemptOutput: () => cdkOutput.lastRunOutput(),
     listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),

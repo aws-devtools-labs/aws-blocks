@@ -3,9 +3,9 @@
 import { afterEach, describe, it, mock } from 'node:test';
 import assert from 'node:assert';
 import type { ChildProcess } from 'node:child_process';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -482,6 +482,76 @@ describe('runDestroyWithRetries failure dump', () => {
       },
     });
     assert.deepStrictEqual(events, []);
+  });
+
+  it('stops at once, with no retry, when an operator aborted the destroy', async () => {
+    mock.method(console, 'error', () => {});
+    mock.method(console, 'log', () => {});
+    let attempts = 0;
+    const aborted = new DeployProcessError('aborted', { aborted: true, operatorSignal: 'SIGTERM' });
+    await assert.rejects(
+      runDestroyWithRetries({
+        runDestroy: async () => {
+          attempts++;
+          throw aborted;
+        },
+        listStacks: () => [],
+        emptyBuckets: async () => {},
+        sleep: async () => {},
+        retryDelays: [0, 0],
+      }),
+      (error: unknown) => error === aborted,
+    );
+    assert.strictEqual(attempts, 1);
+  });
+});
+
+describe('createCdkOutput — deferSignals (a real cdk tree)', { skip: process.platform === 'win32' ? 'POSIX signals' : false }, () => {
+  // The sandbox deploy and destroy ran cdk with no signal handling: one SIGTERM (the blocks CLI forwards
+  // it at once) killed the runner and left cdk running, unwatched (JA-2).
+  it('defers a first SIGTERM, and on a second one stops the whole cdk tree and reports the operator signal', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cdk-defer-'));
+    let cdk = 0;
+    let run: ChildProcess | undefined;
+    try {
+      const pidFile = join(dir, 'cdk.pid');
+      const grandchild = `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+      const harness =
+        `const { createCdkOutput } = await import(${JSON.stringify(new URL('./cdk-output.js', import.meta.url).href)});\n` +
+        "const out = createCdkOutput({ label: 'cdk deploy', verb: 'deploy', level: 'verbose' });\n" +
+        // The shell plays npx/npm: the cdk process is a grandchild, as in the real tree.
+        `try { await out.run('/bin/sh', ['-c', ${JSON.stringify(`${process.execPath} -e "${grandchild.replace(/"/g, '\\"')}"`)}], { deferSignals: true }); console.log('DONE'); }\n` +
+        "catch (e) { console.log('ABORTED ' + JSON.stringify({ aborted: e.aborted, operatorSignal: e.operatorSignal })); process.exitCode = 3; }\n";
+      run = spawn(process.execPath, ['--input-type=module', '-e', harness], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      run.stdout?.on('data', (d) => { stdout += d; });
+      const exited = new Promise<number | null>((resolve) => run?.once('exit', (code) => resolve(code)));
+      const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      const until = async (what: string, check: () => boolean, ms = 10_000) => {
+        for (const deadline = Date.now() + ms; !check(); await new Promise((r) => setTimeout(r, 25))) {
+          if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}; stdout: ${stdout}`);
+        }
+      };
+      await until('cdk to start', () => existsSync(pidFile) && readFileSync(pidFile, 'utf-8') !== '');
+      cdk = Number(readFileSync(pidFile, 'utf-8'));
+      run.kill('SIGTERM');
+      await until('the deferral notice', () => stdout.includes('Ignoring SIGTERM: the deploy is still running'));
+      assert.ok(alive(run.pid ?? 0) && alive(cdk), `a lone SIGTERM stops neither the runner nor cdk; stdout: ${stdout}`);
+      // A real wait: a SIGTERM inside the 2 s coalesce window counts as the same delivery, not a repeat.
+      await new Promise((r) => setTimeout(r, 2300));
+      run.kill('SIGTERM');
+      assert.strictEqual(await exited, 3, stdout);
+      assert.match(stdout, /ABORTED \{"aborted":true,"operatorSignal":"SIGTERM"\}/);
+      await until('cdk to be stopped', () => !alive(cdk));
+    } finally {
+      // Without the fix, cdk outlives the runner and holds its pipe: reap what is left, so the run ends.
+      for (const pid of [run?.pid, cdk]) {
+        try { if (pid) process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+      }
+      run?.stdout?.destroy();
+      run?.stderr?.destroy();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
