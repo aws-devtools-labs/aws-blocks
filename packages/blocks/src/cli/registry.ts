@@ -539,8 +539,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'and the files of a submodule or nested repository inside the app; outside git, or where git does\n' +
 			'not track the app, the files under the app directory other than node_modules and build output.\n' +
 			'In a monorepo it also reads the top-level package.json and CI, shell and Docker files\n' +
-			'(.github/workflows/*). In CI, shell and Docker files and in scripts, a bare scripts/deploy.ts or\n' +
-			'deploy.ts counts as a use too.\n' +
+			'(.github/workflows/*); there a path counts only with the directory of this app\n' +
+			'(apps/web/aws-blocks/scripts/deploy.ts), or in a file that changes into the app\n' +
+			'(working-directory: apps/web, cd apps/web). In CI, shell and Docker files and in scripts, a bare\n' +
+			'scripts/deploy.ts or deploy.ts counts as a use too.\n' +
 			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +
 			'does not track (a parent repository ignores its directory), since git could not undo the\n' +
 			'changes, and a repository that git fails to read.\n' +

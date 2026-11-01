@@ -403,18 +403,75 @@ function wrapperUsers(
 
 const SOURCE_EXTENSION = /\.[cm]?[jt]sx?$/;
 
+/** A word starts after one of these (or at the start): in a command line, a YAML value, a JSON string. */
+const WORD_START = `(?<![^\\s'"\`=;&|()])`;
+
+/**
+ * A path from a variable that names a checkout's top in CI: `$GITHUB_WORKSPACE/`,
+ * `${CI_PROJECT_DIR}/`, `$(pwd)/` or `${{ github.workspace }}/`, of which a
+ * word holds only the `}}/` after the space.
+ */
+const VARIABLE_ROOT = /^(\$\{\{[^}]*\}\}|\}\}|\$\{\w+\}|\$\([\w ]+\)|\$\w+)\//;
+
+/**
+ * The directories that a file above the project changes into: `working-directory:`
+ * (GitHub Actions), `cd` and `pushd` (shell, Makefile, npm script) and `WORKDIR` (Dockerfile).
+ */
+const ENTERED_DIR =
+	/(?:\bworking-directory:|(?<![\w-])(?:cd|pushd)(?=\s)|^\s*WORKDIR(?=\s))\s*("[^"]*"|'[^']*'|\$\{\{[^}]*\}\}[^\s;&|)]*|[^\s;&|)]+)/gm;
+
+/**
+ * True when `path`, written in the file in directory `dir` of the work tree
+ * (whose project sits at `prefix`, `apps/web/`), names the project directory:
+ * relative to the top (where CI and root scripts run) or to `dir` (where npm
+ * runs a `package.json` script), from a {@link VARIABLE_ROOT}, or as the end of
+ * an absolute path (the work tree copied into a container). With `within`, a
+ * directory inside the project counts as well (`apps/web/aws-blocks/scripts`).
+ */
+function namesProject(path: string, dir: string, prefix: string, within: boolean): boolean {
+	const project = prefix.replace(/\/$/, '');
+	const unquoted = path.replace(/^(['"])(.*)\1$/, '$2');
+	const matches = (candidate: string): boolean => {
+		const trimmed = candidate.replace(/\/+$/, '');
+		return trimmed === project || (within && trimmed.startsWith(`${project}/`));
+	};
+	if (VARIABLE_ROOT.test(unquoted)) return matches(posixPath.normalize(unquoted.replace(VARIABLE_ROOT, '')));
+	if (posixPath.isAbsolute(unquoted)) {
+		const trimmed = posixPath.normalize(unquoted).replace(/\/+$/, '');
+		return trimmed.endsWith(`/${project}`) || (within && trimmed.includes(`/${project}/`));
+	}
+	return matches(posixPath.normalize(unquoted)) || matches(posixPath.join(dir, unquoted));
+}
+
+/** True when `text`, a file in directory `dir` of the work tree, changes into the project (at `prefix`) or a directory inside it. */
+function entersProject(text: string, dir: string, prefix: string): boolean {
+	for (const match of text.matchAll(ENTERED_DIR)) {
+		if (namesProject(match[1], dir, prefix, true)) return true;
+	}
+	return false;
+}
+
 /**
  * True when `text`, the content of the file at `sourcePath` (relative to the
  * project root, or to the work tree top for a file above it, whose project
  * then sits at `prefix`; `package.json` for a script), refers to `wrapper`: by
  * its project path (`aws-blocks/scripts/server.ts`, as npm scripts and
- * `devCommand` strings name it, also as the end of a longer path such as
- * `apps/web/aws-blocks/scripts/server.ts`), or by any quoted relative path that
- * resolves to it from the file's directory (`'./server.js'`, `'../server.js'`,
+ * `devCommand` strings name it), or by any quoted relative path that resolves
+ * to it from the file's directory (`'./server.js'`, `'../server.js'`,
  * `import('../../aws-blocks/scripts/server')`), with or without an extension.
  * With `bare` (CI, shell and Docker files, and scripts, which run commands
  * from another working directory), a word `deploy.ts`, `scripts/deploy.ts` or
  * `./scripts/deploy.ts` counts as well.
+ *
+ * In the project, the project path also counts as the end of a longer path.
+ * Above it, the project path counts only after the project's own directory
+ * ({@link namesProject}: `apps/web/aws-blocks/scripts/deploy.ts`,
+ * `../../apps/web/aws-blocks/…` from `tools/release/package.json`); without a
+ * directory, the project path and the `bare` words count only in a file that
+ * changes into the project ({@link entersProject}). So another app's
+ * `apps/api/aws-blocks/scripts/deploy.ts`, or a bare
+ * `aws-blocks/scripts/deploy.ts` under `working-directory: apps/api`, does not
+ * count for `apps/web`.
  */
 function refersTo(
 	text: string,
@@ -424,13 +481,27 @@ function refersTo(
 ): boolean {
 	const target = wrapper.path.replace(SOURCE_EXTENSION, '');
 	const escaped = target.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
-	if (new RegExp(`${escaped}(\\.[cm]?[jt]sx?)?(?![\\w.-])`).test(text)) return true;
-	if (bare) {
-		const name = wrapper.file.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
-		// Only at the start of a word: `src/server.ts` is another file.
-		if (new RegExp(`(?<![^\\s'"\`=;&|()])(\\./)?(scripts/)?${name}(?![\\w.-])`).test(text)) return true;
-	}
+	const name = wrapper.file.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+	// Only at the start of a word: `src/server.ts` is another file.
+	const bareWord = new RegExp(`${WORD_START}(\\./)?(scripts/)?${name}(?![\\w.-])`);
 	const dir = posixPath.dirname(sourcePath);
+	if (prefix === '') {
+		if (new RegExp(`${escaped}(\\.[cm]?[jt]sx?)?(?![\\w.-])`).test(text)) return true;
+		if (bare && bareWord.test(text)) return true;
+	} else {
+		let entered: boolean | undefined;
+		const enters = (): boolean => {
+			entered ??= entersProject(text, dir, prefix);
+			return entered;
+		};
+		// The directory before the project path, up to the start of the word.
+		const projectPath = new RegExp(`${WORD_START}([^\\s'"\`=;&|()]*?)${escaped}(\\.[cm]?[jt]sx?)?(?![\\w.-])`, 'g');
+		for (const match of text.matchAll(projectPath)) {
+			const lead = match[1].replace(/^(\.\/)+/, '');
+			if (lead === '' ? enters() : namesProject(lead, dir, prefix, false)) return true;
+		}
+		if (bare && bareWord.test(text) && enters()) return true;
+	}
 	for (const match of text.matchAll(/(['"`])(\.{1,2}\/[^'"`\s]*)\1/g)) {
 		if (posixPath.join(dir, match[2]).replace(SOURCE_EXTENSION, '') === prefix + target) return true;
 	}

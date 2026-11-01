@@ -98,10 +98,39 @@ function snapshot(root: string): Record<string, string> {
 
 function git(root: string, ...args: string[]): void {
 	const config = ['-c', 'user.email=test@example.com', '-c', 'user.name=test', '-c', 'commit.gpgsign=false'];
+	// `git submodule add` of a local path needs the file protocol, which git disallows by default.
+	config.push('-c', 'protocol.file.allow=always');
 	execFileSync('git', [...config, ...args], {
 		cwd: root,
 		stdio: 'ignore',
 	});
+}
+
+/** Write `files` to a fresh temporary directory; returns it. */
+function writeRepo(prefix: string, files: Record<string, string>): string {
+	const top = mkdtempSync(join(tmpdir(), prefix));
+	for (const [path, text] of Object.entries(files)) {
+		mkdirSync(dirname(join(top, path)), { recursive: true });
+		writeFileSync(join(top, path), text);
+	}
+	return top;
+}
+
+/** A committed monorepo with `files` and a `default@0ab6b047` app at `apps/<name>` for each of `apps`; returns its top. */
+function monorepo(files: Record<string, string>, apps: readonly string[] = ['web']): string {
+	const mono = writeRepo('blocks-migrate-mono-', files);
+	mkdirSync(join(mono, 'apps'), { recursive: true });
+	for (const name of apps) renameSync(writeApp('default@0ab6b047'), join(mono, 'apps', name));
+	git(mono, 'init', '-q');
+	git(mono, 'add', '-A');
+	git(mono, 'commit', '-q', '-m', 'mono');
+	return mono;
+}
+
+/** The sorted `[file, reason]` pairs of the `kept` items in a `--output json` result. */
+function keptReasons(stdout: string): [string, string][] {
+	const kept = JSON.parse(stdout).kept as { file: string; reason: string }[];
+	return kept.map((k): [string, string] => [k.file, k.reason]).sort();
 }
 
 describe('blocks migrate references', () => {
@@ -262,6 +291,34 @@ describe('blocks migrate references', () => {
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'sandbox-destroy.ts', 'secret.ts', 'typegen.ts']);
 		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy', 'the scripts still migrate');
+	});
+
+	it("in a monorepo, does not count another app's paths or working directory for this app", async () => {
+		const mono = monorepo({
+			'.github/workflows/api.yml':
+				'jobs:\n  api:\n    defaults:\n      run:\n        working-directory: apps/api\n    steps:\n' +
+				'      - run: npx tsx aws-blocks/scripts/deploy.ts\n' +
+				'      - run: npx tsx apps/api/aws-blocks/scripts/typegen.ts --check\n',
+			// This app's paths, from a CI variable and after a cd into the app, still count.
+			'.github/workflows/web.yml':
+				'jobs:\n  web:\n    steps:\n' +
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+				'      - run: npx tsx ${{ github.workspace }}/apps/web/aws-blocks/scripts/secret.ts list\n' +
+				'      - run: cd ./apps/web/ && npx tsx aws-blocks/scripts/console.ts\n',
+		}, ['web', 'api']);
+		const root = join(mono, 'apps', 'web');
+		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/console.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+		]);
+		// The api app keeps the two wrappers its workflow runs.
+		const api = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: join(mono, 'apps', 'api') });
+		assert.deepStrictEqual(keptReasons(api.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../.github/workflows/api.yml'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by ../../.github/workflows/api.yml'],
+		]);
 	});
 
 	it('keeps a wrapper that a workflow, shell file or script runs from another working directory', async () => {
