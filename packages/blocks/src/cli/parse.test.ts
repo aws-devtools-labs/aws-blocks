@@ -221,6 +221,9 @@ describe('parseArgv', () => {
 			['dev', '--port', '41401', 'stop'],
 			/^"stop" must follow "blocks dev" directly: put the options of "blocks dev stop" after the whole command\.$/,
 		);
+		// Its help names the same subcommand as the run.
+		const stopHelp = parseArgv(['dev', '--port', '41401', 'stop', '-h']);
+		assert.deepStrictEqual(stopHelp.command?.path, ['dev', 'stop']);
 	});
 
 	it('reads bundled and attached short options before the command as after it', () => {
@@ -254,6 +257,14 @@ describe('parseArgv', () => {
 		);
 		usageError(['--profile', 'a', 'deploy', '--profile', 'b'], /option --profile is given twice/);
 		assert.strictEqual(parseArgv(['-C', 'app', 'deploy', '--cwd', 'app']).globals.cwd, 'app');
+		// A command option too.
+		usageError(['dev', 'stop', '--port', '41400', '--port', '41401'], /^option --port is given twice/);
+	});
+
+	it('rejects global value options without a command, naming a command they took as the value', () => {
+		usageError(['--profile', 'deploy'], /^no command given: --profile took "deploy" as its value\.$/);
+		usageError(['--region', 'us-east-1'], /^no command given for --region\.$/);
+		assert.strictEqual(parseArgv(['--profile', 'x', '--help']).globals.help, true);
 	});
 
 	it('rejects --output json and --query without a command, unless --version or --help prints', () => {

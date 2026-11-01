@@ -155,7 +155,7 @@ interface OptionScope {
  * `arg` is the argv entry the token came from.
  *
  * @throws {UsageError} On an unknown option, a value on a boolean option, a
- * missing value, or a single-valued global option given twice with different values.
+ * missing value, or a single-valued option given twice with different values.
  */
 function applyOption(token: OptionToken, arg: string, scope: OptionScope, values: FlagValues): void {
 	const spec = scope.specs.find((s) => s.name === token.name);
@@ -195,7 +195,7 @@ function applyOption(token: OptionToken, arg: string, scope: OptionScope, values
 		return;
 	}
 	const previous = values[spec.name];
-	if (GLOBAL_FLAGS.includes(spec) && typeof previous === 'string' && previous !== value) {
+	if (typeof previous === 'string' && previous !== value) {
 		throw new UsageError(
 			`option --${spec.name} is given twice, as ${JSON.stringify(previous)} and ${JSON.stringify(value)}; give it once.`,
 			{ hint },
@@ -385,6 +385,18 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 				{ hint: 'blocks --help' },
 			);
 		}
+		// `blocks --profile deploy`: the option took the command as its value, and nothing would run.
+		const given = ['profile', 'region', 'cwd', 'telemetry-file'].filter((name) => typeof values[name] === 'string');
+		if (!globals.help && !globals.version && given.length > 0) {
+			const names = new Set([...nameIndex().keys()].map((key) => key.split(' ')[0]));
+			const swallowed = given.find((name) => names.has(values[name] as string));
+			throw new UsageError(
+				swallowed
+					? `no command given: --${swallowed} took "${values[swallowed]}" as its value.`
+					: `no command given for --${given[0]}.`,
+				{ hint: swallowed ? `blocks --${swallowed} <${swallowed}> ${values[swallowed]}` : 'blocks --help' },
+			);
+		}
 		return { globals, flags: values, positionals: [], passthrough: [] };
 	}
 
@@ -450,6 +462,12 @@ export function parseArgv(argv: readonly string[]): ParsedInvocation {
 	} else {
 		const { positionals, passthrough } = parseCommandArgs(command, tail, values);
 		parsed = { command, alias: aliasName, globals: toGlobals(values), flags: values, positionals, passthrough };
+		// `blocks dev --port 4000 stop -h`: help for the subcommand the run would name, not for `blocks dev`.
+		const subcommand =
+			parsed.globals.help && !command.args?.length && positionals[0] !== undefined
+				? findCommand([...command.path, positionals[0]])
+				: undefined;
+		if (subcommand) parsed.command = subcommand;
 		if (!parsed.globals.help && !parsed.globals.version) {
 			checkPositionals(command, positionals);
 			// Only passthrough commands forward arguments after `--`; elsewhere they would be dropped.
