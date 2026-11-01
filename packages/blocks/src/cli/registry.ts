@@ -572,7 +572,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			removed: [null],
 			kept: [{ file: null, reason: null }],
 			scriptsRewritten: { '*': { from: null, to: null } },
-			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
+			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null, generateClient: null },
 		},
 		examples: [
 			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },
