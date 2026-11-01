@@ -45,7 +45,7 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 
 | Command | Backend | API URL |
 |---------|---------|---------|
-| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001` |
+| `npm run dev` | Local RPC dev server on http://localhost:3001 | `http://localhost:3001/aws-blocks/api` |
 | `npm run sandbox` | Deployed to AWS, `cdk watch --hotswap` keeps it in sync | Deployed API Gateway URL |
 | `npm run sandbox:deploy` | Deployed to AWS once, then exits (no watch); for scripts and CI | Deployed API Gateway URL |
 | `npm run deploy` | Deployed to AWS | Deployed API Gateway URL |

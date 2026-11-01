@@ -327,6 +327,13 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
+  it('the backend README gives the dev server API URL with its /aws-blocks/api path', () => {
+    const readme = readFileSync(join(__dirname, '..', 'templates', 'backend', 'README.md'), 'utf-8');
+    const row = readme.split('\n').find((line) => line.startsWith('| `npm run dev` |'));
+    assert.ok(row, 'the process model table has an npm run dev row');
+    assert.match(row, /\| `http:\/\/localhost:3001\/aws-blocks\/api` \|$/);
+  });
+
   it('nextjs template ignores what next build and the deploy write', () => {
     const lines = readFileSync(join(__dirname, '..', 'templates', 'nextjs', 'gitignore'), 'utf-8').split('\n');
     for (const entry of ['.next/', '.open-next/', '*.tsbuildinfo']) assert.ok(lines.includes(entry), entry);
