@@ -320,6 +320,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
           files.set(to, body);
           return true;
         },
+        replace: (p: string, body: string) => { files.set(p, body); },
         remove: (p: string) => { files.delete(p); },
       },
     };
@@ -382,6 +383,38 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.strictEqual(claim.acquired, false);
     assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), a, "the winner's pidfile is back in place");
     assert.strictEqual(fs.files.size, 1);
+  });
+
+  it("replaces its tsx watch predecessor's record in place, so the pidfile never goes missing in a reload", () => {
+    // The predecessor exited; its tsx watch (pid 900, our parent) runs on.
+    const predecessor = { pid: 1000, ppid: 900, port: 3000, command: 'b', parentCommand: 'node tsx watch server.ts' };
+    const fs = memoryFs({ [path]: JSON.stringify(predecessor) });
+    const guard = <A extends unknown[], R>(op: (...args: A) => R) => (...args: A): R => {
+      const result = op(...args);
+      assert.ok(fs.files.has(path), 'the pidfile exists after every step');
+      return result;
+    };
+    const claim = claimDevPidfile(path, self, {
+      createExclusive: guard(fs.deps.createExclusive),
+      read: guard(fs.deps.read),
+      rename: guard(fs.deps.rename),
+      replace: guard(fs.deps.replace),
+      remove: guard(fs.deps.remove),
+      isAlive: (pid) => pid === 900,
+      commandOf: (pid) => (pid === 900 ? 'node tsx watch server.ts' : ''),
+    });
+    assert.deepStrictEqual(claim, { acquired: true, previous: predecessor });
+    assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), self);
+    assert.strictEqual(fs.files.size, 1, 'no claim file');
+  });
+
+  it("does not replace in place a record whose tsx watch is not this start's parent", () => {
+    // Another session between two reloads: its watcher is alive, so this start bows out.
+    const other = JSON.stringify({ pid: 1000, ppid: 800, port: 3000, command: 'b', parentCommand: 'node tsx watch server.ts' });
+    const fs = memoryFs({ [path]: other });
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 800, commandOf: (pid) => (pid === 800 ? 'node tsx watch server.ts' : '') });
+    assert.strictEqual(claim.acquired, false);
+    assert.strictEqual(fs.files.get(path), other);
   });
 });
 
