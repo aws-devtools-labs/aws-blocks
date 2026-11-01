@@ -35,6 +35,11 @@ function runnerOptions(spec: SpawnSpec, runner: RunnerName): unknown {
 }
 
 /** Record a sandbox id in `root`, as the first `blocks sandbox` does; returns `root`. */
+/** `text` as a regular expression that matches it literally. */
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function withSandboxId(root: string): string {
 	mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
 	writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
@@ -1626,11 +1631,11 @@ describe('JSON output', () => {
 		] as const) {
 			const nested = await runCli([...argv], { cwd: fixtureApp(), env: AWS_ENV, core });
 			assert.strictEqual(nested.code, 2, argv.join(' '));
-			const path = argv[argv.length - 1].replace(/\./g, '\\.');
+			const path = escapeRegExp(argv[argv.length - 1]);
 			assert.match(
 				nested.stderr,
 				new RegExp(
-					`^Error: no field "${path}" in the result of blocks ${argv[0]}[^.]*\\. ${message.replace(/\./g, '\\.')}\\n`,
+					`^Error: no field "${path}" in the result of blocks ${argv[0]}[^.]*\\. ${escapeRegExp(message)}\\n`,
 				),
 			);
 			assert.strictEqual(nested.spawned.length, 0, argv.join(' '));
