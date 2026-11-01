@@ -633,6 +633,18 @@ export function describePortHolders(port: number, result: ReclaimResult): string
 }
 
 /**
+ * What to run next when `result`'s port stays taken, `option` being the flag
+ * that picks another one (`--port` or `--frontend-port`): an exact command,
+ * since an agent told only to "stop that process" reaches for `pkill`. Pure.
+ */
+export function portInUseHint(port: number, result: Pick<ReclaimResult, 'foreign' | 'pids'>, option: string): string {
+  const pids = result.foreign.length > 0 ? result.foreign.map((h) => h.pid) : result.pids;
+  const again = 'then run `npx --no -- blocks dev` again';
+  if (pids.length > 0) return `Stop it with \`kill ${pids.join(' ')}\`, ${again}, or choose another port with ${option}.`;
+  return `Find the process that holds it with \`lsof -i :${port}\` and stop it, ${again}, or choose another port with ${option}.`;
+}
+
+/**
  * The console line for a reclaim of a port that was in use: `♻️` when it was
  * freed, else a `⚠️` with {@link describePortHolders}. `subject` names what was
  * reclaimed (e.g. "this app's previous dev server"). Pure.
@@ -1348,7 +1360,7 @@ export async function startDevServer(options: DevServerOptions) {
       continue;
     }
     removeOwnPidfile();
-    failDevStartup(describePortHolders(p, result), `Stop that process, or choose another port with ${option}.`);
+    failDevStartup(describePortHolders(p, result), portInUseHint(p, result, option));
     return;
   }
 
@@ -1385,7 +1397,8 @@ export async function startDevServer(options: DevServerOptions) {
     reclaim: (p) => reclaimPort(p, reclaimDeps),
     relisten: () => server.listen(port, host, onListening),
     scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
-    onExhausted: () => failDevStartup(`port ${port} is still in use`, 'Stop the process that holds it, or use another --port.'),
+    onExhausted: () =>
+      failDevStartup(`port ${port} is still in use`, portInUseHint(port, { foreign: [], pids: findListenerPids(port) }, '--port')),
     warn: (msg) => console.error(msg),
   });
   // Malformed/aborted requests must not become unhandled socket errors.
@@ -1522,18 +1535,24 @@ export interface StopResult {
    *                 (watcher was already gone / not a tsx watcher).
    *  - `cli`      — SIGTERM to the `blocks dev` CLI whose dev server was still
    *                 starting (a {@link DevServerPidRecord.starting} record).
+   *  - `frontend` — the recorded dev server was gone (a SIGKILL of its group),
+   *                 and its detached frontend group still held the frontend port:
+   *                 stopped that group, which the next start would otherwise
+   *                 refuse to start next to.
    *  - `none`     — nothing live was recorded.
    */
-  via: 'watcher' | 'listener' | 'cli' | 'none';
+  via: 'watcher' | 'listener' | 'cli' | 'frontend' | 'none';
   /** PIDs signalled. */
   pids: number[];
-  /** True when, after signalling, the front-door port is confirmed free. */
+  /** True when, after signalling, the front-door port is confirmed free (and, for `frontend`, the frontend port). */
   portFree: boolean;
   /**
    * When nothing of this app was stopped but the port is bound: the processes
    * holding it, which `dev stop` never signals. Empty otherwise.
    */
   holders: PortHolder[];
+  /** For `via: 'frontend'`: the recorded frontend group and port that were stopped. */
+  frontend?: { pgid: number; port: number };
 }
 
 /** Injectable seams for {@link stopDevServer} (real implementations by default). */
@@ -1552,8 +1571,10 @@ export interface StopDevServerDeps {
   probe: (port: number) => Promise<boolean>;
   /** PIDs of the listener(s) holding a port (fallback path only). */
   listPids: (port: number) => number[];
-  /** Terminate a listener PID's tree (fallback path only). */
+  /** Terminate a listener PID's tree, or with a recorded frontend's pgid, that whole group (POSIX group kill). */
   killTree: (pid: number, sig: NodeJS.Signals) => void;
+  /** `pid`'s process group, or undefined when it can't be read: a frontend group is recorded by its pgid. */
+  groupOf: (pid: number) => number | undefined;
   /** Wait (bounded) for a port to be released. */
   waitFree: (port: number, timeoutMs?: number) => Promise<void>;
   /** Wait (bounded) for `pid` to exit; true once it has. */
@@ -1576,6 +1597,7 @@ function defaultStopDeps(): StopDevServerDeps {
     probe: (p) => isPortOpen(p),
     listPids: (p) => findListenerPids(p),
     killTree: (pid, sig) => killListenerTree(pid, sig),
+    groupOf: (pid) => processGroupOf(pid),
     waitFree: (p, t) => waitForPortFree(p, t),
     waitExit: async (pid, timeoutMs) => {
       for (const deadline = Date.now() + timeoutMs; isPidAlive(pid); await sleep(50)) {
@@ -1684,8 +1706,27 @@ export async function stopDevServer(
     return result('cli', [record.pid], portFree);
   }
 
-  // Nothing we recorded is alive — stale pidfile. Clear it, report no-op.
+  // Nothing we recorded is alive — stale pidfile. A dev server that was
+  // SIGKILLed can still leave its detached frontend group holding the frontend
+  // port; that group is recorded, so stop it (and only it, as a start's reclaim
+  // would), then clear the record. Otherwise report a no-op.
   if (!watcherAlive && !childAlive) {
+    const frontend = record.frontend;
+    if (frontend) {
+      const reclaim = await reclaimPort(frontend.port, {
+        probe: d.probe,
+        listPids: d.listPids,
+        owned: (pid) => d.groupOf(pid) === frontend.pgid,
+        commandOf: d.commandOf,
+        killTree: (_pid, sig) => d.killTree(frontend.pgid, sig),
+        waitFree: d.waitFree,
+      });
+      if (reclaim.wasOpen && reclaim.pids.length > 0) {
+        if (reclaim.reclaimed) reapIfEnded(body);
+        const portFree = !(await d.probe(port));
+        return { ...result('frontend', reclaim.pids, portFree && reclaim.reclaimed), frontend };
+      }
+    }
     reapIfEnded(body);
     return nothingToStop();
   }
@@ -1745,6 +1786,12 @@ export function stopMessage(result: StopResult): string {
     return `No dev server was running on :${result.port} (nothing to stop).`;
   }
   const who = result.pids.length ? ` (pid${result.pids.length > 1 ? 's' : ''} ${result.pids.join(', ')})` : '';
+  if (result.via === 'frontend' && result.frontend) {
+    const left = `the frontend that this app's dev server left running on :${result.frontend.port}${who}`;
+    return result.portFree
+      ? `🛑 The dev server on :${result.port} had already stopped; stopped ${left}.`
+      : `⚠️  Signalled ${left}, but a port of this app is still bound — it may still be shutting down.`;
+  }
   if (result.portFree) {
     return `🛑 Stopped the dev server on :${result.port}${who}.`;
   }
