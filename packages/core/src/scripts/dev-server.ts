@@ -7,6 +7,7 @@ import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 import { createConnection, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import httpProxy from 'http-proxy';
@@ -40,6 +41,7 @@ import {
   parsePidRecord,
   recordLiveness,
   pidCommand,
+  reapDevPidfile,
   releaseDevPidfile,
 } from './dev-pidfile.js';
 export {
@@ -685,28 +687,26 @@ function processGroupOf(pid: number): number | undefined {
 }
 
 /**
- * The script {@link watchPidfileHandoff} runs (`node -e`, CommonJS): every
- * 100 ms, while the pidfile still names the exited dev server, check its
- * `tsx watch`; once that has exited too, the session is over, so remove the
- * pidfile with the same rename-check-restore as `removeOwnPidfile` (a start
- * that claimed it in between keeps its record). It ends as soon as the pidfile
- * names another process (the successor took over) or is gone, and after ten
- * minutes at most.
+ * The script {@link watchPidfileHandoff} runs (`node --input-type=module -e`):
+ * every 100 ms, while the pidfile still holds the exited dev server's record,
+ * check its `tsx watch`; once that has exited too, the session is over, so reap
+ * that record (see reapDevPidfile: a start that claimed the pidfile in between
+ * keeps its record). It ends as soon as the pidfile holds another record (the
+ * successor took over) or is gone, and after ten minutes at most.
  */
 const PIDFILE_HANDOFF_WATCH = `
-const fs = require('node:fs');
-const [file, pid, watcher] = process.argv.slice(1);
-const owner = (path) => { try { return String(JSON.parse(fs.readFileSync(path, 'utf-8')).pid); } catch { return undefined; } };
+import { readFileSync } from 'node:fs';
+const [file, watcher, url] = process.argv.slice(1);
+const { reapDevPidfile } = await import(url);
+const raw = () => { try { return readFileSync(file, 'utf-8'); } catch { return null; } };
 const alive = (p) => { try { process.kill(Number(p), 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const inspected = raw();
 const deadline = Date.now() + 600000;
 const timer = setInterval(() => {
-  if (owner(file) !== pid || Date.now() > deadline) return clearInterval(timer);
+  if (inspected === null || raw() !== inspected || Date.now() > deadline) return clearInterval(timer);
   if (alive(watcher)) return;
   clearInterval(timer);
-  const claim = file + '.' + pid + '.gc';
-  try { fs.renameSync(file, claim); } catch { return; }
-  if (owner(claim) !== pid) { try { fs.linkSync(claim, file); } catch {} }
-  try { fs.unlinkSync(claim); } catch {}
+  reapDevPidfile(file, inspected);
 }, 100);
 `;
 
@@ -719,7 +719,9 @@ const timer = setInterval(() => {
  */
 function watchPidfileHandoff(pidfilePath: string): void {
   try {
-    spawn(process.execPath, ['-e', PIDFILE_HANDOFF_WATCH, resolve(pidfilePath), String(process.pid), String(process.ppid)], {
+    const pidfileModule = new URL('./dev-pidfile.js', import.meta.url).href;
+    const args = ['--input-type=module', '-e', PIDFILE_HANDOFF_WATCH, resolve(pidfilePath), String(process.ppid), pidfileModule];
+    spawn(process.execPath, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -816,6 +818,7 @@ export async function startDevServer(options: DevServerOptions) {
     port,
     command: pidCommand(process.pid),
     parentCommand: pidCommand(process.ppid),
+    token: randomUUID(),
   };
   const session = Number(process.env[DEV_SESSION_ENV]);
   delete process.env[DEV_SESSION_ENV]; // not the frontend's to inherit
@@ -1420,8 +1423,8 @@ export interface StopResult {
 export interface StopDevServerDeps {
   /** Read a pidfile body, or null when absent/unreadable. */
   readPidfile: (path: string) => string | null;
-  /** Delete the pidfile. */
-  removePidfile: (path: string) => void;
+  /** Remove the record `inspected` from the pidfile: never any other record (see reapDevPidfile). */
+  removePidfile: (path: string, inspected: string) => void;
   /** True iff a signal can be delivered to `pid` (it exists). */
   isAlive: (pid: number) => boolean;
   /** The command line of `pid`, for confirming a ppid is really a `tsx` watcher. */
@@ -1449,13 +1452,7 @@ function defaultStopDeps(): StopDevServerDeps {
         return null;
       }
     },
-    removePidfile: (p) => {
-      try {
-        unlinkSync(p);
-      } catch {
-        /* already gone */
-      }
-    },
+    removePidfile: (p, inspected) => reapDevPidfile(p, inspected),
     isAlive: (pid) => isPidAlive(pid),
     commandOf: (pid) => pidCommand(pid),
     signal: (pid, sig) => process.kill(pid, sig),
@@ -1531,9 +1528,16 @@ export async function stopDevServer(
     return { ...result('none', [], portFree), holders };
   };
 
-  if (!record) {
+  /** Remove the record `raw` from the pidfile once nothing it names is alive: never a live record, nor another one. */
+  const reapIfEnded = (raw: string): void => {
+    const rec = parsePidRecord(raw);
+    const live = rec && recordLiveness(rec, d.isAlive, d.commandOf);
+    if (!(live && (live.pidAlive || live.watcherAlive))) d.removePidfile(pidfilePath, raw);
+  };
+
+  if (!record || body == null) {
     // An unreadable pidfile can't name anything to stop, and would keep `--all` listing this port.
-    if (body != null) d.removePidfile(pidfilePath);
+    if (body != null) d.removePidfile(pidfilePath, body);
     return nothingToStop();
   }
 
@@ -1546,7 +1550,7 @@ export async function stopDevServer(
   // stops what it started on a SIGTERM, and exits once all of it has.
   if (record.starting) {
     if (!childAlive) {
-      d.removePidfile(pidfilePath);
+      reapIfEnded(body);
       return nothingToStop();
     }
     try {
@@ -1559,15 +1563,13 @@ export async function stopDevServer(
     const portFree = !(await d.probe(port));
     // The dev server may have taken the record over, and ended before it could remove it.
     const left = d.readPidfile(pidfilePath);
-    const leftRecord = left == null ? null : parsePidRecord(left);
-    const leftLive = leftRecord && recordLiveness(leftRecord, d.isAlive, d.commandOf);
-    if (portFree && left != null && !(leftLive && (leftLive.pidAlive || leftLive.watcherAlive))) d.removePidfile(pidfilePath);
+    if (portFree && left != null) reapIfEnded(left);
     return result('cli', [record.pid], portFree);
   }
 
   // Nothing we recorded is alive — stale pidfile. Clear it, report no-op.
   if (!watcherAlive && !childAlive) {
-    d.removePidfile(pidfilePath);
+    reapIfEnded(body);
     return nothingToStop();
   }
 
@@ -1580,7 +1582,7 @@ export async function stopDevServer(
     }
     await d.waitFree(port, 3000);
     const portFree = !(await d.probe(port));
-    if (portFree) d.removePidfile(pidfilePath);
+    if (portFree) reapIfEnded(body);
     return result('watcher', [record.ppid], portFree);
   }
 
@@ -1595,14 +1597,14 @@ export async function stopDevServer(
       await d.waitFree(port, 2000);
     }
     const portFree = !(await d.probe(port));
-    if (portFree) d.removePidfile(pidfilePath);
+    if (portFree) reapIfEnded(body);
     return result('listener', [record.pid], portFree);
   }
 
   // The recorded owner is alive but no longer holds the port (e.g. already
-  // shutting down). Clear the pidfile if the port is free.
+  // shutting down). Its record goes once it has ended.
   const none = await nothingToStop();
-  if (none.portFree) d.removePidfile(pidfilePath);
+  if (none.portFree) reapIfEnded(body);
   return none;
 }
 

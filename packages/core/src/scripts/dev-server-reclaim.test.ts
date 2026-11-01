@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   reclaimPort,
   reclaimMessage,
@@ -19,6 +24,7 @@ import {
   isPortOpen,
   type DevServerPidRecord,
   type ReclaimResult,
+  stopDevServer,
 } from './dev-server.js';
 import { findListenerPids, killListenerTree } from './process-tree.js';
 
@@ -359,30 +365,116 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.deepStrictEqual(claim, { acquired: true, previous: null });
   });
 
-  it('lets only one of two starts that both found the same stale pidfile win', () => {
-    // B judges the stale record, then A takes it over before B renames it: B
-    // claims A's fresh record, sees a live owner, puts it back and bows out.
-    const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 3000 });
+  it('never moves or removes a live record: B pauses after judging the pidfile stale, A claims, C tries in the gap', async () => {
+    // The interleaving that broke the rename-aside takeover: B moved A's live record away, C took the
+    // empty path, and B's restore failed and deleted A's record, so A served on, invisible to `dev stop`.
+    const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 3000, command: 'dead', token: 'dead-token' });
     const fs = memoryFs({ [path]: stale });
-    const a: DevServerPidRecord = { pid: 3000, ppid: 901, port: 3000, command: 'a3', parentCommand: 'pa' };
-    const alive = (pid: number) => pid === 3000 || pid === 901;
-    const commandOf = (pid: number) => ({ 3000: 'a3', 901: 'pa' } as Record<number, string>)[pid] ?? '';
-    let raced = false;
-    const claim = claimDevPidfile(path, self, {
+    const a: DevServerPidRecord = { pid: 3000, ppid: 901, port: 3000, command: 'a3', parentCommand: 'node tsx watch a', token: 'a-token' };
+    const b: DevServerPidRecord = { ...self, token: 'b-token' };
+    const c: DevServerPidRecord = { pid: 4000, ppid: 902, port: 3000, command: 'c4', parentCommand: 'pc', token: 'c-token' };
+    const commands: Record<number, string> = { 3000: 'a3', 901: 'node tsx watch a', 2000: 'b', 900: 'p', 4000: 'c4', 902: 'pc' };
+    const live = { isAlive: (pid: number) => pid in commands, commandOf: (pid: number) => commands[pid] ?? '', sleep: () => {} };
+    const claims: Record<string, boolean[]> = { a: [], c: [] };
+    const claim = (name: 'a' | 'c', record: DevServerPidRecord) =>
+      claims[name].push(claimDevPidfile(path, record, { ...fs.deps, ...live }).acquired);
+    let bRead = false;
+    let cInGap = false;
+    const cInTheGap = () => {
+      if (cInGap) return;
+      cInGap = true;
+      claim('c', c);
+    };
+    // B's seams. `rename` is the old protocol's step between moving the record aside and putting it back,
+    // `hook('takeover')` the new one's step while holding the record's reap file: C tries again there.
+    const bDeps = {
       ...fs.deps,
-      rename: (from, to) => {
-        if (!raced) {
-          raced = true;
-          assert.deepStrictEqual(claimDevPidfile(path, a, { ...fs.deps, isAlive: alive, commandOf }).acquired, true);
+      ...live,
+      read: (p: string) => {
+        const body = fs.deps.read(p);
+        if (p === path && body === stale && !bRead) {
+          // B has read the dead record: A takes the pidfile over, and C tries while A is live.
+          bRead = true;
+          claim('a', a);
+          claim('c', c);
         }
-        return fs.deps.rename(from, to);
+        return body;
       },
-      isAlive: alive,
-      commandOf,
+      rename: (from: string, to: string) => {
+        const moved = fs.deps.rename(from, to);
+        cInTheGap();
+        return moved;
+      },
+      hook: (step: string) => { if (step === 'takeover') cInTheGap(); },
+    };
+    const bClaim = claimDevPidfile(path, b, bDeps);
+    assert.deepStrictEqual(claims.a, [true]);
+    assert.ok(cInGap, 'C tried during the takeover');
+    assert.deepStrictEqual(claims.c, [false, false], 'C never owns the pidfile while A is live');
+    assert.strictEqual(bClaim.acquired, false);
+    assert.strictEqual(fs.files.get(path), JSON.stringify(a), "A's record is intact");
+    assert.deepStrictEqual([...fs.files.keys()], [path], 'no reap or claim file is left');
+    // And `dev stop` finds A, and stops it through its tsx watch.
+    const signals: Array<[number, string]> = [];
+    const stop = await stopDevServer(3000, {
+      readPidfile: () => fs.files.get(path) ?? null,
+      removePidfile: () => {},
+      ...live,
+      signal: (pid, signal) => { signals.push([pid, signal]); },
+      probe: async () => false,
+      listPids: () => [],
+      killTree: () => {},
+      waitFree: async () => {},
+      waitExit: async () => true,
     });
-    assert.strictEqual(claim.acquired, false);
-    assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), a, "the winner's pidfile is back in place");
-    assert.strictEqual(fs.files.size, 1);
+    assert.strictEqual(stop.via, 'watcher');
+    assert.deepStrictEqual(signals, [[901, 'SIGTERM']]);
+  });
+
+  it('gives a dead pidfile to exactly one of several concurrent claimants and a reaper, round after round', { timeout: 120_000 }, async () => {
+    // Real processes on a real file system, each on its own clock.
+    const dir = mkdtempSync(join(tmpdir(), 'dev-pidfile-race-'));
+    const pidfile = join(dir, 'dev-server.3000.pid');
+    const module = JSON.stringify(new URL('./dev-pidfile.js', import.meta.url).href);
+    const claimant = [
+      `const m = await import(${module});`,
+      'const [file, role, dead] = process.argv.slice(1);',
+      "let won = 'lost';",
+      "if (role === 'reaper') { m.reapDevPidfile(file, dead); won = 'reaped'; }",
+      'else {',
+      '  const self = { pid: process.pid, ppid: process.ppid, port: 3000, command: m.pidCommand(process.pid), parentCommand: m.pidCommand(process.ppid), token: crypto.randomUUID() };',
+      "  if (m.claimDevPidfile(file, self).acquired) won = 'won ' + process.pid;",
+      '}',
+      'process.stdout.write(won + "\\n");',
+      // A winner stays alive until every process of the round has reported: it is the live owner meanwhile.
+      "process.stdin.on('data', () => {}); process.stdin.on('end', () => process.exit(0));",
+    ].join('\n');
+    try {
+      for (let round = 0; round < 50; round++) {
+        // A record whose process has exited, as a crashed dev server leaves it.
+        const dead = JSON.stringify({ pid: 4194300 - round, ppid: 4194000, port: 3000, command: 'node dead-dev-server.js', token: `dead-${round}` });
+        writeFileSync(pidfile, dead);
+        const roles = ['claim', 'claim', 'claim', round % 2 === 0 ? 'reaper' : 'claim'];
+        const runs = roles.map((role) => {
+          const child = spawn(process.execPath, ['--input-type=module', '-e', claimant, pidfile, role, dead], { stdio: ['pipe', 'pipe', 'inherit'] });
+          let out = '';
+          const reported = new Promise<string>((resolve) => child.stdout.on('data', (chunk) => {
+            out += chunk;
+            if (out.includes('\n')) resolve(out.trim());
+          }));
+          return { child, reported, exited: once(child, 'exit') };
+        });
+        const results = await Promise.all(runs.map((r) => r.reported));
+        const winners = results.filter((r) => r.startsWith('won '));
+        assert.strictEqual(winners.length, 1, `round ${round}: exactly one live owner, not ${JSON.stringify(results)}`);
+        assert.strictEqual(parsePidRecord(readFileSync(pidfile, 'utf-8'))?.pid, Number(winners[0].slice(4)), `round ${round}: the pidfile names the owner`);
+        for (const r of runs) r.child.stdin?.end();
+        await Promise.all(runs.map((r) => r.exited));
+        rmSync(pidfile, { force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("replaces its tsx watch predecessor's record in place, so the pidfile never goes missing in a reload", () => {
@@ -397,7 +489,6 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     const claim = claimDevPidfile(path, self, {
       createExclusive: guard(fs.deps.createExclusive),
       read: guard(fs.deps.read),
-      rename: guard(fs.deps.rename),
       replace: guard(fs.deps.replace),
       remove: guard(fs.deps.remove),
       isAlive: (pid) => pid === 900,
