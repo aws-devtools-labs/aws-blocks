@@ -235,7 +235,7 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
   // Guard: refuse to silently migrate local PGlite for an external app.
   if (detectExternalDb()) refuseExternalWithoutUrl('migrate');
 
-  const engine = new PGliteEngine(await lockLocalDatabase(requireLocalDatabaseDir(block)));
+  const engine = new PGliteEngine(lockLocalDatabase(requireLocalDatabaseDir(block), 'cli'));
   try {
     const migrations = await loadMigrationsFromDir(migrationsDir);
     const applied = await runMigrations(engine, migrations);
@@ -263,7 +263,7 @@ async function status(args: string[], url: string | undefined, block?: string) {
   const dataDir = url ? null : resolveLocalDatabaseDir(block);
   const engine = url
     ? new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 })
-    : dataDir && hasInitializedPgliteDataDir(dataDir) ? new PGliteEngine(await lockLocalDatabase(dataDir)) : null;
+    : dataDir && hasInitializedPgliteDataDir(dataDir) ? new PGliteEngine(lockLocalDatabase(dataDir, 'cli')) : null;
   try {
     const migrations = await loadMigrationsFromDir(migrationsDir);
     const allFiles = Object.keys(migrations).sort();
@@ -302,7 +302,7 @@ async function genTypes(args: string[], url: string | undefined, block?: string)
   } else {
     const dataDir = requireLocalDatabaseDir(block, { mustExist: true });
     console.log(`Connecting to local database (${dataDir})...`);
-    engine = new PGliteEngine(await lockLocalDatabase(dataDir));
+    engine = new PGliteEngine(lockLocalDatabase(dataDir, 'cli'));
   }
 
   try {

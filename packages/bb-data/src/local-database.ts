@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Where a `Database`'s local PGlite data lives, and which process has it open. The
- * mock (`index.mock.ts`) and the `bb-data` CLI both resolve the directory here, so
- * `bb-data migrate`, `status` and `generate-types` work on the same database that
- * `npm run dev` uses.
+ * Where a `Database`'s local PGlite data lives, and which process may open it. The
+ * mock (`index.mock.ts`) and the `bb-data` CLI both resolve and lock the directory
+ * here, so `bb-data migrate`, `status` and `generate-types` work on the same database
+ * that `npm run dev` uses, and never at the same time.
  *
  * @module
  */
 
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Dirent } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { hasInitializedPgliteDataDir } from './engines/pglite-engine.js';
 
 /** Local Building Block data, relative to the app root (the dev server's working directory). */
@@ -91,115 +92,187 @@ export function requireLocalDatabaseDir(block: string | undefined, options?: { m
   );
 }
 
-// ── Which process has a local database open ─────────────────────────────────
+// ── One process per local database ──────────────────────────────────────────
 // PGlite runs PostgreSQL inside one process: two processes on one data directory
-// corrupt it. The mock records that an app process (the dev server, a test run)
-// has the database open; the CLI takes the database for the length of a command.
-// The record is `<dataDir>.lock`, next to the data directory: `{ pid, by }`.
+// corrupt it. So the dev mock (role `app`) and the CLI (role `cli`) both take
+// `<dataDir>.lock`, next to the data directory, BEFORE they open PGlite:
+//   - Acquire: hard-link a complete record `{ pid, start, role, token }` to the
+//     lock path. link(2) fails with EEXIST when the lock exists (like O_EXCL), and
+//     a reader never sees a half-written record.
+//   - Stale: the holder's pid is dead, or now belongs to a process with another
+//     start time (pid reused). Take over by renaming the lock to a unique name,
+//     checking that it is the record that was inspected, deleting it, and
+//     acquiring again. A fresh lock moved by mistake is linked back.
+//   - Release: when the process exits, only if the lock still holds our record.
+// A process that already holds the lock (several `Database`s with one fullId)
+// gets it again.
+
+export type LocalDatabaseRole = 'app' | 'cli';
 
 interface LockRecord {
   pid: number;
-  by: 'app' | 'cli';
+  /** Start time of `pid`, to tell a reused pid apart; null where it can't be read. */
+  start: string | null;
+  role: LocalDatabaseRole;
+  token: string;
 }
 
-const heldLocks = new Set<string>();
+/** Lock path → the exact record this process wrote there. */
+const heldLocks = new Map<string, string>();
 
 function lockPath(dataDir: string): string {
   return `${dataDir}.lock`;
 }
 
-function readLock(path: string): LockRecord | null {
+function readRaw(path: string): string | null {
   try {
-    const record = JSON.parse(readFileSync(path, 'utf8'));
+    return readFileSync(path, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+function parseRecord(raw: string): LockRecord | null {
+  try {
+    const record = JSON.parse(raw);
     return typeof record?.pid === 'number' ? record : null;
   } catch {
     return null;
   }
 }
 
-function isAlive(pid: number): boolean {
+/** A process's start time (Linux: `/proc/<pid>/stat`; macOS: `ps`); null elsewhere or when it is gone. */
+function processStartTime(pid: number): string | null {
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'EPERM';
+    if (process.platform === 'linux') {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // Field 22 (starttime); fields 3+ follow the parenthesized command name.
+      return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
+    }
+    if (process.platform === 'darwin') {
+      const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return out.trim() || null;
+    }
+  } catch {
+    /* gone, or not readable */
   }
+  return null;
 }
 
-/** Remove this process's records when it exits (a successor's record is left alone). */
-function releaseOnExit(path: string): void {
+let ownStart: string | null | undefined;
+function ownStartTime(): string | null {
+  if (ownStart === undefined) ownStart = processStartTime(process.pid);
+  return ownStart;
+}
+
+/** Whether the recorded holder is still running: its pid is alive and was not reused. */
+function isHolderAlive(record: LockRecord): boolean {
+  try {
+    process.kill(record.pid, 0);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EPERM') return false;
+  }
+  if (!record.start) return true;
+  const start = record.pid === process.pid ? ownStartTime() : processStartTime(record.pid);
+  return !start || start === record.start;
+}
+
+function releaseOnExit(path: string, raw: string): void {
   if (heldLocks.size === 0) {
     process.once('exit', () => {
-      for (const held of heldLocks) if (readLock(held)?.pid === process.pid) rmSync(held, { force: true });
+      for (const [held, mine] of heldLocks) if (readRaw(held) === mine) rmSync(held, { force: true });
     });
   }
-  heldLocks.add(path);
+  heldLocks.set(path, raw);
 }
 
-/**
- * Record that this process has the database at `dataDir` open, until it exits.
- * Never refuses — the app works as before — so the CLI can tell the database is in
- * use. Best-effort: a missing record only weakens that check.
- */
-export function markLocalDatabaseOpen(dataDir: string): void {
-  const path = lockPath(dataDir);
-  const tmp = `${path}.${process.pid}`;
+/** Remove a stale lock without ever removing a fresh one. */
+function removeStaleLock(path: string, inspected: string): void {
+  const aside = `${path}.stale-${process.pid}-${randomUUID()}`;
   try {
-    writeFileSync(tmp, JSON.stringify({ pid: process.pid, by: 'app' } satisfies LockRecord));
-    renameSync(tmp, path); // atomic: a reader never sees a half-written record
-    releaseOnExit(path);
-  } catch {
-    rmSync(tmp, { force: true });
+    renameSync(path, aside);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
   }
+  if (readRaw(aside) !== inspected) {
+    // Another process replaced the stale lock between our read and our rename:
+    // put its fresh lock back, unless yet another one already took its place.
+    try {
+      linkSync(aside, path);
+    } catch {
+      /* the path is taken again; that holder owns it */
+    }
+  }
+  rmSync(aside, { force: true });
+}
+
+function inUseMessage(dataDir: string, holder: LockRecord, path: string): string {
+  const by =
+    holder.role === 'cli'
+      ? `in use by a \`bb-data\` command (pid ${holder.pid}). Wait for it to finish, or stop it`
+      : `open in another process (pid ${holder.pid}), most likely \`npm run dev\`. Stop it first (\`npm run dev:stop\`)`;
+  return (
+    `The local database ${dataDir} is ${by}: two processes on one PGlite database corrupt it. ` +
+    `If that process is not using the database, delete ${path}.`
+  );
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
- * Take the database at `dataDir` for this CLI process, until it exits. Waits while
- * another bb-data command has it.
+ * Take the local database at `dataDir` for this process, until it exits. Call it
+ * before opening PGlite on the directory.
  *
+ * While another process holds it, waits up to `waitMs` for it to be released. The
+ * CLI does not wait for an app process (a dev server keeps its database open until
+ * it stops).
+ *
+ * @param role - `app` for the dev mock, `cli` for a `bb-data` command.
  * @returns `dataDir`
- * @throws When an app process (`npm run dev`) has the database open, or another
- *   bb-data command still has it after `timeoutMs`.
+ * @throws When another live process still holds the database (the message names
+ *   it and says what to do).
  */
-export async function lockLocalDatabase(dataDir: string, timeoutMs = 60_000): Promise<string> {
+export function lockLocalDatabase(
+  dataDir: string,
+  role: LocalDatabaseRole,
+  waitMs = role === 'cli' ? 60_000 : 30_000,
+): string {
   const path = lockPath(dataDir);
-  const tmp = `${path}.${process.pid}`;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, by: 'cli' } satisfies LockRecord));
-  const deadline = Date.now() + timeoutMs;
+  const raw = JSON.stringify({ pid: process.pid, start: ownStartTime(), role, token: randomUUID() } satisfies LockRecord);
+  const tmp = `${path}.${process.pid}-${randomUUID()}`;
+  writeFileSync(tmp, raw);
+  const deadline = Date.now() + waitMs;
   let announced = false;
   try {
     for (;;) {
       try {
-        linkSync(tmp, path); // atomic create-if-absent, with the full record in place
-        releaseOnExit(path);
+        linkSync(tmp, path);
+        releaseOnExit(path, raw);
         return dataDir;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       }
-      const holder = readLock(path);
-      if (!holder || holder.pid === process.pid || !isAlive(holder.pid)) {
-        rmSync(path, { force: true }); // left behind by a process that is gone
+      const inspected = readRaw(path);
+      if (inspected === null) continue; // released meanwhile
+      const holder = parseRecord(inspected);
+      if (!holder || !isHolderAlive(holder)) {
+        removeStaleLock(path, inspected);
         continue;
       }
-      if (holder.by === 'app') {
-        throw new Error(
-          `${dataDir} is open in another process (pid ${holder.pid}), most likely \`npm run dev\`. ` +
-            'Stop it first (`npm run dev:stop`): two processes on one PGlite database corrupt it. ' +
-            `If that process is not using the database, delete ${path}.`,
-        );
-      }
-      if (Date.now() > deadline) {
-        throw new Error(
-          `Another bb-data command (pid ${holder.pid}) is still using ${dataDir}. ` +
-            `If that process is not using the database, delete ${path}.`,
-        );
+      if (holder.pid === process.pid) return dataDir; // already ours
+      if ((role === 'cli' && holder.role === 'app') || Date.now() > deadline) {
+        throw new Error(inUseMessage(dataDir, holder, path));
       }
       if (!announced) {
-        console.log(`Waiting for another bb-data command (pid ${holder.pid}) to finish with ${dataDir}...`);
+        console.log(`Waiting for pid ${holder.pid} (${holder.role === 'cli' ? 'a bb-data command' : 'an app'}) to release ${dataDir}...`);
         announced = true;
       }
-      await sleep(200);
+      sleepSync(200);
     }
   } finally {
     rmSync(tmp, { force: true });

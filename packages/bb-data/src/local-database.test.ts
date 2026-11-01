@@ -3,18 +3,20 @@
 
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   listLocalDatabases,
   localDatabaseDir,
   lockLocalDatabase,
-  markLocalDatabaseOpen,
   requireLocalDatabaseDir,
   resolveLocalDatabaseDir,
 } from './local-database.js';
+
+const helperUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'local-database.js')).href;
 
 // The helpers resolve `.bb-data` against the working directory, as the dev server and CLI do.
 const startDir = process.cwd();
@@ -43,11 +45,24 @@ function fakeDatabase(fullId: string): void {
   writeFileSync(join(dir, 'global', 'pg_control'), '');
 }
 
-function writeLock(fullId: string, record: { pid: number; by: string }): string {
-  const path = `${localDatabaseDir(fullId)}.lock`;
+const LOCK = `${localDatabaseDir('my-app-main')}.lock`;
+
+interface LockFile {
+  pid: number;
+  start: string | null;
+  role: string;
+  token: string;
+}
+
+function writeLock(record: LockFile): string {
   mkdirSync('.bb-data', { recursive: true });
-  writeFileSync(path, JSON.stringify(record));
-  return path;
+  const raw = JSON.stringify(record);
+  writeFileSync(LOCK, raw);
+  return raw;
+}
+
+function readLock(): LockFile {
+  return JSON.parse(readFileSync(LOCK, 'utf8'));
 }
 
 /** A pid that belonged to a process which has exited. */
@@ -69,6 +84,7 @@ test('lists only directories that hold an initialized PGlite database', () => {
   mkdirSync(join('.bb-data', 'my-app-half'));
   writeFileSync(join('.bb-data', 'my-app-half', 'PG_VERSION'), '16\n');
   writeFileSync(join('.bb-data', 'settings.json'), '{}');
+  writeFileSync(join('.bb-data', 'my-app-main.lock'), '{}');
   assert.deepStrictEqual(listLocalDatabases(), ['my-app-audit', 'my-app-main']);
 });
 
@@ -102,35 +118,88 @@ test('requireLocalDatabaseDir explains how to get a database, and checks it exis
   assert.strictEqual(requireLocalDatabaseDir('my-app-main', { mustExist: true }), localDatabaseDir('my-app-main'));
 });
 
-test('lockLocalDatabase takes a free database and records this process', async () => {
-  assert.strictEqual(await lockLocalDatabase(localDatabaseDir('my-app-main')), localDatabaseDir('my-app-main'));
-  const record = JSON.parse(readFileSync(`${localDatabaseDir('my-app-main')}.lock`, 'utf8'));
-  assert.deepStrictEqual(record, { pid: process.pid, by: 'cli' });
-});
-
-test('lockLocalDatabase takes over a lock whose process is gone', async () => {
-  writeLock('my-app-main', { pid: deadPid(), by: 'app' });
-  await lockLocalDatabase(localDatabaseDir('my-app-main'));
-  const record = JSON.parse(readFileSync(`${localDatabaseDir('my-app-main')}.lock`, 'utf8'));
+test('lockLocalDatabase takes a free database and records this process, its start time and role', () => {
+  assert.strictEqual(lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli'), localDatabaseDir('my-app-main'));
+  const record = readLock();
   assert.strictEqual(record.pid, process.pid);
+  assert.strictEqual(record.role, 'cli');
+  assert.ok(record.token);
+  if (process.platform === 'linux') assert.ok(record.start, 'start time recorded');
+  // The same process gets it again (several Databases with one fullId).
+  assert.strictEqual(lockLocalDatabase(localDatabaseDir('my-app-main'), 'app'), localDatabaseDir('my-app-main'));
+  assert.strictEqual(readLock().token, record.token);
 });
 
-test('lockLocalDatabase refuses at once while an app process (npm run dev) has the database open', async () => {
-  const path = writeLock('my-app-main', { pid: process.ppid, by: 'app' });
-  await assert.rejects(lockLocalDatabase(localDatabaseDir('my-app-main')), /open in another process .*npm run dev:stop/s);
-  assert.strictEqual(existsSync(path), true, 'the app keeps its record');
+test('lockLocalDatabase takes over a lock whose process is gone', () => {
+  writeLock({ pid: deadPid(), start: null, role: 'app', token: 'old' });
+  lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli');
+  assert.strictEqual(readLock().pid, process.pid);
 });
 
-test('lockLocalDatabase waits for another bb-data command, then gives up after the timeout', async () => {
-  writeLock('my-app-main', { pid: process.ppid, by: 'cli' });
+test(
+  'lockLocalDatabase takes over a lock whose pid now belongs to another process',
+  { skip: process.platform !== 'linux' && process.platform !== 'darwin' },
+  () => {
+    // process.ppid is alive, but did not start at this time: the pid was reused.
+    writeLock({ pid: process.ppid, start: 'not-its-start-time', role: 'cli', token: 'old' });
+    lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli', 0);
+    assert.strictEqual(readLock().pid, process.pid);
+  },
+);
+
+test('the CLI refuses at once while an app process (npm run dev) holds the database', () => {
+  const raw = writeLock({ pid: process.ppid, start: null, role: 'app', token: 'dev' });
   const started = Date.now();
-  await assert.rejects(lockLocalDatabase(localDatabaseDir('my-app-main'), 500), /Another bb-data command .* is still using/);
-  assert.ok(Date.now() - started >= 500);
+  assert.throws(
+    () => lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli'),
+    /open in another process .*npm run dev:stop/s,
+  );
+  assert.ok(Date.now() - started < 5_000, 'did not wait for the dev server');
+  assert.strictEqual(readFileSync(LOCK, 'utf8'), raw, 'the app keeps its lock');
 });
 
-test('markLocalDatabaseOpen records the app process without refusing', () => {
-  writeLock('my-app-main', { pid: process.ppid, by: 'cli' });
-  markLocalDatabaseOpen(localDatabaseDir('my-app-main'));
-  const record = JSON.parse(readFileSync(`${localDatabaseDir('my-app-main')}.lock`, 'utf8'));
-  assert.deepStrictEqual(record, { pid: process.pid, by: 'app' });
+test('the app waits for a bb-data command, then refuses without taking the lock', () => {
+  const raw = writeLock({ pid: process.ppid, start: null, role: 'cli', token: 'migrate' });
+  const started = Date.now();
+  assert.throws(
+    () => lockLocalDatabase(localDatabaseDir('my-app-main'), 'app', 500),
+    /in use by a `bb-data` command .*Wait for it to finish/s,
+  );
+  assert.ok(Date.now() - started >= 500);
+  assert.strictEqual(readFileSync(LOCK, 'utf8'), raw, 'the command keeps its lock');
+});
+
+/** Start a child that takes the lock, reports LOCKED, and holds it until its stdin closes. */
+async function childHolder(): Promise<{ end: () => Promise<number | null> }> {
+  const script = `const { lockLocalDatabase, localDatabaseDir } = await import(${JSON.stringify(helperUrl)});
+lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli');
+console.log('LOCKED');
+process.stdin.resume();
+process.stdin.on('end', () => process.exit(0));`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: appDir });
+  const exited = new Promise<number | null>((resolve) => child.on('exit', resolve));
+  await new Promise<void>((resolve, reject) => {
+    child.stdout.on('data', (d) => String(d).includes('LOCKED') && resolve());
+    exited.then(() => reject(new Error('the holder exited before it took the lock')));
+  });
+  return {
+    end: () => {
+      child.stdin.end();
+      return exited;
+    },
+  };
+}
+
+test('a process releases its lock when it exits', async () => {
+  const holder = await childHolder();
+  assert.strictEqual(readLock().role, 'cli');
+  assert.strictEqual(await holder.end(), 0);
+  assert.strictEqual(existsSync(LOCK), false);
+});
+
+test('a process never releases a lock that is no longer its own', async () => {
+  const holder = await childHolder();
+  const other = writeLock({ pid: process.pid, start: null, role: 'app', token: 'someone-else' });
+  assert.strictEqual(await holder.end(), 0);
+  assert.strictEqual(readFileSync(LOCK, 'utf8'), other);
 });

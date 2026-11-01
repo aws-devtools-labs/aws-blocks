@@ -402,8 +402,12 @@ npx bb-data generate-types ./types/database.ts
   creates it. Until then `status` lists every migration as pending, and `migrate`
   asks you to start the app or to pass `--block <fullId>` to create the database.
 - Stop the dev server first (`npm run dev:stop`). PGlite runs inside one process,
-  so the commands refuse while another process has the database open. Concurrent
-  `bb-data` commands on one database wait for each other.
+  so one process at a time opens a local database: the dev server and each command
+  take `.bb-data/<fullId>.lock` before they open it. A command refuses at once
+  while the dev server has the database. The dev server waits up to 30 s for a
+  running command, and a command up to 60 s for another command; then they refuse
+  with a message that names the holder. A lock left by a process that is gone is
+  taken over.
 - For a `fromExisting()` app, the commands refuse without `--url`. They detect such
   an app by a `*_DB_URL` / `*_CONNECTION_STRING` variable in the environment or in
   `.env.local`, or by the connection string `bb-data pull` stores in

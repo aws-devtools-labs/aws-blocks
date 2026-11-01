@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PGliteEngine } from './engines/pglite-engine.js';
 
 const distDir = dirname(fileURLToPath(import.meta.url));
 const CLI = join(distDir, 'cli.js');
@@ -189,6 +190,141 @@ test('with no local database yet, status reports all pending and migrate says ho
     assert.match(migrate.stderr, /npm run dev/);
     assert.match(migrate.stderr, /--block/);
     assert.strictEqual(existsSync(join(dir, '.bb-data')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const helperUrl = pathToFileURL(join(distDir, 'local-database.js')).href;
+const engineUrl = pathToFileURL(join(distDir, 'engines', 'pglite-engine.js')).href;
+
+/** Start a `cli`-role process (what a `bb-data` command does) that holds the lock until its stdin closes. */
+async function startCliHolder(dir: string): Promise<{ pid: number; end: () => Promise<Result> }> {
+  const script = `const { lockLocalDatabase, localDatabaseDir } = await import(${JSON.stringify(helperUrl)});
+lockLocalDatabase(localDatabaseDir('app-main'), 'cli');
+console.log('LOCKED');
+process.stdin.resume();
+process.stdin.on('end', () => process.exit(0));`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: dir, env: localEnv });
+  const done = collect(child);
+  await new Promise<void>((resolve, reject) => {
+    child.stdout?.on('data', (d) => String(d).includes('LOCKED') && resolve());
+    done.then((r) => reject(new Error(`the holder exited before it took the lock: ${r.stderr}`)));
+  });
+  return {
+    pid: child.pid ?? -1,
+    end: () => {
+      child.stdin?.end();
+      return done;
+    },
+  };
+}
+
+test('when a bb-data command holds the database, the dev mock waits instead of opening it', async () => {
+  const dir = makeApp();
+  try {
+    const holder = await startCliHolder(dir);
+    const lock = join(dir, '.bb-data', 'app-main.lock');
+    const app = startApp(dir);
+    let ready = false;
+    app.ready.then(() => (ready = true), () => {});
+
+    // The app is waiting once its own candidate lock record exists next to the lock
+    // (it writes `<lock>.<pid>-<uuid>` before trying to take the lock, and keeps it while it waits).
+    const candidate = `app-main.lock.${app.child.pid}-`;
+    const deadline = Date.now() + 20_000;
+    while (!readdirSync(join(dir, '.bb-data')).some((e) => e.startsWith(candidate))) {
+      assert.ok(Date.now() < deadline, 'the app never tried to take the lock');
+      await new Promise((resolve) => setTimeout(resolve, 50)); // polls a condition, not a guessed duration
+    }
+    assert.strictEqual(ready, false, 'the app ran a query while the command held the database');
+    assert.strictEqual(existsSync(join(dir, '.bb-data', 'app-main', 'PG_VERSION')), false, 'the app opened PGlite');
+    const record = JSON.parse(readFileSync(lock, 'utf8'));
+    assert.strictEqual(record.pid, holder.pid, 'the lock stays the command\'s');
+    assert.strictEqual(record.role, 'cli');
+
+    assert.strictEqual((await holder.end()).status, 0);
+    await app.ready;
+    const result = await app.done;
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Waiting for pid \d+ \(a bb-data command\)/);
+    assert.strictEqual(existsSync(lock), false, 'the app released the lock when it exited');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent app and CLI processes: one owner at a time, and the database stays intact', async () => {
+  const dir = makeApp();
+  try {
+    // `app` opens the dev mock's Database (the lock is taken in its constructor);
+    // `cli` takes the lock and opens PGlite the way a bb-data command does. Each
+    // logs when it owns the database and when it is done with it.
+    writeFileSync(
+      join(dir, 'race.mjs'),
+      `import { appendFileSync } from 'node:fs';
+const [role, n] = process.argv.slice(2);
+const log = (event) => appendFileSync('events.log', event + ' ' + process.pid + '\\n');
+try {
+  if (role === 'app') {
+    const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-blocks/core'))});
+    const { Database, sql } = await import(${JSON.stringify(pathToFileURL(join(distDir, 'index.mock.js')).href)});
+    const db = new Database(new Scope('app'), 'main', { migrationsPath: './migrations' });
+    log('OWN');
+    await db.execute(sql\`INSERT INTO notes (n) VALUES (\${Number(n)})\`);
+  } else {
+    const { lockLocalDatabase, localDatabaseDir } = await import(${JSON.stringify(helperUrl)});
+    const { PGliteEngine } = await import(${JSON.stringify(engineUrl)});
+    const engine = new PGliteEngine(lockLocalDatabase(localDatabaseDir('app-main'), 'cli'));
+    log('OWN');
+    await engine.execute('CREATE TABLE IF NOT EXISTS cli_rows (n INT PRIMARY KEY)');
+    await engine.execute('INSERT INTO cli_rows (n) VALUES (' + Number(n) + ')');
+    await engine.destroy();
+  }
+  log('DONE');
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
+`,
+    );
+    const roles = ['app', 'cli', 'app', 'cli', 'app', 'cli'];
+    const runs = await Promise.all(
+      roles.map((role, n) =>
+        collect(spawn(process.execPath, ['race.mjs', role, String(n)], { cwd: dir, env: localEnv })).then((r) => ({ role, ...r })),
+      ),
+    );
+
+    // Every app ran. A command either ran, or refused because an app held the database.
+    for (const run of runs) {
+      if (run.role === 'app') assert.strictEqual(run.status, 0, run.stderr);
+      else assert.ok(run.status === 0 || /open in another process/.test(run.stderr), run.stderr);
+    }
+    // Ownership never overlapped: each OWN is followed by the same process's DONE.
+    const events = readFileSync(join(dir, 'events.log'), 'utf8').trim().split('\n');
+    for (let i = 0; i < events.length; i += 2) {
+      const [own, ownPid] = events[i].split(' ');
+      const [done, donePid] = (events[i + 1] ?? '').split(' ');
+      assert.deepStrictEqual([own, done, donePid], ['OWN', 'DONE', ownPid], events.join('\n'));
+    }
+    const succeeded = runs.filter((r) => r.status === 0);
+    assert.strictEqual(events.length, succeeded.length * 2);
+
+    // The database opens and holds every row that was written; nothing was quarantined.
+    const engine = new PGliteEngine(join(dir, '.bb-data', 'app-main'));
+    try {
+      const [notes] = await engine.query<{ n: number }>('SELECT count(*)::int AS n FROM notes');
+      assert.strictEqual(notes.n, 3);
+      const cliRuns = succeeded.filter((r) => r.role === 'cli').length;
+      if (cliRuns > 0) {
+        const [rows] = await engine.query<{ n: number }>('SELECT count(*)::int AS n FROM cli_rows');
+        assert.strictEqual(rows.n, cliRuns);
+      }
+    } finally {
+      await engine.destroy();
+    }
+    const quarantined = [...readdirSync(dir), ...readdirSync(join(dir, '.bb-data'))].filter((e) => e.includes('.corrupt-'));
+    assert.deepStrictEqual(quarantined, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
