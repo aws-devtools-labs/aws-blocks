@@ -9,6 +9,7 @@ import {
   runStopCli,
   devPidfilePath,
   parsePortArg,
+  portInUseHint,
   type StopDevServerDeps,
   type StopResult,
 } from './dev-server.js';
@@ -42,6 +43,7 @@ function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
     probe: async () => false,
     listPids: () => [],
     killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); },
+    groupOf: () => undefined,
     waitFree: async () => {},
     waitExit: async () => true,
     ...overrides,
@@ -196,6 +198,54 @@ describe('stopDevServer — what it reports when nothing of this app runs', () =
     assert.equal(r.via, 'none');
     assert.deepEqual(sigs, []);
     assert.deepEqual(removed, [devPidfilePath(3000)], 'the stale record is cleared');
+  });
+});
+
+describe('stopDevServer — the frontend a SIGKILLed dev server left behind', () => {
+  // A SIGKILL of the dev group leaves its detached Vite holding the frontend port. dev stop used to clear
+  // the record as stale, which the next start needed to reclaim that port, and that start then failed (JA-3).
+  const record = JSON.stringify({ pid: 777, ppid: 500, port: 3000, command: 'node run-dev.ts', frontend: { pgid: 900, port: 3100 } });
+
+  it("stops the recorded frontend group when it still holds the frontend port, then clears the record", async () => {
+    let held = true;
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => record,
+      probe: async (p) => p === 3100 && held,
+      listPids: (p) => (p === 3100 && held ? [901] : []),
+      groupOf: (pid) => (pid === 901 ? 900 : undefined),
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); held = false; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'frontend');
+    assert.equal(r.stopped, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(r.frontend, { pgid: 900, port: 3100 });
+    assert.deepEqual(sigs, [{ pid: 900, signal: 'SIGTERM', via: 'killTree' }], 'the recorded group, by its pgid');
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /stopped the frontend that this app's dev server left running on :3100 \(pid 901\)/);
+  });
+
+  it('leaves a frontend port that another process holds alone, and clears the record', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => record,
+      probe: async (p) => p === 3100,
+      listPids: (p) => (p === 3100 ? [4242] : []),
+      groupOf: () => 4242,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+});
+
+describe('portInUseHint — an exact next command', () => {
+  it('names the pids to stop, how to start again, and the flag for another port', () => {
+    assert.equal(
+      portInUseHint(3100, { foreign: [{ pid: 3181756, command: 'node vite --port 3100 --strictPort' }], pids: [] }, '--frontend-port'),
+      'Stop it with `kill 3181756`, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+    );
+    assert.match(portInUseHint(3000, { foreign: [], pids: [] }, '--port'), /`lsof -i :3000`/);
   });
 });
 
