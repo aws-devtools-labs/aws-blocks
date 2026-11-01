@@ -602,6 +602,39 @@ describe('lifecycle commands', () => {
 		assert.ok(!existsSync(join(dir, 'outputs.json')));
 	});
 
+	it('forgets the deleted production stack in last-deploy.json, outputs.json and config.json, and keeps the sandbox', async () => {
+		const root = withSandboxId(fixtureApp());
+		const dir = join(root, '.blocks-sandbox');
+		const write = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
+		const read = (name: string) => JSON.parse(readFileSync(join(dir, name), 'utf-8')) as unknown;
+		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
+		const seed = (config: unknown) => {
+			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
+			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
+			write('config.json', config);
+		};
+		seed({ apiUrl: 'https://p', environment: 'production' });
+		// A failed or declined destroy forgets nothing.
+		const failed = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV, onSpawn: () => ({ code: 1 }) });
+		assert.strictEqual(failed.code, 1);
+		const declined = await runCli(['destroy'], { cwd: root, env: AWS_ENV, stdinIsTTY: true, answer: 'n' });
+		assert.strictEqual(declined.code, 1);
+		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
+		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
+		assert.ok(existsSync(join(dir, 'config.json')));
+		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
+		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
+		// A sandbox config.json stays; an outputs.json with only the production stack goes.
+		seed({ apiUrl: 'https://s', environment: 'sandbox' });
+		write('outputs.json', { 'demo-prod': { ApiUrl: 'https://p' } });
+		assert.strictEqual((await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV })).code, 0);
+		assert.deepStrictEqual(read('config.json'), { apiUrl: 'https://s', environment: 'sandbox' });
+		assert.ok(!existsSync(join(dir, 'outputs.json')));
+	});
+
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
 		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));

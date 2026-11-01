@@ -574,33 +574,38 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 		options: { backendPath, invocation: invocation(ctx, 'sandbox', 'destroy') },
 		where,
 	});
-	if (code === ExitCode.Ok) forgetSandboxRecords(root, stack);
+	if (code === ExitCode.Ok) forgetDeployRecords(root, 'sandbox', stack);
 	return code;
 }
 
 /**
- * Remove what this machine recorded about the deleted sandbox stack, so that
- * `sandbox console` and the frontend no longer point at it: its entry in
- * `last-deploy.json`, its stack in `outputs.json`, and `config.json` when the
- * sandbox wrote it. The sandbox id stays: the next deploy reuses it.
+ * Remove what this machine recorded about the deleted stack of `stage`, so that
+ * `sandbox console`, `--output json` and the frontend no longer point at it: its
+ * entry in `last-deploy.json`, its stack in `outputs.json`, and `config.json`
+ * when a deploy of that stage wrote it. The other stage's records stay, and so
+ * does the sandbox id: the next deploy reuses it.
  */
-function forgetSandboxRecords(root: string, stack: string): void {
-	forgetLastDeploy(root, 'sandbox');
+function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
+	forgetLastDeploy(root, stage);
 	const dir = join(root, '.blocks-sandbox');
 	const readJson = (name: string): Record<string, unknown> | undefined => {
+		let value: unknown;
 		try {
-			return JSON.parse(readFileSync(join(dir, name), 'utf-8')) as Record<string, unknown>;
+			value = JSON.parse(readFileSync(join(dir, name), 'utf-8'));
 		} catch {
 			return undefined;
 		}
+		return typeof value === 'object' && value !== null && !Array.isArray(value)
+			? Object.fromEntries(Object.entries(value))
+			: undefined;
 	};
 	const outputs = readJson('outputs.json');
-	if (outputs && stack in outputs) {
+	if (outputs && Object.hasOwn(outputs, stack)) {
 		delete outputs[stack];
 		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
 		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
 	}
-	if (readJson('config.json')?.environment === 'sandbox') rmSync(join(dir, 'config.json'));
+	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 
 /**
@@ -718,12 +723,14 @@ export async function destroy(ctx: Context): Promise<number> {
 	ctx.out.progress(`This deletes the production stack ${stack}; ${label}; project ${root}.`);
 	const declined = await confirm(ctx, `Delete the production stack ${stack}?`, 'blocks destroy --yes', where);
 	if (declined !== undefined) return declined;
-	return runRunner(ctx, {
+	const code = await runRunner(ctx, {
 		runner: 'destroy',
 		operation: 'blocks destroy',
 		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy') },
 		where,
 	});
+	if (code === ExitCode.Ok) forgetDeployRecords(root, 'production', stack);
+	return code;
 }
 
 /**
