@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
+import { type AwsIdentity, describeDeploymentCredentials, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
@@ -1884,7 +1884,7 @@ describe('JSON output', () => {
 			[['deploy', '--query', 'apiUrl.x'], 'apiUrl is a value, with no fields.'],
 			[
 				['dev', 'stop', '--query', 'stopped.0.nope'],
-				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via.',
+				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via, holders.',
 			],
 			[
 				['dev', 'stop', '--query', 'stopped.length'],
@@ -2220,5 +2220,46 @@ describe('cdk-blocks secret and config', () => {
 		assert.strictEqual(bad.code, 2, bad.stderr);
 		assert.match(bad.stderr, /^Error: Invalid key "bad-key"\./);
 		assert.doesNotMatch(bad.stderr, /--verbose/);
+	});
+});
+
+describe('dev stop output', () => {
+	const stopResult = (overrides: Partial<StopResult>): StopResult => ({
+		port: 3000,
+		stopped: false,
+		alreadyStopped: true,
+		record: null,
+		via: 'none',
+		pids: [],
+		portFree: true,
+		holders: [],
+		...overrides,
+	});
+
+	it('prints a port still bound after the stop on stderr, not stdout, and exits 1', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dev', 'stop'], {
+			cwd: root,
+			core: {
+				stopDevServer: async () =>
+					stopResult({ stopped: true, alreadyStopped: false, via: 'watcher', pids: [4242], portFree: false }),
+			},
+		});
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(run.stdout, '');
+		assert.match(run.stderr, /Signalled the dev server on :3000 \(pid 4242\), but the port is still bound/);
+	});
+
+	it('names the process holding the port, and reports it in JSON', async () => {
+		const root = fixtureApp();
+		const holders = [{ pid: 777, command: 'python3 -m http.server 3000' }];
+		const core = { stopDevServer: async () => stopResult({ portFree: false, holders }) };
+		const text = await runCli(['dev', 'stop'], { cwd: root, core });
+		assert.strictEqual(text.code, 0, text.stderr);
+		assert.match(text.stdout, /held by another process, which was not stopped: pid 777 \(python3 -m http\.server 3000\)/);
+		const json = await runCli(['--output', 'json', 'dev', 'stop'], { cwd: root, core });
+		assert.deepStrictEqual(JSON.parse(json.stdout).stopped[0].holders, holders);
+		const pid = await runCli(['dev', 'stop', '--query', 'stopped.0.holders.0.pid'], { cwd: root, core });
+		assert.strictEqual(pid.stdout, '777\n', pid.stderr);
 	});
 });

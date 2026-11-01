@@ -485,23 +485,24 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	}
 	const results = [];
 	for (const port of ports) results.push(await core.stopDevServer(port));
+	// A port still bound after the stop is a problem, not an outcome: it goes to stderr, as in core's runStopCli.
+	const warnings = results.filter((r) => core.isStopWarning(r));
+	for (const r of warnings) ctx.out.error(`${core.stopMessage(r)}\n`);
+	const outcomes = results.filter((r) => !core.isStopWarning(r));
 	const text =
-		results.length > 0
-			? results.map((r) => core.stopMessage(r)).join('\n')
-			: 'No dev server was recorded for this app.';
-	ctx.out.result(
-		{
-			stopped: results.map(({ port, stopped, alreadyStopped, portFree, via }) => ({
-				port,
-				stopped,
-				alreadyStopped,
-				portFree,
-				via,
-			})),
-		},
-		text,
-	);
-	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
+		results.length > 0 ? outcomes.map((r) => core.stopMessage(r)).join('\n') : 'No dev server was recorded for this app.';
+	const value = {
+		stopped: results.map(({ port, stopped, alreadyStopped, portFree, via, holders }) => ({
+			port,
+			stopped,
+			alreadyStopped,
+			portFree,
+			via,
+			holders,
+		})),
+	};
+	if (ctx.out.format === 'json' || text !== '') ctx.out.result(value, text);
+	return warnings.length > 0 ? ExitCode.Failure : ExitCode.Ok;
 }
 
 /** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
