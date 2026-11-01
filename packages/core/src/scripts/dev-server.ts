@@ -1551,8 +1551,14 @@ export interface StopResult {
    * holding it, which `dev stop` never signals. Empty otherwise.
    */
   holders: PortHolder[];
-  /** For `via: 'frontend'`: the recorded frontend group and port that were stopped. */
+  /** The recorded frontend group and port that were stopped: for `frontend`, and for `watcher` when the runner was already dead. */
   frontend?: { pgid: number; port: number };
+  /**
+   * For `via: 'watcher'`: the `tsx watch` did not exit on its SIGTERM with its
+   * runner dead (a runner killed by a signal leaves tsx waiting forever), so it
+   * was SIGKILLed.
+   */
+  killed?: true;
 }
 
 /** Injectable seams for {@link stopDevServer} (real implementations by default). */
@@ -1613,6 +1619,20 @@ function defaultStopDeps(): StopDevServerDeps {
  * after its SIGTERM: the CLI waits up to 10 s for its dev server's cleanup.
  */
 const CLI_STOP_TIMEOUT_MS = 12_000;
+
+/**
+ * How long {@link stopDevServer} waits for a `tsx watch` whose runner is alive
+ * to exit after its SIGTERM: tsx gives the runner 5 s, and the runner's own
+ * cleanup stops the frontend within that.
+ */
+const WATCHER_EXIT_TIMEOUT_MS = 8000;
+
+/**
+ * How long {@link stopDevServer} gives a `tsx watch` whose runner is already
+ * dead before it SIGKILLs it: tsx waits for an exit that already happened, so
+ * it would never exit on its own.
+ */
+const NO_RUNNER_WATCHER_GRACE_MS = 2000;
 
 /**
  * Stop the dev server recorded for `port` by SIGTERM-ing its `tsx watch`
@@ -1682,8 +1702,9 @@ export async function stopDevServer(
 
   const watcherAlive = record.ppid > 1 && d.isAlive(record.ppid);
   // A recorded child whose pid now runs another command is gone (the pid was reused).
-  const childAlive =
+  const runnerAlive = (): boolean =>
     d.isAlive(record.pid) && (record.command === undefined || d.commandOf(record.pid) === record.command);
+  const childAlive = runnerAlive();
 
   // A `blocks dev` CLI whose dev server has not taken the session over yet: it
   // stops what it started on a SIGTERM, and exits once all of it has.
@@ -1706,42 +1727,74 @@ export async function stopDevServer(
     return result('cli', [record.pid], portFree);
   }
 
+  /**
+   * Stop the recorded frontend group, once the dev server that ran it is gone,
+   * if it still holds the frontend port: with the same ownership test as a
+   * start's reclaim, so nothing but that group is signalled. Null when the
+   * record has none, or nothing of it holds the port.
+   */
+  const stopLeftFrontend = async (): Promise<{ frontend: { pgid: number; port: number }; reclaim: ReclaimResult } | null> => {
+    const frontend = record.frontend;
+    if (!frontend) return null;
+    const reclaim = await reclaimPort(frontend.port, {
+      probe: d.probe,
+      listPids: d.listPids,
+      owned: (pid) => d.groupOf(pid) === frontend.pgid,
+      commandOf: d.commandOf,
+      killTree: (_pid, sig) => d.killTree(frontend.pgid, sig),
+      waitFree: d.waitFree,
+    });
+    return reclaim.wasOpen && reclaim.pids.length > 0 ? { frontend, reclaim } : null;
+  };
+
   // Nothing we recorded is alive — stale pidfile. A dev server that was
   // SIGKILLed can still leave its detached frontend group holding the frontend
   // port; that group is recorded, so stop it (and only it, as a start's reclaim
   // would), then clear the record. Otherwise report a no-op.
   if (!watcherAlive && !childAlive) {
-    const frontend = record.frontend;
-    if (frontend) {
-      const reclaim = await reclaimPort(frontend.port, {
-        probe: d.probe,
-        listPids: d.listPids,
-        owned: (pid) => d.groupOf(pid) === frontend.pgid,
-        commandOf: d.commandOf,
-        killTree: (_pid, sig) => d.killTree(frontend.pgid, sig),
-        waitFree: d.waitFree,
-      });
-      if (reclaim.wasOpen && reclaim.pids.length > 0) {
-        if (reclaim.reclaimed) reapIfEnded(body);
-        const portFree = !(await d.probe(port));
-        return { ...result('frontend', reclaim.pids, portFree && reclaim.reclaimed), frontend };
-      }
+    const left = await stopLeftFrontend();
+    if (left) {
+      if (left.reclaim.reclaimed) reapIfEnded(body);
+      const portFree = !(await d.probe(port));
+      return { ...result('frontend', left.reclaim.pids, portFree && left.reclaim.reclaimed), frontend: left.frontend };
     }
     reapIfEnded(body);
     return nothingToStop();
   }
 
-  // Primary path: SIGTERM the recorded tsx watch supervisor.
+  // Primary path: SIGTERM the recorded tsx watch supervisor, and wait for it to
+  // exit: the port being free does not mean the session ended. `tsx watch`
+  // relays the SIGTERM and gives its runner 5 s; a runner that a signal killed
+  // (the OOM killer, a `kill -9`) never reports an exit tsx waits for, so tsx
+  // then runs forever, out of reach of Ctrl-C. A watcher that is still there
+  // with no runner is SIGKILLed, and so is one that outlives its runner.
   if (watcherAlive && isTsxWatcher(d.commandOf(record.ppid))) {
     try {
       d.signal(record.ppid, 'SIGTERM');
     } catch {
       /* raced away */
     }
+    let exited = await d.waitExit(record.ppid, childAlive ? WATCHER_EXIT_TIMEOUT_MS : NO_RUNNER_WATCHER_GRACE_MS);
+    let killed = false;
+    if (!exited && !runnerAlive()) {
+      try {
+        d.signal(record.ppid, 'SIGKILL');
+        killed = true;
+      } catch {
+        /* raced away */
+      }
+      exited = await d.waitExit(record.ppid, KILL_GRACE_MS);
+    }
+    // A runner that died by a signal ran no cleanup: its frontend is still up.
+    const left = childAlive ? null : await stopLeftFrontend();
     await d.waitFree(port, 3000);
-    const portFree = !(await d.probe(port));
-    if (portFree) reapIfEnded(body);
-    return result('watcher', [record.ppid], portFree);
+    const portFree = !(await d.probe(port)) && (left === null || left.reclaim.reclaimed);
+    if (portFree && exited) reapIfEnded(body);
+    return {
+      ...result('watcher', [record.ppid, ...(left?.reclaim.pids ?? [])], portFree && exited),
+      ...(killed ? { killed: true } : {}),
+      ...(left ? { frontend: left.frontend } : {}),
+    };
   }
 
   // Fallback: the watcher is gone (or ppid is not a tsx watcher), but the
@@ -1793,7 +1846,8 @@ export function stopMessage(result: StopResult): string {
       : `⚠️  Signalled ${left}, but a port of this app is still bound — it may still be shutting down.`;
   }
   if (result.portFree) {
-    return `🛑 Stopped the dev server on :${result.port}${who}.`;
+    const how = result.killed ? '; its tsx watch had lost its runner and ignored SIGTERM, so it was killed' : '';
+    return `🛑 Stopped the dev server on :${result.port}${who}${how}.`;
   }
   return (
     `⚠️  Signalled the dev server on :${result.port}${who}, but the port is still ` +
