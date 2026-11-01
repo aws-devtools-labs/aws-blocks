@@ -13,6 +13,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
+import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
@@ -58,6 +59,12 @@ export interface SandboxOptions {
   invocation?: string;
   /** How the user destroys the sandbox, in the guidance (for example `blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
   destroyInvocation?: string;
+  /**
+   * Called with the deployed sandbox stack's outputs after the first deploy, in
+   * both modes: in watch mode before `cdk watch` starts, since `startSandbox`
+   * then never returns. Awaited.
+   */
+  onDeployed?: (deployed: DeployedStack) => void | Promise<void>;
 }
 
 /**
@@ -324,6 +331,7 @@ export async function startSandbox(options: SandboxOptions) {
     preview = false,
     invocation = "npm run sandbox",
     destroyInvocation = "npm run sandbox:destroy",
+    onDeployed,
   } = options;
   const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
@@ -465,8 +473,8 @@ export async function startSandbox(options: SandboxOptions) {
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
   // single-stack app is unchanged.
-  const stackGroups = Object.values(outputs) as Record<string, string>[];
-  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+  const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
+  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -499,6 +507,10 @@ export async function startSandbox(options: SandboxOptions) {
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
   console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
+
+  // Before watch mode starts, which never returns: a launcher records the deploy here.
+  const hostingKey = Object.keys(stackOutputs).find((key) => key.includes('HostingUrl'));
+  await onDeployed?.({ stack, apiUrl, hostingUrl: hostingKey ? stackOutputs[hostingKey] : undefined });
 
   if (deployOnly) {
     return apiUrl;

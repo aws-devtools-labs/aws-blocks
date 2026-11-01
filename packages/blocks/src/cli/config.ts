@@ -97,6 +97,14 @@ function readRawDevConfig(root: string): Record<string, unknown> | undefined {
 	return dev;
 }
 
+/**
+ * Whether the app generates its own `aws-blocks/client.js` (`package.json#blocks.dev.generateClient: false`,
+ * which the Amplify overlay writes): the generic client would replace it.
+ */
+export function keepsOwnClient(root: string): boolean {
+	return readRawDevConfig(root)?.generateClient === false;
+}
+
 /** A warning for each `package.json#blocks.dev` key that nothing reads (a typo such as `prot`). */
 export function unknownDevConfigWarnings(root: string): string[] {
 	return Object.keys(readRawDevConfig(root) ?? {})

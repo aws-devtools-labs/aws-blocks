@@ -297,7 +297,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: 'Budget for --wait-live, in seconds (1-3600)',
 			},
 		],
-		json: DEPLOY_RESULT,
+		json: { ...DEPLOY_RESULT, live: null },
 		examples: [
 			{ command: 'blocks deploy', description: 'Deploy to production' },
 			{ command: 'blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
@@ -426,6 +426,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 		args: [
 			{ name: 'foundation', description: 'Backend entry (default: aws-blocks/index.ts)' },
 			{ name: 'output', description: 'Output file (default: aws-blocks/client.js)' },
+		],
+		flags: [
+			{
+				name: 'force',
+				type: 'boolean',
+				description: 'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
+			},
 		],
 		examples: [{ command: 'blocks generate client', description: 'Write aws-blocks/client.js' }],
 		handler: commands.generateClient,

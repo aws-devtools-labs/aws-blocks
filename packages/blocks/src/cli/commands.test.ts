@@ -258,6 +258,37 @@ describe('passthrough commands', () => {
 		}
 	});
 
+	it('runs generate spec outside an app from the backend directory, so its mock storage lands there', async () => {
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		mkdirSync(join(outside, 'be'));
+		writeFileSync(join(outside, 'be', 'backend.ts'), 'export {};\n');
+		const spec = await runCli(['generate', 'spec', 'be/backend.ts', 'x.json'], { cwd: outside });
+		assert.strictEqual(spec.code, 0, spec.stderr);
+		assert.strictEqual(spec.spawned[0].cwd, join(outside, 'be'));
+	});
+
+	it('refuses generate client over the client of an app that generates its own, unless --force', async () => {
+		const root = fixtureApp({ blocks: { dev: { generateClient: false } } });
+		const refused = await runCli(['generate', 'client'], { cwd: root });
+		assert.strictEqual(refused.code, 2);
+		assert.match(refused.stderr, /generates its own aws-blocks\/client\.js/);
+		assert.match(refused.stderr, /Try: npm run blocks:generate-client, or blocks generate client --force/);
+		assert.strictEqual(refused.spawned.length, 0);
+		const forced = await runCli(['generate', 'client', '--force'], { cwd: root });
+		assert.strictEqual(forced.code, 0, forced.stderr);
+		assert.strictEqual(forced.spawned.length, 1);
+		// Another output file leaves the app's client alone.
+		const other = await runCli(['generate', 'client', 'aws-blocks/index.ts', 'other.js'], { cwd: root });
+		assert.strictEqual(other.code, 0, other.stderr);
+	});
+
+	it('rejects a generate types --out that names a directory', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['generate', 'types', '--out', 'aws-blocks'], { cwd: root });
+		assert.strictEqual(run.code, 2);
+		assert.match(run.stderr, /option --out names a directory/);
+	});
+
 	it('forwards only "<verb> --help" when --help appears anywhere after db, secret or config', async () => {
 		const root = fixtureApp();
 		const db = await runCli(['db', 'status', './dir', '--url', 'postgres://x', '--help'], { cwd: root });
@@ -498,6 +529,7 @@ describe('lifecycle commands', () => {
 			[['--wait-live='], /not ""/],
 			[['--wait-live', '--wait-live-timeout=abc'], /option --wait-live-timeout must be .*, not "abc"\./],
 			[['--wait-live-timeout=20'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: blocks deploy --wait-live=20\n/],
+			[['--wait-live-timeout=0'], /option --wait-live-timeout needs --wait-live\.\n(.*\n)*Try: blocks deploy --wait-live=SECONDS\n/],
 			[['--wait-live=10', '--wait-live-timeout=20'], /give the --wait-live budget once/],
 		] as const) {
 			const run = await runCli(['deploy', ...argv], { cwd: root, env: AWS_ENV });
@@ -711,7 +743,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(dev.code, 130);
 	});
 
-	it('fails blocks dev with the reason its runner recorded, and takes a 143 without one as a requested stop', async () => {
+	it('fails blocks dev without repeating the reason its runner printed, and takes a 143 without one as a requested stop', async () => {
 		const cwd = fixtureApp();
 		const failed = await runCli(['dev'], {
 			cwd,
@@ -724,8 +756,8 @@ describe('lifecycle commands', () => {
 			},
 		});
 		assert.strictEqual(failed.code, 1);
-		assert.match(failed.stderr, /^Error: blocks dev failed: dev server already running on :3000 \(pid 42\)\.\n/);
-		assert.doesNotMatch(failed.stderr, /--verbose/);
+		// The runner printed the reason itself (`❌ …`); the CLI adds no `Error:` that repeats it.
+		assert.strictEqual(failed.stderr, '');
 		// `blocks dev stop`, or a SIGTERM to the CLI, while the backend had crashed: tsx watch exits 143.
 		const stopped = await runCli(['dev'], { cwd, onSpawn: () => ({ code: 143 }) });
 		assert.strictEqual(stopped.code, 0, stopped.stderr);
@@ -929,6 +961,9 @@ describe('destroy safety', () => {
 			assert.match(run.stderr, /<id>-prod must be the name of its existing production stack/);
 			assert.match(run.stderr, /\nTry: aws cloudformation describe-stacks --query "Stacks\[\?ends_with\(StackName, '-prod'\)\]\.StackName"\n/);
 		}
+		// The suggested command acts on the account and Region of this run.
+		const run = await runCli(['deploy', '--profile', 'prod', '--region', 'eu-west-1'], { cwd: root, env: AWS_ENV });
+		assert.match(run.stderr, /\nTry: aws cloudformation describe-stacks --query .* --profile prod --region eu-west-1\n/);
 	});
 
 	it('names environment access keys that override AWS_PROFILE, and warns even with --quiet', async () => {
@@ -1073,6 +1108,24 @@ describe('error format', () => {
 			tool.stderr,
 			`Error: blocks db status failed: bb-data exited with code 1; its output is above.\n  project: ${root}\n`,
 		);
+		// A tool stopped by a signal may have printed nothing: no "its output is above".
+		const killed = await runCli(['db', 'migrate'], { cwd: root, onSpawn: () => ({ code: null, signal: 'SIGTERM' }) });
+		assert.strictEqual(killed.code, 1);
+		assert.strictEqual(
+			killed.stderr,
+			`Error: blocks db migrate failed: bb-data was stopped by SIGTERM.\n  project: ${root}\n`,
+		);
+		// generate spec and generate client end the same way.
+		for (const [command, tool] of [
+			['client', 'blocks-generate-client'],
+			['spec', 'blocks-generate-spec'],
+		]) {
+			const failed = await runCli(['generate', command], { cwd: root, onSpawn: () => ({ code: 1 }) });
+			assert.strictEqual(
+				failed.stderr,
+				`Error: blocks generate ${command} failed: ${tool} exited with code 1; its output is above.\n  project: ${root}\n`,
+			);
+		}
 		// An error the CLI raised itself: no hint, and --debug shows where it came from.
 		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
 		const plain = await runCli(['generate', 'spec'], { cwd: outside });
@@ -1466,6 +1519,7 @@ describe('JSON output', () => {
 			stack: 'demo-prod',
 			account: '210987654321',
 			region: 'eu-west-3',
+			live: null,
 		});
 		// The other direction: a production deploy rewrote outputs.json after the sandbox runner recorded.
 		const sandbox = await runCli(['sandbox', 'deploy', '--query', 'apiUrl'], {
@@ -1484,6 +1538,22 @@ describe('JSON output', () => {
 		assert.strictEqual(sandbox.code, 0, sandbox.stderr);
 		assert.strictEqual(sandbox.stdout, `${sandboxUrl}\n`);
 		assert.deepStrictEqual(lookups, [], 'the CLI never asks AWS with its own environment');
+	});
+
+	it('prints the result with live false after a --wait-live timeout, and still exits 1', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['deploy', '--wait-live=5', '--output', 'json'], {
+			cwd: root,
+			env: AWS_ENV,
+			onSpawn: () => {
+				writeLastDeploy(root, { production: { ...PROD, live: false } });
+				return { code: 1 };
+			},
+		});
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(JSON.parse(run.stdout).live, false);
+		assert.match(run.stderr, /Error: blocks deploy deployed the stack, but --wait-live could not confirm/);
+		assert.doesNotMatch(run.stderr, /deploy failed/);
 	});
 
 	it('exits 1 with an error, not null fields, when the runner recorded no result', async () => {
@@ -1590,7 +1660,7 @@ describe('JSON output', () => {
 		assert.strictEqual(run.spawned.length, 0);
 		assert.match(
 			run.stderr,
-			/^Error: no field "apiURL" in the result of blocks deploy\. Fields: apiUrl, url, stack, account, region\.\n/,
+			/^Error: no field "apiURL" in the result of blocks deploy\. Fields: apiUrl, url, stack, account, region, live\.\n/,
 		);
 		// The whole path is checked before the command runs: a nested typo never repeats a deploy or stops a server.
 		const identities: unknown[] = [];
@@ -1689,7 +1759,7 @@ describe('the deploy runners record the result', () => {
 	 * its outputs through `onDeployed`, then, during its liveness wait, a sandbox
 	 * deploy of the same app rewrites outputs.json with only its own stack.
 	 */
-	function runRunner(root: string, runner: RunnerName, options: unknown): void {
+	function runRunner(root: string, runner: RunnerName, options: unknown, args: string[] = [], failLive = false): void {
 		const coreUrl = import.meta.resolve('@aws-blocks/core/scripts');
 		const fixture = `
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -1709,15 +1779,20 @@ mock.module(${JSON.stringify(coreUrl)}, {
       outputs({ 'demo-prod-monitoring': { AlarmTopic: 'arn:topic' }, 'demo-prod': prod });
       options.onDeployed({ stack: 'demo-prod', apiUrl: prod.ApiUrl, hostingUrl: prod.HostingHostingUrl1A2B3C4D });
       outputs({ 'demo-jdoe-abc123': { ApiUrl: ${JSON.stringify(sandboxUrl)} } });
+      // A --wait-live wait that timed out: the deploy succeeded, and core exits 1.
+      if (${failLive}) process.exitCode = 1;
     },
-    startSandbox: async () => {
+    startSandbox: async (options) => {
       outputs({ 'demo-jdoe-abc123': { ApiUrl: ${JSON.stringify(sandboxUrl)} } });
+      await options.onDeployed?.({ stack: 'demo-jdoe-abc123', apiUrl: ${JSON.stringify(sandboxUrl)} });
+      // Watch mode: a production deploy rewrites outputs.json while the sandbox runs.
+      if (!options.deployOnly) outputs({ 'demo-prod': { ApiUrl: ${JSON.stringify(prodUrl)} } });
       return ${JSON.stringify(sandboxUrl)};
     },
     readAwsIdentity: async () => ({ account: '210987654321', region: 'eu-west-3', credentials: 'AWS profile prod' }),
   },
 });
-process.argv[2] = ${JSON.stringify(JSON.stringify(options))};
+process.argv = [process.argv[0], 'runner', ${JSON.stringify(JSON.stringify(options))}, ...${JSON.stringify(args)}];
 await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 `;
 		const result = spawnSync(
@@ -1725,7 +1800,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 			['--experimental-test-module-mocks', '--input-type=module', '-e', fixture],
 			{ cwd: root, encoding: 'utf-8', env: { PATH: process.env.PATH, HOME: root }, timeout: 15_000 },
 		);
-		assert.strictEqual(result.status, 0, result.stderr);
+		assert.strictEqual(result.status, failLive ? 1 : 0, result.stderr);
 	}
 
 	const lastDeploy = (root: string) =>
@@ -1753,6 +1828,23 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
 			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
 		});
+	});
+
+	it('blocks sandbox (watch mode): records the sandbox after its first deploy', () => {
+		const root = fixtureApp();
+		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: false });
+		assert.deepStrictEqual(lastDeploy(root), {
+			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
+		});
+	});
+
+	it('blocks deploy --wait-live: records the deploy with live false when the wait fails, and exits 1', () => {
+		const root = fixtureApp();
+		const options = { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root };
+		runRunner(root, 'deploy', options, ['--wait-live', '--wait-live-timeout=5'], true);
+		assert.strictEqual(lastDeploy(root).production?.live, false);
+		runRunner(root, 'deploy', options, ['--wait-live']);
+		assert.strictEqual(lastDeploy(root).production?.live, true);
 	});
 });
 

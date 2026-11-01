@@ -33,6 +33,11 @@ export interface DeployedOutputs {
 	apiUrl: string;
 	/** The frontend URL; null without a hosted frontend. */
 	url: string | null;
+	/**
+	 * Production, with `--wait-live` only: whether the new build was confirmed live. A `false`
+	 * entry is a deploy that succeeded and whose liveness wait failed (the deploy exits 1).
+	 */
+	live?: boolean;
 }
 
 export interface LastDeploy extends DeployedOutputs {

@@ -7,13 +7,19 @@
  * it replaces; see `runners/launch.ts`.
  */
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
-import { frontendPortWarning, resolveDevConfig, resolveDevPort, unknownDevConfigWarnings } from './config.js';
+import {
+	frontendPortWarning,
+	keepsOwnClient,
+	resolveDevConfig,
+	resolveDevPort,
+	unknownDevConfigWarnings,
+} from './config.js';
 import {
 	applyStageEnv,
 	blocksVersion,
@@ -68,8 +74,9 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	/**
 	 * The file a `tsx watch` runner writes the reason of a fatal startup failure
 	 * to, before it stops its `tsx watch` (`BLOCKS_DEV_FAILURE_FILE`). A reason
-	 * there fails the command with it; without one, an exit 143 is a requested
-	 * stop (`blocks dev stop`, or a SIGTERM to a backend that crashed).
+	 * there fails the command (exit 1) with no `Error:` line: the runner printed
+	 * that reason itself. Without one, an exit 143 is a requested stop (`blocks
+	 * dev stop`, or a SIGTERM to a backend that crashed).
 	 */
 	failureFile?: string;
 }
@@ -87,19 +94,24 @@ export function redactArgs(args: readonly string[]): string[] {
 	});
 }
 
+/** A word of a printed command, quoted for a POSIX shell where needed. */
+function shellWord(word: string): string {
+	return /^[\w@%+=:,./-]+$/.test(word) ? word : shellQuote(word, 'linux');
+}
+
+/** The `--profile` and `--region` of this run, for a printed command that must act on the same target. */
+function awsOptions(ctx: Context): string[] {
+	const { profile, region } = ctx.globals;
+	return [...(profile ? ['--profile', profile] : []), ...(region ? ['--region', region] : [])].map(shellWord);
+}
+
 /**
  * The command line that re-runs `blocks <words>` against the same target, for
- * core's guidance ("Then re-run …"): with the -C, --profile and --region of this
- * run, quoted for a POSIX shell where needed.
+ * core's guidance ("Then re-run …"): with the -C, --profile and --region of this run.
  */
 function invocation(ctx: Context, ...words: string[]): string {
-	const { cwd, profile, region } = ctx.globals;
-	const options = [
-		...(cwd === undefined ? [] : ['-C', cwd]),
-		...(profile ? ['--profile', profile] : []),
-		...(region ? ['--region', region] : []),
-	].map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : shellQuote(word, 'linux')));
-	return ['blocks', ...words, ...options].join(' ');
+	const { cwd } = ctx.globals;
+	return ['blocks', ...words, ...(cwd === undefined ? [] : ['-C', cwd].map(shellWord)), ...awsOptions(ctx)].join(' ');
 }
 
 /**
@@ -109,9 +121,7 @@ function invocation(ctx: Context, ...words: string[]): string {
 async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	if (ctx.logLevel === 'verbose' || ctx.logLevel === 'debug') {
 		// Copy-pasteable into a POSIX shell: a word with a space, a quote or JSON is quoted.
-		const words = redactArgs([run.command, ...run.args]).map((word) =>
-			/^[\w@%+=:,./-]+$/.test(word) ? word : shellQuote(word, 'linux'),
-		);
+		const words = redactArgs([run.command, ...run.args]).map(shellWord);
 		ctx.out.progress(`> ${words.join(' ')}`);
 	}
 	let result: ChildResult;
@@ -133,11 +143,9 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			},
 		);
 	}
-	const reason = run.failureFile && existsSync(run.failureFile) ? readFileSync(run.failureFile, 'utf-8').trim() : '';
-	if (reason) {
-		throw new CliError(`${run.operation} failed: ${reason.replace(/\.$/, '')}.`, {
-			where: run.where ?? [`project: ${run.cwd}`],
-		});
+	// The runner printed the reason and its hint; printing it again would only repeat it.
+	if (run.failureFile && existsSync(run.failureFile) && readFileSync(run.failureFile, 'utf-8').trim()) {
+		return ExitCode.Failure;
 	}
 	if (run.failureFile && result.code === 128 + 15 && !result.interrupted) return ExitCode.Ok;
 	// A child that is not long-running and exited 0 finished its work before the
@@ -153,11 +161,12 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	if (code !== ExitCode.Ok) {
 		const where = run.where ?? [`project: ${run.cwd}`];
 		if (run.tool) {
-			const ended = result.code === null ? `ended on ${result.signal}` : `exited with code ${result.code}`;
-			throw new CliError(`${run.operation} failed: ${run.tool} ${ended}; its output is above.`, {
-				where,
-				exitCode: code,
-			});
+			// A tool stopped by a signal may have printed nothing.
+			const ended =
+				result.code === null
+					? `was stopped by ${result.signal}.`
+					: `exited with code ${result.code}; its output is above.`;
+			throw new CliError(`${run.operation} failed: ${run.tool} ${ended}`, { where, exitCode: code });
 		}
 		const detail = result.code === null ? `signal ${result.signal}` : `exit code ${result.code}`;
 		throw new CliError(`${run.operation} failed (${detail}).`, { where, exitCode: code, runner: true });
@@ -165,7 +174,10 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 	return code;
 }
 
-interface RunnerRun extends Pick<SpawnSpec, 'longRunning'>, Pick<RunnerLaunch, 'watch' | 'conditions'> {
+interface RunnerRun
+	extends Pick<SpawnSpec, 'longRunning'>,
+		Pick<RunnerLaunch, 'watch' | 'conditions'>,
+		Pick<ChildRun, 'tool'> {
 	runner: RunnerName;
 	operation: string;
 	/** Passed to the runner as JSON in `process.argv[2]`. */
@@ -221,6 +233,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		cwd: root,
 		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
 		where: run.where,
+		tool: run.tool,
 		longRunning: run.longRunning,
 		watcher: run.watch,
 		failureFile: run.failureFile,
@@ -277,7 +290,10 @@ async function productionStack(ctx: Context, root: string): Promise<string> {
 			// Lists the production stacks, so that the id can be the one whose `<id>-prod` exists.
 			hint: /not valid JSON/.test(message)
 				? undefined
-				: `aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
+				: [
+						`aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
+						...awsOptions(ctx),
+					].join(' '),
 		});
 	}
 }
@@ -322,7 +338,10 @@ function warnKeysOverrideProfile(ctx: Context, env: NodeJS.ProcessEnv): void {
 	);
 }
 
-export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'account' | 'region'>;
+export type DeployResult = Pick<LastDeploy, 'apiUrl' | 'url' | 'stack' | 'account' | 'region'> & {
+	/** Production only: whether `--wait-live` confirmed the new build live; null without `--wait-live`. */
+	live?: boolean | null;
+};
 
 /**
  * Print the result of the deploy of `stage` that just ran, as JSON, from the
@@ -348,6 +367,7 @@ function emitDeployResult(ctx: Context, root: string, stage: DeployStage, operat
 		stack: last.stack,
 		account: last.account,
 		region: last.region,
+		...(stage === 'production' ? { live: last.live ?? null } : {}),
 	};
 	ctx.out.result(result, '');
 }
@@ -596,8 +616,10 @@ function waitLiveArgs(flags: CommandInput['flags']): string[] {
 	const waitLive = flags['wait-live'];
 	const timeout = flags['wait-live-timeout'];
 	if (timeout !== undefined && waitLive === undefined) {
+		// Suggest the value only when --wait-live accepts it.
+		const valid = /^\d+$/.test(String(timeout)) && Number(timeout) >= 1 && Number(timeout) <= 3600;
 		throw new UsageError('option --wait-live-timeout needs --wait-live.', {
-			hint: `blocks deploy --wait-live=${String(timeout)}`,
+			hint: `blocks deploy --wait-live=${valid ? String(timeout) : 'SECONDS'}`,
 		});
 	}
 	if (typeof waitLive === 'string' && timeout !== undefined) {
@@ -623,13 +645,24 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	const { label } = await targetLabel(ctx, root, stageEnv(ctx.env, root, 'production'));
 	ctx.out.progress(`Deploying the production stack ${stack}; ${label}; project ${root}.`);
 	forgetLastDeploy(root, 'production');
-	const code = await runRunner(ctx, {
-		runner: 'deploy',
-		operation: 'blocks deploy',
-		options: { cdkAppPath, projectRoot: root, invocation: invocation(ctx, 'deploy') },
-		args,
-		where: [`stack: ${stack}`, label, `project: ${root}`],
-	});
+	let code: number;
+	try {
+		code = await runRunner(ctx, {
+			runner: 'deploy',
+			operation: 'blocks deploy',
+			options: { cdkAppPath, projectRoot: root, invocation: invocation(ctx, 'deploy') },
+			args,
+			where: [`stack: ${stack}`, label, `project: ${root}`],
+		});
+	} catch (error) {
+		// The deploy succeeded, and only --wait-live failed: report the result, then fail.
+		if (!(error instanceof CliError) || readLastDeploy(root, 'production')?.live !== false) throw error;
+		emitDeployResult(ctx, root, 'production', 'blocks deploy');
+		throw new CliError(
+			'blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live; the output above says why.',
+			{ where: [`stack: ${stack}`, label, `project: ${root}`], hint: 'check the frontend, or re-run with a longer --wait-live' },
+		);
+	}
 	if (code !== ExitCode.Ok) return code;
 	// CDK deploys the stacks that index.cdk.ts defines, whatever .blocks/config.json says.
 	const deployed = readLastDeploy(root, 'production')?.stack;
@@ -829,10 +862,18 @@ const BLOCKS_DIST = fileURLToPath(new URL('..', import.meta.url));
 
 export function generateClient(ctx: Context, input: CommandInput): Promise<number> {
 	// With both paths given, the tool needs no app, as \`blocks-generate-client <foundation> <output>\` does not.
-	const root = input.positionals.length === 2 ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
+	const app = ctx.findRoot();
+	const root = input.positionals.length === 2 ? (app ?? ctx.startDir) : ctx.requireRoot();
 	// Checked here, as generate spec checks it, so both report a missing backend the same way.
-	const [backendArg] = input.positionals;
+	const [backendArg, outputArg] = input.positionals;
 	requireFile(backendArg ? resolve(ctx.startDir, backendArg) : join(root, 'aws-blocks', 'index.ts'), 'the backend entry');
+	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'aws-blocks', 'client.js');
+	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
+		throw new UsageError(
+			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "blocks generate client" would replace it with the generic client.',
+			{ where: [`project: ${app}`], hint: 'npm run blocks:generate-client, or blocks generate client --force' },
+		);
+	}
 	return runChild(ctx, {
 		operation: 'blocks generate client',
 		tool: 'blocks-generate-client',
@@ -845,15 +886,19 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 export function generateSpec(ctx: Context, input: CommandInput): Promise<number> {
 	const [backendArg, outputArg] = input.positionals;
 	// With the backend given, the spec needs no app; its default output sits next to the backend.
-	const root = backendArg ? (ctx.findRoot() ?? ctx.startDir) : ctx.requireRoot();
-	const backendPath = resolve(backendArg ? ctx.startDir : root, backendArg ?? 'aws-blocks/index.ts');
+	const backendPath = backendArg ? resolve(ctx.startDir, backendArg) : join(ctx.requireRoot(), 'aws-blocks', 'index.ts');
+	const root = ctx.findRoot();
 	const outputPath = outputArg ? resolve(ctx.startDir, outputArg) : join(dirname(backendPath), 'blocks.spec.json');
 	requireFile(backendPath, 'the backend entry');
 	return runRunner(ctx, {
 		runner: 'generate-spec',
 		operation: 'blocks generate spec',
+		// Its own `❌` line says why it failed, as blocks-generate-client's does.
+		tool: 'blocks-generate-spec',
 		options: { backendPath, outputPath },
-		cwd: root,
+		// Importing the backend creates its local mock storage (`.bb-data/`) in the working
+		// directory: outside an app, that is the backend's directory, not wherever the user is.
+		cwd: root ?? dirname(backendPath),
 	});
 }
 
@@ -873,7 +918,15 @@ export async function generateTypes(ctx: Context, input: CommandInput): Promise<
 	if (flags.check === true) argv.push('--check');
 	if (flags.watch === true) argv.push('--watch');
 	// typegen runs from the root; a relative --out or --include names a path from where the user is.
-	if (typeof flags.out === 'string') argv.push('--out', resolve(ctx.startDir, flags.out));
+	if (typeof flags.out === 'string') {
+		const out = resolve(ctx.startDir, flags.out);
+		if (existsSync(out) && statSync(out).isDirectory()) {
+			throw new UsageError(`option --out names a directory (${out}); give the .d.ts file to write.`, {
+				hint: `blocks generate types --out ${join(flags.out, 'hosting-values.d.ts')}`,
+			});
+		}
+		argv.push('--out', out);
+	}
 	for (const glob of Array.isArray(flags.include) ? flags.include : []) {
 		const negated = glob.startsWith('!');
 		const fromRoot = relative(root, resolve(ctx.startDir, negated ? glob.slice(1) : glob))
