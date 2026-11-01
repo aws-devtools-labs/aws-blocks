@@ -363,8 +363,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
+          // Quoted: the hook runs in a shell, and a project path may contain a space.
           afterBundling: (_inputDir: string, outputDir: string) => [
-            `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
+            `cp -r "${options.migrationsPath}" "${outputDir}/migrations"`,
           ],
         },
         externalModules: ['@aws-sdk/*'],

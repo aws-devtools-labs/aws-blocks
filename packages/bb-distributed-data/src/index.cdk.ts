@@ -105,8 +105,9 @@ export class DistributedDatabase extends BuildingBlockScope {
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
+          // Quoted: the hook runs in a shell, and a project path may contain a space.
           afterBundling: (_inputDir: string, outputDir: string) => resolvedMigrationsPath
-            ? [`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`]
+            ? [`cp -r "${resolvedMigrationsPath}" "${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}"`]
             : [],
         },
       }),
