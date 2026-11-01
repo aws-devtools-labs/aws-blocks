@@ -210,7 +210,11 @@ void describe('runValueCli() — interactive / yes options', () => {
 	});
 });
 
-/** Run `fn` with a terminal-like stdin that `feed` writes to, and capture what it writes to stdout and stderr. */
+/**
+ * Run `fn` with a terminal-like stdin that `feed` writes to, and capture what it writes to stdout and stderr.
+ * Writes to stdout still go through: `node --test` reads this process's results from its stdout, and a
+ * swallowed write loses the results of the tests that finish meanwhile.
+ */
 async function withTerminal<T>(
 	feed: (input: PassThrough) => void,
 	fn: () => Promise<T>,
@@ -220,9 +224,10 @@ async function withTerminal<T>(
 	Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
 	let stdout = '';
 	let stderr = '';
-	mock.method(process.stdout, 'write', (chunk: string | Uint8Array) => {
+	const write = process.stdout.write.bind(process.stdout) as (...args: unknown[]) => boolean;
+	mock.method(process.stdout, 'write', (chunk: string | Uint8Array, ...rest: unknown[]) => {
 		stdout += String(chunk);
-		return true;
+		return write(chunk, ...rest);
 	});
 	mock.method(process.stderr, 'write', (chunk: string | Uint8Array) => {
 		stderr += String(chunk);
