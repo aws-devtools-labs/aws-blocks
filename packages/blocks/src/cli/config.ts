@@ -55,14 +55,23 @@ const FRONTENDS = [
 	{ dependency: 'vite', command: (port: number) => `npx vite --port ${port} --strictPort` },
 ] as const;
 
-/** Reads the app's package.json. A leading UTF-8 byte order mark is ignored, as npm ignores it. */
+/**
+ * Reads the app's package.json, which must be a JSON object. A leading UTF-8 byte order mark is ignored,
+ * as npm ignores it.
+ */
 function readPackageJson(root: string): AppPackageJson {
 	const path = join(root, 'package.json');
+	let pkg: unknown;
 	try {
-		return JSON.parse(readFileSync(path, 'utf-8').replace(/^\uFEFF/, '')) as AppPackageJson;
+		pkg = JSON.parse(readFileSync(path, 'utf-8').replace(/^\uFEFF/, ''));
 	} catch (error) {
 		throw new CliError(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	if (typeof pkg !== 'object' || pkg === null || Array.isArray(pkg)) {
+		const kind = pkg === null ? 'null' : Array.isArray(pkg) ? 'an array' : `a ${typeof pkg}`;
+		throw new CliError(`${path} must be a JSON object, not ${kind}.`);
+	}
+	return pkg as AppPackageJson;
 }
 
 /** A port: an integer from 1 to 65535, written in decimal digits when it is a string (a flag value). */

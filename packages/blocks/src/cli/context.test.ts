@@ -650,6 +650,29 @@ describe('per-app dev config', () => {
 		assert.strictEqual(config.source, 'vite');
 	});
 
+	it('refuses a package.json that is not a JSON object with one clear error (exit 1)', async () => {
+		const root = fixtureApp({});
+		const path = join(root, 'package.json');
+		for (const [content, kind] of [
+			['null', 'null'],
+			['[]', 'an array'],
+			['"x"', 'a string'],
+			['42', 'a number'],
+		]) {
+			writeFileSync(path, content);
+			for (const argv of [['dev'], ['dev', 'stop'], ['generate', 'client'], ['sandbox']]) {
+				const run = await runCli(argv, { cwd: root, env: { AWS_REGION: 'us-east-1' } });
+				assert.strictEqual(run.code, 1, `${content} ${argv.join(' ')}: ${run.stderr}`);
+				assert.strictEqual(
+					run.stderr.split('\n')[0],
+					`Error: ${path} must be a JSON object, not ${kind}.`,
+					`${content} ${argv.join(' ')}`,
+				);
+				assert.deepStrictEqual(run.spawned, [], `${content} ${argv.join(' ')}`);
+			}
+		}
+	});
+
 	it('uses package.json "blocks.dev" instead of detection, and flags over both', () => {
 		const root = fixtureApp({
 			dependencies: { vite: '*' },
