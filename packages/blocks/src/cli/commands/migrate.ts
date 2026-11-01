@@ -638,13 +638,18 @@ export function planMigration(
 	repos: readonly RepoFiles[] = [],
 ): { result: MigrateResult; pkg: PackageJson } {
 	const pkgPath = join(root, 'package.json');
-	let pkg: PackageJson;
+	let parsed: unknown;
 	try {
 		// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
-		pkg = JSON.parse(readFileSync(pkgPath, 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
+		parsed = JSON.parse(readFileSync(pkgPath, 'utf-8').replace(/^\uFEFF/, ''));
 	} catch (error) {
 		throw new CliError(`cannot read ${pkgPath}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+		const kind = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : `a ${typeof parsed}`;
+		throw new CliError(`${pkgPath} must be a JSON object, not ${kind}.`);
+	}
+	const pkg = parsed as PackageJson;
 	const wrappers = findWrappers(root);
 	const byFile = new Map(wrappers.map((w) => [w.file, w]));
 	const result: MigrateResult = { changed: [], removed: [], kept: [], scriptsRewritten: {}, devConfig: null };

@@ -1019,6 +1019,27 @@ describe('blocks migrate', () => {
 		assert.strictEqual(readFileSync(path, 'utf-8'), '{ "name": \n');
 	});
 
+	it('refuses a package.json that is not a JSON object, and changes nothing', async () => {
+		for (const [text, kind] of [
+			['null', 'null'],
+			['[]', 'an array'],
+			['"x"', 'a string'],
+		] as const) {
+			const root = writeApp('api-only@0ab6b047');
+			const path = join(root, 'package.json');
+			writeFileSync(path, `${text}\n`);
+			const wrappers = scriptsDir(root);
+			for (const args of [['migrate', '--dry-run'], ['migrate']]) {
+				const run = await runCli(args, { cwd: root });
+				assert.strictEqual(run.code, 1, `${text} ${args.join(' ')}`);
+				assert.strictEqual(run.stdout, '');
+				assert.ok(run.stderr.startsWith(`Error: ${path} must be a JSON object, not ${kind}.`), run.stderr);
+			}
+			assert.strictEqual(readFileSync(path, 'utf-8'), `${text}\n`);
+			assert.deepStrictEqual(scriptsDir(root), wrappers, 'no wrapper is removed');
+		}
+	});
+
 	it('treats script values named like Object.prototype members as unrelated', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.packageJson.scripts.a = 'toString';
