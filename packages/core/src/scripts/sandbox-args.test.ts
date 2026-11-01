@@ -19,9 +19,11 @@ import {
   previewRemovalWarning,
   PREVIEW_MODE_CONTEXT,
   findExpressUnsafeStacks,
-  quoteCdkAppPath,
   sandboxFailureRecoveryHint,
+  CDK_APP_ENTRY_ENV,
   cdkAppCommand,
+  cdkAppEnv,
+  buildSandboxWatchSpawn,
   stacksWithExpressUnsafeResources,
 } from './sandbox.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
@@ -48,7 +50,6 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
   const args = buildSandboxDeployArgs({
     outDir: '.blocks-sandbox',
     projectRoot: '/app',
-    backendPath: 'aws-blocks/index.ts',
   });
 
   it('enables CloudFormation Express Mode via --express', () => {
@@ -75,11 +76,11 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(args, '--require-approval'), 'never');
     assert.strictEqual(valueAfter(args, '--outputs-file'), '.blocks-sandbox/outputs.json');
     assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
-    assert.strictEqual(valueAfter(args, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.ts')}`);
+    assert.strictEqual(valueAfter(args, '--app'), cdkAppCommand());
   });
 
   it('interpolates the provided outDir and projectRoot', () => {
-    const custom = buildSandboxDeployArgs({ outDir: 'out', projectRoot: '/other', backendPath: 'b.ts' });
+    const custom = buildSandboxDeployArgs({ outDir: 'out', projectRoot: '/other' });
     assert.strictEqual(valueAfter(custom, '--outputs-file'), 'out/outputs.json');
     assert.strictEqual(valueAfter(custom, '--context'), 'projectRoot=/other');
   });
@@ -121,22 +122,21 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
 
 describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
   it('drops --express (keeping --method direct, rollback on) when express is false', () => {
-    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts', express: false });
+    const args = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', express: false });
     assert.ok(!args.includes('--express'), `unexpected --express in: ${args.join(' ')}`);
     assert.strictEqual(valueAfter(args, '--method'), 'direct');
     assert.ok(!args.includes('--no-rollback'), 'rollback stays at its default (on)');
   });
 
   it('synthesizes once into <outDir>/cdk.out and deploys that assembly', () => {
-    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: 'aws-blocks/index.cdk.ts' });
+    const synth = buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app' });
     assert.deepStrictEqual(synth.slice(0, 4), ['exec', 'cdk', '--', 'synth']);
     assert.strictEqual(valueAfter(synth, '--output'), '.blocks-sandbox/cdk.out');
     assert.ok(synth.includes('sandboxMode=true'));
-    assert.strictEqual(valueAfter(synth, '--app'), `npm exec tsx -- -C cdk ${quoteCdkAppPath('aws-blocks/index.cdk.ts')}`);
+    assert.strictEqual(valueAfter(synth, '--app'), cdkAppCommand());
     const deploy = buildSandboxDeployArgs({
       outDir: '.blocks-sandbox',
       projectRoot: '/app',
-      backendPath: 'aws-blocks/index.cdk.ts',
       assemblyDir: '.blocks-sandbox/cdk.out',
     });
     assert.strictEqual(valueAfter(deploy, '--app'), '.blocks-sandbox/cdk.out', 'no second synth/framework build');
@@ -211,35 +211,19 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     inCleanProject();
 
-    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'aws-blocks/index.cdk.ts');
 
     assert.strictEqual(env[FRAMEWORK_SINK_ENV], '/tmp/blocks-framework-sink');
     assert.strictEqual(env.NODE_OPTIONS, '--conditions=cdk');
+    assert.strictEqual(env[CDK_APP_ENTRY_ENV], 'aws-blocks/index.cdk.ts');
   });
 
   it('omits the sink when the user opted out, so nothing is written to disk', () => {
     process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
 
-    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink');
+    const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'aws-blocks/index.cdk.ts');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
-  });
-});
-
-describe('quoteCdkAppPath', () => {
-  it('double-quotes on Windows, where cmd.exe keeps single quotes as part of the path', () => {
-    assert.strictEqual(
-      quoteCdkAppPath('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'),
-      '"D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
-    );
-  });
-
-  it('single-quotes on POSIX so a path with a space stays one argument', () => {
-    assert.strictEqual(quoteCdkAppPath('/tmp/my app/index.cdk.ts', 'linux'), "'/tmp/my app/index.cdk.ts'");
-  });
-
-  it('escapes a single quote inside a POSIX path', () => {
-    assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
 });
 
@@ -387,24 +371,36 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
 });
 
 describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
-  it('passes a project path with a space, or a quote, to tsx as one word', { skip: process.platform === 'win32' }, () => {
-    const path = "/work/sp ace/it's app/aws-blocks/index.cdk.ts";
-    const command = cdkAppCommand(path, 'linux');
-    // Run the quoted path through sh, as CDK does, and see what arrives.
-    const echoed = spawnSync('sh', ['-c', command.replace('npm exec tsx -- -C cdk', "printf '%s\\n'")], { encoding: 'utf-8' });
-    assert.strictEqual(echoed.stdout, `${path}\n`);
+  const awkward = "/work/sp ace/it's $HOME `id` %PATH% & app/aws-blocks/index.cdk.ts";
+
+  it('names no path: the shell reads the entry from the environment', () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      assert.doesNotMatch(cdkAppCommand(platform), /aws-blocks|index/, platform);
+    }
+    assert.strictEqual(cdkAppCommand('linux'), `npm exec tsx -- -C cdk "$${CDK_APP_ENTRY_ENV}"`);
+    assert.strictEqual(cdkAppCommand('win32'), `npm exec tsx -- -C cdk "%${CDK_APP_ENTRY_ENV}%"`);
+    assert.deepStrictEqual(cdkAppEnv(awkward), { [CDK_APP_ENTRY_ENV]: awkward });
   });
 
-  it('is used by synth, deploy (without an assembly), cdk watch and destroy', () => {
+  it('passes a project path with a space, a quote, $, a backtick or % to tsx as one word', { skip: process.platform === 'win32' }, () => {
+    // Run the command through sh, as CDK does, and see what arrives.
+    const echoed = spawnSync('sh', ['-c', cdkAppCommand('linux').replace('npm exec tsx -- -C cdk', "printf '%s\\n'")], {
+      encoding: 'utf-8',
+      env: { ...process.env, ...cdkAppEnv(awkward) },
+    });
+    assert.strictEqual(echoed.stdout, `${awkward}\n`);
+  });
+
+  it('is used by synth, deploy (without an assembly) and watch, whose env carries the entry', () => {
     const path = '/work/sp ace/aws-blocks/index.cdk.ts';
-    const options = { outDir: '.blocks-sandbox', projectRoot: '/work/sp ace', backendPath: path };
-    const quoted = cdkAppCommand(path);
-    assert.strictEqual(valueAfter(buildSandboxSynthArgs(options), '--app'), quoted);
-    assert.strictEqual(valueAfter(buildSandboxDeployArgs(options), '--app'), quoted);
-    assert.strictEqual(valueAfter(buildSandboxWatchArgs(options), '--app'), quoted);
-  });
-
-  it('double-quotes on Windows', () => {
-    assert.strictEqual(cdkAppCommand('C:\\sp ace\\index.cdk.ts', 'win32'), 'npm exec tsx -- -C cdk "C:\\sp ace\\index.cdk.ts"');
+    const options = { outDir: '.blocks-sandbox', projectRoot: '/work/sp ace' };
+    assert.strictEqual(valueAfter(buildSandboxSynthArgs(options), '--app'), cdkAppCommand());
+    assert.strictEqual(valueAfter(buildSandboxDeployArgs(options), '--app'), cdkAppCommand());
+    assert.strictEqual(buildSandboxCdkEnv(undefined, path)[CDK_APP_ENTRY_ENV], path);
+    const watch = buildSandboxWatchSpawn({ ...options, backendPath: path });
+    assert.deepStrictEqual(watch.args.slice(0, 2), ['cdk', 'watch']);
+    assert.strictEqual(valueAfter(watch.args, '--app'), cdkAppCommand());
+    assert.strictEqual(watch.env[CDK_APP_ENTRY_ENV], path);
+    assert.strictEqual(watch.env.NODE_OPTIONS, '--conditions=cdk');
   });
 });

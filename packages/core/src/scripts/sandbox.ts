@@ -146,8 +146,6 @@ export interface SandboxDeployArgsOptions {
   outDir: string;
   /** Project root passed to synth as `--context projectRoot=…` (usually `process.cwd()`). */
   projectRoot: string;
-  /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
-  backendPath: string;
   /**
    * Use CloudFormation Express Mode (`--express`). Default `true`. Turned off
    * when the deployed sandbox contains a resource Express Mode can't update —
@@ -180,7 +178,7 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, preview = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
@@ -188,39 +186,68 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, previe
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", cdkAppCommand(backendPath),
+    "--app", cdkAppCommand(),
   ];
 }
 
+/** The environment variable that gives the {@link cdkAppCommand} its backend entry. */
+export const CDK_APP_ENTRY_ENV = 'BLOCKS_CDK_APP_ENTRY';
+
 /**
- * The `--app` command CDK runs to synthesize from `backendPath`. CDK runs it
- * through a shell, so the path is quoted ({@link quoteCdkAppPath}): unquoted, a
- * project path with a space splits into two words and synth fails before any
- * stack is touched.
+ * The `--app` command CDK runs to synthesize the backend entry. CDK runs it
+ * through a shell (sh, or cmd.exe on Windows), so the entry is not part of the
+ * command: the shell reads it from {@link CDK_APP_ENTRY_ENV} inside double
+ * quotes, where neither shell splits the value or treats a character of a path
+ * as syntax. A project path with a space, a quote, `$` or `%` reaches tsx as one word.
+ * The cdk child needs {@link cdkAppEnv} in its environment.
  */
-export function cdkAppCommand(backendPath: string, platform: NodeJS.Platform = process.platform): string {
-  return `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`;
+export function cdkAppCommand(platform: NodeJS.Platform = process.platform): string {
+  const entry = platform === 'win32' ? `"%${CDK_APP_ENTRY_ENV}%"` : `"$${CDK_APP_ENTRY_ENV}"`;
+  return `npm exec tsx -- -C cdk ${entry}`;
+}
+
+/** The environment a cdk child running {@link cdkAppCommand} needs: the backend entry. */
+export function cdkAppEnv(backendPath: string): NodeJS.ProcessEnv {
+  return { [CDK_APP_ENTRY_ENV]: backendPath };
 }
 
 /**
- * cdk child env for the sandbox synth + deploy. Includes the telemetry framework
- * sink so the synth child reports its framework before this parent emits SUCCESS.
- * The watch spawn omits it: watch sends no event, and the sink is already consumed
- * and deleted by then, so wiring this same path in would silently write nowhere.
+ * cdk child env for the sandbox synth + deploy: the backend entry the `--app`
+ * command reads (see {@link cdkAppCommand}), and the telemetry framework sink,
+ * so the synth child reports its framework before this parent emits SUCCESS.
+ * The watch spawn omits the sink: watch sends no event, and the sink is already
+ * consumed and deleted by then, so wiring this same path in would silently write nowhere.
  */
-export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.ProcessEnv {
+export function buildSandboxCdkEnv(frameworkSink: string | undefined, backendPath: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     NODE_OPTIONS: "--conditions=cdk",
     ...getCdkTelemetryEnv('sandbox'),
     ...getFrameworkSinkEnv(frameworkSink),
+    ...cdkAppEnv(backendPath),
   };
 }
 
 /**
- * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
- * Only a plain sandbox watches: a preview sandbox is deploy-only (see
- * {@link sandboxIsDeployOnly}).
+ * The `npx cdk watch …` argv and env the sandbox runs after its deploy. The env
+ * has the backend entry the `--app` command reads (see {@link cdkAppCommand}),
+ * and no framework sink (see {@link buildSandboxCdkEnv}).
+ */
+export function buildSandboxWatchSpawn({
+  outDir,
+  projectRoot,
+  backendPath,
+}: { outDir: string; projectRoot: string; backendPath: string }): { args: string[]; env: NodeJS.ProcessEnv } {
+  return {
+    args: buildSandboxWatchArgs({ outDir, projectRoot }),
+    env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox'), ...cdkAppEnv(backendPath) },
+  };
+}
+
+/**
+ * Build the `npx cdk watch …` argv the sandbox runs after its first deploy
+ * (see {@link buildSandboxWatchSpawn} for its env). Only a plain sandbox
+ * watches: a preview sandbox is deploy-only (see {@link sandboxIsDeployOnly}).
  *
  * `--hotswap-fallback`: `cdk watch` defaults to `--hotswap`, which applies
  * code-only changes directly but silently IGNORES any change it can't hotswap.
@@ -230,14 +257,14 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
  * fallback, a code-only change still hotswaps in seconds, and any other change
  * runs a full CloudFormation deploy of the stack.
  */
-export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxWatchArgs({ outDir, projectRoot }: SandboxDeployArgsOptions): string[] {
   return [
     "cdk", "watch",
     "--hotswap-fallback",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", cdkAppCommand(backendPath),
+    "--app", cdkAppCommand(),
   ];
 }
 
@@ -296,7 +323,6 @@ export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pic
 export function buildSandboxDeployArgs({
   outDir,
   projectRoot,
-  backendPath,
   express = true,
   assemblyDir,
   hotswap = false,
@@ -313,7 +339,7 @@ export function buildSandboxDeployArgs({
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", assemblyDir ?? cdkAppCommand(backendPath),
+    "--app", assemblyDir ?? cdkAppCommand(),
   ];
 }
 
@@ -604,8 +630,8 @@ export async function startSandbox(options: SandboxOptions) {
   // retained; the failure path below prints it.
   const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy' });
 
-  const cdkEnv = buildSandboxCdkEnv(frameworkSink);
-  const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
+  const cdkEnv = buildSandboxCdkEnv(frameworkSink, backendPath);
+  const argOptions = { outDir, projectRoot: process.cwd(), preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
   // Which step failed, for the recovery hint: a failed synth never touched a stack.
@@ -712,7 +738,8 @@ export async function startSandbox(options: SandboxOptions) {
   log.progress("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs(argOptions), {
+  const watchSpawn = buildSandboxWatchSpawn({ outDir, projectRoot: process.cwd(), backendPath });
+  const cdkWatch = spawnCommand("npx", watchSpawn.args, {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
@@ -720,7 +747,7 @@ export async function startSandbox(options: SandboxOptions) {
     // shell-only-kill leak this PR eliminates for the dev server. Windows has no
     // groups; terminateProcessTree reaps the tree via taskkill.
     detached: process.platform !== 'win32',
-    env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
+    env: watchSpawn.env,
   });
 
   // Unchanged relay at the default level; condensed and retained (printed when
@@ -1013,17 +1040,6 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 		log.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
 		log.debugError(e);
 	}
-}
-
-/**
- * Quote `backendPath` for the `--app` command string. CDK runs that string
- * through a shell, so an unquoted path containing a space would split. cmd.exe
- * (Windows) does not treat single quotes as quoting and would keep them in the
- * path, so Windows gets double quotes; POSIX shells get single quotes.
- */
-export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
-	if (platform === 'win32') return `"${backendPath}"`;
-	return `'${backendPath.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -1556,13 +1572,13 @@ export function sandboxDestroyDeps(
     // A destroy doesn't deploy the frontend: reuse an existing frontend build
     // (see common/frontend-build.ts).
     "--context", `${REUSE_FRONTEND_BUILD_CONTEXT}=true`,
-    "--app", cdkAppCommand(backendPath),
+    "--app", cdkAppCommand(),
   ];
   // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
   // the retry loop prints it once the destroy finally fails.
   const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: { ...cdkEnv, ...cdkAppEnv(backendPath) } }),
     printRetainedOutput: () => cdkOutput.printRetained(),
     listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),
     emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
