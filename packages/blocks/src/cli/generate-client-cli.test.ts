@@ -8,8 +8,9 @@
  */
 
 import assert from 'node:assert';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -80,4 +81,39 @@ describe('blocks-generate-client output', () => {
 			assert.match(normal.stderr, /\[Realtime\] BLOCKS_RT_WS_URL not set/);
 		});
 	});
+
+	for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+		it(`passes a ${signal} sent to its pid alone on to the worker, and ends after it`, async () => {
+			// The backend prints the worker's pid, then keeps the import pending. Its timer runs in
+			// the worker, not here: it stands for a slow import that the signal must cut short.
+			const backend = [
+				'console.log(`worker ${process.pid}`);',
+				'await new Promise((resolve) => setTimeout(resolve, 10_000));',
+				"export const api = { hello: async (): Promise<string> => 'hi' };",
+				'',
+			].join('\n');
+			await withApp(backend, async (root) => {
+				const bin = spawn(process.execPath, [generateClientCli], {
+					cwd: root,
+					env: generateEnv(),
+					stdio: ['ignore', 'pipe', 'ignore'],
+				});
+				const exited = once(bin, 'exit') as Promise<[number | null, NodeJS.Signals | null]>;
+				let stdout = '';
+				for await (const chunk of bin.stdout) {
+					stdout += chunk;
+					if (/worker \d+\n/.test(stdout)) break;
+				}
+				const worker = Number(/worker (\d+)\n/.exec(stdout)?.[1]);
+				assert.ok(worker > 0, `the worker started: ${stdout}`);
+				const started = Date.now();
+				bin.kill(signal);
+				const [code, ended] = await exited;
+				assert.ok(Date.now() - started < 5000, 'it ended without waiting for the backend');
+				assert.deepStrictEqual({ code, ended }, { code: null, ended: signal });
+				assert.throws(() => process.kill(worker, 0), { code: 'ESRCH' }, 'the worker ended before the bin');
+				assert.strictEqual(existsSync(join(root, 'aws-blocks', 'client.js')), false);
+			});
+		});
+	}
 });

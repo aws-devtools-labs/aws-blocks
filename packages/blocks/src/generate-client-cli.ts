@@ -29,7 +29,7 @@
  * depends on, by absolute URL, so that the worker finds it from any app.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isAbsolute, resolve } from 'node:path';
@@ -81,13 +81,27 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
 	nodeArgs.push('--import', loader);
 }
 
-const result = spawnSync(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {
+const worker = spawn(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {
 	stdio: 'inherit',
 	cwd: process.cwd(),
 });
 
-if (result.status !== 0) {
-	process.exit(result.status ?? 1);
-}
+// A signal sent to this process alone (`kill <pid>`, a supervisor, the `blocks` CLI
+// forwarding one) goes on to the worker, and this process ends after it, so the
+// worker never outlives it and writes the client after a reported failure.
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+const forward = (signal: NodeJS.Signals) => worker.kill(signal);
+for (const signal of SIGNALS) process.on(signal, forward);
 
-console.log(`blocks-generate-client: wrote ${outputPath}`);
+worker.on('error', (error) => {
+	console.error(`blocks-generate-client: cannot start the client generator: ${error.message}`);
+	process.exit(1);
+});
+
+worker.on('exit', (code, signal) => {
+	for (const name of SIGNALS) process.off(name, forward);
+	// End as the worker did: by its signal, so the caller sees the interruption, or with its exit code.
+	if (signal) process.kill(process.pid, signal);
+	else if (code !== 0) process.exit(code ?? 1);
+	else console.log(`blocks-generate-client: wrote ${outputPath}`);
+});
