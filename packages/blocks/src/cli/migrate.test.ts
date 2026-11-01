@@ -517,8 +517,9 @@ describe('blocks migrate', () => {
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
 			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
-			// templates have changed them since; migrate leaves them as they are.
-			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e'];
+			// templates have changed them since; migrate leaves them as they are. config is new in the
+			// templates and no released app had it or a wrapper for it, so migrate adds nothing for it.
+			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config'];
 			const pick = (scripts: Record<string, string>) =>
 				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
 			const expected = pick(current.scripts);
