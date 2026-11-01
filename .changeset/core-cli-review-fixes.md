@@ -13,3 +13,4 @@ fix(core): production destroy and deploy guidance for the `blocks` CLI
 - `getStackId()` says `.blocks/config.json is not valid JSON (<parse error>)` for a file that does not parse, instead of "not found or missing stackId".
 - `readAwsIdentity()` reports a selected profile that is not in the AWS config files even when no Region is set, instead of returning no identity, which `blocks whoami --profile <typo>` reported as "no AWS Region is set".
 - The production deploy no longer lists "Frontend hosting (S3 + CloudFront)" for an app without a frontend.
+- The first-run telemetry notice says `To disable: npx blocks telemetry disable`, and the `blocks-telemetry` usage starts with `npx blocks telemetry [status|enable|disable] [--global]`, the `blocks` CLI command, instead of naming only `npx blocks-telemetry --disable`.
