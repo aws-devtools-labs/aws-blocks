@@ -6,13 +6,19 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, it, mock } from 'node:test';
 import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { forceDeleteWarning, runValueCli, ValueCliInterruptedError, ValueCliUsageError } from './secret-cli.js';
+import {
+	forceDeleteWarning,
+	restoreSecretCommand,
+	runValueCli,
+	ValueCliInterruptedError,
+	ValueCliUsageError,
+} from './secret-cli.js';
 
 afterEach(() => mock.restoreAll());
 
-/** Stops a forced delete at its warning, before any store call: proves the confirmation passed. */
+/** Stops a forced delete at its existence lookup, the first store call: proves the confirmation passed. */
 function stopAtForceWarning(): void {
-	mock.method(console, 'warn', () => {
+	mock.method(SecretsManagerClient.prototype, 'send', async () => {
 		throw new Error('reached the forced delete');
 	});
 }
@@ -319,9 +325,23 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 			return {};
 		});
 		const log = mock.method(console, 'log', () => {});
+		const warn = mock.method(console, 'warn', () => {});
 		await runValueCli(['remove', 'ZZ_NOPE', '--force', '--yes'], { kind: 'secret', prefix: 'blocks/secrets' });
 		assert.deepStrictEqual(calls, ['DescribeSecretCommand']);
 		assert.match(String(log.mock.calls.at(-1)?.arguments[0]), /'ZZ_NOPE' was not set/);
+		// Nothing is deleted, so nothing warns that it is deleted immediately.
+		assert.strictEqual(warn.mock.calls.length, 0);
+	});
+
+	void it('names the secret, profile and Region in the restore command', () => {
+		assert.strictEqual(
+			restoreSecretCommand('blocks/app/K', 'eu-west-1', { AWS_PROFILE: 'prod' }),
+			'aws secretsmanager restore-secret --secret-id blocks/app/K --profile prod --region eu-west-1',
+		);
+		assert.strictEqual(
+			restoreSecretCommand('blocks/app/K', undefined, { AWS_REGION: 'us-east-1' }),
+			'aws secretsmanager restore-secret --secret-id blocks/app/K --region us-east-1',
+		);
 	});
 });
 

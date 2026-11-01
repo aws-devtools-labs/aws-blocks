@@ -184,6 +184,23 @@ export function forceDeleteWarning(kind: ValueKind, key: string, stage: string |
 }
 
 /**
+ * The AWS CLI command that restores the secret `name`, with the profile and Region this run used,
+ * so that it acts on the same account from a shell that does not export them.
+ * @internal
+ */
+export function restoreSecretCommand(name: string, region: string | undefined, env = process.env): string {
+	const quote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+	const profile = env.AWS_PROFILE;
+	const regionArg = region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION;
+	return [
+		'aws secretsmanager restore-secret --secret-id',
+		quote(name),
+		...(profile ? ['--profile', quote(profile)] : []),
+		...(regionArg ? ['--region', quote(regionArg)] : []),
+	].join(' ');
+}
+
+/**
  * Remove a value of `kind`. Returns true if it existed, false if already absent.
  *
  * For **secrets** (Secrets Manager) the default is a *recoverable* delete — the
@@ -205,7 +222,6 @@ export async function removeValue(
 	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
-		if (opts.force) console.warn(forceDeleteWarning(kind, key, opts.stage));
 		const { SecretsManagerClient, DeleteSecretCommand, DescribeSecretCommand } = await import(
 			'@aws-sdk/client-secrets-manager'
 		);
@@ -213,7 +229,11 @@ export async function removeValue(
 		try {
 			// Secrets Manager accepts a forced delete of a name that does not exist: look it up first,
 			// so a typo'd key reports "was not set" (ResourceNotFoundException) instead of "removed".
-			if (opts.force) await client.send(new DescribeSecretCommand({ SecretId: name }));
+			// The warning follows the lookup: it must not claim a deletion of a key that is not set.
+			if (opts.force) {
+				await client.send(new DescribeSecretCommand({ SecretId: name }));
+				console.warn(forceDeleteWarning(kind, key, opts.stage));
+			}
 			// Default: recoverable delete (recovery window). --force: immediate, no recovery.
 			await client.send(
 				new DeleteSecretCommand(
@@ -223,7 +243,7 @@ export async function removeValue(
 			console.log(
 				opts.force
 					? `🗑️  ${kind} '${key}' permanently removed (no recovery).`
-					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`aws secretsmanager restore-secret\`, or use --force --yes to delete immediately).`,
+					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`${restoreSecretCommand(name, opts.region)}\`, or use --force --yes to delete immediately).`,
 			);
 			return true;
 		} catch (error: unknown) {
