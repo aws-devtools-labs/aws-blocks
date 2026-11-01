@@ -49,11 +49,19 @@ void describe('blocks secret / config CLI options forwarding', () => {
 
 	void it('forwards `yes` so a forced secret delete is confirmed', async () => {
 		await assert.rejects(runSecretCli(['remove', 'K', '--force']), ValueCliUsageError);
-		// The forced delete warns before any store call; stop there.
-		mock.method(console, 'warn', () => {
-			throw new Error('reached the forced delete');
-		});
-		await assert.rejects(runSecretCli(['remove', 'K', '--force'], { yes: true }), /reached the forced delete/);
+		// Confirmed, it reaches its first store call, which fails offline with no Region.
+		const saved = { ...process.env };
+		for (const key of ['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_PROFILE']) delete process.env[key];
+		process.env.AWS_CONFIG_FILE = '/nonexistent/aws-config';
+		process.env.AWS_SHARED_CREDENTIALS_FILE = '/nonexistent/aws-credentials';
+		try {
+			await assert.rejects(
+				runSecretCli(['remove', 'K', '--force'], { yes: true }),
+				(e: unknown) => !(e instanceof ValueCliUsageError) && /Region is missing/.test(String(e)),
+			);
+		} finally {
+			process.env = saved;
+		}
 	});
 });
 
