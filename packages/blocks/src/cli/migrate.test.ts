@@ -915,6 +915,20 @@ describe('blocks migrate', () => {
 		assert.strictEqual(JSON.parse(text.slice(1)).scripts.deploy, 'blocks deploy');
 	});
 
+	it('names the package.json that it cannot parse', async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const path = join(root, 'package.json');
+		writeFileSync(path, '{ "name": \n');
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(run.stdout, '');
+		assert.ok(run.stderr.startsWith(`Error: cannot read ${path}: `), run.stderr);
+		assert.strictEqual(readFileSync(path, 'utf-8'), '{ "name": \n');
+	});
+
 	it('treats script values named like Object.prototype members as unrelated', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.packageJson.scripts.a = 'toString';

@@ -529,8 +529,14 @@ export function planMigration(
 	files: readonly string[] | null,
 	repo: RepoFiles | null = null,
 ): { result: MigrateResult; pkg: PackageJson } {
-	// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
-	const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
+	const pkgPath = join(root, 'package.json');
+	let pkg: PackageJson;
+	try {
+		// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
+		pkg = JSON.parse(readFileSync(pkgPath, 'utf-8').replace(/^\uFEFF/, '')) as PackageJson;
+	} catch (error) {
+		throw new CliError(`cannot read ${pkgPath}: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	const wrappers = findWrappers(root);
 	const byFile = new Map(wrappers.map((w) => [w.file, w]));
 	const result: MigrateResult = { changed: [], removed: [], kept: [], scriptsRewritten: {}, devConfig: null };
