@@ -325,6 +325,25 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
     assert.ok(!existsSync(join(dir, devPidfilePath(port))));
   });
 
+  it("records the blocks sandbox session that started it, and keeps it from its frontend's environment (U2)", async () => {
+    const dir = makeApp();
+    const [port, frontendPort] = await Promise.all([freePort(), freePort()]);
+    const script = join(dir, 'frontend.mjs');
+    writeFileSync(
+      script,
+      "import { createServer } from 'node:http';\n" +
+        "createServer((_q, r) => r.end('session=' + (process.env.BLOCKS_SANDBOX_SESSION ?? 'none'))).listen(Number(process.argv[2]), '127.0.0.1');\n",
+    );
+    const dev = startDev(
+      dir,
+      { port, frontendPort, frontendCommand: `${quote(process.execPath)} ${quote(script)} ${frontendPort}` },
+      { env: { BLOCKS_SANDBOX_SESSION: String(process.pid), BLOCKS_API_URL: '' } },
+    );
+    assert.strictEqual(await waitFor('the frontend', () => fetchText(port).then((t) => t?.startsWith('session=') && t), [dev]), 'session=none');
+    const record = JSON.parse(readFileSync(join(dir, devPidfilePath(port)), 'utf-8'));
+    assert.deepStrictEqual(record.sandbox, { pid: process.pid });
+  });
+
   it('leaves no pidfile after the blocks CLI stop: SIGTERM to the dev server, then to its tsx watch', async () => {
     const dir = makeApp();
     const port = await freePort();

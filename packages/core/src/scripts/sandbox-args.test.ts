@@ -25,6 +25,7 @@ import {
   cdkAppEnv,
   buildSandboxWatchSpawn,
   stacksWithExpressUnsafeResources,
+  sandboxDevServerExitCode,
 } from './sandbox.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
@@ -225,6 +226,16 @@ describe('buildSandboxCdkEnv — framework sink reaches the synth child, and hon
     const env = buildSandboxCdkEnv('/tmp/blocks-framework-sink', 'aws-blocks/index.cdk.ts');
 
     assert.ok(!(FRAMEWORK_SINK_ENV in env), `opted-out run must not set ${FRAMEWORK_SINK_ENV}`);
+  });
+});
+
+describe('sandboxDevServerExitCode', () => {
+  it('ends the sandbox with 0 when its dev server was stopped, and 1 when it failed', () => {
+    assert.strictEqual(sandboxDevServerExitCode(0, null), 0);
+    assert.strictEqual(sandboxDevServerExitCode(null, 'SIGTERM'), 0);
+    assert.strictEqual(sandboxDevServerExitCode(143, null), 0, 'the shell reports a SIGTERM as 128+15');
+    assert.strictEqual(sandboxDevServerExitCode(137, null), 0, 'dev stop SIGKILLs a hung tsx watch');
+    assert.strictEqual(sandboxDevServerExitCode(1, null), 1, 'a startup failure');
   });
 });
 
