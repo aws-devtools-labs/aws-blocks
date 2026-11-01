@@ -3,6 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -10,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
 import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
@@ -2209,6 +2211,52 @@ describe('cdk-blocks dev stop', () => {
 			listed.stderr,
 			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with npx --no -- cdk-blocks dev stop --port <port>, or all of them with npx --no -- cdk-blocks dev stop --all\./,
 		);
+	});
+
+	it('blocks dev claims the session before it starts anything, and releases it after', async () => {
+		const cwd = fixtureApp({ blocks: { dev: { port: 41966 } } });
+		const pidfile = join(cwd, '.blocks-sandbox', 'dev-server.41966.pid');
+		let during: unknown;
+		const run = await runCli(['dev'], {
+			cwd,
+			onSpawn: () => {
+				during = JSON.parse(readFileSync(pidfile, 'utf-8'));
+				return { code: 143 };
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		// `dev stop` during startup finds this record, and SIGTERMs this process; the dev server takes it over.
+		assert.deepStrictEqual(during, {
+			pid: process.pid,
+			ppid: process.ppid,
+			port: 41966,
+			command: pidCommand(process.pid),
+			parentCommand: pidCommand(process.ppid),
+			starting: true,
+		});
+		assert.strictEqual(run.spawned[0]?.env.BLOCKS_DEV_SESSION, String(process.pid));
+		assert.strictEqual(existsSync(pidfile), false);
+
+		// While another CLI's session is starting, a second blocks dev is refused before it starts anything.
+		const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+		try {
+			const pid = other.pid ?? 0;
+			await once(other, 'spawn');
+			const record = { pid, ppid: process.pid, port: 41966, command: pidCommand(pid), parentCommand: '', starting: true };
+			writeFileSync(pidfile, JSON.stringify(record));
+			const second = await runCli(['dev'], { cwd });
+			assert.strictEqual(second.code, 1, second.stderr);
+			assert.strictEqual(second.spawned.length, 0);
+			assert.match(
+				second.stderr,
+				new RegExp(
+					`^Error: a dev server is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- blocks dev stop --port 41966, or use another --port\\n`,
+				),
+			);
+			assert.deepStrictEqual(JSON.parse(readFileSync(pidfile, 'utf-8')), record, 'the first session keeps its record');
+		} finally {
+			other.kill('SIGKILL');
+		}
 	});
 });
 

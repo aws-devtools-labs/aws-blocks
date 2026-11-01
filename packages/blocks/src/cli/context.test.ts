@@ -446,6 +446,83 @@ setInterval(() => {}, 1000);
 		assert.strictEqual(await stopDev('pid', 'SIGHUP', 1500), 0);
 	});
 
+	/**
+	 * Start `blocks dev` in a process group of its own, run `blocks dev stop` `delayMs` after it, and
+	 * check that the stop stopped it, whatever stage of its startup it was in, leaving nothing running.
+	 */
+	async function stopDuringStartup(delayMs: number): Promise<void> {
+		const root = mkdtempSync(join(tmpdir(), 'blocks-cli-dev-stop-early-'));
+		const [port, frontendPort] = await freePorts(2);
+		writeFileSync(
+			join(root, 'frontend.cjs'),
+			[
+				"require('node:fs').writeFileSync('frontend.pid', String(process.pid));",
+				`require('node:http').createServer((req, res) => res.end('ok')).listen(${frontendPort}, '127.0.0.1');`,
+			].join('\n'),
+		);
+		writeFileSync(
+			join(root, 'package.json'),
+			JSON.stringify({
+				name: 'dev-stop-early-app',
+				type: 'module',
+				blocks: { dev: { port, frontendCommand: `node frontend.cjs ${frontendPort}`, frontendPort } },
+			}),
+		);
+		mkdirSync(join(root, 'aws-blocks'));
+		writeFileSync(join(root, 'aws-blocks', 'index.ts'), "export const testApi = { ping: async () => 'pong' };\n");
+		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		const run = (args: string[], detached: boolean) => {
+			const child = spawn(process.execPath, [bin, ...args], { cwd: root, detached, stdio: ['ignore', 'pipe', 'pipe'] });
+			let output = '';
+			child.stdout.on('data', (chunk) => (output += chunk));
+			child.stderr.on('data', (chunk) => (output += chunk));
+			const closed = once(child, 'close').then(([code]) => code as number | null);
+			return { child, closed, output: () => output };
+		};
+		const dev = run(['dev'], true);
+		const pgid = dev.child.pid ?? 0;
+		try {
+			await sleep(delayMs);
+			const stop = run(['dev', 'stop', '--port', String(port)], false);
+			const stopCode = await stop.closed;
+			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- blocks dev:\n${dev.output()}`;
+			assert.strictEqual(stopCode, 0, context);
+			assert.match(stop.output(), /Stopped the dev server/, context);
+			const devCode = await Promise.race([dev.closed, sleep(15_000).then(() => 'still running')]);
+			assert.strictEqual(devCode, 0, context);
+			assert.strictEqual(isGroupRunning(pgid), false, `a process of blocks dev outlived it${context}`);
+			// The frontend starts only once the dev server listens, which the later stops may come after.
+			const frontendPid = join(root, 'frontend.pid');
+			if (existsSync(frontendPid)) {
+				let alive = true;
+				try {
+					process.kill(Number(readFileSync(frontendPid, 'utf-8')), 0);
+				} catch {
+					alive = false;
+				}
+				assert.strictEqual(alive, false, `the frontend outlived it${context}`);
+			}
+			assert.strictEqual(await isListening(port), false, context);
+			assert.strictEqual(await isListening(frontendPort), false, context);
+			// The dev server's pidfile hand-off watcher removes its record just after `tsx watch` exits.
+			const pidfile = join(root, '.blocks-sandbox', `dev-server.${port}.pid`);
+			for (const deadline = Date.now() + 2000; existsSync(pidfile) && Date.now() < deadline; ) await sleep(25);
+			assert.strictEqual(existsSync(pidfile), false, `the pidfile outlived the session${context}`);
+		} finally {
+			if (isGroupRunning(pgid)) process.kill(-pgid, 'SIGKILL');
+			rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+		}
+	}
+
+	it('stops `blocks dev` on a `blocks dev stop` at any moment of its startup, leaving nothing running', {
+		timeout: 300_000,
+	}, async () => {
+		// Before the dev server has loaded, the pidfile names the CLI, which `dev stop` signals.
+		for (let round = 0; round < 2; round++) {
+			for (const delayMs of [0, 200, 600, 1000]) await stopDuringStartup(delayMs);
+		}
+	});
+
 	it('otherwise ignores SIGHUP and does not forward it, as core defers it during a deploy', async () => {
 		const listeners = process.listenerCount('SIGHUP');
 		const child = await start();

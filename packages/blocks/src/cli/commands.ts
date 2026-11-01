@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claimDevSession, DEV_SESSION_ENV } from '@aws-blocks/core/scripts/dev-pidfile';
 import type { AwsIdentity } from '@aws-blocks/core/scripts';
 import {
 	frontendPortWarning,
@@ -185,6 +186,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		const code = devExitCode(run, run.failureFile, result);
 		if (code !== undefined) return code;
 	}
+
 	// A child that is not long-running and exited 0 finished its work before the
 	// Ctrl-C reached it (`cdk-blocks db migrate` applied every migration): report that.
 	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
@@ -433,20 +435,45 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		);
 	}
 	const { source: _source, ...devConfig } = config;
-	// The dev server records a fatal startup failure here (see ChildRun.failureFile).
-	const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
-	const failureFile = join(failureDir, 'failure');
-	try {
-		return await runRunner(ctx, {
-			runner: 'dev-server',
-			operation: 'cdk-blocks dev',
-			watch: true,
-			env: { ...devServerEnv(ctx.env, { backendPath, ...devConfig }), [DEV_FAILURE_FILE_ENV]: failureFile },
-			longRunning: true,
-			failureFile,
+	const port = config.port ?? 3000;
+	// Claim the session before anything starts, so that a `dev stop` from now on finds it: until the dev
+	// server has loaded and taken the record over, the stop SIGTERMs this process, which stops what it started.
+	// A listener keeps that SIGTERM from ending the CLI before it spawns `tsx watch`; from then on the spawn's
+	// own listener stops the child. Nothing in between awaits, so the signal is handled once both are in place.
+	const keepAlive = (): void => {};
+	process.on('SIGTERM', keepAlive);
+	const session = claimDevSession(root, port);
+	if (!session.acquired) {
+		process.off('SIGTERM', keepAlive);
+		const stop = port === 3000 ? blocksCommand('dev', 'stop') : blocksCommand('dev', 'stop', '--port', String(port));
+		throw new CliError(`${session.reason}. Not starting a second one.`, {
+			where: [`project: ${root}`],
+			hint: `${stop}, or use another --port`,
 		});
+	}
+	try {
+		// The dev server records a fatal startup failure here (see ChildRun.failureFile).
+		const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
+		const failureFile = join(failureDir, 'failure');
+		try {
+			return await runRunner(ctx, {
+				runner: 'dev-server',
+				operation: 'blocks dev',
+				watch: true,
+				env: {
+					...devServerEnv(ctx.env, { backendPath, ...devConfig }),
+					[DEV_FAILURE_FILE_ENV]: failureFile,
+					[DEV_SESSION_ENV]: String(process.pid),
+				},
+				longRunning: true,
+				failureFile,
+			});
+		} finally {
+			rmSync(failureDir, { recursive: true, force: true });
+		}
 	} finally {
-		rmSync(failureDir, { recursive: true, force: true });
+		process.off('SIGTERM', keepAlive);
+		session.release();
 	}
 }
 
