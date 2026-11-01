@@ -830,6 +830,8 @@ export interface ClaimPidfileDeps {
   read: (path: string) => string | null;
   /** Rename `from` to `to`; false when `from` doesn't exist. */
   rename: (from: string, to: string) => boolean;
+  /** Replace `path` with `body` in one step (temp file + rename): readers see the old body or the new one, never no file. */
+  replace: (path: string, body: string) => void;
   /** Delete `path` if it exists. */
   remove: (path: string) => void;
   isAlive: (pid: number) => boolean;
@@ -877,6 +879,11 @@ function defaultClaimDeps(): ClaimPidfileDeps {
     rename: (from, to) => {
       try { renameSync(from, to); return true; } catch { return false; }
     },
+    replace: (p, body) => {
+      const tmp = `${p}.${process.pid}.tmp`;
+      writeFileSync(tmp, body);
+      renameSync(tmp, p);
+    },
     remove: (p) => {
       try { unlinkSync(p); } catch { /* already gone */ }
     },
@@ -895,10 +902,19 @@ const CLAIM_ATTEMPTS = 5;
  * The pidfile is created exclusively, so of two simultaneous starts only one
  * creates it. When it already exists, {@link evaluateSingleton} decides: a live
  * owner makes this start bow out; a stale (or unreadable) record is taken over.
- * The takeover first renames the old pidfile to a private path — of two starts
- * that both found it stale, only one rename succeeds — then checks that what
- * it took is the record it judged (a racer may have replaced it, in which case
- * that record is put back and judged again), then creates the pidfile afresh.
+ *
+ * The record of our own `tsx watch` predecessor (same live watcher, exited
+ * child) is replaced in place, so the pidfile exists throughout a reload and a
+ * `dev stop` run at any moment of it finds the session. Only this start can
+ * take that record over: any other start sees the live watcher and bows out,
+ * and `tsx watch` runs one child at a time.
+ *
+ * Any other stale record is taken over by first renaming it to a private
+ * path — of two starts that both found it stale, only one rename succeeds —
+ * then checking that what it took is the record it judged (a racer may have
+ * replaced it, in which case that record is put back and judged again), then
+ * creating the pidfile afresh. No session is running then, so nothing needs to
+ * find the pidfile in between.
  */
 export function claimDevPidfile(
   path: string,
@@ -915,8 +931,13 @@ export function claimDevPidfile(
     const text = d.read(path);
     if (text === null) continue; // removed since: create again
     const existing = parsePidRecord(text);
-    const decision = judge(existing);
+    const liveness = existing ? recordLiveness(existing, d.isAlive, d.commandOf) : null;
+    const decision = existing && liveness ? evaluateSingleton(existing, self, liveness) : { action: 'proceed' as const };
     if (decision.action === 'exit') return { acquired: false, reason: decision.reason };
+    if (existing && liveness?.watcherAlive && !liveness.pidAlive && existing.ppid === self.ppid && existing.pid !== self.pid) {
+      d.replace(path, body);
+      return { acquired: true, previous: existing };
+    }
     const claimPath = `${path}.${self.pid}.gc`;
     if (!d.rename(path, claimPath)) continue; // another start took it first
     const claimedText = d.read(claimPath);
