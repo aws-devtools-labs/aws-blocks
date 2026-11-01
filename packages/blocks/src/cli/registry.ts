@@ -474,8 +474,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 		passthrough: true,
 		verbs: ['migrate', 'status', 'generate-types', 'pull'],
 		examples: [
-			{ command: 'blocks db migrate', description: 'Apply pending migrations to the local database' },
-			{ command: 'blocks db status', description: 'Show applied and pending migrations' },
+			{
+				command: 'blocks db migrate aws-blocks/migrations',
+				description: 'Apply pending migrations to the local database',
+			},
+			{ command: 'blocks db status aws-blocks/migrations', description: 'Show applied and pending migrations' },
 			{ command: 'blocks db pull', description: 'Introspect the database and write its files' },
 		],
 		handler: commands.db,

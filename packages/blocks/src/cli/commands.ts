@@ -951,6 +951,8 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 		command: process.execPath,
 		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough))],
 		cwd: root,
+		// bb-data's verb help names the command that runs it.
+		env: { BB_DATA_COMMAND: 'blocks db' },
 	});
 }
 

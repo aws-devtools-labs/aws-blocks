@@ -139,7 +139,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn(outputs) });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}${outputs.join('')}`);
 			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['pull', '--help']);
-			assert.match(outputs.join(''), /Usage: bb-data pull \[output-dir\]/);
+			assert.match(outputs.join(''), /Usage: blocks db pull \[output-dir\]/);
 			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
 		}
 	});
@@ -149,7 +149,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		const outputs: string[] = [];
 		const run = await runCli(['help', 'db', 'migrate'], { cwd: root, onSpawn: realSpawn(outputs) });
 		assert.strictEqual(run.code, 0, run.stderr + outputs.join(''));
-		assert.match(outputs.join(''), /Usage: bb-data migrate \[dir\][\s\S]*--url <conn>/);
+		assert.match(outputs.join(''), /Usage: blocks db migrate \[dir\][\s\S]*--url <conn>/);
 		assert.ok(!existsSync(join(root, '.bb-data')));
 	});
 

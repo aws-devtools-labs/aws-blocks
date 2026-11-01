@@ -134,6 +134,21 @@ test('--help and -h print the verb usage and exit 0 without touching any databas
   }
 });
 
+test('the verb usage names the command in BB_DATA_COMMAND, which runs this CLI', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    for (const verb of ['migrate', 'status', 'generate-types', 'pull']) {
+      const r = runCli([verb, '--help'], dir, { BB_DATA_COMMAND: 'blocks db' });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.match(r.stdout, new RegExp(`Usage: blocks db ${verb} `), verb);
+      assert.doesNotMatch(r.stdout, /(?<!\.)bb-data /, verb);
+    }
+    assert.match(runCli(['status', '--help'], dir, { BB_DATA_COMMAND: '' }).stdout, /Usage: bb-data status /);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('without --help, an unknown verb still prints the overview and a missing migrations dir still exits 1', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
   try {

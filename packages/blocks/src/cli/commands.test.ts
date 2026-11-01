@@ -273,6 +273,17 @@ describe('passthrough commands', () => {
 		assert.strictEqual(run.spawned.length, 0);
 	});
 
+	it('shows db examples with the migrations directory of an app, and runs the verb help as blocks db', async () => {
+		const root = fixtureApp();
+		const help = await runCli(['db', '--help'], { cwd: root });
+		assert.strictEqual(help.code, 0, help.stderr);
+		assert.match(help.stdout, /blocks db migrate aws-blocks\/migrations /);
+		assert.match(help.stdout, /blocks db status aws-blocks\/migrations /);
+		const verb = await runCli(['db', 'migrate', '--help'], { cwd: root });
+		assert.strictEqual(verb.code, 0, verb.stderr);
+		assert.strictEqual(verb.spawned[0].env.BB_DATA_COMMAND, 'blocks db');
+	});
+
 	it('forwards vendorize arguments verbatim', async () => {
 		const run = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 0, run.stderr);
