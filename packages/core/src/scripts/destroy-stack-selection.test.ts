@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { buildSandboxDeployArgs } from './sandbox.js';
-import { stackExists } from './destroy.js';
+import { cdkListedStacks, stackExists } from './destroy.js';
 
 // The sandbox destroy must select the same stacks the sandbox deploy creates.
 // (The production destroy follows in a separate change, together with its
@@ -209,5 +209,23 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     assert.strictEqual(await stackExists(failing(named('ValidationError', 'Stack with id s does not exist')), describe, 's'), false);
     assert.strictEqual(await stackExists(failing(named('AccessDenied', 'not authorized')), describe, 's'), undefined);
     assert.strictEqual(await stackExists(failing(named('ValidationError', 'Rate exceeded')), describe, 's'), undefined);
+  });
+});
+
+describe('cdkListedStacks', () => {
+  it('keeps only stack ids from cdk ls output, not the build output of the synth', () => {
+    const out = [
+      'AI agent detected',
+      '🏗️  Building frontend (spa): npm run build',
+      '> mig1@0.1.0 prebuild',
+      'blocks-generate-client: wrote /app/aws-blocks/client.js',
+      'vite v6.4.5 building for production...',
+      '✓ built in 406ms',
+      'zz-app-prod',
+      'Main (zz-app-prod-main)',
+      'Stage/Nested',
+      '',
+    ].join('\n');
+    assert.deepStrictEqual(cdkListedStacks(out), ['zz-app-prod', 'Main (zz-app-prod-main)', 'Stage/Nested']);
   });
 });

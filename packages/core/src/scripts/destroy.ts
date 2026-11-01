@@ -70,6 +70,19 @@ async function productionStackExists(projectRoot: string, stackName: string): Pr
 }
 
 /**
+ * The stacks in `cdk ls` output: lines that are a stack id, optionally followed
+ * by `(name)`. Synthesizing the app also prints to stdout (a Hosting frontend
+ * build, CDK notices), and those lines are not stacks.
+ * @internal
+ */
+export function cdkListedStacks(out: string): string[] {
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[A-Za-z][\w/-]*( \([^()]*\))?$/.test(line));
+}
+
+/**
  * Resolve the production app's stack names via `cdk ls` (best-effort; [] on
  * error). Mirrors the sandbox resolver but without `sandboxMode` — it drives
  * the pre-retry bucket-emptying in {@link runDestroyWithRetries}, so a failure
@@ -85,10 +98,7 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
       // below rather than being indistinguishable from "app has zero stacks".
       { cwd: options.projectRoot, env: cdkEnv },
     );
-    return out
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    return cdkListedStacks(out);
   } catch (e) {
     const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
     log.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
@@ -117,7 +127,7 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
     const detail = stderr || (e instanceof Error ? e.message : String(e));
     throw new Error(`Could not list the stacks of the CDK app with 'cdk ls', so nothing was deleted: ${detail}`);
   }
-  const stacks = out.split('\n').map((s) => s.trim()).filter(Boolean);
+  const stacks = cdkListedStacks(out);
   if (stacks.some((s) => s === stackName || s.endsWith(` (${stackName})`))) return;
   throw new Error(
     `The CDK app (aws-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
