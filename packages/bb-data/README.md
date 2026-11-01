@@ -406,8 +406,9 @@ npx bb-data generate-types ./types/database.ts
   take `.bb-data/<fullId>.lock` before they open it. A command refuses at once
   while the dev server has the database. The dev server waits up to 30 s for a
   running command, and a command up to 60 s for another command; then they refuse
-  with a message that names the holder. A lock left by a process that is gone is
-  taken over.
+  with a message that names the holder. A second dev server of the same app (on
+  another port) waits up to 10 s, which covers a `tsx watch` restart, then refuses
+  to start. A lock left by a process that is gone is taken over.
 - For a `fromExisting()` app, the commands refuse without `--url`. They detect such
   an app by a `*_DB_URL` / `*_CONNECTION_STRING` variable in the environment or in
   `.env.local`, or by the connection string `bb-data pull` stores in

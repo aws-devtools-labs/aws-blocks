@@ -95,8 +95,10 @@ function translateError(e: unknown): never {
 /**
  * Remove stale postmaster.pid left by a previous unclean shutdown.
  * PGlite runs PostgreSQL in-process via WASM — there is no external
- * postmaster process — so a leftover pid file is always stale and
- * causes PGlite to crash with `Aborted()`.
+ * postmaster process — so a leftover pid file causes PGlite to crash with
+ * `Aborted()`. It is stale only when no live PGlite has the directory open:
+ * another process is kept out by the local-database lock (`local-database.ts`),
+ * and another engine of this process by `removeStalePid: false`.
  */
 function cleanStaleLock(dataDir: string): void {
   const pidFile = join(dataDir, 'postmaster.pid');
@@ -181,6 +183,7 @@ export class PGliteEngine implements DatabaseEngine {
   private cancelExitClose?: () => void;
   private readonly dataDir: string;
   private readonly createClient: (dataDir: string) => PGlite;
+  private readonly removeStalePid: boolean;
   private ready?: Promise<PGlite>;
 
   /**
@@ -188,14 +191,22 @@ export class PGliteEngine implements DatabaseEngine {
    * @param createClient - factory for the underlying PGlite instance; defaults
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
+   * @param options.removeStalePid - remove a leftover `postmaster.pid` before
+   *   opening (default true). Pass false when another engine of this process may
+   *   have the directory open: its `postmaster.pid` is live, not stale.
    *
    * To load Postgres extensions (PostGIS, pgvector) use the async
    * {@link PGliteEngine.create} factory instead — extension packages are
    * resolved by dynamic import, which the synchronous constructor cannot do.
    */
-  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = createLocalPglite) {
+  constructor(
+    dataDir: string = '.bb-data',
+    createClient: (dataDir: string) => PGlite = createLocalPglite,
+    options?: { removeStalePid?: boolean },
+  ) {
     this.dataDir = dataDir;
     this.createClient = createClient;
+    this.removeStalePid = options?.removeStalePid ?? true;
     this.db = this.createDb();
   }
 
@@ -208,17 +219,22 @@ export class PGliteEngine implements DatabaseEngine {
    * `createClient` closure, so it is reapplied on every PGlite instance the
    * init-trap retry path recreates — the extensions survive a WASM-trap retry.
    *
-   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir)`.
+   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir, undefined, options)`.
    *
    * @param dataDir - directory PGlite persists to (nested paths are created).
    * @param extensions - extension names from `DatabaseOptions.extensions`.
+   * @param options - passed to the constructor (`removeStalePid`).
    */
-  static async create(dataDir: string = '.bb-data', extensions?: readonly string[]): Promise<PGliteEngine> {
+  static async create(
+    dataDir: string = '.bb-data',
+    extensions?: readonly string[],
+    options?: { removeStalePid?: boolean },
+  ): Promise<PGliteEngine> {
     const resolved = await resolveExtensions(extensions);
     if (Object.keys(resolved).length === 0) {
-      return new PGliteEngine(dataDir);
+      return new PGliteEngine(dataDir, undefined, options);
     }
-    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }));
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }), options);
   }
 
   /**
@@ -240,7 +256,7 @@ export class PGliteEngine implements DatabaseEngine {
     // boot. Create the full path up front (matches DsqlMockEngine).
     mkdirSync(this.dataDir, { recursive: true });
     recoverIncompletePgliteDataDir(this.dataDir);
-    cleanStaleLock(this.dataDir);
+    if (this.removeStalePid) cleanStaleLock(this.dataDir);
     this.cancelExitClose ??= closeOnProcessExit(() => this.closeForExit());
     return this.createClient(this.dataDir);
   }

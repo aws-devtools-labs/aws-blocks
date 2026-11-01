@@ -6,7 +6,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { LazyEngine } from './engines/lazy-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
-import { localDatabaseDir, lockLocalDatabase } from './local-database.js';
+import { holdsLocalDatabase, localDatabaseDir, lockLocalDatabase } from './local-database.js';
 import { RLSEnabledDatabase } from './database.js';
 import { runMigrations, loadMigrationsFromDir, trackEager, logRecovery } from '@aws-blocks/data-common';
 import { createCrudHandlers } from './crud/index.js';
@@ -80,8 +80,13 @@ export class Database extends Scope {
     } else {
       // Local PGlite for development, in the directory the bb-data CLI also resolves.
       // Locked before PGlite opens it: two processes on one PGlite database corrupt it,
-      // so this waits for a running `bb-data` command, then refuses.
-      const dataDir = lockLocalDatabase(localDatabaseDir(this.fullId), 'app');
+      // so this waits (bounded) for another holder, then refuses. A second Database
+      // with this fullId in this process re-enters the lock; the first one's engine
+      // is live, so its postmaster.pid must stay.
+      const dataDir = localDatabaseDir(this.fullId);
+      const reentered = holdsLocalDatabase(dataDir);
+      lockLocalDatabase(dataDir, 'app');
+      const engineOptions = { removeStalePid: !reentered };
       if (options?.extensions && options.extensions.length > 0) {
         // Extensions are resolved by dynamic import (async), which the sync
         // constructor cannot await. Install ONE stable engine — a LazyEngine
@@ -93,10 +98,10 @@ export class Database extends Scope {
         // extension packages lazily, so a Database that declares extensions but
         // is never queried never loads them.
         const extensions = options.extensions;
-        const lazyEngine = new LazyEngine(() => PGliteEngine.create(dataDir, extensions));
+        const lazyEngine = new LazyEngine(() => PGliteEngine.create(dataDir, extensions, engineOptions));
         this.base = new RLSEnabledDatabase(lazyEngine);
       } else {
-        this.base = new RLSEnabledDatabase(new PGliteEngine(dataDir));
+        this.base = new RLSEnabledDatabase(new PGliteEngine(dataDir, undefined, engineOptions));
       }
     }
 

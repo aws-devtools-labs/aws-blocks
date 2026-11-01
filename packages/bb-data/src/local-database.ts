@@ -287,16 +287,32 @@ function tempPath(path: string): string {
   return `${path}.${process.pid}-${randomUUID()}`;
 }
 
-function inUseMessage(dataDir: string, holder: LockRecord, path: string): string {
+function inUseMessage(dataDir: string, holder: LockRecord, path: string, role: LocalDatabaseRole): string {
   const by =
     holder.role === 'cli'
       ? `in use by a \`bb-data\` command (pid ${holder.pid}). Wait for it to finish, or stop it`
-      : `open in another process (pid ${holder.pid}), most likely \`npm run dev\`. Stop it first (\`npm run dev:stop\`)`;
+      : role === 'app'
+        ? `in use by another app process (pid ${holder.pid}). Is another \`npm run dev\` running for this app, ` +
+          'on another port? Stop it first (`npm run dev:stop -- --port <port>`)'
+        : `open in another process (pid ${holder.pid}), most likely \`npm run dev\`. Stop it first (\`npm run dev:stop\`)`;
   return (
     `The local database ${dataDir} is ${by}: two processes on one PGlite database corrupt it. ` +
     `If that process is not using the database, delete ${path}.`
   );
 }
+
+/**
+ * Whether this process holds the lock of `dataDir` (an earlier `Database` with the
+ * same fullId took it): its PGlite engine is then live, and its `postmaster.pid` too.
+ */
+export function holdsLocalDatabase(dataDir: string): boolean {
+  const path = lockPath(dataDir);
+  const mine = heldLocks.get(path);
+  return mine !== undefined && readRaw(path) === mine;
+}
+
+/** How long an app waits for another app process: a `tsx watch` restart, where the old process is exiting. */
+const APP_RESTART_WAIT_MS = 10_000;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -325,7 +341,8 @@ function testHook(step: 'stale-inspected' | 'takeover' | 'live-holder'): void {
  *
  * While another process holds it, waits up to `waitMs` for it to be released. The
  * CLI does not wait for an app process (a dev server keeps its database open until
- * it stops).
+ * it stops); an app waits for another app at most 10 s (a `tsx watch` restart),
+ * then refuses. Only this process (this module instance) re-enters its own lock.
  *
  * @param role - `app` for the dev mock, `cli` for a `bb-data` command.
  * @returns `dataDir`
@@ -342,7 +359,8 @@ export function lockLocalDatabase(
   const raw = newRecord(role);
   const tmp = tempPath(path);
   writeFileSync(tmp, raw);
-  const deadline = Date.now() + waitMs;
+  const started = Date.now();
+  const deadline = started + waitMs;
   let announced = false;
   try {
     for (;;) {
@@ -373,10 +391,11 @@ export function lockLocalDatabase(
         }
         continue;
       }
-      if (holder.pid === process.pid) return dataDir; // already ours
+      if (heldLocks.get(path) === inspected) return dataDir; // already ours, in this process
       testHook('live-holder');
-      if ((role === 'cli' && holder.role === 'app') || Date.now() > deadline) {
-        throw new Error(inUseMessage(dataDir, holder, path));
+      const until = role === 'app' && holder.role === 'app' ? Math.min(deadline, started + APP_RESTART_WAIT_MS) : deadline;
+      if ((role === 'cli' && holder.role === 'app') || Date.now() > until) {
+        throw new Error(inUseMessage(dataDir, holder, path, role));
       }
       if (!announced) {
         console.log(`Waiting for pid ${holder.pid} (${holder.role === 'cli' ? 'a bb-data command' : 'an app'}) to release ${dataDir}...`);
