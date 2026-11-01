@@ -328,6 +328,8 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
         },
         replace: (p: string, body: string) => { files.set(p, body); },
         remove: (p: string) => { files.delete(p); },
+        peers: (p: string) =>
+          [...files.keys()].filter((f) => f !== p && /\/dev-server\.\d+\.pid$/.test(f) && f.slice(0, f.lastIndexOf('/')) === p.slice(0, p.lastIndexOf('/'))),
       },
     };
   }
@@ -348,6 +350,46 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.strictEqual(claim.acquired, false);
     assert.strictEqual(fs.files.get(path), owner);
     assert.strictEqual(fs.files.size, 1, 'no claim file is left behind');
+  });
+
+  it("refuses while the app's dev server on another port is alive, names that port, and removes its own record", () => {
+    // Two dev servers of one app share its .bb-data: the second one, on another port, must not start either.
+    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a', parentCommand: 'q' });
+    const foreign = '/elsewhere/.blocks-sandbox/dev-server.4200.pid';
+    const fs = memoryFs({ [other]: owner, [foreign]: JSON.stringify({ pid: 1001, ppid: 501, port: 4200, command: 'c' }) });
+    const commandOf = (pid: number) => ({ 1000: 'a', 500: 'q', 1001: 'c' })[pid] ?? '';
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: () => true, commandOf });
+    assert.deepStrictEqual(claim, {
+      acquired: false,
+      reason: 'a dev server of this app is already running on :4100 (pid 1000)',
+      port: 4100,
+    });
+    assert.ok(!fs.files.has(path), 'the refused start removed the record it wrote');
+    assert.strictEqual(fs.files.get(other), owner, "the running server's record stays");
+  });
+
+  it("starts when the app's record on another port is stale, and leaves that record to its own port", () => {
+    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const stale = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' });
+    const fs = memoryFs({ [other]: stale });
+    const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 2000, commandOf: () => 'b' });
+    assert.deepStrictEqual(claim, { acquired: true, previous: null });
+    assert.strictEqual(fs.files.get(other), stale);
+  });
+
+  it('takes its own reload over in place without looking at the other ports again', () => {
+    // A dev server whose tsx watch reloads it keeps the session, even while a refused start's record lingers.
+    const predecessor = { pid: 1999, ppid: 900, port: 3000, command: 'old', parentCommand: 'tsx watch server.ts' };
+    const other = '/app/.blocks-sandbox/dev-server.4100.pid';
+    const fs = memoryFs({ [path]: JSON.stringify(predecessor), [other]: JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a' }) });
+    const commandOf = (pid: number) => ({ 900: 'tsx watch server.ts', 1000: 'a', 2000: 'b' })[pid] ?? '';
+    const claim = claimDevPidfile(path, { ...self, parentCommand: 'tsx watch server.ts' }, {
+      ...fs.deps,
+      isAlive: (pid) => pid !== 1999,
+      commandOf,
+    });
+    assert.strictEqual(claim.acquired, true);
   });
 
   it('takes over a stale pidfile and reports the record it replaced', () => {
@@ -525,7 +567,7 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
       for (const adopt of [undefined, 701]) {
         const fs = memoryFs({ [path]: JSON.stringify(cli) });
         const claim = claimDevPidfile(path, self, { ...fs.deps, ...live }, adopt);
-        assert.deepStrictEqual(claim, { acquired: false, reason: 'a dev server is already starting on :3000 (pid 700)' });
+        assert.deepStrictEqual(claim, { acquired: false, reason: 'a dev server is already starting on :3000 (pid 700)', port: 3000 });
         assert.strictEqual(fs.files.get(path), JSON.stringify(cli));
       }
     });

@@ -136,4 +136,17 @@ process.on('exit', () => console.log('exit'));`);
 		assert.strictEqual(result.status, 0, result.stderr);
 		assert.deepStrictEqual(result.stdout.trim().split('\n'), ['closed b', 'exit']);
 	});
+
+	it('registers the close where the dev server finds it, and runs it once whoever runs it first', () => {
+		// The dev server ends with process.exit(), which skips beforeExit: it runs the shared closers itself.
+		const result = run(`closeOnProcessExit(async () => { console.log('closed'); });
+const closers = globalThis[Symbol.for('aws-blocks.local-engine-closers')];
+console.log('registered ' + closers.size);
+const pending = [...closers];
+closers.clear();
+await Promise.all(pending.map((close) => close()));
+process.on('exit', () => console.log('exit'));`);
+		assert.strictEqual(result.status, 0, result.stderr);
+		assert.deepStrictEqual(result.stdout.trim().split('\n'), ['registered 1', 'closed', 'exit']);
+	});
 });

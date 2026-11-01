@@ -127,7 +127,17 @@ export const pgliteUnrefTimersExtension: PgliteExtensionLike = {
 	},
 };
 
-const pendingClosers = new Set<() => Promise<void>>();
+/**
+ * The pending closers of every local engine in the process, under a
+ * `Symbol.for` key so that every copy of this module (two installed versions
+ * included) shares one set, and so that the dev server, which does not depend
+ * on this package, can run them itself before it calls `process.exit()`, which
+ * skips `beforeExit` (see `closeLocalEngines` in `@aws-blocks/core`).
+ */
+const LOCAL_ENGINE_CLOSERS = Symbol.for('aws-blocks.local-engine-closers');
+const globalScope = globalThis as Record<symbol, unknown>;
+globalScope[LOCAL_ENGINE_CLOSERS] ??= new Set<() => Promise<void>>();
+const pendingClosers = globalScope[LOCAL_ENGINE_CLOSERS] as Set<() => Promise<void>>;
 let listening = false;
 
 function closePendingOnBeforeExit(): void {
@@ -150,9 +160,9 @@ function closePendingOnBeforeExit(): void {
  * down mid-flight. Runs at most once per registration; returns a function
  * that cancels it (call it when the engine is closed explicitly).
  *
- * `beforeExit` is not emitted for `process.exit()` or a fatal signal, so a dev
- * server stopped with Ctrl-C still leaves `postmaster.pid` behind; the engines
- * remove a stale one on the next start, as before.
+ * `beforeExit` is not emitted for `process.exit()` or a fatal signal. The dev
+ * server runs the pending closers itself before it exits on a stop (Ctrl-C,
+ * `blocks dev stop`), so only a crash or a SIGKILL leaves `postmaster.pid` behind.
  *
  * @internal
  */
