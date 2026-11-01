@@ -325,6 +325,20 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it("every template's cdk watch ignores the generated aws-blocks/client.js", () => {
+    // blocks deploy regenerates it; a running blocks sandbox then started a watch synth, and the deploy failed
+    // on CDK's cdk.out lock (JW-02). The deployed backend does not use the browser client.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const cdkJson = join(templatesDir, entry.name, 'cdk.json');
+      if (!entry.isDirectory() || !existsSync(cdkJson)) continue;
+      const exclude: string[] = JSON.parse(readFileSync(cdkJson, 'utf-8')).watch?.exclude ?? [];
+      if (!exclude.includes('aws-blocks/client.js')) problems.push(`${entry.name}: watch.exclude lacks aws-blocks/client.js`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('every template e2e suite can run again and again against one running dev server', () => {
     // AGENTS.md's iteration loop reruns `npm run test:e2e` against a running server. The
     // realtime client keeps its socket to that server open, so the run must exit when the
