@@ -43,6 +43,7 @@ function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
     listPids: () => [],
     killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); },
     waitFree: async () => {},
+    waitExit: async () => true,
     ...overrides,
   };
   return { deps, sigs, removed };
@@ -251,5 +252,62 @@ describe('runStopCli', () => {
     assert.equal(parsePortArg(['--foo']), null);
     assert.equal(parsePortArg(['--port', 'abc']), null);
     assert.equal(parsePortArg(['--port', '0']), null);
+  });
+});
+
+describe('stopDevServer — a blocks dev CLI whose dev server is still starting', () => {
+  const CLI = 'node /app/node_modules/@aws-blocks/blocks/dist/cli/bin.js dev';
+  const starting = JSON.stringify({ pid: 700, ppid: 600, port: 3000, command: CLI, parentCommand: 'bash', starting: true });
+
+  it('SIGTERMs the CLI alone, never its caller, waits for it, and removes the pidfile it left', async () => {
+    let pidfile: string | null = starting;
+    const waited: number[] = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      removePidfile: (p) => { removed.push(p); pidfile = null; },
+      isAlive: (pid) => pid === 700 || pid === 600,
+      commandOf: (pid) => (pid === 700 ? CLI : 'bash'),
+      waitExit: async (pid) => { waited.push(pid); return true; },
+    });
+    // The CLI's exit leaves the record of the dev server that took it over, and ended.
+    deps.signal = (pid, signal) => {
+      sigs.push({ pid, signal, via: 'signal' });
+      pidfile = JSON.stringify({ pid: 702, ppid: 701, port: 3000, command: 'node dev-server.js', parentCommand: 'tsx watch' });
+      deps.isAlive = () => false;
+    };
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 700, signal: 'SIGTERM', via: 'signal' }]);
+    assert.deepEqual(waited, [700]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.stopped, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /Stopped the dev server on :3000 \(pid 700\)/);
+  });
+
+  it('keeps the record of a live session that took the pidfile over meanwhile', async () => {
+    const live = JSON.stringify({ pid: 900, ppid: 901, port: 3000, command: 'node dev-server.js', parentCommand: 'tsx watch x' });
+    let pidfile = starting;
+    const { deps, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      isAlive: () => true,
+      commandOf: (pid) => ({ 700: CLI, 900: 'node dev-server.js', 901: 'tsx watch x' })[pid] ?? 'bash',
+      signal: () => { pidfile = live; },
+    });
+    assert.equal((await stopDevServer(3000, deps)).via, 'cli');
+    assert.deepEqual(removed, []);
+  });
+
+  it('treats the record of a CLI that has exited as stale', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => starting,
+      // Its caller, the shell, is still alive, and is never signalled.
+      isAlive: (pid) => pid === 600,
+      commandOf: () => 'bash',
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
   });
 });

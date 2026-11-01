@@ -416,12 +416,43 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.strictEqual(claim.acquired, false);
     assert.strictEqual(fs.files.get(path), other);
   });
+
+  describe('the starting record of a blocks dev CLI', () => {
+    // The CLI (pid 700, run from a shell, pid 600) claimed the port before it started tsx watch.
+    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node blocks dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
+    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node blocks dev' : 'bash') };
+
+    it('is replaced in place by the dev server that CLI started, which keeps its leftover frontend group', () => {
+      const fs = memoryFs({ [path]: JSON.stringify(cli) });
+      const claim = claimDevPidfile(path, self, { ...fs.deps, ...live }, 700);
+      assert.deepStrictEqual(claim, { acquired: true, previous: cli });
+      assert.deepStrictEqual(parsePidRecord(fs.files.get(path) ?? ''), self);
+      assert.strictEqual(fs.files.size, 1);
+    });
+
+    it('makes any other start bow out while the CLI lives, saying the session is starting', () => {
+      for (const adopt of [undefined, 701]) {
+        const fs = memoryFs({ [path]: JSON.stringify(cli) });
+        const claim = claimDevPidfile(path, self, { ...fs.deps, ...live }, adopt);
+        assert.deepStrictEqual(claim, { acquired: false, reason: 'a dev server is already starting on :3000 (pid 700)' });
+        assert.strictEqual(fs.files.get(path), JSON.stringify(cli));
+      }
+    });
+
+    it('is stale once the CLI has exited, though its caller lives on', () => {
+      const fs = memoryFs({ [path]: JSON.stringify(cli) });
+      const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 600, commandOf: () => 'bash' });
+      assert.deepStrictEqual(claim, { acquired: true, previous: cli });
+    });
+  });
 });
 
 // ── parsePidRecord ──────────────────────────────────────────────────────────
 describe('parsePidRecord — tolerant pidfile parsing', () => {
   it('parses a well-formed record', () => {
     assert.deepStrictEqual(parsePidRecord('{"pid":12,"ppid":3,"port":3000}'), { pid: 12, ppid: 3, port: 3000 });
+    assert.deepStrictEqual(parsePidRecord('{"pid":12,"ppid":3,"port":3000,"starting":true}'), { pid: 12, ppid: 3, port: 3000, starting: true });
+    assert.deepStrictEqual(parsePidRecord('{"pid":12,"ppid":3,"port":3000,"starting":1}'), { pid: 12, ppid: 3, port: 3000 });
   });
 
   it('returns null for empty / corrupt JSON', () => {
