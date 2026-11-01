@@ -18,7 +18,7 @@ import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
 import { BACKEND_OUTPUT_KEY, outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
-import { SANDBOX_SESSION_ENV } from './dev-pidfile.js';
+import { liveSandboxSession, SANDBOX_SESSION_ENV } from './dev-pidfile.js';
 import { terminateProcessTree, type AwaitableChild } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
@@ -265,6 +265,9 @@ export function buildSandboxWatchArgs({ outDir, projectRoot }: SandboxDeployArgs
   return [
     "cdk", "watch",
     "--hotswap-fallback",
+    // Its own assembly directory, as the sandbox deploy has: in the default
+    // `./cdk.out`, a `blocks deploy` of the app beside it failed on CDK's lock.
+    "--output", `${outDir}/cdk.out`,
     "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
@@ -281,6 +284,23 @@ export function buildSandboxWatchArgs({ outDir, projectRoot }: SandboxDeployArgs
  */
 export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pick<SandboxOptions, "deployOnly" | "preview">): boolean {
   return deployOnly || preview;
+}
+
+/**
+ * Refuse a sandbox deploy or destroy while a `blocks sandbox` session of the
+ * app at `projectRoot` runs (see {@link liveSandboxSession}): its `cdk watch`
+ * deploys every change to the same stack and uses the same cloud assembly
+ * directory, so both would fail on CDK's lock or race on the stack.
+ * `invocation` is the command to re-run.
+ */
+export function assertNoRunningSandbox(projectRoot: string, invocation: string): void {
+  const running = liveSandboxSession(projectRoot);
+  if (!running) return;
+  throw new Error(
+    `A \`blocks sandbox\` is running in this app (pid ${running.pid}, dev server on :${running.port}), and its cdk watch ` +
+      `deploys every change to the sandbox. Stop it first, with Ctrl-C in its terminal or ` +
+      `\`npx --no -- blocks dev stop --port ${running.port}\`, then re-run \`${invocation}\`.`,
+  );
 }
 
 /**
@@ -592,6 +612,8 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   const sandboxStartTime = Date.now();
   // A closed output pipe or terminal must not crash the runner (see ignoreClosedOutput).
   ignoreClosedOutput();
+  // Before anything reaches AWS: a running `blocks sandbox` already deploys every change.
+  assertNoRunningSandbox(process.cwd(), invocation);
 
   // Load .env.local so CDK can read secret ARNs and other config.
   try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -1632,6 +1654,8 @@ export async function runSandboxDestroy(
   invocation = 'npm run sandbox:destroy',
 ) {
   log.progress("🗑️  Destroying sandbox...");
+  // Its `cdk watch` would redeploy what this deletes, and shares the cloud assembly directory.
+  assertNoRunningSandbox(process.cwd(), invocation);
 
   // Load .env.local first, as the sandbox deploy does: an AWS_PROFILE or
   // AWS_REGION set there selects the target, so the pre-check below must see it.

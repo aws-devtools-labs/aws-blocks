@@ -487,6 +487,32 @@ export function devPidfilePath(port: number): string {
   return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
 }
 
+/** A running `blocks sandbox` session of an app: its process, and the port of its dev server. */
+export interface SandboxSession {
+  pid: number;
+  port: number;
+}
+
+/**
+ * The `blocks sandbox` session running in the app at `root`, if any: a live
+ * dev-server record (see {@link recordLiveness}) whose `sandbox` process is
+ * alive too. Its `cdk watch` deploys every change and writes the app's
+ * `.blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
+ * must not run beside it.
+ */
+export function liveSandboxSession(root: string, deps: Partial<ClaimPidfileDeps> = {}): SandboxSession | null {
+  const d = { ...defaultClaimDeps(), ...deps };
+  // Port 0 never has a pidfile: its peers are every dev-server pidfile of the app.
+  for (const file of d.peers(join(root, devPidfilePath(0)))) {
+    const text = d.read(file);
+    const record = text === null ? null : parsePidRecord(text);
+    if (!record?.sandbox || !d.isAlive(record.sandbox.pid)) continue;
+    const live = recordLiveness(record, d.isAlive, d.commandOf);
+    if (live.pidAlive || live.watcherAlive) return { pid: record.sandbox.pid, port: record.port };
+  }
+  return null;
+}
+
 /**
  * Remove the pidfile at `path` if it still holds `owner`'s record, under that
  * record's reap file (see the protocol above), so a successor that is taking
