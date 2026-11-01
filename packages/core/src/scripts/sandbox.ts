@@ -5,7 +5,7 @@ import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
-import { assertAwsCredentials } from './preflight-credentials.js';
+import { assertAwsCredentials, type AssertAwsCredentialsOptions } from './preflight-credentials.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
@@ -1001,6 +1001,35 @@ function isThrottlingError(error: unknown): boolean {
 	);
 }
 
+/**
+ * CDK and AWS SDK failures that no retry can fix, each with the reason
+ * {@link deterministicDestroyFailure} reports. Matched on fixed error codes and
+ * message text, never on resource names.
+ */
+const DETERMINISTIC_DESTROY_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
+	[/\bUnresolvedAccount\b|Unable to resolve AWS account to use/, 'CDK could not resolve the AWS account (UnresolvedAccount); the credentials are missing or expired'],
+	[/\bRegion is missing\b/, 'no AWS Region is set'],
+	[/Need to perform AWS calls for account \S+, but no credentials have been configured/, 'no AWS credentials are configured'],
+	[/Could not load credentials from any providers/, 'no AWS credentials are configured'],
+	[/\bExpiredToken(?:Exception)?\b|The security token included in the request is expired/, 'the AWS credentials have expired'],
+	[/\bInvalidClientTokenId\b|\bUnrecognizedClientException\b|The security token included in the request is invalid/, 'AWS rejected the credentials'],
+];
+
+/**
+ * Why a failed `cdk destroy` attempt can never succeed on a retry, from the
+ * output it printed (`lines`), or undefined when a retry might help: the
+ * credentials or the Region are missing or rejected, which a backoff only
+ * repeats (three `UnresolvedAccount` attempts took about 3.5 minutes).
+ */
+export function deterministicDestroyFailure(lines: readonly string[]): string | undefined {
+	for (const line of lines) {
+		for (const [pattern, reason] of DETERMINISTIC_DESTROY_FAILURES) {
+			if (pattern.test(line)) return reason;
+		}
+	}
+	return undefined;
+}
+
 /** Clock skew allowed between this machine and CloudFormation event timestamps. */
 const EVENT_CLOCK_SKEW_MS = 60_000;
 /** DescribeStackEvents pages read per stack before giving up on finding this attempt's start. */
@@ -1226,6 +1255,13 @@ export interface DestroyRetryDeps {
 	edgeReplicaBlocked?: (stacks: AssemblyStack[], attemptStartedAt: number) => Promise<string[]>;
 	/** The command that re-runs this destroy, for the Lambda@Edge hint. Default: 'npm run sandbox:destroy'. */
 	rerunCommand?: string;
+	/**
+	 * Why the failed attempt can never succeed on a retry (a missing Region or
+	 * credentials; see {@link deterministicDestroyFailure}), or undefined when a
+	 * retry might help. When it returns a reason, the loop stops at once instead
+	 * of backing off. Default: every failure might be transient.
+	 */
+	deterministicFailure?: () => string | undefined;
 }
 
 /**
@@ -1236,9 +1272,11 @@ export interface DestroyRetryDeps {
  * we empty them out-of-band — and (2) VPC ENIs that take 60-120s to detach (the
  * backoff). Stack names are resolved once and reused (topology is stable across
  * attempts; an empty list, e.g. after a failed synth, is resolved again).
- * Deterministic auth/account failures never reach here: both callers
- * run an {@link assertAwsCredentials} pre-flight first, so this loop only ever
- * retries a transient teardown blocker. Factored out with injectable deps so
+ * Deterministic auth/account failures should never reach here: both callers
+ * run an {@link assertAwsCredentials} pre-flight first. When one still does
+ * (the pre-check could not reach AWS, or CDK resolves credentials differently),
+ * {@link DestroyRetryDeps.deterministicFailure} stops the loop at once, so it
+ * only ever retries a transient teardown blocker. Factored out with injectable deps so
  * this behavior is unit-testable.
  *
  * A failure that `isThrottled` attributes to an AWS API throttle (typically
@@ -1287,6 +1325,16 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			const previousFailureAt = lastFailureAt;
 			lastFailureAt = now();
 			firstFailureAt ??= lastFailureAt;
+			// Before listing stacks: `cdk ls` would only fail the same way.
+			const deterministic = deps.deterministicFailure?.();
+			if (deterministic) {
+				deps.printRetainedOutput?.();
+				console.error(
+					`\n❌ Destroy failed: ${deterministic}. Retrying can't fix that, so the destroy stops here. ` +
+						'Fix the AWS configuration, then run destroy again.',
+				);
+				throw error;
+			}
 			if (!stacks?.length) stacks = deps.listStacks();
 			const edgeBlocked = await edgeStacksBlocked(deps, stacks, attemptStartedAt);
 			if (edgeBlocked.length > 0) {
@@ -1382,31 +1430,62 @@ async function edgeStacksBlocked(deps: DestroyRetryDeps, stacks: AssemblyStack[]
 const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
 
 export async function destroySandbox(backendPath: string, options: { invocation?: string } = {}) {
-  const invocation = options.invocation ?? 'npm run sandbox:destroy';
   ignoreClosedOutput();
-  return trackCommand('sandbox:destroy', async () => {
-    log.progress("🗑️  Destroying sandbox...");
+  return trackCommand('sandbox:destroy', () =>
+    runSandboxDestroy(backendPath, SANDBOX_DESTROY_STEPS, options.invocation ?? 'npm run sandbox:destroy'));
+}
 
-    // Fail fast on a missing/expired credential BEFORE the retry loop: a
-    // credential error is deterministic and retrying only burns the backoff.
-    // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
-    // teardown blockers, not auth.
-    await assertAwsCredentials({ command: 'sandbox:destroy', invocation, projectRoot: process.cwd(), accountDetails: false });
+/** The steps of {@link runSandboxDestroy} that reach AWS; fakes in tests. */
+export interface SandboxDestroySteps {
+  checkCredentials: (options: AssertAwsCredentialsOptions) => Promise<void>;
+  retryClients: (projectRoot: string) => Promise<Required<EmptyBucketsClients>>;
+  destroy: (deps: DestroyRetryDeps) => Promise<void>;
+}
 
-    // Load .env.local so CDK synth can read project refs and other config.
-    try { loadEnvFile('.env.local'); } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-    }
+const SANDBOX_DESTROY_STEPS: SandboxDestroySteps = {
+  checkCredentials: assertAwsCredentials,
+  retryClients: destroyRetryClients,
+  destroy: runDestroyWithRetries,
+};
 
-    // The destroy synthesizes into this directory; the retry reads the stacks
-    // it selected from there. Cleared first so a failed synth can't leave an
-    // earlier run's stack list behind, and removed after a successful destroy.
-    rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
-    const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
-    const clients = await destroyRetryClients(process.cwd());
-    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients, invocation));
-    rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
+/**
+ * The body of {@link destroySandbox}, run in the project root. `invocation` is
+ * how the user ran it, for the messages that say to run it again.
+ */
+export async function runSandboxDestroy(
+  backendPath: string,
+  steps: SandboxDestroySteps = SANDBOX_DESTROY_STEPS,
+  invocation = 'npm run sandbox:destroy',
+) {
+  log.progress("🗑️  Destroying sandbox...");
+
+  // Load .env.local first, as the sandbox deploy does: an AWS_PROFILE or
+  // AWS_REGION set there selects the target, so the pre-check below must see it.
+  // CDK synth also reads project refs and other config from it.
+  try { loadEnvFile('.env.local'); } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
+
+  // Fail fast on a missing/expired credential or a missing Region BEFORE the
+  // retry loop: both are deterministic and retrying only burns the backoff.
+  // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
+  // teardown blockers, not auth.
+  await steps.checkCredentials({
+    command: 'sandbox:destroy',
+    invocation,
+    projectRoot: process.cwd(),
+    accountDetails: false,
+    requireRegion: true,
   });
+
+  // The destroy synthesizes into this directory; the retry reads the stacks
+  // it selected from there. Cleared first so a failed synth can't leave an
+  // earlier run's stack list behind, and removed after a successful destroy.
+  rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
+  const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
+  const clients = await steps.retryClients(process.cwd());
+  await steps.destroy(sandboxDestroyDeps(backendPath, cdkEnv, clients, invocation));
+  rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
 }
 
 /**
@@ -1453,6 +1532,7 @@ export function sandboxDestroyDeps(
     isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),
     edgeReplicaBlocked: (stacks, since) => edgeStacksBlockedByReplicas(stacks, since, clients.cfnFor),
     rerunCommand,
+    deterministicFailure: () => deterministicDestroyFailure(cdkOutput.lastRunOutput()),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }

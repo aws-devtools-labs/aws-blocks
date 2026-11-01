@@ -66,7 +66,7 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
   const script = `const mod = await import(${JSON.stringify(moduleUrl)}); await ${call};`;
   execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     cwd: root,
-    // HOME without ~/.aws and no Region: the credential pre-check is skipped,
+    // HOME without ~/.aws and no Region; the callers fake the credential check,
     // so the child never reaches AWS. PATH holds only the fake binaries.
     env: { PATH: join(root, 'bin'), HOME: root, USERPROFILE: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -108,20 +108,6 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     // ... and the successful destroy removed what CDK wrote.
     assert.ok(!existsSync(assemblyDir), `expected ${assemblyDir} to be removed`);
   });
-
-  it('the production destroy loads .env.production, as the production deploy does', () => {
-    writeFileSync(join(root, '.env.production'), 'ZZ_MARK=from-env-production\n');
-    try {
-      const argv = recordDestroyArgv('./destroy.js', `mod.destroy({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: ${JSON.stringify(root)} })`);
-      assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
-      // A destroy doesn't deploy the frontend, so Hosting reuses an existing build.
-      assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
-      // cdk destroy synthesizes the app with the production environment.
-      assert.match(readFileSync(cdkLog, 'utf-8'), /^stage=production mark=from-env-production$/m);
-    } finally {
-      rmSync(join(root, '.env.production'), { force: true });
-    }
-  });
 });
 
 describe('the production destroy of a stack that does not exist', { skip }, () => {
@@ -154,7 +140,11 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
    * Run the production destroy in a child, with a CDK app that defines `stacks`;
    * the server must keep answering, so not execFileSync.
    */
-  async function runDestroy(stackName: string, stacks = stackName): Promise<{ failed: boolean; output: string; cdkRan: boolean }> {
+  async function runDestroy(
+    stackName: string,
+    stacks = stackName,
+    env: NodeJS.ProcessEnv = {},
+  ): Promise<{ failed: boolean; output: string; cdkRan: boolean }> {
     rmSync(argvLog, { force: true });
     const moduleUrl = new URL('./destroy.js', import.meta.url).href;
     const options = JSON.stringify({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: root, stackName });
@@ -171,6 +161,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
         AWS_ENDPOINT_URL_STS: endpoint,
         AWS_ENDPOINT_URL_CLOUDFORMATION: endpoint,
         ZZ_STACKS: stacks,
+        ...env,
       },
       timeout: 60_000,
     });
@@ -203,6 +194,21 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     // A construct id that differs from the stack name is listed as `id (name)`.
     const named = await runDestroy('live-prod', 'Edge\nApp (live-prod)');
     assert.strictEqual(named.cdkRan, true, named.output);
+  });
+
+  it('loads .env.production before the Region check, as the production deploy does', async () => {
+    writeFileSync(join(root, '.env.production'), 'AWS_REGION=us-east-1\nZZ_MARK=from-env-production\n');
+    try {
+      const live = await runDestroy('live-prod', 'live-prod', { AWS_REGION: undefined });
+      assert.strictEqual(live.failed, false, live.output);
+      const argv = readFileSync(argvLog, 'utf-8').split('\n').filter(Boolean);
+      // A destroy doesn't deploy the frontend, so Hosting reuses an existing build.
+      assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
+      // cdk destroy synthesizes the app with the production environment.
+      assert.match(readFileSync(cdkLog, 'utf-8'), /^stage=production mark=from-env-production$/m);
+    } finally {
+      rmSync(join(root, '.env.production'), { force: true });
+    }
   });
 
   it('reads only "does not exist" as a missing stack', async () => {

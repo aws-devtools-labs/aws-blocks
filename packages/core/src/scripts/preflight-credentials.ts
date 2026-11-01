@@ -158,6 +158,12 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	checkBootstrap?: boolean;
 	/** Reads the CDK bootstrap version parameter. Override in tests. */
 	readBootstrapVersion?: BootstrapVersionReader;
+	/**
+	 * Stop when no Region is set, instead of warning and skipping the probe.
+	 * Default `false`. The destroy commands turn it on: a destroy without a Region
+	 * can't find the stack it deletes, and its failure would only be retried.
+	 */
+	requireRegion?: boolean;
 }
 
 const BILLING_URL = 'https://settings.aws.com/billing';
@@ -252,8 +258,8 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  *
  * The check uses the Region and the profile from {@link resolveDeploymentTarget},
  * and the access keys from the environment when CDK deploys with them.
- * If no Region is set, the check shows a warning and does not send a request.
- * Network and service errors are not fatal; see the module doc. The AWS CLI
+ * If no Region is set, the check shows a warning and does not send a request;
+ * with `requireRegion`, it stops instead. Network and service errors are not fatal; see the module doc. The AWS CLI
  * version is checked only after a credential failure, so it never blocks valid
  * credentials.
  *
@@ -270,8 +276,8 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  * with the `cdk bootstrap` command for the account and Region.
  *
  * @throws {Error} With actionable guidance when the probe reports a credential error,
- * when `checkBootstrap` finds that CDK is not bootstrapped, or when the CDK
- * configuration cannot be read.
+ * when `requireRegion` is set and no Region is set, when `checkBootstrap` finds that
+ * CDK is not bootstrapped, or when the CDK configuration cannot be read.
  */
 export async function assertAwsCredentials({
 	command,
@@ -282,6 +288,7 @@ export async function assertAwsCredentials({
 	metadataTimeoutMs,
 	accountDetails = true,
 	checkBootstrap = false,
+	requireRegion = false,
 	readBootstrapVersion,
 	...options
 }: AssertAwsCredentialsOptions): Promise<void> {
@@ -292,18 +299,28 @@ export async function assertAwsCredentials({
 	const environmentKeys = profile ? undefined : environmentAccessKeys(env);
 	const target = await credentialsLabel(env, profile, environmentKeys);
 	if (!region) {
+		const loginAdvice = target.profile
+			? [
+					"   For `aws login`: before you run `aws login`, set the profile Region to your project's Region " +
+						`(listed at ${PROJECTS_URL}):`,
+					`     aws configure set region <region> --profile ${profileArg(target.profile)}`,
+					'   If you change the profile Region after you sign in, run `aws login` again.',
+				]
+			: [];
+		if (requireRegion) {
+			throw new Error(
+				[
+					`No AWS Region is set, so \`${invocation}\` can't find the stack to delete. ` +
+						`Set AWS_REGION, or set region in your AWS profile, to the Region you deployed to, then re-run \`${invocation}\`.`,
+					...loginAdvice,
+				].join('\n'),
+			);
+		}
 		log.warn(
 			[
 				`⚠️  Skipping the AWS credential pre-check for \`${invocation}\`: no Region is set. ` +
 					'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
-				...(target.profile
-					? [
-							"   For `aws login`: before you run `aws login`, set the profile Region to your project's Region " +
-								`(listed at ${PROJECTS_URL}):`,
-							`     aws configure set region <region> --profile ${profileArg(target.profile)}`,
-							'   If you change the profile Region after you sign in, run `aws login` again.',
-						]
-					: []),
+				...loginAdvice,
 			].join('\n'),
 		);
 		console.log(targetSummary(target, null, accountDetails ? NO_METADATA : null));
