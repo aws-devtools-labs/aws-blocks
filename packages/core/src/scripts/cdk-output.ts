@@ -298,6 +298,12 @@ export interface CdkOutput {
   run(command: string, args: string[], options?: CdkRunOptions): void | Promise<void>;
   /** Print the retained raw output to stderr (curated levels only; no-op when empty). */
   printRetained(): void;
+  /**
+   * The retained raw lines that the most recent {@link run} produced, oldest
+   * first, so a caller can classify a failure. Always [] when output is not
+   * curated: the child then writes straight to the terminal.
+   */
+  lastRunLines(): string[];
 }
 
 /** Build the {@link CdkOutput} for one operation at the current log level. */
@@ -343,12 +349,15 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
         },
       }
     : undefined;
+  // Where the most recent run's lines start, as a ring.total() count.
+  let runStart = 0;
 
   return {
     level,
     curated,
     streams,
     run(command: string, args: string[], runOptions: CdkRunOptions = {}): void | Promise<void> {
+      runStart = ring.total();
       if (!streams) {
         return runSync(command, args, { stdio: toStderr ? ['inherit', 2, 'inherit'] : 'inherit', ...runOptions });
       }
@@ -359,6 +368,11 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
       const dump = formatRetainedOutput(ring, options.label, level);
       if (dump) stderr.write(dump);
       ring.clear();
+      runStart = 0;
+    },
+    lastRunLines(): string[] {
+      const lines = ring.lines();
+      return lines.slice(Math.max(0, lines.length - (ring.total() - runStart)));
     },
   };
 }
