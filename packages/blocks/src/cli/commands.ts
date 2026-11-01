@@ -47,6 +47,7 @@ import {
 import {
 	DEV_FAILURE_FILE_ENV,
 	DEV_OPTIONS_ENV,
+	DEV_STATE,
 	type RunnerLaunch,
 	type RunnerName,
 	resolveTsxCli,
@@ -72,13 +73,40 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	env?: NodeJS.ProcessEnv;
 	where?: string[];
 	/**
-	 * The file a `tsx watch` runner writes the reason of a fatal startup failure
-	 * to, before it stops its `tsx watch` (`BLOCKS_DEV_FAILURE_FILE`). A reason
-	 * there fails the command (exit 1) with no `Error:` line: the runner printed
-	 * that reason itself. Without one, an exit 143 is a requested stop (`blocks
-	 * dev stop`, or a SIGTERM to a backend that crashed).
+	 * The file in which the dev server runner under `tsx watch` records its state
+	 * (`BLOCKS_DEV_FAILURE_FILE`, see `DEV_STATE`). A failure reason there fails
+	 * the command (exit 1) with no `Error:` line: the runner printed that reason
+	 * itself. Otherwise a stop that the CLI made, or an exit 143 of `tsx watch`
+	 * (`blocks dev stop` while the backend is not running), succeeds, and a
+	 * `tsx watch` that exits 0 by itself, with no runner that stopped cleanly
+	 * under it, fails: it does when its runner dies and it watches no file.
 	 */
 	failureFile?: string;
+}
+
+/**
+ * The exit code of `blocks dev`, from what its runner recorded in `failureFile`
+ * (see {@link ChildRun.failureFile}); `undefined` to map `result` as for any child.
+ */
+function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): number | undefined {
+	let state: string | undefined;
+	try {
+		state = readFileSync(failureFile, 'utf-8');
+	} catch {
+		// No runner started.
+	}
+	if (state?.trim() === '') state = undefined;
+	// The runner printed the reason and its hint; printing it again would only repeat it.
+	if (state !== undefined && state !== DEV_STATE.running && state !== DEV_STATE.stopped) return ExitCode.Failure;
+	if (result.interrupted) return undefined;
+	if (result.stopped || result.code === 128 + 15) return ExitCode.Ok;
+	if (result.code !== 0 || state === DEV_STATE.stopped) return undefined;
+	throw new CliError(
+		state === DEV_STATE.running
+			? 'blocks dev ended: its dev server was killed (by a signal, or out of memory); its output is above.'
+			: 'blocks dev ended: its dev server did not start; its output is above.',
+		{ where: run.where ?? [`project: ${run.cwd}`], runner: true },
+	);
 }
 
 /**
@@ -143,11 +171,10 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			},
 		);
 	}
-	// The runner printed the reason and its hint; printing it again would only repeat it.
-	if (run.failureFile && existsSync(run.failureFile) && readFileSync(run.failureFile, 'utf-8').trim()) {
-		return ExitCode.Failure;
+	if (run.failureFile) {
+		const code = devExitCode(run, run.failureFile, result);
+		if (code !== undefined) return code;
 	}
-	if (run.failureFile && result.code === 128 + 15 && !result.interrupted) return ExitCode.Ok;
 	// A child that is not long-running and exited 0 finished its work before the
 	// Ctrl-C reached it (`blocks db migrate` applied every migration): report that.
 	// A long-running child (`blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.

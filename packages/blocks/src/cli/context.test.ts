@@ -16,7 +16,7 @@ import { resolveDevConfig } from './config.js';
 import { createSpawnChild, findProjectRoot, isCi, logLevelFor, PromptInterrupted, promptLine } from './context.js';
 import { CliError } from './errors.js';
 import { parseArgv } from './parse.js';
-import { runnerArgs, shellQuote } from './runners/launch.js';
+import { DEV_FAILURE_FILE_ENV, DEV_OPTIONS_ENV, DEV_STATE, runnerArgs, runnerPath, shellQuote } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 describe('the confirmation prompt', () => {
@@ -478,7 +478,12 @@ setInterval(() => {}, 1000);
 			while (!existsSync(ready) || readFileSync(ready, 'utf-8') === '') await sleep(10);
 			process.kill(-(cli.pid ?? 0), 'SIGHUP');
 			assert.strictEqual((await exited)[0], 7, stderr);
-			assert.deepStrictEqual(JSON.parse(stdout), { code: 7, signal: null, interrupted: false });
+			assert.deepStrictEqual(JSON.parse(stdout), {
+				code: 7,
+				signal: null,
+				interrupted: false,
+				stopped: false,
+			});
 			assert.strictEqual(readFileSync(join(dir, 'done'), 'utf-8'), 'SIGHUP');
 		} finally {
 			try {
@@ -486,6 +491,111 @@ setInterval(() => {}, 1000);
 			} catch {
 				// The group has exited.
 			}
+		}
+	});
+
+	/** A backend-only app on a free port, for a real `blocks dev`; returns its root and port. */
+	async function devApp(): Promise<{ root: string; port: number }> {
+		const [port] = await freePorts(1);
+		const root = fixtureApp({ name: 'dev-app', blocks: { dev: { port, frontend: false } } });
+		return { root, port };
+	}
+
+	/** `promise`, or a rejection after `ms`, so that a process that hangs fails the test rather than outliving it. */
+	function within<T>(promise: Promise<T>, ms: number, what: () => string): Promise<T> {
+		let timer: NodeJS.Timeout | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error(`still running after ${ms} ms\n${what()}`)), ms);
+		});
+		return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+	}
+
+	/** Wait until `port` listens, failing after 30 s. */
+	async function listening(port: number, what: () => string): Promise<void> {
+		for (const deadline = Date.now() + 30_000; !(await isListening(port)); await sleep(100)) {
+			assert.ok(Date.now() < deadline, `nothing listens on :${port}\n${what()}`);
+		}
+	}
+
+	/** The pids whose parent is `pid`. */
+	function childrenOf(pid: number): number[] {
+		return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8' })
+			.split('\n')
+			.map((line) => line.trim().split(/\s+/).map(Number))
+			.filter(([, parent]) => parent === pid)
+			.map(([child]) => child);
+	}
+
+	/** Start `blocks dev` in `root` in a process group of its own. */
+	function startCli(root: string) {
+		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
+		const cli = spawn(process.execPath, [bin, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+		let output = '';
+		cli.stdout.on('data', (chunk) => (output += chunk));
+		cli.stderr.on('data', (chunk) => (output += chunk));
+		const exited = once(cli, 'close') as Promise<[number | null, NodeJS.Signals | null]>;
+		const kill = () => {
+			if (isGroupRunning(cli.pid ?? 0)) process.kill(-(cli.pid ?? 0), 'SIGKILL');
+		};
+		return { cli, exited, output: () => output, kill };
+	}
+
+	it('exits 1 when its dev server fails to start, rather than waiting for a file change or exiting 0', {
+		timeout: 60_000,
+	}, async () => {
+		const { root } = await devApp();
+		// Core fails before it loads the backend: tsx watch has no app file to wait on.
+		mkdirSync(join(root, '.env.local'));
+		const dev = startCli(root);
+		try {
+			const [code] = await within(dev.exited, 20_000, dev.output);
+			assert.strictEqual(code, 1, dev.output());
+			assert.match(dev.output(), /❌ .*\.env\.local/);
+			// The runner printed the reason; the CLI does not repeat it.
+			assert.doesNotMatch(dev.output(), /Error:/);
+			assert.strictEqual(isGroupRunning(dev.cli.pid ?? 0), false, dev.output());
+		} finally {
+			dev.kill();
+		}
+	});
+
+	it('records how its dev server runner ended, for blocks dev', { timeout: 60_000 }, async () => {
+		const { root, port } = await devApp();
+		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-state-')), 'failure');
+		const run = () => {
+			const watcher = spawn(process.execPath, runnerArgs(root, runnerPath('dev-server'), { watch: true }), {
+				cwd: root,
+				detached: true,
+				stdio: 'ignore',
+				env: {
+					...process.env,
+					[DEV_OPTIONS_ENV]: JSON.stringify({ backendPath: join(root, 'aws-blocks', 'index.ts'), port }),
+					[DEV_FAILURE_FILE_ENV]: file,
+				},
+			});
+			return { watcher, exited: once(watcher, 'close') };
+		};
+		const first = run();
+		try {
+			await listening(port, () => '');
+			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
+			// `blocks dev stop`: a SIGTERM to tsx watch, which relays it.
+			process.kill(first.watcher.pid ?? 0, 'SIGTERM');
+			await within(first.exited, 10_000, () => 'tsx watch');
+			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.stopped);
+		} finally {
+			if (isGroupRunning(first.watcher.pid ?? 0)) process.kill(-(first.watcher.pid ?? 0), 'SIGKILL');
+		}
+		const second = run();
+		try {
+			await listening(port, () => '');
+			const [runner] = childrenOf(second.watcher.pid ?? 0);
+			process.kill(runner, 'SIGKILL');
+			while (isGroupRunning(runner)) await sleep(25);
+			// Nothing ran in the runner: `blocks dev` reads `running` as a runner that a signal killed.
+			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
+		} finally {
+			if (isGroupRunning(second.watcher.pid ?? 0)) process.kill(-(second.watcher.pid ?? 0), 'SIGKILL');
 		}
 	});
 });

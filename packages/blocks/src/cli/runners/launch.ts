@@ -29,8 +29,20 @@ import { CliError } from '../errors.js';
 /** The environment variable that carries the dev server runner's options. */
 export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
 
-/** The environment variable naming the file core's dev server writes a fatal startup failure to (`blocks dev`). */
+/**
+ * The environment variable naming the file in which `blocks dev` learns how its dev server ended.
+ * The dev server runner writes {@link DEV_STATE}`.running` when it starts and
+ * {@link DEV_STATE}`.stopped` when it exits after a start or a reload; a fatal startup
+ * failure writes its reason instead (the runner's `exitWithError`, core's dev server).
+ * Absent until the first runner starts.
+ */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
+
+/**
+ * The states in {@link DEV_FAILURE_FILE_ENV}'s file that are not a failure reason. `running`
+ * left behind means that the runner died without running any code: a signal, or out of memory.
+ */
+export const DEV_STATE = { running: '[blocks dev: running]', stopped: '[blocks dev: stopped]' } as const;
 
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';

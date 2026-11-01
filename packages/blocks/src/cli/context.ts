@@ -59,6 +59,8 @@ export interface ChildResult {
 	signal: NodeJS.Signals | null;
 	/** The CLI received SIGINT while the child ran. */
 	interrupted: boolean;
+	/** The CLI stopped a long-running child on a SIGTERM or SIGHUP: the stop was requested. */
+	stopped?: boolean;
 }
 
 /** Run a child process to completion. */
@@ -404,7 +406,7 @@ export function createSpawnChild(options: SpawnChildOptions = {}): SpawnFn {
 			});
 			child.on('exit', (code, signal) => {
 				cleanup();
-				resolvePromise({ code, signal, interrupted });
+				resolvePromise({ code, signal, interrupted, stopped: stopping });
 			});
 		});
 }

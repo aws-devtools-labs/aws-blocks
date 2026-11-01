@@ -12,9 +12,9 @@ import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
-import { type SpawnSpec, stageEnv } from './context.js';
+import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
-import { DEV_OPTIONS_ENV, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
+import { DEV_OPTIONS_ENV, DEV_STATE, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 const IDENTITY: AwsIdentity = {
@@ -764,6 +764,36 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(stopped.stderr, '');
 		// Other commands keep mapping 143 to a failure.
 		assert.strictEqual((await runCli(['vendorize', 'x'], { cwd, onSpawn: () => ({ code: 143 }) })).code, 1);
+	});
+
+	it('fails blocks dev when tsx watch exits by itself after its runner died, unless the runner stopped cleanly', async () => {
+		const cwd = fixtureApp();
+		const dev = (state: string | null, result: Partial<ChildResult>) =>
+			runCli(['dev'], {
+				cwd,
+				onSpawn: (spec) => {
+					const file = String(spec.env.BLOCKS_DEV_FAILURE_FILE);
+					if (state === null) rmSync(file);
+					else writeFileSync(file, state);
+					return result;
+				},
+			});
+		// `tsx watch` ignores node_modules: with the runner there, it exits 0 once the runner has gone.
+		const killed = await dev(DEV_STATE.running, { code: 0 });
+		assert.strictEqual(killed.code, 1);
+		assert.match(killed.stderr, /^Error: blocks dev ended: its dev server was killed \(by a signal, or out of memory\)/);
+		const neverStarted = await dev(null, { code: 0 });
+		assert.strictEqual(neverStarted.code, 1);
+		assert.match(neverStarted.stderr, /^Error: blocks dev ended: its dev server did not start; its output is above\./);
+		// `blocks dev stop`: tsx watch relays its SIGTERM, the runner stops cleanly, and tsx exits with its code.
+		assert.strictEqual((await dev(DEV_STATE.stopped, { code: 0 })).code, 0);
+		// A stop that the CLI made (a SIGTERM to it), even of a runner that a signal killed, and Ctrl-C.
+		assert.strictEqual((await dev(DEV_STATE.running, { code: null, signal: 'SIGKILL', stopped: true })).code, 0);
+		assert.strictEqual((await dev(DEV_STATE.running, { code: 0, interrupted: true })).code, 130);
+		// A runner killed under a watcher that another process killed is a failure.
+		const sigkill = await dev(DEV_STATE.running, { code: null, signal: 'SIGKILL' });
+		assert.strictEqual(sigkill.code, 1);
+		assert.match(sigkill.stderr, /^Error: blocks dev failed \(signal SIGKILL\)\./);
 	});
 
 	it('runs only the watch runners, dev and sandbox, as long-running children', async () => {
@@ -1744,7 +1774,7 @@ describe('JSON output', () => {
 		].join('\n');
 		const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf-8' });
 		assert.strictEqual(result.status, 0, result.stderr);
-		assert.deepStrictEqual(JSON.parse(result.stdout), { code: 0, signal: null, interrupted: false });
+		assert.deepStrictEqual(JSON.parse(result.stdout), { code: 0, signal: null, interrupted: false, stopped: false });
 		assert.match(result.stderr, /child says hi/);
 	});
 });

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import * as realCore from '@aws-blocks/core/scripts';
 import { type ChildResult, type CliDeps, type CoreScripts, PromptInterrupted, type SpawnSpec } from './context.js';
 import { main } from './main.js';
+import { DEV_FAILURE_FILE_ENV, DEV_STATE } from './runners/launch.js';
 
 export interface FakeRun {
 	code: number;
@@ -29,7 +30,10 @@ export interface FakeOptions {
 	stdinIsTTY?: boolean;
 	/** The prompt's answer; `null` interrupts the prompt, as Ctrl-C does. */
 	answer?: string | null;
-	/** Called for each child; return its result. Default: exit 0. */
+	/**
+	 * Called for each child; return its result. Default: exit 0. A dev server runner
+	 * has recorded a clean stop (`DEV_STATE.stopped`) in its failure file beforehand.
+	 */
 	onSpawn?: (spec: SpawnSpec) => Partial<ChildResult> | undefined;
 	core?: Partial<CoreScripts>;
 }
@@ -75,6 +79,8 @@ export async function runCli(argv: string[], options: FakeOptions): Promise<Fake
 		},
 		spawn: async (spec) => {
 			run.spawned.push(spec);
+			const failureFile = spec.env[DEV_FAILURE_FILE_ENV];
+			if (failureFile) writeFileSync(failureFile, DEV_STATE.stopped);
 			return { code: 0, signal: null, interrupted: false, ...options.onSpawn?.(spec) };
 		},
 		chdir: (dir) => run.chdirs.push(dir),
