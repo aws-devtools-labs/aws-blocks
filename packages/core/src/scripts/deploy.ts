@@ -17,7 +17,7 @@ import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/fra
 import { createCdkOutput } from './cdk-output.js';
 import { BACKEND_OUTPUT_KEY, OUTPUTS_FILE } from './deploy-outputs.js';
 import { ignoreClosedOutput, log } from './log.js';
-import { writeDeployedConfig } from './deployed-config.js';
+import { migrateLegacyDeployedConfig, writeDeployedConfig } from './deployed-config.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -251,6 +251,7 @@ export async function deploy(options: DeployOptions) {
 async function runDeploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     log.progress('🏗️  Preparing deployment...');
+    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
 
     // Resolve the liveness-wait config: an explicit option wins, else read the
     // flags from argv so the thin template wrapper needs no arg plumbing. Only

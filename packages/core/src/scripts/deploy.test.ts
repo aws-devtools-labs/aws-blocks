@@ -229,7 +229,7 @@ describe('deploy — onDeployed', () => {
   const scripts = new URL('./', import.meta.url).href;
   const fixture = `
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { mock } from 'node:test';
 
@@ -276,8 +276,10 @@ await replace(moduleUrl('wait-live'), {
 const { deploy } = await import(moduleUrl('deploy'));
 // The running dev server's config, which the Node client and the e2e tests read.
 const local = { apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' };
+// LEGACY: the config.json a sandbox deploy from before core 0.8 wrote, with the sandbox's AWS URL.
+const legacy = { apiUrl: 'https://stub.example/prod/aws-blocks/api', environment: 'sandbox' };
 mkdirSync('.blocks-sandbox', { recursive: true });
-writeFileSync('.blocks-sandbox/config.json', JSON.stringify(local));
+writeFileSync('.blocks-sandbox/config.json', JSON.stringify(process.env.LEGACY ? legacy : local));
 await deploy({
   cdkAppPath: 'unused',
   projectRoot: process.cwd(),
@@ -289,20 +291,28 @@ assert.deepEqual(events, [
   { stack: 'demo-prod', apiUrl: prod.ApiUrl, hostingUrl: prod.HostingHostingUrl1A2B3C4D },
   'wait',
 ]);
-assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8')), local);
+if (process.env.LEGACY) {
+  assert.ok(!existsSync('.blocks-sandbox/config.json'), 'the legacy config.json is gone');
+  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.sandbox.json', 'utf-8')), legacy);
+} else {
+  assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8')), local);
+}
 assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.production.json', 'utf-8')), {
   apiUrl: prod.ApiUrl,
   environment: 'production',
 });
 `;
 
-  it('reports the stack outputs it read before the liveness wait, which a second production deploy can overwrite', () => {
+  for (const legacy of [false, true]) {
+  it(legacy
+    ? 'moves a config.json an older sandbox deploy wrote into config.sandbox.json, and removes it'
+    : 'reports the stack outputs it read before the liveness wait, which a second production deploy can overwrite', () => {
     // It also records its API URL in config.production.json, and leaves the dev server's config.json alone.
     const dir = mkdtempSync(join(tmpdir(), 'blocks-on-deployed-'));
     try {
       execFileSync(process.execPath, ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture], {
         cwd: dir,
-        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+        env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...(legacy ? { LEGACY: '1' } : {}) },
         encoding: 'utf8',
         stdio: 'pipe',
         timeout: 15_000,
@@ -311,4 +321,5 @@ assert.deepEqual(JSON.parse(readFileSync('.blocks-sandbox/config.production.json
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  }
 });

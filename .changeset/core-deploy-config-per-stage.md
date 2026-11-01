@@ -13,5 +13,6 @@ Every deploy rewrote `.blocks-sandbox/config.json` with its AWS `apiUrl`. The No
 - The template e2e tests set `BLOCKS_API_URL` to the dev server on `blocks.dev.port` before they load the client. Set `TEST_URL` to the URL a deployed app's API is under to run them against it; they then start no dev server.
 - `blocks generate spec` takes the spec's `servers` entry from the dev server's `config.json`, or from `config.<stage>.json` when `BLOCKS_SPEC_STAGE` is `sandbox` or `production`.
 - `blocks destroy` and `blocks sandbox destroy` also remove the destroyed stage's `config.<stage>.json`.
+- An app deployed before this release still has the deploy's AWS URL in `config.json`. The Node.js client refuses such a file (`environment` `production`, or `sandbox` with an `https:` URL, which no dev server writes) with an error that says to start the dev server or set `BLOCKS_API_URL`, instead of calling the deployed stack. `blocks dev` rewrites the file, and `deploy`, `sandbox deploy` and both destroys first move it to `config.<stage>.json`.
 
 Scripts that read a deployed URL from `config.json` after a deploy should read `config.sandbox.json` or `config.production.json`, or `blocks sandbox deploy --query apiUrl`.
