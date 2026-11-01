@@ -939,6 +939,30 @@ export async function startDevServer(options: DevServerOptions) {
     failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(claim.port)}\`.`);
     return;
   }
+  // `tsx watch` restarts us on a file change with a SIGTERM (and relays a
+  // SIGTERM stop the same way). The session goes on across a restart, so the
+  // pidfile stays: a `dev stop` run before the successor has booted must still
+  // find it. The successor takes it over (see evaluateSingleton), and `dev stop`
+  // removes it once the port is free. Every other signal ends the session.
+  // A SIGTERM that was a stop looks the same to us (the `blocks` CLI SIGTERMs
+  // this process, then its `tsx watch`), so a handoff watch removes the kept
+  // pidfile once `tsx watch` exits without a successor (see watchPidfileHandoff).
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const underTsxWatch = isTsxWatcher(pidCommand(process.ppid));
+  // Until the cleanup below is installed, once the server listens, a stop
+  // still ends the session cleanly: it releases the record we now hold (or
+  // hands it to a reload's successor), and closes any database the backend
+  // opened. Without this, a group SIGTERM while the backend loaded killed us
+  // by the default disposition and left a stale pidfile (JA-6).
+  let stoppingAtStartup = false;
+  const startupStop = (signal: NodeJS.Signals): void => {
+    if (stoppingAtStartup) return;
+    stoppingAtStartup = true;
+    if (signal === 'SIGTERM' && underTsxWatch) watchPidfileHandoff(pidfilePath);
+    else removeOwnPidfile();
+    void closeLocalEngines().finally(() => process.exit(0));
+  };
+  for (const sig of signals) process.on(sig, startupStop);
   // The only processes this start may stop to free a port: those in the
   // frontend group that the record it took over (a crashed predecessor, or its
   // own `tsx watch` predecessor) wrote down.
@@ -1436,16 +1460,7 @@ export async function startDevServer(options: DevServerOptions) {
   server.listen(port, host, onListening);
 
   // ── Cleanup ────────────────────────────────────────────────────────────
-  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  // `tsx watch` restarts us on a file change with a SIGTERM (and relays a
-  // SIGTERM stop the same way). The session goes on across a restart, so the
-  // pidfile stays: a `dev stop` run before the successor has booted must still
-  // find it. The successor takes it over (see evaluateSingleton), and `dev stop`
-  // removes it once the port is free. Every other signal ends the session.
-  // A SIGTERM that was a stop looks the same to us (the `blocks` CLI SIGTERMs
-  // this process, then its `tsx watch`), so a handoff watch removes the kept
-  // pidfile once `tsx watch` exits without a successor (see watchPidfileHandoff).
-  const underTsxWatch = isTsxWatcher(pidCommand(process.ppid));
+  // (See `signals` and `underTsxWatch` above for what a SIGTERM keeps.)
   let keepPidfile = false;
   let cleaningUp = false;
   const cleanup = async (signal: NodeJS.Signals) => {
@@ -1483,7 +1498,10 @@ export async function startDevServer(options: DevServerOptions) {
     setTimeout(() => process.exit(0), 2000).unref();
   };
 
-  for (const sig of signals) process.on(sig, cleanup);
+  for (const sig of signals) {
+    process.off(sig, startupStop);
+    process.on(sig, cleanup);
+  }
 
   // Last-resort safety net for paths that bypass `cleanup` (e.g. an uncaught
   // exception terminating the process): synchronously reap the frontend tree so
