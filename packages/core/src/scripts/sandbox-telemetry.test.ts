@@ -50,8 +50,9 @@ interface SandboxRun {
 		counters?: { blocksCount: number };
 	}>;
 	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; appEntry: string | undefined; clientExisted: boolean }>;
-	/** `.blocks-sandbox/config.json` and `aws-blocks/client.js` after the run, if written. */
+	/** `.blocks-sandbox/config.json`, `config.sandbox.json` and `aws-blocks/client.js` after the run, if written. */
 	configJson?: string;
+	sandboxConfigJson?: string;
 	clientJs?: string;
 }
 
@@ -98,6 +99,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 		const readIfExists = (path: string) => (existsSync(path) ? readFileSync(path, 'utf-8') : undefined);
 		return {
 			configJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.json')),
+			sandboxConfigJson: readIfExists(join(appDir, '.blocks-sandbox', 'config.sandbox.json')),
 			clientJs: readIfExists(join(appDir, 'aws-blocks', 'client.js')),
 			status: result.status,
 			signal: result.signal,
@@ -242,13 +244,15 @@ try {
 		assert.strictEqual(synth.appEntry, BACKEND_PATH);
 	});
 
-	it('writes the same outputs: config.json and the aws-runtime client (generated before the deploy)', () => {
+	it('writes the same outputs: config.sandbox.json and the aws-runtime client (generated before the deploy)', () => {
 		assert.strictEqual(success.npmCalls[0].clientExisted, true);
-		assert.ok(success.configJson, 'config.json was not written');
-		assert.deepStrictEqual(JSON.parse(success.configJson), {
+		assert.ok(success.sandboxConfigJson, 'config.sandbox.json was not written');
+		assert.deepStrictEqual(JSON.parse(success.sandboxConfigJson), {
 			apiUrl: 'https://fake-api.example.com/',
 			environment: 'sandbox',
 		});
+		// config.json is the dev server's: the Node client reads it, so a deploy must not point it at AWS.
+		assert.strictEqual(success.configJson, undefined, 'the deploy wrote the dev server config.json');
 		assert.match(success.clientJs ?? '', /export const api = /);
 		assert.match(success.stdout, /BLOCKS_DEPLOYED api=https:\/\/fake-api\.example\.com\//);
 	});

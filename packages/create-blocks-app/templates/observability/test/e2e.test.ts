@@ -20,6 +20,10 @@ let authApi: typeof authApiType;
 const creds = { username: `orders-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
+// a deploy, which records its URL in .blocks-sandbox/config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 // Every line the dev server writes, when this file started it. Logger and
@@ -52,7 +56,7 @@ async function waitForServer() {
 }
 
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -65,7 +69,11 @@ test.before(async () => {
     server.unref();
   }
 
-  await waitForServer();
+  // A deployed app (TEST_URL) has no dev server to wait for.
+  if (!testUrl) await waitForServer();
+
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
   // aws-blocks/client.js before it listens, so an earlier import could load a
@@ -156,7 +164,7 @@ function savedTraces() {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `placeOrder` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -183,7 +191,7 @@ test('placeOrder returns an order id and the trace id', async () => {
   assert.ok(order.traceId, 'traceId should be set: the Tracer samples every request by default');
 });
 
-test('Tracer: the placeOrder segment is saved with its annotation', async () => {
+test('Tracer: the placeOrder segment is saved with its annotation', { skip: testUrl && 'reads the local Tracer mock, so it needs a dev server' }, async () => {
   const trace = savedTraces().find((t) => t.traceId === order.traceId);
   assert.ok(trace, `no saved trace with traceId ${order.traceId}`);
   assert.strictEqual(trace.segment, 'placeOrder');

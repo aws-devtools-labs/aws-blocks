@@ -647,6 +647,8 @@ describe('lifecycle commands', () => {
 			// upgrades still has on disk: a sandbox destroy must take only its own.
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		// A failed destroy forgets nothing.
@@ -658,6 +660,8 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['production']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.ok(!existsSync(join(dir, 'config.sandbox.json')), 'the sandbox deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
 		// No record names the deleted sandbox any more, and CloudFormation no longer has it.
 		const console = await runCli(['sandbox', 'console'], {
@@ -689,6 +693,8 @@ describe('lifecycle commands', () => {
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 			write(prodOutputs, { 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://p', environment: 'production' });
 		// A failed or declined destroy forgets nothing.
@@ -699,6 +705,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
 		assert.deepStrictEqual(Object.keys(read(prodOutputs) as object), ['demo-prod']);
 		assert.ok(existsSync(join(dir, 'config.json')));
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
@@ -706,6 +713,8 @@ describe('lifecycle commands', () => {
 		assert.ok(!existsSync(join(dir, prodOutputs)));
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
+		assert.ok(!existsSync(join(dir, 'config.production.json')), 'the production deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.sandbox.json')));
 		// A sandbox config.json stays. A production document naming a second stack
 		// keeps that entry rather than being removed wholesale.
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
@@ -721,6 +730,11 @@ describe('lifecycle commands', () => {
 		write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.strictEqual((await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV })).code, 0);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+		// Upgraded on both counts: the old outputs.json and the old config.json both
+		// named production, and the per-stage deploy record goes with them.
+		assert.ok(!existsSync(join(dir, 'config.production.json')));
+		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.deepStrictEqual(read('config.sandbox.json'), { apiUrl: 'https://s', environment: 'sandbox' });
 	});
 
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {

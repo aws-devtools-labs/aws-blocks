@@ -55,6 +55,7 @@ import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
+import { testApiUrl } from './api-url.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -157,7 +158,8 @@ test.before(async () => {
   // server persist across requests — Node's fetch doesn't do this natively.
   installCookieJar();
 
-  // Import API after config is written
+  // Import API after config is written, pinned to the target of BLOCKS_TEST_ENV (see testApiUrl).
+  process.env.BLOCKS_API_URL = testApiUrl();
   const module = await import('aws-blocks');
   appModule = module;
   api = module.api;

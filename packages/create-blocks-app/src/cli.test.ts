@@ -323,6 +323,34 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every template e2e test calls the dev server it reuses, or TEST_URL, never a URL a deploy recorded', () => {
+    // The Node client resolves BLOCKS_API_URL before it reads .blocks-sandbox/config.json. A test that
+    // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;';
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const source = readFileSync(testPath, 'utf-8');
+      const load = source.indexOf("import('aws-blocks')");
+      if (load === -1) continue; // builds its own client from the server's URL (nextjs)
+      const pinned = source.indexOf(pin);
+      if (pinned === -1 || pinned > load) problems.push(`${entry.name}: does not set BLOCKS_API_URL before it loads the client`);
+      // A dev server that inherits BLOCKS_API_URL runs in sandbox mode, proxying to that URL (here: itself).
+      if (pinned !== -1 && pinned < source.indexOf("server = spawn('npm'")) {
+        problems.push(`${entry.name}: sets BLOCKS_API_URL before it starts the dev server, which then inherits it`);
+      }
+      if (!source.includes("const testUrl = process.env.TEST_URL?.replace(/\\/$/, '') || undefined;")) {
+        problems.push(`${entry.name}: does not read TEST_URL`);
+      }
+      if (!source.includes('if (!testUrl && !await isServerRunning(serverPort))')) {
+        problems.push(`${entry.name}: starts a dev server although TEST_URL names a deployed app`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('every template e2e suite can run again and again against one running dev server', () => {
     // AGENTS.md's iteration loop reruns `npm run test:e2e` against a running server. The
     // realtime client keeps its socket to that server open, so the run must exit when the
