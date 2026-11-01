@@ -293,12 +293,19 @@ setInterval(() => {}, 1000);
 		const child = await start({ longRunning: true });
 		// A supervisor, `timeout` or CI signals the whole process group: the CLI and the child.
 		// The sandbox runner's cleanup is idempotent, so the duplicate is harmless.
+		const started = Date.now();
 		process.emit('SIGTERM');
 		process.kill(child.pid, 'SIGTERM');
 		const result = await child.running;
+		assert.ok(Date.now() - started < GRACE_MS, 'at once, before the grace period');
 		await sleep(GRACE_MS * 2);
 		assert.strictEqual(result.interrupted, false);
-		assert.deepStrictEqual(child.received(), ['SIGTERM', 'SIGTERM'], 'the group signal and one forward');
+		// The group signal and the forward can arrive together, and a pending signal is delivered once.
+		const received = child.received();
+		assert.ok(
+			received.length >= 1 && received.length <= 2 && received.every((signal) => signal === 'SIGTERM'),
+			`the group signal and at most one forward: ${received.join(', ')}`,
+		);
 	});
 
 	it('forwards one SIGTERM at once to a long-running child that SIGTERM and SIGHUP to the CLI did not reach', async () => {
