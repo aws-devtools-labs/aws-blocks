@@ -46,7 +46,8 @@ export type FlagValues = Record<string, string | boolean | string[] | undefined>
 /**
  * The shape of a JSON result, so that a `--query` path is checked before the
  * command runs: `null` for a value, an object's fields, or a one-element
- * array for a list whose elements have that shape.
+ * array for a list whose elements have that shape. An object whose field
+ * names are data (script names) declares the shape of every field as `'*'`.
  */
 export type JsonShape = null | readonly [JsonShape] | JsonObjectShape;
 export interface JsonObjectShape {
@@ -557,7 +558,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: 'Run even with uncommitted changes, or where git does not track the app or fails to read it',
 			},
 		],
-		json: ['changed', 'removed', 'kept', 'scriptsRewritten', 'devConfig'],
+		json: {
+			changed: [null],
+			removed: [null],
+			kept: [{ file: null, reason: null }],
+			scriptsRewritten: { '*': { from: null, to: null } },
+			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
+		},
 		examples: [
 			{ command: 'blocks migrate --dry-run', description: 'Show what would change' },
 			{ command: 'blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
