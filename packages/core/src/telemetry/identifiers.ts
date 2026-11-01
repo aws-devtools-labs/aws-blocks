@@ -54,6 +54,9 @@ export function getInstallationId(): string {
   return id;
 }
 
+/** How long recording the projectId waits for another writer of `.blocks/config.json`. */
+const PROJECT_ID_LOCK_TIMEOUT_MS = 2_000;
+
 /**
  * Get or create a persistent project ID.
  * Stored in `.blocks/config.json` under `telemetry.projectId` in the project root (cwd).
@@ -61,7 +64,9 @@ export function getInstallationId(): string {
  *
  * Never throws and never rewrites a config it can't parse (it may hold the
  * committed `stackId`): in that case the ID is for this session only and the
- * reason is logged under `NODE_DEBUG=blocks-telemetry`.
+ * reason is logged under `NODE_DEBUG=blocks-telemetry`. The same applies when the
+ * config's write lock can't be taken within {@link PROJECT_ID_LOCK_TIMEOUT_MS}, so
+ * telemetry never holds up a command for long.
  */
 export function getProjectId(): string {
   const configPath = join(process.cwd(), '.blocks', 'config.json');
@@ -88,7 +93,7 @@ export function getProjectId(): string {
         : {};
       config.telemetry = { ...telemetry, projectId: id };
       return true;
-    });
+    }, { lockTimeoutMs: PROJECT_ID_LOCK_TIMEOUT_MS });
   } catch (error: unknown) {
     // If we can't persist, still return the generated ID for this session
     debug('not persisting the projectId: %s', error instanceof Error ? error.message : String(error));
