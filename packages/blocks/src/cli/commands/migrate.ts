@@ -319,9 +319,11 @@ interface WrapperUser {
 }
 
 /**
- * The files above the project that can run its wrappers, when the project is
- * a subdirectory of its git work tree (a monorepo): `files` relative to the
- * work tree's `top`, and the project's `prefix` there (`apps/web/`).
+ * The files of a git work tree above the project that can run its wrappers:
+ * `files` relative to the work tree's `top`, and the project's `prefix` there
+ * (`apps/web/`). The work tree is the project's own, when the project is a
+ * subdirectory of it (a monorepo), or a superproject of a submodule that
+ * holds the project.
  */
 export interface RepoFiles {
 	top: string;
@@ -341,15 +343,15 @@ export interface RepoFiles {
  * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
  * `package.json` (its scripts are checked after the rewrite) and symbolic
  * links, which are not followed, do not. Each file is read once, and only the
- * wrappers it names are kept. Above the project root, only the `repo` files are
- * read: the top-level `package.json` and CI, shell and Docker files of a
- * monorepo, from {@link gitRepoFiles}.
+ * wrappers it names are kept. Above the project root, only the `repos` files
+ * are read: the `package.json` files and CI, shell and Docker files of a
+ * monorepo or a superproject, from {@link gitRepoFiles}.
  */
 function wrapperUsers(
 	root: string,
 	wrappers: readonly Wrapper[],
 	files: readonly string[] | null,
-	repo: RepoFiles | null,
+	repos: readonly RepoFiles[],
 ): WrapperUser[] {
 	const users: WrapperUser[] = [];
 	const walk = (dir: string): void => {
@@ -362,8 +364,8 @@ function wrapperUsers(
 			}
 		}
 	};
-	/** The text of a file worth reading, or `undefined`; walks a directory instead. */
-	const read = (path: string): string | undefined => {
+	/** The text of a file worth reading, or `undefined`; walks a directory instead, with `walkDirs`. */
+	const read = (path: string, walkDirs = true): string | undefined => {
 		let stats: Stats;
 		try {
 			stats = lstatSync(path);
@@ -371,6 +373,8 @@ function wrapperUsers(
 			return undefined; // A tracked file deleted from the work tree.
 		}
 		if (stats.isDirectory()) {
+			// Above the project, a directory that git lists is a submodule: another work tree, not this project's.
+			if (!walkDirs) return undefined;
 			walk(path);
 			return undefined;
 		}
@@ -389,14 +393,15 @@ function wrapperUsers(
 	if (files === null) walk(root);
 	// git lists an untracked repository as `dir/`.
 	else for (const rel of files) scan(rel.replace(/\/$/, ''));
-	const { top, prefix, files: repoFiles } = repo ?? { top: root, prefix: '', files: [] };
-	// From the project up to the top, without resolving symbolic links that git resolved in `top`.
-	const up = prefix.split('/').filter((segment) => segment !== '').map(() => '..');
-	for (const rel of repoFiles) {
-		const text = read(join(top, rel));
-		if (text === undefined) continue;
-		const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w, { bare: true, prefix })).map((w) => w.path));
-		if (uses.size > 0) users.push({ path: [...up, rel].join('/'), uses });
+	for (const { top, prefix, files: repoFiles } of repos) {
+		// From the project up to the top, without resolving symbolic links that git resolved in `top`.
+		const up = prefix.split('/').filter((segment) => segment !== '').map(() => '..');
+		for (const rel of repoFiles) {
+			const text = read(join(top, rel), false);
+			if (text === undefined) continue;
+			const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w, { bare: true, prefix })).map((w) => w.path));
+			if (uses.size > 0) users.push({ path: [...up, rel].join('/'), uses });
+		}
 	}
 	return users;
 }
@@ -514,14 +519,15 @@ function refersTo(
  * trust a directory another user owns), with git's first error line; `unseen`
  * when the work tree does not list the app's `package.json` (a parent repo
  * ignores the app's directory), so git could not undo the migration; or the
- * files git lists for the project, from {@link gitFiles}, and, in a monorepo,
- * the files above it that can run its wrappers, from {@link gitRepoFiles}.
+ * files git lists for the project, from {@link gitFiles}, and the files above
+ * it that can run its wrappers, in a monorepo or a superproject, from
+ * {@link gitRepoFiles}.
  */
 type GitView =
 	| { kind: 'outside' }
 	| { kind: 'refused'; message: string }
 	| { kind: 'unseen' }
-	| { kind: 'listed'; files: string[]; repo: RepoFiles | null };
+	| { kind: 'listed'; files: string[]; repos: RepoFiles[] };
 
 function gitView(root: string): GitView {
 	// The C locale keeps "not a git repository" in English.
@@ -538,7 +544,7 @@ function gitView(root: string): GitView {
 	}
 	if (inside.stdout.trim() !== 'true') return { kind: 'outside' };
 	const files = gitFiles(root);
-	return files.includes('package.json') ? { kind: 'listed', files, repo: gitRepoFiles(root) } : { kind: 'unseen' };
+	return files.includes('package.json') ? { kind: 'listed', files, repos: gitRepoFiles(root) } : { kind: 'unseen' };
 }
 
 /** `git status --porcelain` for the project, which must be in a git work tree. */
@@ -552,11 +558,10 @@ function gitStatus(root: string): string {
 
 /**
  * The project's tracked files and its untracked files that git does not
- * ignore, relative to `root` with `/` separators; with `args`, those that the
- * extra `git ls-files` arguments select, as git prints them.
+ * ignore, relative to `root` with `/` separators.
  */
-function gitFiles(root: string, args: readonly string[] = []): string[] {
-	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z', ...args], {
+function gitFiles(root: string): string[] {
+	const list = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
 		cwd: root,
 		encoding: 'utf-8',
 		maxBuffer: Number.POSITIVE_INFINITY,
@@ -569,36 +574,68 @@ function gitFiles(root: string, args: readonly string[] = []): string[] {
 }
 
 /**
- * When the project is a subdirectory of its git work tree (a monorepo), the
- * work tree's top-level `package.json` and its top-level CI, shell and Docker
- * files ({@link RUNNER_FILE}: `.github/workflows/*`, a root `Dockerfile` or
- * `ci.sh`): GitHub Actions runs workflows only from the top level, and a root
- * script or workflow can run an app's wrappers. `null` when the project is the
- * top level, whose files {@link gitFiles} lists already.
+ * The files above the project that can run its wrappers: every file that git
+ * tracks in the project's work tree outside the project, when the project is a
+ * subdirectory of it (a monorepo), and in each superproject when the work tree
+ * is a submodule, that is a `package.json` or a CI, shell, Make or Docker file
+ * ({@link RUNNER_FILE}: `.github/workflows/*`, `scripts/deploy-web.sh`,
+ * `ci/Makefile`, `tools/release/package.json`). Only tracked files, and none
+ * under `node_modules`, so a large monorepo costs one `git ls-files` per work
+ * tree; {@link wrapperUsers} skips the files over {@link MAX_SCANNED_BYTES}.
  */
-function gitRepoFiles(root: string): RepoFiles | null {
+function gitRepoFiles(root: string): RepoFiles[] {
 	const where = spawnSync('git', ['rev-parse', '--show-toplevel', '--show-prefix'], { cwd: root, encoding: 'utf-8' });
 	if (where.error || where.status !== 0) {
 		throw new CliError(`git rev-parse failed in ${root}: ${where.stderr || where.error?.message}`.trim());
 	}
-	const [top = '', prefix = ''] = where.stdout.split('\n');
-	if (prefix === '') return null;
-	// Top-level files, and the files of top-level dot directories (.github, .circleci), relative to the top.
-	const files = gitFiles(root, ['--full-name', '--', ':(top,glob)*', ':(top,glob).*/**']).filter(
-		(rel) => !rel.startsWith(prefix) && (rel === 'package.json' || RUNNER_FILE.test(rel)),
-	);
-	return { top, prefix, files };
+	let [top = '', prefix = ''] = where.stdout.split('\n');
+	// At the top of its work tree, gitFiles lists the project's files already.
+	const repos: RepoFiles[] = prefix === '' ? [] : [{ top, prefix, files: filesAbove(top, prefix) }];
+	for (;;) {
+		// Outside a submodule git prints nothing; a git too old for the option, or a superproject it does not read, ends the search too.
+		const sup = spawnSync('git', ['rev-parse', '--show-superproject-working-tree'], { cwd: top, encoding: 'utf-8' });
+		const superTop = sup.error || sup.status !== 0 ? '' : sup.stdout.trim();
+		if (superTop === '') return repos;
+		prefix = `${posix(relative(superTop, top))}/${prefix}`;
+		top = superTop;
+		repos.push({ top, prefix, files: filesAbove(top, prefix) });
+	}
+}
+
+/** The {@link gitRepoFiles} that the work tree at `top` tracks outside `prefix`, relative to `top`. */
+function filesAbove(top: string, prefix: string): string[] {
+	const list = spawnSync('git', ['ls-files', '-z', '--', ':(top)'], {
+		cwd: top,
+		encoding: 'utf-8',
+		maxBuffer: Number.POSITIVE_INFINITY,
+	});
+	if (list.error || list.status !== 0) {
+		throw new CliError(`git ls-files failed in ${top}: ${list.stderr || list.error?.message}`.trim());
+	}
+	return [
+		...new Set(
+			list.stdout
+				.split('\0')
+				.filter(
+					(rel) =>
+						rel !== '' &&
+						!rel.startsWith(prefix) &&
+						!rel.split('/').includes('node_modules') &&
+						(posixPath.basename(rel) === 'package.json' || RUNNER_FILE.test(rel)),
+				),
+		),
+	];
 }
 
 /**
  * Plan the migration of `root`, reading `files` (from {@link gitFiles}), or
- * every file under `root` when `files` is `null`, and the `repo` files above
+ * every file under `root` when `files` is `null`, and the `repos` files above
  * it (from {@link gitRepoFiles}). Pure apart from reading files.
  */
 export function planMigration(
 	root: string,
 	files: readonly string[] | null,
-	repo: RepoFiles | null = null,
+	repos: readonly RepoFiles[] = [],
 ): { result: MigrateResult; pkg: PackageJson } {
 	const pkgPath = join(root, 'package.json');
 	let pkg: PackageJson;
@@ -694,7 +731,7 @@ export function planMigration(
 			});
 		}
 	}
-	const namers = wrapperUsers(root, wrappers, files, repo);
+	const namers = wrapperUsers(root, wrappers, files, repos);
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -830,7 +867,7 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 	const { result, pkg } = planMigration(
 		root,
 		git.kind === 'listed' ? git.files : null,
-		git.kind === 'listed' ? git.repo : null,
+		git.kind === 'listed' ? git.repos : [],
 	);
 	if (!dryRun) {
 		if (result.changed.includes('package.json')) writePackageJson(root, pkg, result.devConfig);

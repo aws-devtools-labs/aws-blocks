@@ -256,11 +256,7 @@ describe('blocks migrate references', () => {
 	});
 
 	it('in a monorepo, keeps a wrapper that a top-level workflow, script or shell file runs', async () => {
-		const app = writeApp('default@0ab6b047');
-		const mono = mkdtempSync(join(tmpdir(), 'blocks-migrate-mono-'));
-		mkdirSync(join(mono, 'apps'));
-		renameSync(app, join(mono, 'apps', 'web'));
-		const files: Record<string, string> = {
+		const mono = monorepo({
 			// GitHub Actions runs workflows only from the top level.
 			'.github/workflows/web.yml':
 				'jobs:\n  web:\n    defaults:\n      run:\n        working-directory: apps/web\n    steps:\n' +
@@ -268,22 +264,14 @@ describe('blocks migrate references', () => {
 				'      - run: npx tsx apps/web/aws-blocks/scripts/typegen.ts --check\n',
 			'package.json': `${JSON.stringify({ private: true, workspaces: ['apps/*'], scripts: { 'secret:web': 'tsx apps/web/aws-blocks/scripts/secret.ts' } }, null, 2)}\n`,
 			'ci.sh': '#!/bin/sh\ncd apps/web/aws-blocks/scripts && npx tsx sandbox-destroy.ts\n',
-			// A doc and a file of another directory do not count.
+			// A doc, and a file that is neither a script nor a package.json, do not count.
 			'README.md': 'Run `npx tsx apps/web/aws-blocks/scripts/console.ts`.\n',
-			'tools/release.sh': '#!/bin/sh\nnpx tsx apps/web/aws-blocks/scripts/cleanup.ts\n',
-		};
-		for (const [path, text] of Object.entries(files)) {
-			mkdirSync(dirname(join(mono, path)), { recursive: true });
-			writeFileSync(join(mono, path), text);
-		}
-		git(mono, 'init', '-q');
-		git(mono, 'add', '-A');
-		git(mono, 'commit', '-q', '-m', 'mono');
+			'tools/notes.txt': 'npx tsx apps/web/aws-blocks/scripts/cleanup.ts\n',
+		});
 		const root = join(mono, 'apps', 'web');
 		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
-		const result = JSON.parse(run.stdout);
-		assert.deepStrictEqual((result.kept as { file: string; reason: string }[]).map((k) => [k.file, k.reason]).sort(), [
+		assert.deepStrictEqual(keptReasons(run.stdout), [
 			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
 			['aws-blocks/scripts/sandbox-destroy.ts', 'generated, but still used by ../../ci.sh'],
 			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../package.json'],
@@ -291,6 +279,50 @@ describe('blocks migrate references', () => {
 		]);
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'sandbox-destroy.ts', 'secret.ts', 'typegen.ts']);
 		assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy', 'the scripts still migrate');
+	});
+
+	it('in a monorepo, keeps a wrapper that a nested script, Makefile or sibling package.json runs', async () => {
+		const mono = monorepo({
+			'scripts/deploy-web.sh': '#!/bin/sh\ncd apps/web && npx tsx aws-blocks/scripts/deploy.ts\n',
+			'ci/Makefile': 'deploy:\n\tcd apps/web && npx tsx aws-blocks/scripts/destroy.ts\n',
+			// npm runs a workspace's scripts from its own directory.
+			'tools/release/package.json': `${JSON.stringify({ name: 'release', scripts: { 'web:secret': 'tsx ../../apps/web/aws-blocks/scripts/secret.ts list' } }, null, 2)}\n`,
+			// Dependencies are not read.
+			'node_modules/some-dep/run.sh': '#!/bin/sh\ncd apps/web && npx tsx aws-blocks/scripts/typegen.ts\n',
+		});
+		const root = join(mono, 'apps', 'web');
+		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../scripts/deploy-web.sh'],
+			['aws-blocks/scripts/destroy.ts', 'generated, but still used by ../../ci/Makefile'],
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../tools/release/package.json'],
+		]);
+	});
+
+	it('in a git submodule, keeps a wrapper that a file of the superproject runs', async () => {
+		const app = writeApp('default@0ab6b047');
+		git(app, 'init', '-q');
+		git(app, 'add', '-A');
+		git(app, 'commit', '-q', '-m', 'app');
+		const sup = writeRepo('blocks-migrate-super-', {
+			'.github/workflows/web.yml':
+				'jobs:\n  web:\n    steps:\n      - run: npx tsx apps/web/aws-blocks/scripts/deploy.ts\n',
+			// Another app's path does not count.
+			'scripts/api.sh': '#!/bin/sh\nnpx tsx apps/api/aws-blocks/scripts/typegen.ts\n',
+		});
+		git(sup, 'init', '-q');
+		git(sup, 'submodule', '--quiet', 'add', app, 'apps/web');
+		git(sup, 'add', '-A');
+		git(sup, 'commit', '-q', '-m', 'super');
+		const root = join(sup, 'apps', 'web');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+		]);
+		assert.ok(scriptsDir(root).includes('deploy.ts'));
+		assert.ok(!scriptsDir(root).includes('typegen.ts'));
 	});
 
 	it("in a monorepo, does not count another app's paths or working directory for this app", async () => {
